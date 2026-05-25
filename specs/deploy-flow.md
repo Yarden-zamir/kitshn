@@ -5,7 +5,7 @@ One deploy operation:
 2. Ensure deployment root, params root, persistent root, logs root, and log symlink exist.
 3. Fetch from the GitHub remote and check out the requested branch, tag, or SHA in `/deployments/<owner>/<repo>/<environment>`.
 4. Use git in the checkout to determine current and target refs.
-5. Clear and rewrite `/params/<owner>/<repo>/<environment>/params.env` from GitHub Environment params.
+5. Copy `--params-file` atomically into `/params/<owner>/<repo>/<environment>/params.env` with mode `600`.
 6. Pull external images and build local images with Compose using `--env-file`.
 7. Run Compose with `--env-file` when the recipe has Compose.
 8. Roll logs under `KITSHN_LOG_DIR` for each service that will be recreated: rename existing log files in the service's log subdirectory to `<name>.<timestamp>` before the service restarts.
@@ -17,6 +17,8 @@ One deploy operation:
 
 Compose is fail-forward. Caddy keeps the previous generated Caddyfile when validation fails.
 
-`deploy` requires a GitHub token in the environment to read Environment params.
+`deploy` reads params from `--params-file`. CI builds this file from `KITSHN_*` vars/secrets and pushes it over SSH. The VPS does not call the GitHub API.
+
+`destroy` of an ephemeral env deletes the GitHub Environment after teardown (handled by the CI workflow, not the CLI).
 
 CI uses GitHub Actions concurrency groups per `<owner>/<repo>/<environment>`.

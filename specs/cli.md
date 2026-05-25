@@ -5,8 +5,9 @@ Core commands:
 kitshn bootstrap
 kitshn doctor
 kitshn init <owner/repo> --template <template>
-kitshn deploy <owner/repo> [--ref <ref>] [--environment <name>]
+kitshn deploy <owner/repo> --params-file <path> [--ref <ref>] [--environment <name>]
 kitshn destroy <owner/repo> --environment <name> [--purge]
+kitshn resolve --recipe <owner/repo> --event <push|pull_request|workflow_dispatch> [event flags]
 kitshn logs [<owner/repo> [service]] [--environment <name>] [--follow] [--files]
 kitshn status [owner/repo] [--environment <name>]
 ```
@@ -51,5 +52,7 @@ Rules:
 - Environment arguments are GitHub Environment names.
 - CLI output should be script-friendly by default.
 - Logs should support both Docker stdout/stderr and file logs under `/logs`.
-- `deploy` and `destroy` require a GitHub token in the environment and acquire a per-deployment `flock`.
+- `deploy` requires `--params-file` pointing at a key/value file. The file is treated as opaque — the `KITSHN_` selection and prefix-stripping happen in CI before the file is built.
+- `deploy` and `destroy` acquire a per-deployment `flock`.
+- `resolve` is a pure function. It writes `env=`, `action=`, `ephemeral=` lines suitable for `$GITHUB_OUTPUT` and exits non-zero with no output when no `.kitshn.yaml` entry matches.
 - Every invocation appends a structured JSON line to `/logs/.kitshn/kitshn.log` with: `timestamp`, `command`, `deployment` (`<owner>/<repo>/<environment>`), `ref`, `compose_project`, `changed_services`, `triggered_by`, `status`.

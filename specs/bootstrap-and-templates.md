@@ -34,6 +34,11 @@ kitshn doctor
 
 Recipes are not registered separately. `kitshn deploy` creates the deployment, params, persistent, and logs roots on first run and clones the recipe into the deployment root. `kitshn status` walks `/deployments/*/*/*`.
 
+Every template includes:
+
+- `.kitshn.yaml` with at least one entry, defaulting to `main` → `prod` and a `pr-{pr}` ephemeral entry.
+- `.github/workflows/kitshn.yml` calling the kitshn-hosted reusable workflow with `secrets: inherit`.
+
 Recipe templates should stay boring and editable.
 
 Command:

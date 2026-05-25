@@ -2,44 +2,76 @@
 A repo auto-deploys only when:
 
 - it has the GitHub topic `kitshn-deploy`
-- the pushed branch matches an auto-deploy environment mapping
+- a `.kitshn.yaml` entry matches the triggering event
 
-Mapping syntax:
+## `.kitshn.yaml`
+Lives at the recipe repo root.
 
-```text
-environment(branch-glob)
+```yaml
+deploy:
+  - on: push
+    branch: main
+    name: prod
+
+  - on: push
+    branch: "dev*"
+    name: feature
+
+  - on: pull_request
+    name: "pr-{pr}"
+    ephemeral: true
 ```
 
-Example:
+Fields per entry:
 
-```text
-prod(main),stage(dev),feature(dev*),test
+- `on` — `push` or `pull_request`.
+- `branch` — glob, required when `on: push`.
+- `name` — env identity. Literal or template using `{branch}`, `{pr}`, `{sha7}`.
+- `ephemeral` — `true` means destroy also deletes the GitHub Environment. Defaults to `false`.
+
+First matching entry wins. No match means no auto-deploy.
+
+## Caller workflow
+Each recipe ships `.github/workflows/kitshn.yml`:
+
+```yaml
+on:
+  push:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+  workflow_dispatch:
+    inputs:
+      environment: { required: true,  type: string }
+      ref:         { required: false, type: string }
+
+jobs:
+  call:
+    uses: kitshn-org/kitshn/.github/workflows/deploy.yml@v1
+    secrets: inherit
 ```
 
-Meaning:
+`kitshn init` writes this file.
 
-- `prod(main)`: push to `main` deploys environment `prod`.
-- `stage(dev)`: push to `dev` deploys environment `stage`.
-- `feature(dev*)`: push to branches matching `dev*` deploys environment `feature`.
-- `test`: environment exists, but no push auto-deploys it.
+## Reusable workflow
+`kitshn-org/kitshn/.github/workflows/deploy.yml` is the only supported entry point for `kitshn deploy` and `kitshn destroy`.
 
-Automatic CI command shape:
+Jobs:
 
-```bash
-kitshn deploy <owner/repo> --ref <branch-or-sha> --environment <environment>
-```
+- `resolve` — no `environment:` binding. Runs `kitshn resolve` and emits `env`, `action`, `ephemeral`.
+- `deploy` — `environment: ${{ needs.resolve.outputs.env }}`. Builds `params.env` from `vars` and `secrets` filtered by `KITSHN_` prefix, scps to the VPS, runs `kitshn deploy --params-file …`.
+- `teardown` — `environment: ${{ needs.resolve.outputs.env }}`. Runs `kitshn destroy`. When `ephemeral` is `true`, also calls `DELETE /repos/{owner}/{repo}/environments/{name}`.
 
-Manual `workflow_dispatch` can deploy any branch or SHA to any GitHub Environment.
+The `environment:` binding on deploy/teardown attaches the run to the GitHub Environment and applies its protection rules and secrets. `environment:` also auto-creates the Environment on first use, so dynamic names like `pr-42` need no `PUT`.
 
-Manual inputs:
+## `KITSHN_` prefix filter
+Only secrets and vars whose names start with `KITSHN_` are forwarded into `params.env`. The prefix is stripped when writing: `KITSHN_TOKEN` lands in `params.env` as `TOKEN=…`. The prefix is a GitHub-side selector, not a wire format.
 
-```text
-recipe: owner/repo
-ref: branch-or-sha
-environment: GitHub Environment name
-```
+Workflow infrastructure uses the same namespace:
 
-Concurrency:
+- `vars.KITSHN_VPS_HOST` — SSH target.
+- `secrets.KITSHN_SSH_KEY` — deploy SSH key.
 
-- CI uses a GitHub Actions concurrency group per deployment identity, `<owner>/<repo>/<environment>`.
-- Two deploy jobs for the same deployment must not run at the same time.
+## PR lifecycle
+- `opened`, `synchronize`, `reopened` → deploy.
+- `closed` → destroy. Ephemeral entries also DELETE the GitHub Environment.
+- `/persistent` and `/logs` for the PR env survive destroy by default.

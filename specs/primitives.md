@@ -16,15 +16,15 @@ Rules:
 - Log to stdout.
 
 ## Environment
-An environment is a GitHub Environment name.
+An environment is a string produced by resolving the recipe's `.kitshn.yaml` against a triggering event. The same string is the GitHub Environment name, the `/deployments/<owner>/<repo>/<env>` path segment, the Compose project name, and the Caddy site identifier.
 
 Rules:
 
-- Params come from GitHub Environment vars and secrets.
-- Auto-deploy mappings use `environment(branch-glob)`.
-- Environments without brackets exist but do not auto-deploy.
-- Manual `workflow_dispatch` can deploy any branch or SHA to any GitHub Environment.
-- Environment names are sanitized before use in paths, Compose project names, and generated Caddyfile names.
+- Params come from GitHub Environment vars and secrets. CI forwards only `KITSHN_*` entries and strips the prefix; the recipe sees bare names.
+- Mappings live in `.kitshn.yaml`; see `ci.md`.
+- `name` may be literal or templated with `{branch}`, `{pr}`, `{sha7}`.
+- Sanitization on every expanded name: lowercase, replace any char outside `[a-z0-9-]` with `-`, collapse repeats, trim leading/trailing `-`, cap at 63 chars.
+- Manual `workflow_dispatch` can deploy any ref to any env name.
 
 ## Deployment
 A deployment is one recipe deployed to one environment.
