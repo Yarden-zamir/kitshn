@@ -1,5 +1,5 @@
 # Bootstrap And Templates
-Bootstrap prepares the VPS.
+Bootstrap prepares the VPS and is idempotent.
 
 Bootstrap installs or verifies:
 
@@ -16,16 +16,23 @@ Bootstrap creates or verifies:
 - `/params`
 - `/persistent`
 - `/logs`
+- `/logs/.kitshn`
 - shared Docker networks such as `kitshn-edge`
 - GitHub deploy access
-- registered recipe checkouts
+
+Running `kitshn bootstrap` repeatedly is safe. It creates missing resources, verifies existing resources, and only changes existing configuration when it does not match KitSHn's expected state. At the end, it runs the same checks as `kitshn doctor`.
 
 Commands:
 
 ```bash
 kitshn bootstrap
 kitshn bootstrap-remote <ssh-target>
+kitshn doctor
 ```
+
+`kitshn doctor` performs the verification checks without making changes.
+
+Recipes are not registered separately. `kitshn deploy` creates the deployment, params, persistent, and logs roots on first run and clones the recipe into the deployment root. `kitshn status` walks `/deployments/*/*/*`.
 
 Recipe templates should stay boring and editable.
 

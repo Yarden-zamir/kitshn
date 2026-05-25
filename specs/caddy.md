@@ -12,14 +12,13 @@ Bootstrap owns:
 
 Recipe route contract:
 
-- A recipe that routes public traffic must provide `Caddyfile` or `Caddyfile.j2`.
-- `Caddyfile` is copied as static Caddy config.
-- `Caddyfile.j2` is rendered with Jinja2 into the deployment `Caddyfile`.
+- A recipe that routes public traffic must provide a root `Caddyfile`.
+- The recipe `Caddyfile` is rendered through Jinja2 into the deployment `Caddyfile`.
 - Public-route services must be reachable by Caddy through an edge network such as `kitshn-edge`.
 
 Deploy behavior:
 
-- Generate `/deployments/<owner>/<repo>/<environment>/Caddyfile`.
+- Generate `/deployments/<owner>/<repo>/<environment>/Caddyfile` via atomic rename.
 - Validate the full Caddy config once.
 - Reload Caddy once when generated Caddyfiles changed.
 - If validation fails, keep the previous generated Caddyfile active and fail deploy.
@@ -30,4 +29,4 @@ Jinja2 context includes:
 - environment name
 - deployment identity
 - deployment paths
-- GitHub Environment vars
+- GitHub Environment vars (non-secret only)

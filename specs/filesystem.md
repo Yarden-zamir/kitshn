@@ -17,7 +17,13 @@ Deployment root:
 Params:
 
 - Contains `params.env` generated on every deploy from GitHub Environment params.
+- Owned by the deployment user, mode `600`, written via atomic rename.
 - `KITSHN_PARAMS_FILE=/params/<owner>/<repo>/<environment>/params.env`.
+
+Destroy:
+
+- `kitshn destroy` removes Compose services, the deployment Caddyfile, `/deployments/<owner>/<repo>/<environment>`, and `/params/<owner>/<repo>/<environment>`.
+- `/persistent` and `/logs` are preserved unless `--purge` is passed.
 
 Runtime env:
 
@@ -35,6 +41,10 @@ Persistent data:
 
 Logs:
 
+- KitSHn logs go under `/logs/.kitshn`.
+- `kitshn logs` without a recipe reads `/logs/.kitshn/kitshn.log`.
 - Apps log to stdout.
 - File logs go under `KITSHN_LOG_DIR`.
 - `KITSHN_LOG_DIR=/logs/<owner>/<repo>/<environment>`.
+- On deploy, existing log files for services about to be recreated are rolled to `<name>.<timestamp>` before the service restarts.
+- Every `kitshn` CLI invocation appends a structured JSON line to `/logs/.kitshn/kitshn.log`.

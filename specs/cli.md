@@ -3,9 +3,11 @@ Core commands:
 
 ```bash
 kitshn bootstrap
+kitshn doctor
 kitshn init <owner/repo> --template <template>
 kitshn deploy <owner/repo> [--ref <ref>] [--environment <name>]
-kitshn logs <owner/repo> [service] [--environment <name>] [--follow] [--files]
+kitshn destroy <owner/repo> --environment <name> [--purge]
+kitshn logs [<owner/repo> [service]] [--environment <name>] [--follow] [--files]
 kitshn status [owner/repo] [--environment <name>]
 ```
 
@@ -18,9 +20,36 @@ kitshn restart <owner/repo> [--environment <name>]
 kitshn affected <owner/repo> [--from <sha>] [--to <sha>]
 ```
 
+`status` for a single deployment reports:
+
+- checkout ref
+- running Compose services
+- healthcheck state per service
+- Caddy route presence
+- last deploy entry from `/logs/.kitshn/kitshn.log`
+
+`logs` behavior:
+
+- `kitshn logs` shows KitSHn's own log stream from `/logs/.kitshn/kitshn.log`.
+- `kitshn logs <owner/repo>` shows Docker stdout/stderr logs for all Compose services in the deployment.
+- `kitshn logs <owner/repo> <service>` shows Docker stdout/stderr logs for one Compose service.
+- `--files` reads file logs under `/logs/<owner>/<repo>/<environment>` instead of Docker logs.
+- `--follow` follows the selected log source.
+
+`doctor` verifies server readiness:
+
+- Docker and Docker Compose are available.
+- Git, uv, and Caddy are available.
+- canonical roots exist with expected ownership and permissions.
+- shared Docker networks such as `kitshn-edge` exist.
+- GitHub deploy access works.
+- Caddy config validates.
+
 Rules:
 
 - Recipe arguments are always fully qualified `owner/repo` names.
 - Environment arguments are GitHub Environment names.
 - CLI output should be script-friendly by default.
 - Logs should support both Docker stdout/stderr and file logs under `/logs`.
+- `deploy` and `destroy` require a GitHub token in the environment and acquire a per-deployment `flock`.
+- Every invocation appends a structured JSON line to `/logs/.kitshn/kitshn.log` with: `timestamp`, `command`, `deployment` (`<owner>/<repo>/<environment>`), `ref`, `compose_project`, `changed_services`, `triggered_by`, `status`.

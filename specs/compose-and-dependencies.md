@@ -7,7 +7,7 @@ KitSHn renders Compose with:
 docker compose --env-file /params/<owner>/<repo>/<environment>/params.env config --format json
 ```
 
-KitSHn uses the same `--env-file /params/<owner>/<repo>/<environment>/params.env` argument for every Compose command in the deploy flow, including config rendering, pulling external images, building local images, and applying changes.
+KitSHn uses the same `--env-file /params/<owner>/<repo>/<environment>/params.env` argument for every Compose command in the deploy flow, including config rendering, pulling external images, building local images, and applying changes. `KITSHN_PARAMS_FILE` is exported into the runtime env as a pointer for app code, not as a Compose input.
 
 KitSHn reads:
 
@@ -31,6 +31,7 @@ Dependency rules:
 - Values are comma-separated, fully qualified `owner/repo` recipe names.
 - Matching is exact and case-sensitive.
 - Shared Docker networks do not imply dependencies.
+- When a recipe deploys, KitSHn scans every other deployment for services labelled `kitshn.depends_on` containing the deployed recipe and recreates those services. It does not re-checkout, re-pull, or re-build the dependent recipes.
 
 Example:
 
