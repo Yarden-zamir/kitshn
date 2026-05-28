@@ -33,4 +33,4 @@ Jinja2 context includes:
 - deployment paths
 - full deployment params from `params.env`, including secrets, as `params`
 
-Templates should treat `params` as sensitive. Use it only for values that must be rendered into Caddy config.
+`Caddyfile.j2` should treat `params` as sensitive. Use it only for values that must be rendered into Caddy config.

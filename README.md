@@ -172,6 +172,8 @@ git commit -m "chore: add KitSHn deployment config"
 git push
 ```
 
+Also add `compose.yml`, `Caddyfile.j2`, and `.gitignore` if `kitshn init --docker` or `kitshn init --routing` generated them.
+
 Deployments then happen through GitHub Actions:
 
 - Push to `main` deploys `prod`.
@@ -194,5 +196,5 @@ Docs:
 - [Caddy Ingress](specs/caddy.md)
 - [Deploy Flow](specs/deploy-flow.md)
 - [CI Rules](specs/ci.md)
-- [Bootstrap And Repo Init](specs/bootstrap-and-templates.md)
+- [Bootstrap And Repo Init](specs/bootstrap-and-repo-init.md)
 - [CLI](specs/cli.md)
