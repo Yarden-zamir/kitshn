@@ -31,7 +31,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_ACTION: ${{ github.event.action }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-        run: uvx --from git+https://github.com/Yarden-zamir/kitshn.git@v1 kitshn ci-resolve
+        run: uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ci-resolve
 
   deploy:
     needs: resolve
@@ -45,7 +45,7 @@ jobs:
         env:
           KITSHN_VARS_JSON: ${{ toJson(vars) }}
           KITSHN_SECRETS_JSON: ${{ toJson(secrets) }}
-        run: uvx --from git+https://github.com/Yarden-zamir/kitshn.git@v1 kitshn ci-write-params --output params.env
+        run: uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ci-write-params --output params.env
 
       - name: Deploy over SSH
         env:
@@ -53,7 +53,7 @@ jobs:
           KITSHN_SSH_KEY: ${{ secrets.KITSHN_SSH_KEY }}
           KITSHN_ENVIRONMENT: ${{ needs.resolve.outputs.env }}
           KITSHN_REF: ${{ needs.resolve.outputs.ref }}
-        run: uvx --from git+https://github.com/Yarden-zamir/kitshn.git@v1 kitshn ci-deploy --params-file params.env
+        run: uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ci-deploy --params-file params.env
 
   teardown:
     needs: resolve
@@ -68,11 +68,11 @@ jobs:
           KITSHN_VPS_HOST: ${{ vars.KITSHN_VPS_HOST }}
           KITSHN_SSH_KEY: ${{ secrets.KITSHN_SSH_KEY }}
           KITSHN_ENVIRONMENT: ${{ needs.resolve.outputs.env }}
-        run: uvx --from git+https://github.com/Yarden-zamir/kitshn.git@v1 kitshn ci-destroy
+        run: uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ci-destroy
 
       - name: Delete ephemeral GitHub Environment
         if: needs.resolve.outputs.ephemeral == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           KITSHN_ENVIRONMENT: ${{ needs.resolve.outputs.env }}
-        run: uvx --from git+https://github.com/Yarden-zamir/kitshn.git@v1 kitshn ci-delete-environment
+        run: uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ci-delete-environment

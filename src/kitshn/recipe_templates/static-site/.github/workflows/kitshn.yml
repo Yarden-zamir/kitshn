@@ -9,5 +9,5 @@ on:
 
 jobs:
   call:
-    uses: Yarden-zamir/kitshn/.github/workflows/deploy.yml@v1
+    uses: Yarden-zamir/kitshn/.github/workflows/deploy.yml@main
     secrets: inherit

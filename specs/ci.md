@@ -45,7 +45,7 @@ on:
 
 jobs:
   call:
-    uses: Yarden-zamir/kitshn/.github/workflows/deploy.yml@v1
+    uses: Yarden-zamir/kitshn/.github/workflows/deploy.yml@main
     secrets: inherit
 ```
 
@@ -57,7 +57,7 @@ jobs:
 Workflow steps run KitSHn directly from the hosted GitHub ref:
 
 ```bash
-uvx --from git+https://github.com/Yarden-zamir/kitshn.git@v1 kitshn <ci-command>
+uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn <ci-command>
 ```
 
 The workflow YAML should stay declarative. Non-trivial logic belongs in KitSHn CLI `ci-*` commands, not inline shell, Node, or Python in the workflow file.
