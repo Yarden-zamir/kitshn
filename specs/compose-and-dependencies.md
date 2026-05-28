@@ -29,7 +29,7 @@ Dependency rules:
 
 - `kitshn.depends_on` compose label is the only dependency source.
 - Values are comma-separated, fully qualified `owner/repo` recipe names.
-- Matching is exact and case-sensitive.
+- Matching is case-insensitive.
 - Shared Docker networks do not imply dependencies.
 - When a recipe deploys, KitSHn scans every other deployment for services labelled `kitshn.depends_on` containing the deployed recipe and recreates those services. It does not re-checkout, re-pull, or re-build the dependent recipes.
 

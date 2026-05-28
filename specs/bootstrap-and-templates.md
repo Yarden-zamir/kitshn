@@ -1,7 +1,7 @@
 # Bootstrap And Templates
 Bootstrap prepares the VPS and is idempotent.
 
-Bootstrap installs or verifies:
+Bootstrap verifies:
 
 - Docker
 - Docker Compose plugin
@@ -22,10 +22,24 @@ Bootstrap creates or verifies:
 
 Running `kitshn bootstrap` repeatedly is safe. It creates missing resources, verifies existing resources, and only changes existing configuration when it does not match KitSHn's expected state. At the end, it runs the same checks as `kitshn doctor`.
 
+Dependency installation is explicit and opt-in. `kitshn doctor` reports missing dependencies and suggests matching installer modules. `kitshn bootstrap --install-missing --installer <installer>` runs the selected installer before creating/verifying KitSHn resources.
+
+Installer modules are standalone Python files under `kitshn.installers`. KitSHn discovers them dynamically and exposes their names through `kitshn installers` and the `--installer` choice list. Each installer declares metadata, supported package managers, OS detection, and its install routine.
+
+Initial installers:
+
+- `ubuntu` — apt, official Docker and Caddy package repositories, Git via apt, uv via official standalone installer.
+- `debian` — apt, official Docker and Caddy package repositories, Git via apt, uv via official standalone installer.
+- `fedora` — dnf, Docker CE repository, Caddy COPR, Git via dnf, uv via official standalone installer.
+- `arch` — pacman packages for Docker, Compose, Git, Caddy, uv via official standalone installer.
+- `alpine` — apk packages for Docker, Compose, Git, Caddy, uv via official standalone installer.
+
 Commands:
 
 ```bash
 kitshn bootstrap
+kitshn bootstrap --install-missing --installer ubuntu
+kitshn installers
 kitshn bootstrap-remote <ssh-target>
 kitshn doctor
 ```

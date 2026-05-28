@@ -9,14 +9,14 @@ Rules:
 - Always use the fully qualified name.
 - Assume GitHub hosting.
 - Remote is derived as `git@github.com:<owner>/<repo>.git`.
-- Matching is exact and case-sensitive.
+- Matching is case-insensitive.
 - Use `compose.yml` when the recipe has containers.
-- Use root `Caddyfile` or `Caddyfile.j2` when the recipe routes public traffic.
+- Use root `Caddyfile.j2` when the recipe routes public traffic.
 - Use Compose required variable interpolation for required runtime params, for example `${TOKEN:?TOKEN is required}`.
 - Log to stdout.
 
 ## Environment
-An environment is a string produced by resolving the recipe's `.kitshn.yaml` against a triggering event. The same string is the GitHub Environment name, the `/deployments/<owner>/<repo>/<env>` path segment, the Compose project name, and the Caddy site identifier.
+An environment is a string produced by resolving the recipe's `.kitshn.yaml` against a triggering event. The same string is the GitHub Environment name, the `/deployments/<owner>/<repo>/<env>` path segment, and the Caddy site identifier.
 
 Rules:
 
@@ -34,6 +34,14 @@ Identity:
 ```text
 <owner>/<repo>/<environment>
 ```
+
+The Compose project name is deployment-scoped and sanitized as:
+
+```text
+<owner>-<repo>-<environment>
+```
+
+For example, `Yarden-zamir/example` deployed to `prod` uses Compose project `yarden-zamir-example-prod`.
 
 ## Service
 A service is a Docker Compose service inside a recipe.

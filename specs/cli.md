@@ -3,6 +3,8 @@ Core commands:
 
 ```bash
 kitshn bootstrap
+kitshn bootstrap --install-missing --installer <installer>
+kitshn installers
 kitshn doctor
 kitshn init <owner/repo> --template <template>
 kitshn deploy <owner/repo> --params-file <path> [--ref <ref>] [--environment <name>]
@@ -41,6 +43,8 @@ kitshn affected <owner/repo> [--from <sha>] [--to <sha>]
 
 - Docker and Docker Compose are available.
 - Git, uv, and Caddy are available.
+- Missing dependencies are reported explicitly.
+- Matching optional installer modules are reported when dependencies are missing.
 - canonical roots exist with expected ownership and permissions.
 - shared Docker networks such as `kitshn-edge` exist.
 - GitHub deploy access works.
@@ -53,6 +57,5 @@ Rules:
 - CLI output should be script-friendly by default.
 - Logs should support both Docker stdout/stderr and file logs under `/logs`.
 - `deploy` requires `--params-file` pointing at a key/value file. The file is treated as opaque — the `KITSHN_` selection and prefix-stripping happen in CI before the file is built.
-- `deploy` and `destroy` acquire a per-deployment `flock`.
 - `resolve` is a pure function. It writes `env=`, `action=`, `ephemeral=` lines suitable for `$GITHUB_OUTPUT` and exits non-zero with no output when no `.kitshn.yaml` entry matches.
 - Every invocation appends a structured JSON line to `/logs/.kitshn/kitshn.log` with: `timestamp`, `command`, `deployment` (`<owner>/<repo>/<environment>`), `ref`, `compose_project`, `changed_services`, `triggered_by`, `status`.
