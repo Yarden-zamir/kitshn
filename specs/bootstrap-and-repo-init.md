@@ -76,4 +76,4 @@ kitshn recipe auth
 kitshn recipe auth --vps-host <ssh-target>
 ```
 
-It assumes the repo already exists, has a GitHub remote, and the local `gh` CLI is authenticated. It derives the GitHub repo name with `gh repo view`, generates a per-recipe SSH key, authorizes that public key locally when `--vps-host` is omitted or over SSH when supplied, and sets the GitHub Actions secret/variable needed by the reusable workflow.
+It assumes the repo already exists, has a GitHub remote, and the local `gh` CLI is authenticated. It derives the GitHub repo name with `gh repo view`, generates a per-recipe SSH key, authorizes that public key locally when `--vps-host` is omitted or over SSH when supplied, and sets the GitHub Actions secret/variable needed by the reusable workflow. When `--vps-host` is an SSH alias, KitSHn uses the alias for SSH and stores the resolved `user@hostname` from `ssh -G` in `KITSHN_VPS_HOST`.

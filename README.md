@@ -110,7 +110,7 @@ CLI path when authorizing a remote VPS from your local machine:
 kitshn recipe auth --vps-host deploy@example.com
 ```
 
-`recipe auth` derives the GitHub repo from the current repo with `gh`, generates a per-recipe SSH key, authorizes the public key on the VPS user, and configures the GitHub repo with `KITSHN_SSH_KEY` and `KITSHN_VPS_HOST`.
+`recipe auth` derives the GitHub repo from the current repo with `gh`, generates a per-recipe SSH key, authorizes the public key on the VPS user, and configures the GitHub repo with `KITSHN_SSH_KEY` and `KITSHN_VPS_HOST`. If `--vps-host` is an SSH alias, KitSHn uses it for SSH but stores the resolved `user@hostname` from `ssh -G` in GitHub.
 
 <details>
 <summary>Manual auth details</summary>

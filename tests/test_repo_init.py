@@ -36,6 +36,13 @@ class RecordingRunner(CommandRunner):
             Path(f"{private_key}.pub").write_text("public-key\n", encoding="utf-8")
         if command == ("hostname", "-f"):
             return CommandResult(args=args, returncode=0, stdout="vps.example.com\n", stderr="")
+        if command == ("ssh", "-G", "prod-vps"):
+            return CommandResult(
+                args=args,
+                returncode=0,
+                stdout="user deploy\nhostname vps.example.com\n",
+                stderr="",
+            )
         return CommandResult(args=args, returncode=0, stdout="", stderr="")
 
 
@@ -132,13 +139,14 @@ def test_recipe_auth_can_authorize_remote_vps_host(tmp_path: Path) -> None:
     result = authorize_recipe(
         recipe_dir=tmp_path,
         runner=runner,
-        vps_host="deploy@example.com",
+        vps_host="prod-vps",
         key_path=key_path,
     )
 
-    assert result.vps_host == "deploy@example.com"
+    assert result.vps_host == "deploy@vps.example.com"
     assert result.authorized_via_ssh is True
-    assert any(command[:2] == ("ssh", "deploy@example.com") for command in runner.commands)
+    assert ("ssh", "-G", "prod-vps") in runner.commands
+    assert any(command[:2] == ("ssh", "prod-vps") for command in runner.commands)
     assert runner.commands[-1] == (
         "gh",
         "variable",
@@ -147,5 +155,5 @@ def test_recipe_auth_can_authorize_remote_vps_host(tmp_path: Path) -> None:
         "--repo",
         "Owner/my-app",
         "--body",
-        "deploy@example.com",
+        "deploy@vps.example.com",
     )

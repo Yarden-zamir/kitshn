@@ -53,8 +53,8 @@ def authorize_recipe(
         _authorize_local_key(key, authorized_keys or Path.home() / ".ssh" / "authorized_keys")
         authorized_via_ssh = False
     else:
-        resolved_host = vps_host
-        _authorize_remote_key(resolved_host, key, runner)
+        resolved_host = _resolved_ssh_target(vps_host, runner)
+        _authorize_remote_key(vps_host, key, runner)
         authorized_via_ssh = True
 
     runner.run(
@@ -134,6 +134,23 @@ def _local_vps_host(runner: CommandRunner) -> str:
         return host
     msg = "cannot determine local VPS host; pass --vps-host explicitly"
     raise KitshnError(msg)
+
+
+def _resolved_ssh_target(vps_host: str, runner: CommandRunner) -> str:
+    if runner.dry_run:
+        return vps_host
+    result = runner.run(["ssh", "-G", vps_host], capture=True)
+    values: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        key, _, value = line.partition(" ")
+        if key in {"hostname", "user"} and value.strip():
+            values[key] = value.strip()
+    hostname = values.get("hostname")
+    user = values.get("user")
+    if not hostname or not user:
+        msg = f"cannot resolve SSH target to user and hostname: {vps_host}"
+        raise KitshnError(msg)
+    return f"{user}@{hostname}"
 
 
 def _authorize_local_key(key: str, authorized_keys: Path) -> None:

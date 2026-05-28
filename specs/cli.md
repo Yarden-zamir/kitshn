@@ -57,7 +57,7 @@ Rules:
 - Environment arguments are GitHub Environment names.
 - CLI output should be script-friendly by default.
 - `init` writes the fixed required recipe contract files. `--docker` and `--routing` add optional example contract files.
-- `recipe auth` derives the GitHub repo from `gh`, generates a per-recipe SSH key, authorizes the public key locally or over SSH, and sets `KITSHN_SSH_KEY` plus `KITSHN_VPS_HOST` through `gh`.
+- `recipe auth` derives the GitHub repo from `gh`, generates a per-recipe SSH key, authorizes the public key locally or over SSH, and sets `KITSHN_SSH_KEY` plus `KITSHN_VPS_HOST` through `gh`. If `--vps-host` is an SSH alias, it stores the resolved `user@hostname`, not the alias.
 - Logs should support both Docker stdout/stderr and file logs under `/logs`.
 - `deploy` requires `--params-file` pointing at a key/value file. The file is treated as opaque — the `KITSHN_` selection and prefix-stripping happen in CI before the file is built.
 - `resolve` is a pure function. It writes `env=`, `action=`, `ephemeral=` lines suitable for `$GITHUB_OUTPUT` and exits non-zero with no output when no `.kitshn.yaml` entry matches.
