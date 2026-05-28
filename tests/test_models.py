@@ -18,7 +18,7 @@ def test_sanitize_environment_name_rejects_empty_result() -> None:
 
 
 def test_recipe_parse_requires_fully_qualified_name() -> None:
-    assert Recipe.parse("Owner/repo").remote_url == "git@github.com:Owner/repo.git"
+    assert Recipe.parse("Owner/repo").remote_url == "https://github.com/Owner/repo.git"
     with pytest.raises(KitshnError):
         Recipe.parse("repo")
 

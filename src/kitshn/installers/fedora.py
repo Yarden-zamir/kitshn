@@ -30,6 +30,15 @@ def install(runner: CommandRunner) -> None:
         [
             *sudo,
             "dnf",
+            "config-manager",
+            "addrepo",
+            "--from-repofile=https://cli.github.com/packages/rpm/gh-cli.repo",
+        ]
+    )
+    runner.run(
+        [
+            *sudo,
+            "dnf",
             "-y",
             "install",
             "docker-ce",
@@ -37,6 +46,7 @@ def install(runner: CommandRunner) -> None:
             "containerd.io",
             "docker-buildx-plugin",
             "docker-compose-plugin",
+            "gh",
             "caddy",
         ]
     )

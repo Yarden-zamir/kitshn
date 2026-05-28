@@ -18,6 +18,7 @@ def install(runner: CommandRunner) -> None:
     runner.run([*sudo, "apt-get", "update"])
     runner.run([*sudo, "apt-get", "install", "-y", "ca-certificates", "curl", "gnupg", "git"])
     runner.run([*sudo, "install", "-m", "0755", "-d", "/etc/apt/keyrings"])
+    _install_github_cli_apt_repo(runner, sudo)
     runner.run(
         [
             *sudo,
@@ -57,6 +58,7 @@ EOF
             "containerd.io",
             "docker-buildx-plugin",
             "docker-compose-plugin",
+            "gh",
             "caddy",
         ]
     )
@@ -94,6 +96,28 @@ def _install_caddy_apt_repo(runner: CommandRunner, sudo: list[str]) -> None:
     )
     runner.run([*sudo, "chmod", "o+r", "/usr/share/keyrings/caddy-stable-archive-keyring.gpg"])
     runner.run([*sudo, "chmod", "o+r", "/etc/apt/sources.list.d/caddy-stable.list"])
+
+
+def _install_github_cli_apt_repo(runner: CommandRunner, sudo: list[str]) -> None:
+    runner.run([*sudo, "mkdir", "-p", "-m", "755", "/etc/apt/keyrings"])
+    runner.run(
+        [
+            *sudo,
+            "sh",
+            "-c",
+            "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg",
+        ]
+    )
+    runner.run([*sudo, "chmod", "go+r", "/etc/apt/keyrings/githubcli-archive-keyring.gpg"])
+    runner.run([*sudo, "mkdir", "-p", "-m", "755", "/etc/apt/sources.list.d"])
+    runner.run(
+        [
+            *sudo,
+            "sh",
+            "-c",
+            'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list',
+        ]
+    )
 
 
 def _sudo() -> list[str]:

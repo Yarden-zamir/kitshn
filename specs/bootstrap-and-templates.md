@@ -18,7 +18,8 @@ Bootstrap creates or verifies:
 - `/logs`
 - `/logs/.kitshn`
 - shared Docker networks such as `kitshn-edge`
-- GitHub deploy access
+- GitHub CLI (`gh`) availability
+- GitHub CLI private repo auth status as a warning when unauthenticated
 
 Running `kitshn bootstrap` repeatedly is safe. It creates missing resources, verifies existing resources, and only changes existing configuration when it does not match KitSHn's expected state. At the end, it runs the same checks as `kitshn doctor`.
 

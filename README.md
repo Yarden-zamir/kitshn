@@ -44,7 +44,8 @@ Configure SSH access:
 
 - Add a GitHub Actions secret named `KITSHN_SSH_KEY` containing a private key that can SSH into the VPS deployment user.
 - Add a GitHub Actions variable named `KITSHN_VPS_HOST`, for example `deploy@example.com`.
-- Add a deploy key on each recipe repo so the VPS can clone `git@github.com:<owner>/<repo>.git`.
+- Public recipe repos can be cloned by the VPS without GitHub auth.
+- Private recipe repos need GitHub CLI auth on the VPS deployment user: run `gh auth login`, then verify with `kitshn doctor`.
 
 ## Create And Deploy A Service
 

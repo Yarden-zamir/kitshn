@@ -9,6 +9,7 @@ from .runner import CommandRunner
 
 def checkout_recipe(deployment: Deployment, ref: str | None, runner: CommandRunner) -> tuple[str | None, str]:
     root = deployment.deployment_root
+    _configure_github_git_auth(runner)
     if not (root / ".git").exists():
         runner.run(["git", "init"], cwd=root)
         runner.run(["git", "remote", "add", "origin", deployment.recipe.remote_url], cwd=root)
@@ -75,3 +76,13 @@ def _checkout_target(root: Path, ref: str, runner: CommandRunner) -> str:
     if result.returncode == 0:
         return f"origin/{ref}"
     return ref
+
+
+def _configure_github_git_auth(runner: CommandRunner) -> None:
+    if not runner.exists("gh"):
+        return
+    status = runner.run(
+        ["gh", "auth", "status", "--hostname", "github.com"], capture=True, check=False
+    )
+    if status.returncode == 0:
+        runner.run(["gh", "auth", "setup-git", "--hostname", "github.com"])

@@ -412,7 +412,7 @@ def _print_doctor_report(report: DoctorReport) -> None:
     print(f"{OK if report.ok else FAIL} server readiness")
     _print_table(
         ("status", "check", "detail"),
-        [(OK if check.ok else FAIL, check.name, check.detail) for check in report.checks],
+        [(_check_icon(check.state), check.name, check.detail) for check in report.checks],
     )
     if report.installers:
         print("")
@@ -440,6 +440,14 @@ def _print_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
     print("  ".join("-" * width for width in widths))
     for row in rows:
         print("  ".join(value.ljust(widths[index]) for index, value in enumerate(row)))
+
+
+def _check_icon(state: str) -> str:
+    if state == "ok":
+        return OK
+    if state == "warn":
+        return "⚠️"
+    return FAIL
 
 
 def _safe_log(entry: InvocationLog, roots) -> None:

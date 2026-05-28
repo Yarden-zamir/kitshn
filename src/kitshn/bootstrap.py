@@ -7,6 +7,7 @@ import os
 import pwd
 import shutil
 import stat
+from typing import Literal
 
 from .errors import KitshnError
 from .installer_registry import Installer, get_installer, suggested_installers
@@ -19,8 +20,12 @@ EXPECTED_CADDY_IMPORT = "import /deployments/*/*/*/Caddyfile"
 @dataclass(frozen=True, slots=True)
 class Check:
     name: str
-    ok: bool
+    state: Literal["ok", "warn", "fail"]
     detail: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.state in {"ok", "warn"}
 
 
 @dataclass(slots=True)
@@ -33,7 +38,10 @@ class DoctorReport:
         return all(check.ok for check in self.checks)
 
     def add(self, name: str, ok: bool, detail: str = "") -> None:
-        self.checks.append(Check(name, ok, detail))
+        self.checks.append(Check(name, "ok" if ok else "fail", detail))
+
+    def warn(self, name: str, detail: str) -> None:
+        self.checks.append(Check(name, "warn", detail))
 
 
 def bootstrap(
@@ -69,7 +77,7 @@ def doctor(
     caddyfile: Path = Path("/etc/caddy/Caddyfile"),
 ) -> DoctorReport:
     report = DoctorReport()
-    for executable in ("docker", "git", "uv", "caddy"):
+    for executable in ("docker", "git", "gh", "uv", "caddy"):
         report.add(executable, runner.exists(executable), _which_detail(executable))
 
     compose = runner.run(["docker", "compose", "version"], capture=True, check=False)
@@ -87,11 +95,17 @@ def doctor(
     network_check = runner.run(["docker", "network", "inspect", network], capture=True, check=False)
     report.add("edge network", network_check.returncode == 0, network)
 
-    github_check = runner.run(["ssh", "-T", "git@github.com"], capture=True, check=False)
-    github_ok = github_check.returncode in {0, 1} and "successfully authenticated" in (
-        github_check.stdout + github_check.stderr
-    )
-    report.add("github deploy access", github_ok, _result_detail(github_check.stdout, github_check.stderr))
+    if runner.exists("gh"):
+        github_check = runner.run(
+            ["gh", "auth", "status", "--hostname", "github.com"], capture=True, check=False
+        )
+        if github_check.returncode == 0:
+            report.add("github private repo auth", True, "authenticated with gh")
+        else:
+            report.warn(
+                "github private repo auth",
+                "public repos work without auth; private repos need: gh auth login",
+            )
 
     caddy_check = runner.run(
         ["caddy", "validate", "--config", str(caddyfile)], capture=True, check=False
@@ -148,8 +162,8 @@ def describe_mode(path: Path) -> str:
 
 
 def _has_missing_dependencies(report: DoctorReport) -> bool:
-    dependency_checks = {"docker", "docker compose", "git", "uv", "caddy"}
-    return any(check.name in dependency_checks and not check.ok for check in report.checks)
+    dependency_checks = {"docker", "docker compose", "git", "gh", "uv", "caddy"}
+    return any(check.name in dependency_checks and check.state == "fail" for check in report.checks)
 
 
 def _single_suggested_installer(report: DoctorReport) -> Installer:

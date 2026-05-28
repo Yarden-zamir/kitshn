@@ -15,5 +15,5 @@ def matches_os_release(os_release: dict[str, str]) -> bool:
 
 def install(runner: CommandRunner) -> None:
     sudo = [] if os.geteuid() == 0 else ["sudo"]
-    runner.run([*sudo, "apk", "add", "--no-cache", "docker", "docker-cli-compose", "git", "curl", "caddy"])
+    runner.run([*sudo, "apk", "add", "--no-cache", "docker", "docker-cli-compose", "git", "github-cli", "curl", "caddy"])
     runner.run(["sh", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"])

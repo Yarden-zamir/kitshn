@@ -48,7 +48,7 @@ class Recipe:
 
     @property
     def remote_url(self) -> str:
-        return f"git@github.com:{self.owner}/{self.repo}.git"
+        return f"https://github.com/{self.owner}/{self.repo}.git"
 
 
 @dataclass(frozen=True, slots=True)

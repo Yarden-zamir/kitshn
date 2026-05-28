@@ -42,12 +42,12 @@ kitshn affected <owner/repo> [--from <sha>] [--to <sha>]
 `doctor` verifies server readiness:
 
 - Docker and Docker Compose are available.
-- Git, uv, and Caddy are available.
+- Git, GitHub CLI (`gh`), uv, and Caddy are available.
 - Missing dependencies are reported explicitly.
 - Matching optional installer modules are reported when dependencies are missing.
 - canonical roots exist with expected ownership and permissions.
 - shared Docker networks such as `kitshn-edge` exist.
-- GitHub deploy access works.
+- GitHub CLI auth status is shown. Public repos work without auth; private repos need `gh auth login` on the VPS deployment user.
 - Caddy config validates.
 
 Rules:

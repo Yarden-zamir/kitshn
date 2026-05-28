@@ -8,7 +8,7 @@ Rules:
 
 - Always use the fully qualified name.
 - Assume GitHub hosting.
-- Remote is derived as `git@github.com:<owner>/<repo>.git`.
+- Remote is derived as `https://github.com/<owner>/<repo>.git`.
 - Matching is case-insensitive.
 - Use `compose.yml` when the recipe has containers.
 - Use root `Caddyfile.j2` when the recipe routes public traffic.
