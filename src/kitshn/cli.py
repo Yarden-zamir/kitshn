@@ -35,6 +35,7 @@ from .logs import show_logs
 from .models import Deployment, Recipe
 from .resolve import ResolveInput, resolve_deployment
 from .runner import CommandRunner
+from .seeding import seed_recipe
 from .structured_log import InvocationLog, append_invocation_log
 from .templates import available_templates, init_recipe
 
@@ -55,6 +56,7 @@ PLAY = "▶️"
 STOP = "⏹️"
 RESTART = "🔄"
 REMOTE = "🖥️"
+KEY = "🔑"
 
 InstallerChoice = StrEnum(
     "InstallerChoice",
@@ -125,6 +127,51 @@ def installers() -> None:
             for installer in load_installers()
         ],
     )
+
+
+@app.command
+def seed(
+    recipe: str,
+    *,
+    vps_host: Annotated[str, Parameter("--vps-host", help="SSH target used by GitHub Actions.")],
+    template: Annotated[str, Parameter("--template", help="Template name to copy.")] = "bare",
+    directory: Annotated[Path, Parameter("--directory", help="Target repository directory.")] = Path("."),
+    key_path: Annotated[
+        Path | None,
+        Parameter("--key-path", help="Private key path to generate. Defaults to ~/.ssh/kitshn-<owner>-<repo>-ed25519."),
+    ] = None,
+    force: Annotated[bool, Parameter("--force", help="Overwrite generated files and SSH key.")] = False,
+    authorize_key: Annotated[
+        bool,
+        Parameter("--authorize-key", help="Append the generated public key to the VPS user's authorized_keys."),
+    ] = True,
+    dry_run: Annotated[bool, Parameter("--dry-run", help="Print commands without running them.")] = False,
+) -> None:
+    """Seed an existing repository with KitSHn files and GitHub Actions SSH access."""
+
+    result = seed_recipe(
+        recipe,
+        template=template,
+        target_dir=directory,
+        vps_host=vps_host,
+        runner=CommandRunner(dry_run=dry_run),
+        key_path=key_path,
+        force=force,
+        authorize_key=authorize_key,
+    )
+    print(f"{OK} recipe seeded")
+    print("status=seeded")
+    print(f"recipe={recipe}")
+    print(f"template={template}")
+    print(f"directory={directory}")
+    print(f"files={len(result.created_files)}")
+    print(f"{KEY} ssh_key={result.private_key}")
+    print(f"public_key={result.public_key}")
+    print(f"vps_host={vps_host}")
+    print(f"authorized_key={str(result.authorized_key).lower()}")
+    for path in result.created_files:
+        print(f"file={path}")
+    _safe_log(InvocationLog(command="seed", status="ok", extra={"template": template}), roots_from_env())
 
 
 @app.command

@@ -48,7 +48,7 @@ def init_recipe(
 
 def _walk_template_files(root: Traversable, prefix: Path = Path()) -> list[tuple[Traversable, Path]]:
     files: list[tuple[Traversable, Path]] = []
-    for child in root.iterdir():
+    for child in sorted(root.iterdir(), key=lambda item: item.name):
         relative = prefix / child.name
         if child.is_dir():
             files.extend(_walk_template_files(child, relative))

@@ -56,7 +56,16 @@ Every template includes:
 
 Recipe templates should stay boring and editable.
 
-Command:
+Seeding is the process of connecting an existing repository to KitSHn.
+
+High-level command:
+
+```bash
+kitshn templates
+kitshn seed <owner/repo> --template bare --vps-host <ssh-target>
+```
+
+Manual command:
 
 ```bash
 kitshn init <owner/repo> --template <template>
@@ -64,6 +73,7 @@ kitshn init <owner/repo> --template <template>
 
 Initial templates:
 
+- `bare` — only `.kitshn.yaml` and `.github/workflows/kitshn.yml`.
 - `node-service`
 - `static-site`
 - `worker`
