@@ -11,9 +11,9 @@ def test_caddy_render_receives_full_params_file(tmp_path: Path) -> None:
     deployment = _deployment(tmp_path)
     deployment.deployment_root.mkdir(parents=True)
     deployment.params_root.mkdir(parents=True)
-    deployment.params_file.write_text('DOMAIN="example.com"\nTOKEN="secret"\n', encoding="utf-8")
+    deployment.params_file.write_text('HOST="example.com"\nTOKEN="secret"\n', encoding="utf-8")
     (deployment.deployment_root / "Caddyfile.j2").write_text(
-        "{{ params.DOMAIN }} {\n    header X-Token {{ params.TOKEN }}\n}\n",
+        "{{ params.HOST }} {\n    header X-Token {{ params.TOKEN }}\n}\n",
         encoding="utf-8",
     )
 

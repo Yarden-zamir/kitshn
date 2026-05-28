@@ -33,11 +33,11 @@ from .filesystem import roots_from_env
 from .installer_registry import installer_choices, load_installers
 from .logs import show_logs
 from .models import Deployment, Recipe
+from .recipe_auth import authorize_recipe
+from .repo_init import init_recipe_repo
 from .resolve import ResolveInput, resolve_deployment
 from .runner import CommandRunner
-from .seeding import seed_recipe
 from .structured_log import InvocationLog, append_invocation_log
-from .templates import available_templates, init_recipe
 
 app = App(
     name="kitshn",
@@ -62,6 +62,9 @@ InstallerChoice = StrEnum(
     "InstallerChoice",
     {choice.upper().replace("-", "_"): choice for choice in installer_choices()},
 )
+
+recipe_app = App(name="recipe", help="Manage recipe repository configuration.")
+app.command(recipe_app)
 
 
 @app.command
@@ -130,78 +133,71 @@ def installers() -> None:
 
 
 @app.command
-def seed(
-    recipe: str,
-    *,
-    vps_host: Annotated[str, Parameter("--vps-host", help="SSH target used by GitHub Actions.")],
-    template: Annotated[str, Parameter("--template", help="Template name to copy.")] = "bare",
-    directory: Annotated[Path, Parameter("--directory", help="Target repository directory.")] = Path("."),
-    key_path: Annotated[
-        Path | None,
-        Parameter("--key-path", help="Private key path to generate. Defaults to ~/.ssh/kitshn-<owner>-<repo>-ed25519."),
-    ] = None,
-    force: Annotated[bool, Parameter("--force", help="Overwrite generated files and SSH key.")] = False,
-    authorize_key: Annotated[
-        bool,
-        Parameter("--authorize-key", help="Append the generated public key to the VPS user's authorized_keys."),
-    ] = True,
-    dry_run: Annotated[bool, Parameter("--dry-run", help="Print commands without running them.")] = False,
-) -> None:
-    """Seed an existing repository with KitSHn files and GitHub Actions SSH access."""
-
-    result = seed_recipe(
-        recipe,
-        template=template,
-        target_dir=directory,
-        vps_host=vps_host,
-        runner=CommandRunner(dry_run=dry_run),
-        key_path=key_path,
-        force=force,
-        authorize_key=authorize_key,
-    )
-    print(f"{OK} recipe seeded")
-    print("status=seeded")
-    print(f"recipe={recipe}")
-    print(f"template={template}")
-    print(f"directory={directory}")
-    print(f"files={len(result.created_files)}")
-    print(f"{KEY} ssh_key={result.private_key}")
-    print(f"public_key={result.public_key}")
-    print(f"vps_host={vps_host}")
-    print(f"authorized_key={str(result.authorized_key).lower()}")
-    for path in result.created_files:
-        print(f"file={path}")
-    _safe_log(InvocationLog(command="seed", status="ok", extra={"template": template}), roots_from_env())
-
-
-@app.command
 def init(
-    recipe: str,
     *,
-    template: Annotated[str, Parameter("--template", help="Template name to copy.")],
     directory: Annotated[Path, Parameter("--directory", help="Target directory.")] = Path("."),
+    docker: Annotated[bool, Parameter("--docker", help="Add a minimal compose.yml contract file.")] = False,
+    routing: Annotated[
+        bool,
+        Parameter("--routing", help="Add a minimal Caddyfile.j2 routing contract file."),
+    ] = False,
     force: Annotated[bool, Parameter("--force", help="Overwrite existing files.")] = False,
 ) -> None:
-    """Create KitSHn recipe files from a template."""
+    """Create KitSHn recipe contract files in a repository."""
 
-    created = init_recipe(recipe, template=template, target_dir=directory, force=force)
+    result = init_recipe_repo(
+        target_dir=directory,
+        runner=CommandRunner(),
+        docker=docker,
+        routing=routing,
+        force=force,
+    )
     print(f"{OK} recipe initialized")
     print("status=initialized")
-    print(f"recipe={recipe}")
-    print(f"template={template}")
     print(f"directory={directory}")
-    print(f"files={len(created)}")
-    for path in created:
+    print(f"files={len(result.created_files)}")
+    print(f"kitshn_commit={result.source_commit}")
+    for path in result.created_files:
         print(f"file={path}")
-    _safe_log(InvocationLog(command="init", status="ok", extra={"template": template}), roots_from_env())
+    _safe_log(InvocationLog(command="init", status="ok"), roots_from_env())
 
 
-@app.command
-def templates() -> None:
-    """List available recipe templates."""
+@recipe_app.command(name="auth")
+def recipe_auth(
+    *,
+    recipe: Annotated[Path, Parameter("--recipe", help="Recipe repo path.")] = Path("."),
+    vps_host: Annotated[
+        str | None,
+        Parameter("--vps-host", help="SSH target to authorize. Omit when running on the VPS."),
+    ] = None,
+    key_path: Annotated[
+        Path | None,
+        Parameter(
+            "--key-path",
+            help="Private key path to generate. Defaults to ~/.ssh/kitshn-owner-repo-ed25519.",
+        ),
+    ] = None,
+    force: Annotated[bool, Parameter("--force", help="Overwrite generated SSH key.")] = False,
+    dry_run: Annotated[bool, Parameter("--dry-run", help="Print commands without running them.")] = False,
+) -> None:
+    """Configure GitHub Actions SSH auth for a recipe repo."""
 
-    print(f"{FILES} available templates")
-    _print_table(("template",), [(template,) for template in available_templates()])
+    result = authorize_recipe(
+        recipe_dir=recipe,
+        runner=CommandRunner(dry_run=dry_run),
+        vps_host=vps_host,
+        key_path=key_path,
+        force=force,
+    )
+    print(f"{KEY} recipe auth configured")
+    print("status=authorized")
+    print(f"recipe={result.recipe.full_name}")
+    print(f"recipe_dir={recipe}")
+    print(f"ssh_key={result.private_key}")
+    print(f"public_key={result.public_key}")
+    print(f"vps_host={result.vps_host}")
+    print(f"authorized_via_ssh={str(result.authorized_via_ssh).lower()}")
+    _safe_log(InvocationLog(command="recipe auth", status="ok"), roots_from_env())
 
 
 @app.command

@@ -1,4 +1,4 @@
-# Bootstrap And Templates
+# Bootstrap And Repo Init
 Bootstrap prepares the VPS and is idempotent.
 
 Bootstrap verifies:
@@ -49,32 +49,31 @@ kitshn doctor
 
 Recipes are not registered separately. `kitshn deploy` creates the deployment, params, persistent, and logs roots on first run and clones the recipe into the deployment root. `kitshn status` walks `/deployments/*/*/*`.
 
-Every template includes:
+`kitshn init` writes the required recipe contract files:
 
 - `.kitshn.yaml` with at least one entry, defaulting to `main` → `prod` and a `pr-{pr}` ephemeral entry.
 - `.github/workflows/kitshn.yml` calling the kitshn-hosted reusable workflow with `secrets: inherit`.
+- `kitshn.md` explaining the recipe contract and recording the KitSHn source commit that generated it.
 
-Recipe templates should stay boring and editable.
+Optional init flags add optional contract examples:
 
-Seeding is the process of connecting an existing repository to KitSHn.
+- `--docker` writes a commented `compose.yml` with KitSHn runtime env and label examples.
+- `--routing` writes a commented `Caddyfile.j2` and `.gitignore` for the generated `Caddyfile` artifact.
 
-High-level command:
-
-```bash
-kitshn templates
-kitshn seed <owner/repo> --template bare --vps-host <ssh-target>
-```
-
-Manual command:
+Commands:
 
 ```bash
-kitshn init <owner/repo> --template <template>
+kitshn init
+kitshn init --docker
+kitshn init --routing
+kitshn init --docker --routing
 ```
 
-Initial templates:
+Recipe auth is separate from init:
 
-- `bare` — only `.kitshn.yaml` and `.github/workflows/kitshn.yml`.
-- `node-service`
-- `static-site`
-- `worker`
-- `settings-repo`
+```bash
+kitshn recipe auth
+kitshn recipe auth --vps-host <ssh-target>
+```
+
+It assumes the repo already exists, has a GitHub remote, and the local `gh` CLI is authenticated. It derives the GitHub repo name with `gh repo view`, generates a per-recipe SSH key, authorizes that public key locally when `--vps-host` is omitted or over SSH when supplied, and sets the GitHub Actions secret/variable needed by the reusable workflow.

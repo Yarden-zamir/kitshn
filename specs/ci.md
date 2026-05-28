@@ -51,6 +51,8 @@ jobs:
 
 `kitshn init` writes this file.
 
+`kitshn init` also writes `kitshn.md`, which explains the recipe contract and records the KitSHn source commit that generated it.
+
 ## Reusable workflow
 `Yarden-zamir/kitshn/.github/workflows/deploy.yml` is the only supported CI entry point for `kitshn deploy` and `kitshn destroy`.
 

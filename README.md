@@ -55,55 +55,70 @@ kitshn doctor
 
 </details>
 
-## Seed And Deploy A Service
+## Connect A Repo
 
-Seeding means connecting an existing service repository to KitSHn by adding the required KitSHn files and GitHub Actions SSH configuration.
+Before running KitSHn commands, the service repo should already exist, have a GitHub remote, and be accessible through an authenticated local `gh` CLI.
 
-List available templates:
+### 1. Init
 
-```bash
-kitshn templates
-```
-
-Choose one:
-
-- `bare` adds only `.kitshn.yaml` and `.github/workflows/kitshn.yml`.
-- `node-service` adds a starter Node app, Compose file, Dockerfile, Caddy route, and workflow.
-- `static-site` adds a starter static site and Caddy route.
-- `worker` adds a starter background worker.
-- `settings-repo` adds only deployment settings scaffolding.
-
-CLI path for seeding an existing repo:
+CLI path:
 
 ```bash
-kitshn seed <owner/repo> --template bare --vps-host deploy@example.com
+kitshn init
 ```
 
-This one command copies the template, generates a per-recipe SSH key, authorizes the public key on the VPS user, and configures the service repo with `KITSHN_SSH_KEY` plus `KITSHN_VPS_HOST` through `gh`.
-
-For public HTTP routing, set a GitHub Environment variable or secret with the `KITSHN_` prefix. The starter `node-service` and `static-site` templates expect:
-
-```text
-KITSHN_DOMAIN=example.com
-```
-
-CI strips the `KITSHN_` prefix before writing `params.env`, so the recipe sees `DOMAIN`. `KITSHN_VPS_HOST` and `KITSHN_SSH_KEY` are reserved infrastructure keys and are not forwarded to app params.
-
-Commit and push the seeded files:
+Add optional deployment contract files only when you need them:
 
 ```bash
-git add .kitshn.yaml .github/workflows/kitshn.yml
-git commit -m "chore: seed KitSHn deployment config"
-git push
+kitshn init --docker
+kitshn init --routing
+kitshn init --docker --routing
 ```
 
 <details>
-<summary>Manual seeding details</summary>
+<summary>Manual init details</summary>
 
-Copy template files into the service repo:
+Create the required files yourself:
+
+```text
+.kitshn.yaml
+.github/workflows/kitshn.yml
+kitshn.md
+```
+
+Add optional files only when your recipe needs them:
+
+```text
+compose.yml
+Caddyfile.j2
+.gitignore
+```
+
+</details>
+
+### 2. Auth
+
+CLI path when running on the VPS:
 
 ```bash
-kitshn init <owner/repo> --template bare
+kitshn recipe auth
+```
+
+CLI path when authorizing a remote VPS from your local machine:
+
+```bash
+kitshn recipe auth --vps-host deploy@example.com
+```
+
+`recipe auth` derives the GitHub repo from the current repo with `gh`, generates a per-recipe SSH key, authorizes the public key on the VPS user, and configures the GitHub repo with `KITSHN_SSH_KEY` and `KITSHN_VPS_HOST`.
+
+<details>
+<summary>Manual auth details</summary>
+
+Find the GitHub repo name:
+
+```bash
+gh repo view --json nameWithOwner --jq .nameWithOwner
 ```
 
 Generate a per-recipe SSH key:
@@ -134,11 +149,28 @@ kitshn doctor
 
 </details>
 
-The seeded files include:
+### File Contract
 
-- `.kitshn.yaml` with `main -> prod` and ephemeral PR deployments.
-- `.github/workflows/kitshn.yml` that calls the KitSHn reusable workflow.
-- Template-specific files such as `compose.yml`, `Dockerfile`, app files, and `Caddyfile.j2` when the chosen template includes them.
+| File | Required | Purpose |
+| --- | --- | --- |
+| `.kitshn.yaml` | Yes | Maps GitHub events to deployment environments. |
+| `.github/workflows/kitshn.yml` | Yes | Calls the KitSHn reusable deployment workflow. |
+| `kitshn.md` | Yes | Documents the recipe contract and records the KitSHn source commit that generated it. |
+| `compose.yml` | No | Defines Docker Compose services when the recipe has containers. |
+| `Caddyfile.j2` | No | Defines public Caddy routing when the recipe needs HTTP ingress. |
+| `.gitignore` | No | Ignores generated deployment artifacts such as `Caddyfile` when routing is enabled. |
+
+GitHub vars and secrets starting with `KITSHN_` are forwarded into `params.env` with the prefix stripped. Reserved infrastructure keys `KITSHN_VPS_HOST` and `KITSHN_SSH_KEY` are not forwarded to app params.
+
+### 3. Deploy
+
+Commit and push the KitSHn files:
+
+```bash
+git add .kitshn.yaml .github/workflows/kitshn.yml kitshn.md
+git commit -m "chore: add KitSHn deployment config"
+git push
+```
 
 Deployments then happen through GitHub Actions:
 
@@ -162,5 +194,5 @@ Docs:
 - [Caddy Ingress](specs/caddy.md)
 - [Deploy Flow](specs/deploy-flow.md)
 - [CI Rules](specs/ci.md)
-- [Bootstrap And Templates](specs/bootstrap-and-templates.md)
+- [Bootstrap And Repo Init](specs/bootstrap-and-templates.md)
 - [CLI](specs/cli.md)

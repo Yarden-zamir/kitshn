@@ -6,9 +6,8 @@ kitshn bootstrap
 kitshn bootstrap --install-missing --installer <installer>
 kitshn installers
 kitshn doctor
-kitshn templates
-kitshn seed <owner/repo> --template <template> --vps-host <ssh-target>
-kitshn init <owner/repo> --template <template>
+kitshn init [--docker] [--routing]
+kitshn recipe auth [--recipe <path>] [--vps-host <ssh-target>]
 kitshn deploy <owner/repo> --params-file <path> [--ref <ref>] [--environment <name>]
 kitshn destroy <owner/repo> --environment <name> [--purge]
 kitshn resolve --recipe <owner/repo> --event <push|pull_request|workflow_dispatch> [event flags]
@@ -57,7 +56,8 @@ Rules:
 - Recipe arguments are always fully qualified `owner/repo` names.
 - Environment arguments are GitHub Environment names.
 - CLI output should be script-friendly by default.
-- `seed` is the high-level repo connection command. It copies template files, generates a per-recipe SSH key, authorizes the public key on the VPS user, and sets `KITSHN_SSH_KEY` plus `KITSHN_VPS_HOST` through `gh`.
+- `init` writes the fixed required recipe contract files. `--docker` and `--routing` add optional example contract files.
+- `recipe auth` derives the GitHub repo from `gh`, generates a per-recipe SSH key, authorizes the public key locally or over SSH, and sets `KITSHN_SSH_KEY` plus `KITSHN_VPS_HOST` through `gh`.
 - Logs should support both Docker stdout/stderr and file logs under `/logs`.
 - `deploy` requires `--params-file` pointing at a key/value file. The file is treated as opaque — the `KITSHN_` selection and prefix-stripping happen in CI before the file is built.
 - `resolve` is a pure function. It writes `env=`, `action=`, `ephemeral=` lines suitable for `$GITHUB_OUTPUT` and exits non-zero with no output when no `.kitshn.yaml` entry matches.

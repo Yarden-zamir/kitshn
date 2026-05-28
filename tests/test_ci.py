@@ -12,7 +12,7 @@ def test_write_params_from_github_filters_and_strips_prefix(tmp_path, monkeypatc
         "KITSHN_VARS_JSON",
         json.dumps(
             {
-                "KITSHN_DOMAIN": "example.com",
+                "KITSHN_PUBLIC_URL": "https://example.com",
                 "UNRELATED": "ignored",
                 "KITSHN_VPS_HOST": "server",
             }
@@ -26,7 +26,7 @@ def test_write_params_from_github_filters_and_strips_prefix(tmp_path, monkeypatc
 
     write_params_from_github(output)
 
-    assert output.read_text(encoding="utf-8") == 'DOMAIN="example.com"\nTOKEN="secret"\n'
+    assert output.read_text(encoding="utf-8") == 'PUBLIC_URL="https://example.com"\nTOKEN="secret"\n'
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
 
 
