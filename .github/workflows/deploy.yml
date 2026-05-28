@@ -1,0 +1,78 @@
+name: KitSHn Deploy
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  deployments: write
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      matched: ${{ steps.resolve.outputs.matched }}
+      env: ${{ steps.resolve.outputs.env }}
+      action: ${{ steps.resolve.outputs.action }}
+      ephemeral: ${{ steps.resolve.outputs.ephemeral }}
+      ref: ${{ steps.resolve.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v7
+
+      - id: resolve
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_SHA: ${{ github.sha }}
+          INPUT_ENVIRONMENT: ${{ github.event.inputs.environment }}
+          INPUT_REF: ${{ github.event.inputs.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_ACTION: ${{ github.event.action }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: uvx --from git+https://github.com/kitshn-org/kitshn.git@v1 kitshn ci-resolve
+
+  deploy:
+    needs: resolve
+    if: needs.resolve.outputs.matched == 'true' && needs.resolve.outputs.action == 'deploy'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve.outputs.env }}
+    steps:
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Build params file
+        env:
+          KITSHN_VARS_JSON: ${{ toJson(vars) }}
+          KITSHN_SECRETS_JSON: ${{ toJson(secrets) }}
+        run: uvx --from git+https://github.com/kitshn-org/kitshn.git@v1 kitshn ci-write-params --output params.env
+
+      - name: Deploy over SSH
+        env:
+          KITSHN_VPS_HOST: ${{ vars.KITSHN_VPS_HOST }}
+          KITSHN_SSH_KEY: ${{ secrets.KITSHN_SSH_KEY }}
+          KITSHN_ENVIRONMENT: ${{ needs.resolve.outputs.env }}
+          KITSHN_REF: ${{ needs.resolve.outputs.ref }}
+        run: uvx --from git+https://github.com/kitshn-org/kitshn.git@v1 kitshn ci-deploy --params-file params.env
+
+  teardown:
+    needs: resolve
+    if: needs.resolve.outputs.matched == 'true' && needs.resolve.outputs.action == 'destroy'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve.outputs.env }}
+    steps:
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Destroy over SSH
+        env:
+          KITSHN_VPS_HOST: ${{ vars.KITSHN_VPS_HOST }}
+          KITSHN_SSH_KEY: ${{ secrets.KITSHN_SSH_KEY }}
+          KITSHN_ENVIRONMENT: ${{ needs.resolve.outputs.env }}
+        run: uvx --from git+https://github.com/kitshn-org/kitshn.git@v1 kitshn ci-destroy
+
+      - name: Delete ephemeral GitHub Environment
+        if: needs.resolve.outputs.ephemeral == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          KITSHN_ENVIRONMENT: ${{ needs.resolve.outputs.env }}
+        run: uvx --from git+https://github.com/kitshn-org/kitshn.git@v1 kitshn ci-delete-environment
