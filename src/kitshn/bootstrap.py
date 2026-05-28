@@ -153,13 +153,44 @@ def _ensure_caddy_import(caddyfile: Path, roots: Roots) -> None:
         return
 
     content = caddyfile.read_text(encoding="utf-8")
-    if expected_import in content:
+    updated_content = _replace_stale_caddy_imports(content, roots)
+    if updated_content == content:
         return
     if not os.access(caddyfile, os.W_OK):
         msg = f"cannot update Caddyfile import without write access: {caddyfile}"
         raise KitshnError(msg)
-    separator = "" if content.endswith("\n") else "\n"
-    caddyfile.write_text(content + separator + expected_import + "\n", encoding="utf-8")
+    caddyfile.write_text(updated_content, encoding="utf-8")
+
+
+def _replace_stale_caddy_imports(content: str, roots: Roots) -> str:
+    expected_import = expected_caddy_import(roots)
+    stale_imports = {
+        f"import {roots.deployments}/*/*/*/Caddyfile",
+        f"import {roots.deployments}/_caddy/*.Caddyfile",
+    }
+
+    lines: list[str] = []
+    expected_seen = False
+    changed = False
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped in stale_imports:
+            changed = True
+            continue
+        if stripped == expected_import:
+            if expected_seen:
+                changed = True
+                continue
+            expected_seen = True
+        lines.append(line)
+
+    if not expected_seen:
+        lines.append(expected_import)
+        changed = True
+
+    if not changed:
+        return content
+    return "\n".join(lines) + "\n"
 
 
 def _which_detail(executable: str) -> str:
