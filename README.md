@@ -16,6 +16,23 @@ Core primitives:
 
 ## Setup
 
+CLI path:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv tool install git+https://github.com/Yarden-zamir/kitshn.git --force
+kitshn installers
+kitshn bootstrap --install-missing --installer ubuntu
+kitshn doctor
+```
+
+Make sure the `uv` tool bin directory is available to non-interactive SSH sessions. For the default uv install this is usually `~/.local/bin`.
+
+Bootstrap verifies or creates the deployment roots, shared Docker network, and Caddy import. Dependency installers are opt-in; `doctor` reports missing dependencies and matching installers.
+
+<details>
+<summary>Manual setup details</summary>
+
 Install `uv` on the VPS first, because KitSHn is distributed and run with `uv`:
 
 ```bash
@@ -28,9 +45,7 @@ Install the KitSHn CLI on the VPS:
 uv tool install git+https://github.com/Yarden-zamir/kitshn.git --force
 ```
 
-Make sure the `uv` tool bin directory is available to non-interactive SSH sessions. For the default uv install this is usually `~/.local/bin`.
-
-Bootstrap the VPS. Pick the installer matching your distro:
+List installers and pick the one matching your distro:
 
 ```bash
 kitshn installers
@@ -38,30 +53,35 @@ kitshn bootstrap --install-missing --installer ubuntu
 kitshn doctor
 ```
 
-Bootstrap verifies or creates the deployment roots, shared Docker network, and Caddy import. Dependency installers are opt-in; `doctor` reports missing dependencies and matching installers.
+</details>
 
-Configure SSH access:
+## Seed And Deploy A Service
 
-- Add a GitHub Actions secret named `KITSHN_SSH_KEY` containing a private key that can SSH into the VPS deployment user.
-- Add a GitHub Actions variable named `KITSHN_VPS_HOST`, for example `deploy@example.com`.
-- Public recipe repos can be cloned by the VPS without GitHub auth.
-- Private recipe repos need GitHub CLI auth on the VPS deployment user: run `gh auth login`, then verify with `kitshn doctor`.
+Seeding means connecting an existing service repository to KitSHn by adding the required KitSHn files and GitHub Actions SSH configuration.
 
-## Create And Deploy A Service
-
-In the service repository, generate KitSHn files from a template:
+List available templates:
 
 ```bash
-uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn init <owner/repo> --template node-service
+kitshn templates
 ```
 
-This creates:
+Choose one:
 
-- `.kitshn.yaml` with `main -> prod` and ephemeral PR deployments.
-- `.github/workflows/kitshn.yml` that calls the KitSHn reusable workflow.
-- A starter `compose.yml`, `Dockerfile`, app file, and `Caddyfile.j2`.
+- `bare` adds only `.kitshn.yaml` and `.github/workflows/kitshn.yml`.
+- `node-service` adds a starter Node app, Compose file, Dockerfile, Caddy route, and workflow.
+- `static-site` adds a starter static site and Caddy route.
+- `worker` adds a starter background worker.
+- `settings-repo` adds only deployment settings scaffolding.
 
-For public HTTP routing, set a GitHub Environment variable or secret with the `KITSHN_` prefix. The starter `node-service` template expects:
+CLI path for seeding an existing repo:
+
+```bash
+kitshn seed <owner/repo> --template bare --vps-host deploy@example.com
+```
+
+This one command copies the template, generates a per-recipe SSH key, authorizes the public key on the VPS user, and configures the service repo with `KITSHN_SSH_KEY` plus `KITSHN_VPS_HOST` through `gh`.
+
+For public HTTP routing, set a GitHub Environment variable or secret with the `KITSHN_` prefix. The starter `node-service` and `static-site` templates expect:
 
 ```text
 KITSHN_DOMAIN=example.com
@@ -69,13 +89,56 @@ KITSHN_DOMAIN=example.com
 
 CI strips the `KITSHN_` prefix before writing `params.env`, so the recipe sees `DOMAIN`. `KITSHN_VPS_HOST` and `KITSHN_SSH_KEY` are reserved infrastructure keys and are not forwarded to app params.
 
-Commit and push the generated files:
+Commit and push the seeded files:
 
 ```bash
-git add .kitshn.yaml .github/workflows/kitshn.yml compose.yml Dockerfile Caddyfile.j2 .gitignore
-git commit -m "chore: add KitSHn deployment config"
+git add .kitshn.yaml .github/workflows/kitshn.yml
+git commit -m "chore: seed KitSHn deployment config"
 git push
 ```
+
+<details>
+<summary>Manual seeding details</summary>
+
+Copy template files into the service repo:
+
+```bash
+kitshn init <owner/repo> --template bare
+```
+
+Generate a per-recipe SSH key:
+
+```bash
+ssh-keygen -t ed25519 -C "kitshn:<owner/repo>" -f ~/.ssh/kitshn-<owner>-<repo>-ed25519 -N ""
+```
+
+Authorize the public key on the VPS deployment user:
+
+```bash
+ssh deploy@example.com 'umask 077; mkdir -p ~/.ssh; cat >> ~/.ssh/authorized_keys' < ~/.ssh/kitshn-<owner>-<repo>-ed25519.pub
+```
+
+Configure the service repository through GitHub CLI:
+
+```bash
+gh secret set KITSHN_SSH_KEY --repo <owner/repo> --body-file ~/.ssh/kitshn-<owner>-<repo>-ed25519
+gh variable set KITSHN_VPS_HOST --repo <owner/repo> --body deploy@example.com
+```
+
+If the recipe repo is private, authenticate GitHub CLI on the VPS deployment user so the VPS can clone it:
+
+```bash
+gh auth login
+kitshn doctor
+```
+
+</details>
+
+The seeded files include:
+
+- `.kitshn.yaml` with `main -> prod` and ephemeral PR deployments.
+- `.github/workflows/kitshn.yml` that calls the KitSHn reusable workflow.
+- Template-specific files such as `compose.yml`, `Dockerfile`, app files, and `Caddyfile.j2` when the chosen template includes them.
 
 Deployments then happen through GitHub Actions:
 
