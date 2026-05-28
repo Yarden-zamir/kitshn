@@ -76,6 +76,10 @@ def _workflow_yml() -> str:
       environment: { required: true, type: string }
       ref: { required: false, type: string }
 
+permissions:
+  contents: read
+  deployments: write
+
 jobs:
   call:
     uses: Yarden-zamir/kitshn/.github/workflows/deploy.yml@main
@@ -92,7 +96,7 @@ This repository is a KitSHn recipe repo. KitSHn deploys recipe repos from GitHub
 ## Contract
 
 - `.kitshn.yaml` maps GitHub events to deployment environments.
-- `.github/workflows/kitshn.yml` calls the KitSHn reusable deploy workflow.
+- `.github/workflows/kitshn.yml` calls the KitSHn reusable deploy workflow and grants it required GitHub token permissions.
 - `kitshn.md` documents the recipe contract and the KitSHn source commit that generated it.
 - Optional `compose.yml` defines container services for Docker Compose deployments.
 - Optional `Caddyfile.j2` defines public routing and is rendered on the VPS into a generated `Caddyfile`.

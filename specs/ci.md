@@ -43,11 +43,17 @@ on:
       environment: { required: true,  type: string }
       ref:         { required: false, type: string }
 
+permissions:
+  contents: read
+  deployments: write
+
 jobs:
   call:
     uses: Yarden-zamir/kitshn/.github/workflows/deploy.yml@main
     secrets: inherit
 ```
+
+The caller workflow must grant the reusable workflow at least `contents: read` and `deployments: write`; permissions can only be maintained or reduced across a reusable workflow call.
 
 `kitshn init` writes this file.
 

@@ -52,7 +52,7 @@ Recipes are not registered separately. `kitshn deploy` creates the deployment, p
 `kitshn init` writes the required recipe contract files:
 
 - `.kitshn.yaml` with at least one entry, defaulting to `main` → `prod` and a `pr-{pr}` ephemeral entry.
-- `.github/workflows/kitshn.yml` calling the kitshn-hosted reusable workflow with `secrets: inherit`.
+- `.github/workflows/kitshn.yml` calling the kitshn-hosted reusable workflow with `secrets: inherit` and the required `contents: read` plus `deployments: write` permissions.
 - `kitshn.md` explaining the recipe contract and recording the KitSHn source commit that generated it.
 
 Optional init flags add optional contract examples:

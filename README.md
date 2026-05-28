@@ -154,7 +154,7 @@ kitshn doctor
 | File | Required | Purpose |
 | --- | --- | --- |
 | `.kitshn.yaml` | Yes | Maps GitHub events to deployment environments. |
-| `.github/workflows/kitshn.yml` | Yes | Calls the KitSHn reusable deployment workflow. |
+| `.github/workflows/kitshn.yml` | Yes | Calls the KitSHn reusable deployment workflow and grants required token permissions. |
 | `kitshn.md` | Yes | Documents the recipe contract and records the KitSHn source commit that generated it. |
 | `compose.yml` | No | Defines Docker Compose services when the recipe has containers. |
 | `Caddyfile.j2` | No | Defines public Caddy routing when the recipe needs HTTP ingress. |
