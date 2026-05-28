@@ -1,7 +1,7 @@
 from pathlib import Path
 from collections.abc import Mapping, Sequence
 
-from kitshn.bootstrap import doctor, expected_caddy_import
+from kitshn.bootstrap import bootstrap, doctor, expected_caddy_import
 from kitshn.models import Roots
 from kitshn.runner import CommandResult, CommandRunner
 
@@ -90,6 +90,30 @@ def test_doctor_reports_caddy_validation_error_instead_of_info_log(tmp_path: Pat
 
 def test_expected_caddy_import_uses_generated_manifest(tmp_path: Path) -> None:
     assert expected_caddy_import(_roots(tmp_path)) == f"import {tmp_path}/deployments/Caddyfile"
+
+
+def test_bootstrap_replaces_stale_caddy_imports(tmp_path: Path) -> None:
+    roots = _roots(tmp_path)
+    caddyfile = tmp_path / "Caddyfile"
+    caddyfile.write_text(
+        ":80 {\n"
+        "    respond ok\n"
+        "}\n"
+        f"import {roots.deployments}/*/*/*/Caddyfile\n"
+        f"import {roots.deployments}/Caddyfile\n"
+        f"import {roots.deployments}/_caddy/*.Caddyfile\n",
+        encoding="utf-8",
+    )
+    runner = FakeRunner({"docker", "git", "gh", "uv", "caddy"})
+
+    bootstrap(roots=roots, user=None, runner=runner, caddyfile=caddyfile)
+
+    assert caddyfile.read_text(encoding="utf-8") == (
+        ":80 {\n"
+        "    respond ok\n"
+        "}\n"
+        f"import {roots.deployments}/Caddyfile\n"
+    )
 
 
 def _roots(tmp_path: Path) -> Roots:
