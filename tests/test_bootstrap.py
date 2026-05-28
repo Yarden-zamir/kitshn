@@ -88,8 +88,8 @@ def test_doctor_reports_caddy_validation_error_instead_of_info_log(tmp_path: Pat
     assert caddy_check.detail == "unrecognized directive: bad"
 
 
-def test_expected_caddy_import_uses_single_glob_segment(tmp_path: Path) -> None:
-    assert expected_caddy_import(_roots(tmp_path)) == f"import {tmp_path}/deployments/_caddy/*.Caddyfile"
+def test_expected_caddy_import_uses_generated_manifest(tmp_path: Path) -> None:
+    assert expected_caddy_import(_roots(tmp_path)) == f"import {tmp_path}/deployments/Caddyfile"
 
 
 def _roots(tmp_path: Path) -> Roots:
