@@ -44,6 +44,18 @@ app = App(
     version=__version__,
 )
 
+OK = "✅"
+FAIL = "❌"
+INFO = "ℹ️"
+PACKAGE = "📦"
+FILES = "📄"
+ROCKET = "🚀"
+TRASH = "🗑️"
+PLAY = "▶️"
+STOP = "⏹️"
+RESTART = "🔄"
+REMOTE = "🖥️"
+
 InstallerChoice = StrEnum(
     "InstallerChoice",
     {choice.upper().replace("-", "_"): choice for choice in installer_choices()},
@@ -84,6 +96,9 @@ def bootstrap_remote(ssh_target: str) -> None:
     """Run kitshn bootstrap on a remote SSH target."""
 
     run_bootstrap_remote(ssh_target, CommandRunner())
+    print(f"{REMOTE} bootstrapped remote host")
+    print("status=bootstrapped-remote")
+    print(f"target={ssh_target}")
     _safe_log(InvocationLog(command="bootstrap-remote", status="ok"), roots_from_env())
 
 
@@ -102,9 +117,14 @@ def doctor() -> int:
 def installers() -> None:
     """List dynamically loaded bootstrap installers."""
 
-    for installer in load_installers():
-        managers = ",".join(installer.package_managers)
-        print(f"{installer.name}\t{managers}\t{installer.description}")
+    print(f"{PACKAGE} available installers")
+    _print_table(
+        ("name", "package managers", "description"),
+        [
+            (installer.name, ", ".join(installer.package_managers), installer.description)
+            for installer in load_installers()
+        ],
+    )
 
 
 @app.command
@@ -118,8 +138,14 @@ def init(
     """Create KitSHn recipe files from a template."""
 
     created = init_recipe(recipe, template=template, target_dir=directory, force=force)
+    print(f"{OK} recipe initialized")
+    print("status=initialized")
+    print(f"recipe={recipe}")
+    print(f"template={template}")
+    print(f"directory={directory}")
+    print(f"files={len(created)}")
     for path in created:
-        print(path)
+        print(f"file={path}")
     _safe_log(InvocationLog(command="init", status="ok", extra={"template": template}), roots_from_env())
 
 
@@ -127,8 +153,8 @@ def init(
 def templates() -> None:
     """List available recipe templates."""
 
-    for template in available_templates():
-        print(template)
+    print(f"{FILES} available templates")
+    _print_table(("template",), [(template,) for template in available_templates()])
 
 
 @app.command
@@ -149,10 +175,13 @@ def deploy(
         environment=environment,
         runner=CommandRunner(dry_run=dry_run),
     )
+    print(f"{ROCKET} deployed")
+    print("status=deployed")
     print(f"deployment={result.deployment.identity}")
+    print(f"environment={result.deployment.environment}")
     print(f"ref={result.ref}")
     print(f"compose_project={result.deployment.compose_project}")
-    print("changed_services=" + ",".join(result.changed_services))
+    print("changed_services=" + (",".join(result.changed_services) or "none"))
     print(f"caddy_reloaded={str(result.caddy_reloaded).lower()}")
     _safe_log(
         InvocationLog(
@@ -179,8 +208,11 @@ def destroy(
     deployment = destroy_deployment(
         recipe, environment=environment, purge=purge, runner=CommandRunner(dry_run=dry_run)
     )
-    print(f"deployment={deployment.identity}")
+    print(f"{TRASH} destroyed")
     print("status=destroyed")
+    print(f"deployment={deployment.identity}")
+    print(f"environment={deployment.environment}")
+    print(f"purge={str(purge).lower()}")
     _safe_log(InvocationLog(command="destroy", status="ok", deployment=deployment), deployment.roots)
 
 
@@ -273,8 +305,10 @@ def start(
     """Start Compose services for one deployment."""
 
     deployment = set_deployment_state(recipe, environment=environment, action="start")
-    print(f"deployment={deployment.identity}")
+    print(f"{PLAY} started")
     print("status=started")
+    print(f"deployment={deployment.identity}")
+    print(f"environment={deployment.environment}")
     _safe_log(InvocationLog(command="start", status="ok", deployment=deployment), deployment.roots)
 
 
@@ -287,8 +321,10 @@ def stop(
     """Stop Compose services for one deployment."""
 
     deployment = set_deployment_state(recipe, environment=environment, action="stop")
-    print(f"deployment={deployment.identity}")
+    print(f"{STOP} stopped")
     print("status=stopped")
+    print(f"deployment={deployment.identity}")
+    print(f"environment={deployment.environment}")
     _safe_log(InvocationLog(command="stop", status="ok", deployment=deployment), deployment.roots)
 
 
@@ -301,8 +337,10 @@ def restart(
     """Restart Compose services for one deployment."""
 
     deployment = set_deployment_state(recipe, environment=environment, action="restart")
-    print(f"deployment={deployment.identity}")
+    print(f"{RESTART} restarted")
     print("status=restarted")
+    print(f"deployment={deployment.identity}")
+    print(f"environment={deployment.environment}")
     _safe_log(InvocationLog(command="restart", status="ok", deployment=deployment), deployment.roots)
 
 
@@ -310,6 +348,7 @@ def restart(
 def affected(recipe: str) -> None:
     """List deployments/services depending on a recipe."""
 
+    print(f"{INFO} affected services")
     for item in affected_deployments(recipe):
         print(item)
     _safe_log(InvocationLog(command="affected", status="ok", extra={"recipe": recipe}), roots_from_env())
@@ -370,12 +409,37 @@ def main() -> int:
 
 
 def _print_doctor_report(report: DoctorReport) -> None:
-    for check in report.checks:
-        status = "ok" if check.ok else "fail"
-        detail = f"\t{check.detail}" if check.detail else ""
-        print(f"{status}\t{check.name}{detail}")
+    print(f"{OK if report.ok else FAIL} server readiness")
+    _print_table(
+        ("status", "check", "detail"),
+        [(OK if check.ok else FAIL, check.name, check.detail) for check in report.checks],
+    )
     if report.installers:
-        print("installers\t" + ",".join(installer.name for installer in report.installers))
+        print("")
+        print(f"{PACKAGE} suggested installers")
+        _print_table(
+            ("name", "package managers", "description"),
+            [
+                (installer.name, ", ".join(installer.package_managers), installer.description)
+                for installer in report.installers
+            ],
+        )
+        print("")
+        print(f"{INFO} install with: kitshn bootstrap --install-missing --installer <name>")
+
+
+def _print_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
+    if not rows:
+        return
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for index, value in enumerate(row):
+            widths[index] = max(widths[index], len(value))
+
+    print("  ".join(header.upper().ljust(widths[index]) for index, header in enumerate(headers)))
+    print("  ".join("-" * width for width in widths))
+    for row in rows:
+        print("  ".join(value.ljust(widths[index]) for index, value in enumerate(row)))
 
 
 def _safe_log(entry: InvocationLog, roots) -> None:
