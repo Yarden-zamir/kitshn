@@ -132,20 +132,22 @@ def deploy_over_ssh(params_file: Path) -> None:
         remote_command = "; ".join(
             [
                 REMOTE_PATH_PREFIX,
-                shlex.join(
-                    [
-                        *HOSTED_CLI,
-                        "deploy",
-                        repository,
-                        "--params-file",
-                        remote_params,
-                        "--ref",
-                        ref,
-                        "--environment",
-                        environment,
-                    ]
+                _preserve_exit_with_cleanup(
+                    shlex.join(
+                        [
+                            *HOSTED_CLI,
+                            "deploy",
+                            repository,
+                            "--params-file",
+                            remote_params,
+                            "--ref",
+                            ref,
+                            "--environment",
+                            environment,
+                        ]
+                    ),
+                    shlex.join(["rm", "-f", remote_params]),
                 ),
-                shlex.join(["rm", "-f", remote_params]),
             ]
         )
         _run(["ssh", *ssh_args, vps_host, remote_command])
@@ -217,6 +219,10 @@ def _run(args: list[str]) -> None:
     except subprocess.CalledProcessError as error:
         msg = f"command failed ({error.returncode}): {shlex.join(args)}"
         raise KitshnError(msg) from error
+
+
+def _preserve_exit_with_cleanup(command: str, cleanup: str) -> str:
+    return f"{command}; status=$?; {cleanup}; exit $status"
 
 
 def _required_env(name: str) -> str:

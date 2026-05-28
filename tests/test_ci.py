@@ -91,7 +91,9 @@ def test_deploy_over_ssh_uses_hosted_cli_on_remote(tmp_path, monkeypatch) -> Non
     remote_command = commands[1][-1]
     assert "export PATH=$HOME/.local/bin:$PATH" in remote_command
     assert "uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn deploy" in remote_command
+    assert "status=$?" in remote_command
     assert "rm -f /tmp/kitshn-123-2.env" in remote_command
+    assert "exit $status" in remote_command
 
 
 def test_destroy_over_ssh_uses_hosted_cli_on_remote(monkeypatch) -> None:
