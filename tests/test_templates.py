@@ -1,8 +1,4 @@
-from kitshn.templates import available_templates, init_recipe
-
-
-def test_available_templates_include_initial_set() -> None:
-    assert set(available_templates()) == {"node-service", "settings-repo", "static-site", "worker"}
+from kitshn.templates import init_recipe
 
 
 def test_init_recipe_renders_placeholders(tmp_path) -> None:

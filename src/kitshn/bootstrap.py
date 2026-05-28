@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 from pathlib import Path
 import getpass
 import os
@@ -154,7 +155,35 @@ def _which_detail(executable: str) -> str:
 
 
 def _result_detail(stdout: str, stderr: str) -> str:
-    return (stdout.strip() or stderr.strip()).splitlines()[0] if stdout.strip() or stderr.strip() else ""
+    lines = [line.strip() for line in (stderr + "\n" + stdout).splitlines() if line.strip()]
+    if not lines:
+        return ""
+
+    parsed_messages: list[tuple[str, str]] = []
+    plain_lines: list[str] = []
+    for line in lines:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            plain_lines.append(line)
+            continue
+        if not isinstance(payload, dict):
+            plain_lines.append(line)
+            continue
+        level = payload.get("level")
+        message = payload.get("msg")
+        if isinstance(level, str) and isinstance(message, str):
+            parsed_messages.append((level, message))
+        else:
+            plain_lines.append(line)
+
+    for wanted_level in ("error", "warn"):
+        for level, message in parsed_messages:
+            if level == wanted_level:
+                return message
+    if plain_lines:
+        return plain_lines[-1]
+    return parsed_messages[-1][1] if parsed_messages else lines[-1]
 
 
 def describe_mode(path: Path) -> str:

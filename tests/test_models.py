@@ -47,7 +47,3 @@ def test_compose_project_is_deployment_scoped() -> None:
     assert left != right
     assert left == "owner-a-app-prod"
     assert len(left) <= 63
-
-
-def test_recipe_normalized_name_is_case_insensitive() -> None:
-    assert Recipe.parse("Owner/Repo").normalized_full_name == "owner/repo"

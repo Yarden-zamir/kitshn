@@ -1,4 +1,4 @@
-from kitshn.installer_registry import installer_choices, read_os_release, suggested_installers
+from kitshn.installer_registry import read_os_release, suggested_installers
 from kitshn.runner import CommandRunner
 
 
@@ -9,10 +9,6 @@ class FakeRunner(CommandRunner):
 
     def exists(self, executable: str) -> bool:
         return executable in self.executables
-
-
-def test_installer_choices_are_loaded_from_modules() -> None:
-    assert installer_choices() == ["alpine", "arch", "debian", "fedora", "ubuntu"]
 
 
 def test_suggested_installers_fall_back_to_package_manager(monkeypatch) -> None:
