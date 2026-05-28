@@ -58,16 +58,8 @@ def authorize_recipe(
         authorized_via_ssh = True
 
     runner.run(
-        [
-            "gh",
-            "secret",
-            "set",
-            "KITSHN_SSH_KEY",
-            "--repo",
-            recipe.full_name,
-            "--body-file",
-            str(private_key),
-        ]
+        ["gh", "secret", "set", "KITSHN_SSH_KEY", "--repo", recipe.full_name],
+        input_text=private_key.read_text(encoding="utf-8") if not runner.dry_run else "",
     )
     runner.run(
         [

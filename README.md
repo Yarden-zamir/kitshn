@@ -136,7 +136,7 @@ ssh deploy@example.com 'umask 077; mkdir -p ~/.ssh; cat >> ~/.ssh/authorized_key
 Configure the service repository through GitHub CLI:
 
 ```bash
-gh secret set KITSHN_SSH_KEY --repo <owner/repo> --body-file ~/.ssh/kitshn-<owner>-<repo>-ed25519
+gh secret set KITSHN_SSH_KEY --repo <owner/repo> < ~/.ssh/kitshn-<owner>-<repo>-ed25519
 gh variable set KITSHN_VPS_HOST --repo <owner/repo> --body deploy@example.com
 ```
 

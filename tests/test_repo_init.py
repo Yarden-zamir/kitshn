@@ -22,6 +22,7 @@ class RecordingRunner(CommandRunner):
         env: Mapping[str, str] | None = None,
         check: bool = True,
         capture: bool = False,
+        input_text: str | None = None,
     ) -> CommandResult:
         command = tuple(args)
         self.commands.append(command)
@@ -109,8 +110,6 @@ def test_recipe_auth_configures_local_authorized_key_and_github(tmp_path: Path) 
         "KITSHN_SSH_KEY",
         "--repo",
         "Owner/my-app",
-        "--body-file",
-        str(key_path),
     )
     assert runner.commands[-1] == (
         "gh",

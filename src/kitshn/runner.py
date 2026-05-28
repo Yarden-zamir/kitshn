@@ -33,6 +33,7 @@ class CommandRunner:
         env: Mapping[str, str] | None = None,
         check: bool = True,
         capture: bool = False,
+        input_text: str | None = None,
     ) -> CommandResult:
         if not args:
             msg = "cannot run an empty command"
@@ -53,6 +54,7 @@ class CommandRunner:
                 env=merged_env,
                 check=False,
                 text=True,
+                input=input_text,
                 stdout=subprocess.PIPE if capture else None,
                 stderr=subprocess.PIPE if capture else None,
             )

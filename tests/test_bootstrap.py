@@ -29,6 +29,7 @@ class FakeRunner(CommandRunner):
         env: Mapping[str, str] | None = None,
         check: bool = True,
         capture: bool = False,
+        input_text: str | None = None,
     ) -> CommandResult:
         command = tuple(args)
         if command in self.results:
