@@ -1,7 +1,7 @@
 from pathlib import Path
 from collections.abc import Mapping, Sequence
 
-from kitshn.bootstrap import doctor
+from kitshn.bootstrap import doctor, expected_caddy_import
 from kitshn.models import Roots
 from kitshn.runner import CommandResult, CommandRunner
 
@@ -86,6 +86,10 @@ def test_doctor_reports_caddy_validation_error_instead_of_info_log(tmp_path: Pat
     caddy_check = next(check for check in report.checks if check.name == "caddy config")
     assert caddy_check.state == "fail"
     assert caddy_check.detail == "unrecognized directive: bad"
+
+
+def test_expected_caddy_import_uses_single_glob_segment(tmp_path: Path) -> None:
+    assert expected_caddy_import(_roots(tmp_path)) == f"import {tmp_path}/deployments/_caddy/*.Caddyfile"
 
 
 def _roots(tmp_path: Path) -> Roots:

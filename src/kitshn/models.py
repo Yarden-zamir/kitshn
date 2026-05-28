@@ -102,6 +102,14 @@ class Deployment:
         return self.deployment_root / "Caddyfile"
 
     @property
+    def caddy_manifest_file(self) -> Path:
+        return self.roots.deployments / "Caddyfile"
+
+    @property
+    def caddy_manifest_entry(self) -> str:
+        return self.generated_caddyfile.relative_to(self.roots.deployments).as_posix()
+
+    @property
     def compose_project(self) -> str:
         identity = f"{self.recipe.owner}-{self.recipe.repo}-{self.environment}"
         return sanitize_environment_name(identity)

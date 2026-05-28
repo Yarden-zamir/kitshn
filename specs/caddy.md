@@ -8,7 +8,7 @@ Bootstrap owns:
 - Caddy install/runtime.
 - Caddy global config.
 - persistent Caddy `/data` and `/config`.
-- base Caddyfile importing `/deployments/*/*/*/Caddyfile`.
+- base Caddyfile importing `/deployments/Caddyfile`.
 
 Recipe route contract:
 
@@ -20,6 +20,7 @@ Recipe route contract:
 Deploy behavior:
 
 - Generate `/deployments/<owner>/<repo>/<environment>/Caddyfile` via atomic rename.
+- Regenerate `/deployments/Caddyfile` with explicit imports for every generated deployment Caddyfile.
 - Validate the full Caddy config once.
 - Reload Caddy once when generated Caddyfiles changed.
 - If validation fails, keep the previous generated Caddyfile active and fail deploy.
