@@ -1,9 +1,10 @@
 import json
 import stat
+import subprocess
 
 import pytest
 
-from kitshn.ci import resolve_github_action, write_params_from_github
+from kitshn.ci import deploy_over_ssh, destroy_over_ssh, resolve_github_action, write_params_from_github
 from kitshn.errors import KitshnError
 
 
@@ -63,3 +64,52 @@ deploy:
         "ephemeral=false",
         "ref=abcdef123456",
     ]
+
+
+def test_deploy_over_ssh_uses_hosted_cli_on_remote(tmp_path, monkeypatch) -> None:
+    params_file = tmp_path / "params.env"
+    params_file.write_text("TOKEN=secret\n", encoding="utf-8")
+    commands: list[list[str]] = []
+
+    def fake_run(args, check):
+        commands.append(args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "Owner/my-app")
+    monkeypatch.setenv("KITSHN_VPS_HOST", "deploy@example.com")
+    monkeypatch.setenv("KITSHN_SSH_KEY", "private-key")
+    monkeypatch.setenv("KITSHN_ENVIRONMENT", "prod")
+    monkeypatch.setenv("KITSHN_REF", "abcdef123456")
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+
+    deploy_over_ssh(params_file)
+
+    assert commands[0][0] == "scp"
+    assert commands[1][0] == "ssh"
+    remote_command = commands[1][-1]
+    assert "export PATH=$HOME/.local/bin:$PATH" in remote_command
+    assert "uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn deploy" in remote_command
+    assert "rm -f /tmp/kitshn-123-2.env" in remote_command
+
+
+def test_destroy_over_ssh_uses_hosted_cli_on_remote(monkeypatch) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(args, check):
+        commands.append(args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "Owner/my-app")
+    monkeypatch.setenv("KITSHN_VPS_HOST", "deploy@example.com")
+    monkeypatch.setenv("KITSHN_SSH_KEY", "private-key")
+    monkeypatch.setenv("KITSHN_ENVIRONMENT", "prod")
+
+    destroy_over_ssh()
+
+    assert commands[0][0] == "ssh"
+    remote_command = commands[0][-1]
+    assert "export PATH=$HOME/.local/bin:$PATH" in remote_command
+    assert "uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn destroy" in remote_command

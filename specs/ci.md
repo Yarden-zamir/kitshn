@@ -62,7 +62,7 @@ The caller workflow must grant the reusable workflow at least `contents: read` a
 ## Reusable workflow
 `Yarden-zamir/kitshn/.github/workflows/deploy.yml` is the only supported CI entry point for `kitshn deploy` and `kitshn destroy`.
 
-Workflow steps run KitSHn directly from the hosted GitHub ref:
+Workflow steps run KitSHn directly from the hosted GitHub ref. Remote VPS deploy/destroy commands also use this hosted CLI through `uvx`, with `$HOME/.local/bin` prepended for non-interactive SSH sessions:
 
 ```bash
 uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn <ci-command>
@@ -73,8 +73,8 @@ The workflow YAML should stay declarative. Non-trivial logic belongs in KitSHn C
 Jobs:
 
 - `resolve` — no `environment:` binding. Runs `kitshn ci-resolve` and emits `matched`, `env`, `action`, `ephemeral`, and `ref`.
-- `deploy` — `environment: ${{ needs.resolve.outputs.env }}`. Runs `kitshn ci-write-params`, scps to the VPS through `kitshn ci-deploy`, and runs `kitshn deploy --params-file …` remotely.
-- `teardown` — `environment: ${{ needs.resolve.outputs.env }}`. Runs `kitshn ci-destroy`. When `ephemeral` is `true`, `kitshn ci-delete-environment` calls `DELETE /repos/{owner}/{repo}/environments/{name}`.
+- `deploy` — `environment: ${{ needs.resolve.outputs.env }}`. Runs `kitshn ci-write-params`, scps to the VPS through `kitshn ci-deploy`, and runs the hosted KitSHn CLI remotely through `uvx`.
+- `teardown` — `environment: ${{ needs.resolve.outputs.env }}`. Runs `kitshn ci-destroy`, which runs the hosted KitSHn CLI remotely through `uvx`. When `ephemeral` is `true`, `kitshn ci-delete-environment` calls `DELETE /repos/{owner}/{repo}/environments/{name}`.
 
 The `environment:` binding on deploy/teardown attaches the run to the GitHub Environment and applies its protection rules and secrets. `environment:` also auto-creates the Environment on first use, so dynamic names like `pr-42` need no `PUT`.
 

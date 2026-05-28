@@ -17,6 +17,8 @@ from .resolve import DeployEvent, ResolveInput, resolve_deployment
 
 RESERVED_PARAM_NAMES = {"KITSHN_VPS_HOST", "KITSHN_SSH_KEY"}
 ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+HOSTED_CLI = ["uvx", "--from", "git+https://github.com/Yarden-zamir/kitshn.git", "kitshn"]
+REMOTE_PATH_PREFIX = "export PATH=$HOME/.local/bin:$PATH"
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,9 +131,10 @@ def deploy_over_ssh(params_file: Path) -> None:
         _run(["scp", *ssh_args, str(params_file), f"{vps_host}:{remote_params}"])
         remote_command = "; ".join(
             [
+                REMOTE_PATH_PREFIX,
                 shlex.join(
                     [
-                        "kitshn",
+                        *HOSTED_CLI,
                         "deploy",
                         repository,
                         "--params-file",
@@ -156,7 +159,10 @@ def destroy_over_ssh() -> None:
 
     with _ssh_key_file(ssh_key) as key_file:
         ssh_args = ["-i", str(key_file), "-o", "StrictHostKeyChecking=accept-new"]
-        remote_command = shlex.join(["kitshn", "destroy", repository, "--environment", environment])
+        remote_command = shlex.join(
+            [*HOSTED_CLI, "destroy", repository, "--environment", environment]
+        )
+        remote_command = "; ".join([REMOTE_PATH_PREFIX, remote_command])
         _run(["ssh", *ssh_args, vps_host, remote_command])
 
 
