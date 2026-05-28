@@ -1,0 +1,34 @@
+[project]
+name = "kitshn"
+version = "0.1.0"
+description = "Small VPS deployment system for GitHub repos"
+readme = "README.md"
+requires-python = ">=3.14"
+license = "MIT"
+authors = [{ name = "Yarden-zamir", email = "dev@yarden-zamir.com" }]
+dependencies = [
+    "cyclopts>=4.16.0",
+    "jinja2>=3.1.6",
+    "pyyaml>=6.0.3",
+]
+
+[project.scripts]
+kitshn = "kitshn.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.8.0,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "ruff>=0.15.14",
+    "ty>=0.0.39",
+]

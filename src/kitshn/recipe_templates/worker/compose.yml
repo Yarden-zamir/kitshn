@@ -1,0 +1,12 @@
+services:
+  worker:
+    build:
+      context: .
+    pull_policy: build
+    environment:
+      KITSHN_RECIPE: ${KITSHN_RECIPE}
+      KITSHN_ENVIRONMENT: ${KITSHN_ENVIRONMENT}
+      KITSHN_DEPLOYMENT: ${KITSHN_DEPLOYMENT}
+      KITSHN_PARAMS_FILE: ${KITSHN_PARAMS_FILE}
+      KITSHN_DATA_DIR: ${KITSHN_DATA_DIR}
+      KITSHN_LOG_DIR: ${KITSHN_LOG_DIR}
