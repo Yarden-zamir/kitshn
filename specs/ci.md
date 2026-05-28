@@ -45,19 +45,19 @@ on:
 
 jobs:
   call:
-    uses: kitshn-org/kitshn/.github/workflows/deploy.yml@v1
+    uses: Yarden-zamir/kitshn/.github/workflows/deploy.yml@v1
     secrets: inherit
 ```
 
 `kitshn init` writes this file.
 
 ## Reusable workflow
-`kitshn-org/kitshn/.github/workflows/deploy.yml` is the only supported CI entry point for `kitshn deploy` and `kitshn destroy`.
+`Yarden-zamir/kitshn/.github/workflows/deploy.yml` is the only supported CI entry point for `kitshn deploy` and `kitshn destroy`.
 
 Workflow steps run KitSHn directly from the hosted GitHub ref:
 
 ```bash
-uvx --from git+https://github.com/kitshn-org/kitshn.git@v1 kitshn <ci-command>
+uvx --from git+https://github.com/Yarden-zamir/kitshn.git@v1 kitshn <ci-command>
 ```
 
 The workflow YAML should stay declarative. Non-trivial logic belongs in KitSHn CLI `ci-*` commands, not inline shell, Node, or Python in the workflow file.
