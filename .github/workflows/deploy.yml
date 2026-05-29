@@ -31,6 +31,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_ACTION: ${{ github.event.action }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ci-resolve
 
   deploy:

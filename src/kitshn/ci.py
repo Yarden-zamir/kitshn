@@ -56,12 +56,13 @@ def resolve_github_action(config: Path = Path(".kitshn.yaml")) -> ActionResolveR
     pr_number = _optional_int(os.environ.get("PR_NUMBER"))
     pr_action = os.environ.get("PR_ACTION") or None
     pr_head_ref = os.environ.get("PR_HEAD_REF") or None
+    pr_head_sha = os.environ.get("PR_HEAD_SHA") or None
 
     branch = ref_name
     ref = input_ref or sha
     if event == "pull_request":
         branch = pr_head_ref
-        ref = sha
+        ref = pr_head_sha or sha
 
     try:
         result = resolve_deployment(

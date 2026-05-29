@@ -66,6 +66,36 @@ deploy:
     ]
 
 
+def test_resolve_github_action_uses_pull_request_head_sha(tmp_path, monkeypatch) -> None:
+    config = tmp_path / ".kitshn.yaml"
+    config.write_text(
+        """
+deploy:
+  - on: pull_request
+    name: pr-{pr}
+    ephemeral: true
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_SHA", "merge-sha")
+    monkeypatch.setenv("GITHUB_REF_NAME", "1/merge")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    monkeypatch.setenv("PR_ACTION", "opened")
+    monkeypatch.setenv("PR_HEAD_REF", "example")
+    monkeypatch.setenv("PR_HEAD_SHA", "head-sha")
+
+    result = resolve_github_action(config)
+
+    assert result.output_lines() == [
+        "matched=true",
+        "env=pr-1",
+        "action=deploy",
+        "ephemeral=true",
+        "ref=head-sha",
+    ]
+
+
 def test_deploy_over_ssh_uses_hosted_cli_on_remote(tmp_path, monkeypatch) -> None:
     params_file = tmp_path / "params.env"
     params_file.write_text("TOKEN=secret\n", encoding="utf-8")
