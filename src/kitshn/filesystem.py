@@ -40,6 +40,11 @@ def ensure_deployment_paths(deployment: Deployment) -> None:
         logs_link.symlink_to(deployment.logs_root)
 
 
+def reset_socket_paths(deployment: Deployment) -> None:
+    remove_tree(deployment.socket_root)
+    deployment.socket_root.mkdir(parents=True, exist_ok=True)
+
+
 def atomic_copy_params(source: Path, deployment: Deployment) -> None:
     if not source.exists() or not source.is_file():
         msg = f"params file does not exist: {source}"

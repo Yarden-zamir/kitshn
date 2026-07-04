@@ -15,7 +15,8 @@ Recipe route contract:
 - A recipe that routes public traffic must provide a root `Caddyfile.j2`.
 - The recipe `Caddyfile.j2` is rendered through Jinja2 into the deployment `Caddyfile`.
 - `Caddyfile` is a generated deployment artifact and should be gitignored by recipes.
-- Public-route services must be reachable by Caddy through an edge network such as `kitshn-edge`.
+- Public-route services should default to Unix socket ingress at `{{ paths.default_socket }}`.
+- TCP routing is still possible, but recipe authors must avoid host port collisions themselves.
 
 Deploy behavior:
 
@@ -32,5 +33,12 @@ Jinja2 context includes:
 - deployment identity
 - deployment paths
 - full deployment params from `params.env`, including secrets, as `params`
+
+Socket ingress:
+
+- `KITSHN_SOCKET_DIR` points at `/deployments/<owner>/<repo>/<environment>/.kitshn/sockets` and is cleared before each deploy.
+- `KITSHN_DEFAULT_SOCKET` points at `$KITSHN_SOCKET_DIR/app.sock`.
+- Compose services can bind mount `${KITSHN_SOCKET_DIR}:${KITSHN_SOCKET_DIR}` and listen on `${KITSHN_DEFAULT_SOCKET}`.
+- Caddy routes to sockets with `reverse_proxy unix//{{ paths.default_socket }}`.
 
 `Caddyfile.j2` should treat `params` as sensitive. Use it only for values that must be rendered into Caddy config.

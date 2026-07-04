@@ -100,6 +100,7 @@ This repository is a KitSHn recipe repo. KitSHn deploys recipe repos from GitHub
 - `kitshn.md` documents the recipe contract and the KitSHn source commit that generated it.
 - Optional `compose.yml` defines container services for Docker Compose deployments.
 - Optional `Caddyfile.j2` defines public routing and is rendered on the VPS into a generated `Caddyfile`.
+- Socket ingress is the default routing pattern. Compose services can bind `${{KITSHN_DEFAULT_SOCKET}}` and Caddy can route to `{{{{ paths.default_socket }}}}`.
 - GitHub vars and secrets starting with `KITSHN_` become deployment params with the prefix stripped, except reserved infrastructure keys.
 - `KITSHN_SSH_KEY` and `KITSHN_VPS_HOST` are required for GitHub Actions to deploy to the VPS.
 
@@ -125,8 +126,15 @@ def _compose_yml() -> str:
 #       KITSHN_PARAMS_FILE: ${KITSHN_PARAMS_FILE} # Path to copied params.env on the VPS.
 #       KITSHN_DATA_DIR: ${KITSHN_DATA_DIR} # Persistent data directory for this deployment.
 #       KITSHN_LOG_DIR: ${KITSHN_LOG_DIR} # File log directory for this deployment.
+#       KITSHN_SOCKET_DIR: ${KITSHN_SOCKET_DIR} # Runtime Unix socket directory cleaned before each deploy.
+#       KITSHN_DEFAULT_SOCKET: ${KITSHN_DEFAULT_SOCKET} # Default public ingress socket path.
 #       APP_PUBLIC_URL: ${PUBLIC_URL:?PUBLIC_URL is required} # From GitHub var KITSHN_PUBLIC_URL.
 #       APP_TOKEN: ${TOKEN:?TOKEN is required} # From GitHub secret KITSHN_TOKEN.
+#     volumes:
+#       - ${KITSHN_SOCKET_DIR}:${KITSHN_SOCKET_DIR}
+#     command: ["serve", "--unix-socket", "${KITSHN_DEFAULT_SOCKET}"]
+#     healthcheck:
+#       test: ["CMD", "test", "-S", "${KITSHN_DEFAULT_SOCKET}"]
 #     labels:
 #       kitshn.depends_on: "owner/another-recipe"
 #     networks:
@@ -145,7 +153,7 @@ def _caddyfile_j2() -> str:
 #
 # Example:
 # example.com {
-#     reverse_proxy app:3000
+#     reverse_proxy unix//{{ paths.default_socket }}
 # }
 """
 

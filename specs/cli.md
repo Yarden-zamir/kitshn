@@ -13,6 +13,7 @@ kitshn destroy <owner/repo> --environment <name> [--purge]
 kitshn resolve --recipe <owner/repo> --event <push|pull_request|workflow_dispatch> [event flags]
 kitshn logs [<owner/repo> [service]] [--environment <name>] [--follow] [--files]
 kitshn status [owner/repo] [--environment <name>]
+kitshn diagnose <owner/repo> [--environment <name>]
 ```
 
 Lifecycle helpers can be added when needed:
@@ -30,7 +31,16 @@ kitshn affected <owner/repo> [--from <sha>] [--to <sha>]
 - running Compose services
 - healthcheck state per service
 - Caddy route presence
+- default Unix socket path and whether it exists
 - last deploy entry from `/logs/.kitshn/kitshn.log`
+
+`diagnose` for a single deployment checks:
+
+- deployment root, params file, Compose file, generated Caddyfile, and socket directory
+- generated Caddyfile `unix//...` targets exist and are sockets
+- optional `curl --unix-socket` probes when curl is available
+- `docker compose ps --format json` when a Compose file exists
+- host Caddy config validation
 
 `logs` behavior:
 

@@ -23,7 +23,8 @@ Image rules:
 - Local builds use `build.context` and `pull_policy: build`.
 - External images use `image` and `pull_policy: always`.
 - Required runtime params use Compose interpolation like `${TOKEN:?TOKEN is required}` so `docker compose config` fails early.
-- Compose service names should be stable because Caddy and other services may route to them by Docker DNS name.
+- Public HTTP services should prefer Unix socket ingress by mounting `${KITSHN_SOCKET_DIR}:${KITSHN_SOCKET_DIR}` and listening on `${KITSHN_DEFAULT_SOCKET}`.
+- Compose service names should be stable because other services may route to them by Docker DNS name.
 
 Dependency rules:
 

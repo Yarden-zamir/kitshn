@@ -28,6 +28,7 @@ from .deploy import (
     status_entries,
     status_json,
 )
+from .diagnose import diagnose_deployment
 from .errors import KitshnError, NoMatchingDeployment
 from .filesystem import roots_from_env
 from .installer_registry import installer_choices, load_installers
@@ -336,6 +337,37 @@ def status(
     entries = status_entries(recipe, environment=environment)
     print(status_json(entries))
     _safe_log(InvocationLog(command="status", status="ok"), roots_from_env())
+
+
+@app.command
+def diagnose(
+    recipe: str,
+    *,
+    environment: Annotated[str, Parameter("--environment", help="GitHub Environment name.")] = "prod",
+) -> int:
+    """Diagnose one deployment's Compose, socket, and Caddy state."""
+
+    roots = roots_from_env()
+    checks = diagnose_deployment(
+        recipe,
+        environment=environment,
+        roots=roots,
+        runner=CommandRunner(),
+    )
+    print(f"{OK if all(check.ok for check in checks) else FAIL} deployment diagnosis")
+    _print_table(
+        ("status", "check", "detail"),
+        [(_check_icon(check.state), check.name, check.detail) for check in checks],
+    )
+    _safe_log(
+        InvocationLog(
+            command="diagnose",
+            status="ok" if all(check.ok for check in checks) else "failed",
+            deployment=_deployment_or_none(recipe, environment),
+        ),
+        roots,
+    )
+    return 0 if all(check.ok for check in checks) else 1
 
 
 @app.command

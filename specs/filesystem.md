@@ -3,6 +3,7 @@ Canonical deployment-owned paths use `owner/repo/environment` ordering.
 
 ```text
 /deployments/<owner>/<repo>/<environment>
+/deployments/<owner>/<repo>/<environment>/.kitshn/sockets
 /deployments/Caddyfile
 /params/<owner>/<repo>/<environment>
 /persistent/<owner>/<repo>/<environment>
@@ -14,6 +15,7 @@ Deployment root:
 - Contains the recipe checkout for the selected ref.
 - Contains generated deployment `Caddyfile` when public traffic is routed.
 - Contains `logs` symlink to `/logs/<owner>/<repo>/<environment>`.
+- Contains `.kitshn/sockets`, a runtime Unix socket directory cleared before each deploy.
 
 Caddy manifest:
 
@@ -40,6 +42,8 @@ Runtime env:
 - `KITSHN_PARAMS_FILE=/params/<owner>/<repo>/<environment>/params.env`.
 - `KITSHN_DATA_DIR=/persistent/<owner>/<repo>/<environment>`.
 - `KITSHN_LOG_DIR=/logs/<owner>/<repo>/<environment>`.
+- `KITSHN_SOCKET_DIR=/deployments/<owner>/<repo>/<environment>/.kitshn/sockets`.
+- `KITSHN_DEFAULT_SOCKET=/deployments/<owner>/<repo>/<environment>/.kitshn/sockets/app.sock`.
 
 Persistent data:
 

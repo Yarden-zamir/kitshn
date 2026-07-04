@@ -29,6 +29,8 @@ def render_caddyfile(deployment: Deployment) -> str | None:
             "params_file": str(deployment.params_file),
             "persistent": str(deployment.persistent_root),
             "logs": str(deployment.logs_root),
+            "socket": str(deployment.socket_root),
+            "default_socket": str(deployment.default_socket),
         },
         params=read_env_file(deployment.params_file),
     )

@@ -17,6 +17,7 @@ from .filesystem import (
     atomic_copy_params,
     ensure_deployment_paths,
     remove_tree,
+    reset_socket_paths,
     roots_from_env,
     walk_deployments,
 )
@@ -54,6 +55,7 @@ def deploy_recipe(
         deployment.generated_caddyfile.unlink()
     previous_ref, checked_out_ref = checkout_recipe(deployment, ref, runner)
     atomic_copy_params(params_file, deployment)
+    reset_socket_paths(deployment)
     changed_services = apply_compose(deployment, runner)
     changed_services.extend(
         recreate_dependent_services(deployment.recipe, deployment, deployment.roots, runner)
@@ -139,6 +141,9 @@ def deployment_status(
         "path": str(deployment.deployment_root),
         "ref": ref,
         "compose_project": deployment.compose_project,
+        "socket_dir": str(deployment.socket_root),
+        "default_socket": str(deployment.default_socket),
+        "default_socket_exists": deployment.default_socket.exists(),
         "services": compose_service_status(deployment, runner),
         "caddy_route": deployment.generated_caddyfile.exists(),
         "last_deploy": last_deploy_entry(deployment),

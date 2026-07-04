@@ -102,6 +102,14 @@ class Deployment:
         return self.deployment_root / "Caddyfile"
 
     @property
+    def socket_root(self) -> Path:
+        return self.deployment_root / ".kitshn" / "sockets"
+
+    @property
+    def default_socket(self) -> Path:
+        return self.socket_root / "app.sock"
+
+    @property
     def caddy_manifest_file(self) -> Path:
         return self.roots.deployments / "Caddyfile"
 
@@ -123,4 +131,6 @@ class Deployment:
             "KITSHN_PARAMS_FILE": str(self.params_file),
             "KITSHN_DATA_DIR": str(self.persistent_root),
             "KITSHN_LOG_DIR": str(self.logs_root),
+            "KITSHN_SOCKET_DIR": str(self.socket_root),
+            "KITSHN_DEFAULT_SOCKET": str(self.default_socket),
         }
