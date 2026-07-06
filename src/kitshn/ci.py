@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 from typing import cast
 import urllib.error
@@ -187,6 +188,12 @@ def delete_github_environment() -> None:
             return
     except urllib.error.HTTPError as error:
         if error.code == 404:
+            return
+        if error.code == 403:
+            print(
+                f"warning: cannot delete GitHub Environment {environment}: forbidden",
+                file=sys.stderr,
+            )
             return
         raise
 

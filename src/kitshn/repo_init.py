@@ -138,8 +138,6 @@ def _compose_yml() -> str:
 #       test: ["CMD", "test", "-S", "${KITSHN_DEFAULT_SOCKET}"]
 #     labels:
 #       kitshn.depends_on: "owner/another-recipe"
-#     networks:
-#       - kitshn-edge
 #
 # TCP-only image example using a socket proxy sidecar:
 # services:
@@ -147,8 +145,6 @@ def _compose_yml() -> str:
 #     image: nginx:alpine
 #     expose:
 #       - "80"
-#     networks:
-#       - kitshn-edge
 #
 #   socket-proxy:
 #     image: alpine/socat:latest
@@ -163,9 +159,8 @@ def _compose_yml() -> str:
 #     healthcheck:
 #       test: ["CMD", "test", "-S", "${KITSHN_DEFAULT_SOCKET}"]
 #
-# networks:
-#   kitshn-edge:
-#     external: true
+# Keep proxy-to-app traffic on the project-local default network. Attach services
+# to an external network such as kitshn-edge only when other recipes must call them.
 services: {}
 """
 
