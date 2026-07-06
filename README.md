@@ -75,4 +75,5 @@ kitshn skill link-opencode
 - [CI Rules](specs/ci.md)
 - [Bootstrap And Repo Init](specs/bootstrap-and-repo-init.md)
 - [CLI](specs/cli.md)
+- [Release](specs/release.md)
 - [Lessons And Architecture Follow-ups](specs/lessons-and-architecture-followups.md)

@@ -78,8 +78,10 @@ def test_init_recipe_repo_adds_optional_docker_and_routing_files(tmp_path: Path)
 
     compose = (tmp_path / "compose.yml").read_text(encoding="utf-8")
     caddyfile = (tmp_path / "Caddyfile.j2").read_text(encoding="utf-8")
-    assert "# Example:" in compose
+    assert "# Direct Unix socket example" in compose
+    assert "# TCP-only image example" in compose
     assert "#   app:" in compose
+    assert "alpine/socat" in compose
     assert "services: {}" in compose
     assert "# Caddyfiles support comments with #." in caddyfile
     assert "# example.com {" in caddyfile

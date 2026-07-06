@@ -116,10 +116,10 @@ def _compose_yml() -> str:
     return """# Define this recipe's Docker Compose services here.
 # KitSHn runs docker compose with this file during deployment.
 #
-# Example:
+# Direct Unix socket example for apps that can listen on a socket:
 # services:
 #   app:
-#     image: nginx:alpine
+#     build: .
 #     environment:
 #       KITSHN_RECIPE: ${KITSHN_RECIPE} # Runtime owner/repo recipe name.
 #       KITSHN_ENVIRONMENT: ${KITSHN_ENVIRONMENT} # Resolved deployment environment.
@@ -140,6 +140,28 @@ def _compose_yml() -> str:
 #       kitshn.depends_on: "owner/another-recipe"
 #     networks:
 #       - kitshn-edge
+#
+# TCP-only image example using a socket proxy sidecar:
+# services:
+#   app:
+#     image: nginx:alpine
+#     expose:
+#       - "80"
+#     networks:
+#       - kitshn-edge
+#
+#   socket-proxy:
+#     image: alpine/socat:latest
+#     pull_policy: always
+#     command: ["UNIX-LISTEN:${KITSHN_DEFAULT_SOCKET},fork,unlink-early,mode=666", "TCP:app:80"]
+#     volumes:
+#       - ${KITSHN_SOCKET_DIR}:${KITSHN_SOCKET_DIR}
+#     networks:
+#       - kitshn-edge
+#     depends_on:
+#       - app
+#     healthcheck:
+#       test: ["CMD", "test", "-S", "${KITSHN_DEFAULT_SOCKET}"]
 #
 # networks:
 #   kitshn-edge:
