@@ -12,7 +12,7 @@ class Kitshn < Formula
   depends_on "uv"
 
   def install
-    libexec.install "pyproject.toml", "src"
+    libexec.install "pyproject.toml", "README.md", "src"
     (bin/"kitshn").write <<~SH
       #!/bin/bash
       export KITSHN_SOURCE_REF="{{TAG}}"
