@@ -100,7 +100,7 @@ def apply_compose(deployment: Deployment, runner: CommandRunner) -> list[str]:
 
     roll_service_logs(deployment.logs_root, service_names)
     runner.run(
-        compose_command(deployment, "up", "-d", "--remove-orphans"),
+        compose_command(deployment, "up", "-d", "--remove-orphans", "--force-recreate"),
         cwd=deployment.deployment_root,
         env=deployment.runtime_env,
     )
