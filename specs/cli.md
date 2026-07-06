@@ -14,6 +14,9 @@ kitshn resolve --recipe <owner/repo> --event <push|pull_request|workflow_dispatc
 kitshn logs [<owner/repo> [service]] [--environment <name>] [--follow] [--files]
 kitshn status [owner/repo] [--environment <name>]
 kitshn diagnose <owner/repo> [--environment <name>]
+kitshn skill show
+kitshn skill link-claude
+kitshn skill link-opencode
 ```
 
 Lifecycle helpers can be added when needed:
@@ -49,6 +52,13 @@ kitshn affected <owner/repo> [--from <sha>] [--to <sha>]
 - `kitshn logs <owner/repo> <service>` shows Docker stdout/stderr logs for one Compose service.
 - `--files` reads file logs under `/logs/<owner>/<repo>/<environment>` instead of Docker logs.
 - `--follow` follows the selected log source.
+
+`skill` behavior:
+
+- `skill show` prints the bundled minimal deployment agent skill.
+- `skill link-claude` symlinks the bundled skill to `~/.claude/skills/kitshn-deploy-service`.
+- `skill link-opencode` symlinks the bundled skill to `~/.opencode/skills/kitshn-deploy-service`.
+- Existing non-matching skill paths are never overwritten.
 
 `doctor` verifies server readiness:
 

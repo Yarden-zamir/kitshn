@@ -1,51 +1,21 @@
 # KitSHn
 KitSHn is a small VPS deployment system for GitHub repos.
 
-Core flow:
-
 ```text
-repo changed -> CI SSHes to VPS -> kitshn deploy <owner/repo> -> affected deployments update
+repo changed -> GitHub Actions SSHes to VPS -> kitshn deploy <owner/repo>
 ```
 
-Core primitives:
-
-- **Recipe**: a fully qualified GitHub repo name, `owner/repo`, plus its deployment contract.
-- **Environment**: a GitHub Environment name, such as `prod`, `stage`, or `test`.
-- **Deployment**: one recipe deployed to one environment.
-- **Service**: a Docker Compose service inside a recipe.
-
-## Setup
-
-CLI path:
+## Install
+Install the CLI on your computer:
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-uv tool install git+https://github.com/Yarden-zamir/kitshn.git --force
-kitshn installers
-kitshn bootstrap --install-missing --installer ubuntu
-kitshn doctor
+brew install yarden-zamir/tap/kitshn
 ```
 
-Make sure the `uv` tool bin directory is available to non-interactive SSH sessions. For the default uv install this is usually `~/.local/bin`.
+The VPS also needs `kitshn` available to non-interactive SSH sessions. Install it there the same way when Homebrew is available, or use the project `uv` workflow from [Bootstrap And Repo Init](specs/bootstrap-and-repo-init.md).
 
-Bootstrap verifies or creates the deployment roots, shared Docker network, and Caddy import. Dependency installers are opt-in; `doctor` reports missing dependencies and matching installers.
-
-<details>
-<summary>Manual setup details</summary>
-
-Install `uv` on the VPS first, because KitSHn is distributed and run with `uv`:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-Install the KitSHn CLI on the VPS:
-
-```bash
-uv tool install git+https://github.com/Yarden-zamir/kitshn.git --force
-```
-
-List installers and pick the one matching your distro:
+## Bootstrap A VPS
+Run once per VPS:
 
 ```bash
 kitshn installers
@@ -53,144 +23,49 @@ kitshn bootstrap --install-missing --installer ubuntu
 kitshn doctor
 ```
 
-</details>
+Bootstrap verifies Docker, Caddy, deployment roots, the shared Docker network, and Caddy imports. See [Filesystem](specs/filesystem.md), [Caddy Ingress](specs/caddy.md), and [CLI](specs/cli.md).
 
-## Connect A Repo
-
-Before running KitSHn commands, the service repo should already exist, have a GitHub remote, and be accessible through an authenticated local `gh` CLI.
-
-### 1. Init
-
-CLI path:
+## Deploy A Repo
+From the service repo:
 
 ```bash
-kitshn init
-```
-
-Add optional deployment contract files only when you need them:
-
-```bash
-kitshn init --docker
-kitshn init --routing
 kitshn init --docker --routing
-```
-
-<details>
-<summary>Manual init details</summary>
-
-Create the required files yourself:
-
-```text
-.kitshn.yaml
-.github/workflows/kitshn.yml
-kitshn.md
-```
-
-Add optional files only when your recipe needs them:
-
-```text
-compose.yml
-Caddyfile.j2
-.gitignore
-```
-
-</details>
-
-### 2. Auth
-
-CLI path when running on the VPS:
-
-```bash
-kitshn recipe auth
-```
-
-CLI path when authorizing a remote VPS from your local machine:
-
-```bash
 kitshn recipe auth --vps-host deploy@example.com
 ```
 
-`recipe auth` derives the GitHub repo from the current repo with `gh`, generates a per-recipe SSH key, authorizes the public key on the VPS user, and configures the GitHub repo with `KITSHN_SSH_KEY` and `KITSHN_VPS_HOST`. If `--vps-host` is an SSH alias, KitSHn uses it for SSH but stores the resolved `user@hostname` from `ssh -G` in GitHub.
+Use `--routing` only for public HTTP services. KitSHn defaults public HTTP to Unix socket ingress:
 
-<details>
-<summary>Manual auth details</summary>
-
-Find the GitHub repo name:
-
-```bash
-gh repo view --json nameWithOwner --jq .nameWithOwner
+```caddyfile
+example.com {
+    reverse_proxy unix//{{ paths.default_socket }}
+}
 ```
 
-Generate a per-recipe SSH key:
+Apps can listen on `${KITSHN_DEFAULT_SOCKET}` directly. TCP-only images can use a sidecar such as `alpine/socat` to forward from the socket to the app's internal Compose port. See [Compose And Dependencies](specs/compose-and-dependencies.md) and [Caddy Ingress](specs/caddy.md).
+
+Set runtime params as GitHub vars/secrets named `KITSHN_<NAME>`; the app receives `<NAME>`. `KITSHN_VPS_HOST` and `KITSHN_SSH_KEY` are reserved infrastructure keys and are not forwarded. See [CI Rules](specs/ci.md).
+
+Commit and push the generated files. The default `.kitshn.yaml` deploys `main` to `prod` and pull requests to `pr-<number>`.
+
+## Verify
+Watch the GitHub Actions run, then diagnose on the VPS:
 
 ```bash
-ssh-keygen -t ed25519 -C "kitshn:<owner/repo>" -f ~/.ssh/kitshn-<owner>-<repo>-ed25519 -N ""
+kitshn diagnose <owner/repo> --environment prod
 ```
 
-Authorize the public key on the VPS deployment user:
+For PR previews, diagnose `pr-<number>`. Public PR routes still require DNS, usually wildcard DNS pointing at the VPS.
+
+## Agent Skill
+Show or install the minimal deployment skill for future agent sessions:
 
 ```bash
-ssh deploy@example.com 'umask 077; mkdir -p ~/.ssh; cat >> ~/.ssh/authorized_keys' < ~/.ssh/kitshn-<owner>-<repo>-ed25519.pub
+kitshn skill show
+kitshn skill link-claude
+kitshn skill link-opencode
 ```
 
-Configure the service repository through GitHub CLI:
-
-```bash
-gh secret set KITSHN_SSH_KEY --repo <owner/repo> < ~/.ssh/kitshn-<owner>-<repo>-ed25519
-gh variable set KITSHN_VPS_HOST --repo <owner/repo> --body deploy@example.com
-```
-
-If the recipe repo is private, authenticate GitHub CLI on the VPS deployment user so the VPS can clone it:
-
-```bash
-gh auth login
-kitshn doctor
-```
-
-</details>
-
-### File Contract
-
-| File | Required | Purpose |
-| --- | --- | --- |
-| `.kitshn.yaml` | Yes | Maps GitHub events to deployment environments. |
-| `.github/workflows/kitshn.yml` | Yes | Calls the KitSHn reusable deployment workflow and grants required token permissions. |
-| `kitshn.md` | Yes | Documents the recipe contract and records the KitSHn source commit that generated it. |
-| `compose.yml` | No | Defines Docker Compose services when the recipe has containers. |
-| `Caddyfile.j2` | No | Defines public Caddy routing when the recipe needs HTTP ingress. |
-| `.gitignore` | No | Ignores generated deployment artifacts such as `Caddyfile` when routing is enabled. |
-
-GitHub vars and secrets starting with `KITSHN_` are forwarded into `params.env` with the prefix stripped. Reserved infrastructure keys `KITSHN_VPS_HOST` and `KITSHN_SSH_KEY` are not forwarded to app params.
-
-Public HTTP recipes default to Unix socket ingress instead of fixed host ports. KitSHn provides `KITSHN_SOCKET_DIR` and `KITSHN_DEFAULT_SOCKET`; mount the socket directory into the service, listen on the default socket or proxy to it from a sidecar, and route Caddy with `reverse_proxy unix//{{ paths.default_socket }}`.
-
-### 3. Deploy
-
-Commit and push the KitSHn files:
-
-```bash
-git add .kitshn.yaml .github/workflows/kitshn.yml kitshn.md
-git commit -m "chore: add KitSHn deployment config"
-git push
-```
-
-Also add `compose.yml`, `Caddyfile.j2`, and `.gitignore` if `kitshn init --docker` or `kitshn init --routing` generated them.
-
-Deployments then happen through GitHub Actions:
-
-- Push to `main` deploys `prod`.
-- Opening or updating a pull request deploys `pr-<number>`.
-- Closing a pull request destroys the PR deployment while preserving `/persistent` and `/logs` by default.
-- Manual `workflow_dispatch` can deploy any ref to an explicit environment.
-
-To deploy manually from the VPS, provide a params file and run:
-
-```bash
-kitshn deploy <owner/repo> --environment prod --ref main --params-file ./params.env
-```
-
-Docs:
-
+## References
 - [Scope](specs/scope.md)
 - [Primitives](specs/primitives.md)
 - [Filesystem](specs/filesystem.md)

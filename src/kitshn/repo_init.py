@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
 import json
+import os
 
 from .errors import KitshnError
 from .runner import CommandRunner
@@ -159,6 +160,9 @@ def _caddyfile_j2() -> str:
 
 
 def _kitshn_source_commit(runner: CommandRunner) -> str:
+    if source_ref := os.environ.get("KITSHN_SOURCE_REF"):
+        return source_ref
+
     if commit := _direct_url_commit():
         return commit
 

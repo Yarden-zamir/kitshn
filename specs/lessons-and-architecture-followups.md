@@ -3,7 +3,7 @@ This records lessons from deploying several real services with KitSHn and the ar
 
 ## What Worked
 - The core model stayed useful: a recipe repo plus `.kitshn.yaml` was enough to deploy prod services, PR previews, singleton bots, and utility apps.
-- Running the hosted KitSHn CLI through `uvx` kept CI and VPS behavior aligned without requiring a preinstalled local checkout.
+- Installing KitSHn locally through Homebrew gives users and agents a stable `kitshn` command; CI still runs the hosted CLI to keep workflow behavior tied to the reusable workflow ref.
 - Docker Compose as runtime source of truth made deployments understandable and debuggable with native Docker commands.
 - Caddy generated from recipe-owned `Caddyfile.j2` kept ingress close to the service contract.
 - `kitshn.depends_on` labels gave dependent services, such as Shahar depending on OpenCode, a simple recreation hook when an upstream deploy changed.

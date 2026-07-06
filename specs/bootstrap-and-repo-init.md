@@ -1,6 +1,14 @@
 # Bootstrap And Repo Init
 Bootstrap prepares the VPS and is idempotent.
 
+Local users are expected to install the CLI before using it:
+
+```bash
+brew install yarden-zamir/tap/kitshn
+```
+
+The reusable CI workflow may still run the hosted CLI directly; that is a CI implementation detail, not the local user workflow.
+
 Bootstrap verifies:
 
 - Docker

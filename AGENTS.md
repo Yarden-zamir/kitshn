@@ -13,6 +13,7 @@
 - Focus one test file or case: `uv run pytest tests/test_resolve.py -k workflow_dispatch`.
 - Build package artifacts: `uv build`; `dist/` is generated.
 - Local CLI smokes that might touch deployment state should set `KITSHN_ROOT` to a temp directory; otherwise roots default to `/deployments`, `/params`, `/persistent`, and `/logs`.
+- Local users install the CLI with Homebrew from `Yarden-zamir/homebrew-tap`; update that formula when cutting a KitSHn release/tag.
 
 ## Implementation Contracts
 - `src/kitshn/models.py` owns recipe/deployment identity and path rules: recipes must be `owner/repo`; environments are sanitized to lowercase dash names and truncated to 63 chars.

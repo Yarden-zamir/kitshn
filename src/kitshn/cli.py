@@ -65,6 +65,8 @@ InstallerChoice = StrEnum(
 
 recipe_app = App(name="recipe", help="Manage recipe repository configuration.")
 app.command(recipe_app)
+skill_app = App(name="skill", help="Show or install the KitSHn deployment agent skill.")
+app.command(skill_app)
 
 
 @app.command
@@ -198,6 +200,29 @@ def recipe_auth(
     print(f"vps_host={result.vps_host}")
     print(f"authorized_via_ssh={str(result.authorized_via_ssh).lower()}")
     _safe_log(InvocationLog(command="recipe auth", status="ok"), roots_from_env())
+
+
+@skill_app.command(name="show")
+def skill_show() -> None:
+    """Print the KitSHn deployment agent skill."""
+
+    print(_skill_file().read_text(encoding="utf-8"), end="")
+
+
+@skill_app.command(name="link-claude")
+def skill_link_claude() -> None:
+    """Symlink the KitSHn deployment skill into Claude's skill directory."""
+
+    target = _link_skill(Path.home() / ".claude" / "skills")
+    print(f"{OK} linked {target}")
+
+
+@skill_app.command(name="link-opencode")
+def skill_link_opencode() -> None:
+    """Symlink the KitSHn deployment skill into OpenCode's skill directory."""
+
+    target = _link_skill(Path.home() / ".opencode" / "skills")
+    print(f"{OK} linked {target}")
 
 
 @app.command
@@ -529,6 +554,30 @@ def _safe_log(entry: InvocationLog, roots) -> None:
         append_invocation_log(entry, roots)
     except OSError:
         pass
+
+
+def _skill_dir() -> Path:
+    return Path(__file__).parent / "resources" / "kitshn-deploy-service"
+
+
+def _skill_file() -> Path:
+    path = _skill_dir() / "SKILL.md"
+    if not path.exists():
+        raise KitshnError(f"missing bundled skill file: {path}")
+    return path
+
+
+def _link_skill(skills_root: Path) -> Path:
+    source = _skill_dir()
+    _skill_file()
+    target = skills_root / source.name
+    skills_root.mkdir(parents=True, exist_ok=True)
+    if target.is_symlink() and target.resolve() == source.resolve():
+        return target
+    if target.exists() or target.is_symlink():
+        raise KitshnError(f"refusing to replace existing skill path: {target}")
+    target.symlink_to(source, target_is_directory=True)
+    return target
 
 
 def _deployment_or_none(recipe: str | None, environment: str) -> Deployment | None:
