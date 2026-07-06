@@ -24,6 +24,8 @@ Image rules:
 - External images use `image` and `pull_policy: always`.
 - Required runtime params use Compose interpolation like `${TOKEN:?TOKEN is required}` so `docker compose config` fails early.
 - Public HTTP services should prefer Unix socket ingress by mounting `${KITSHN_SOCKET_DIR}:${KITSHN_SOCKET_DIR}` and listening on `${KITSHN_DEFAULT_SOCKET}`.
+- Images that only expose TCP can use a Compose sidecar such as `alpine/socat` to bind `${KITSHN_DEFAULT_SOCKET}` and forward to `TCP:<service>:<port>`.
+- KitSHn force-recreates recipe services on deploy because the socket directory is cleared before Compose runs.
 - Compose service names should be stable because other services may route to them by Docker DNS name.
 
 Dependency rules:

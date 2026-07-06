@@ -162,6 +162,8 @@ kitshn doctor
 
 GitHub vars and secrets starting with `KITSHN_` are forwarded into `params.env` with the prefix stripped. Reserved infrastructure keys `KITSHN_VPS_HOST` and `KITSHN_SSH_KEY` are not forwarded to app params.
 
+Public HTTP recipes default to Unix socket ingress instead of fixed host ports. KitSHn provides `KITSHN_SOCKET_DIR` and `KITSHN_DEFAULT_SOCKET`; mount the socket directory into the service, listen on the default socket or proxy to it from a sidecar, and route Caddy with `reverse_proxy unix//{{ paths.default_socket }}`.
+
 ### 3. Deploy
 
 Commit and push the KitSHn files:
@@ -198,3 +200,4 @@ Docs:
 - [CI Rules](specs/ci.md)
 - [Bootstrap And Repo Init](specs/bootstrap-and-repo-init.md)
 - [CLI](specs/cli.md)
+- [Lessons And Architecture Follow-ups](specs/lessons-and-architecture-followups.md)

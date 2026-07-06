@@ -7,9 +7,9 @@ One deploy operation:
 4. Copy `--params-file` atomically into `/params/<owner>/<repo>/<environment>/params.env` with mode `600`.
 5. Clear and recreate `/deployments/<owner>/<repo>/<environment>/.kitshn/sockets` for runtime Unix socket leftovers.
 6. Pull external images and build local images with Compose using `--env-file`.
-7. Run Compose with `--env-file` when the recipe has Compose.
+7. Run Compose with `--env-file` when the recipe has Compose. Recipe services are applied with `docker compose up -d --remove-orphans --force-recreate` so services that bind Unix sockets are recreated after socket cleanup.
 8. Roll logs under `KITSHN_LOG_DIR` for each service that will be recreated: rename existing log files in the service's log subdirectory to `<name>.<timestamp>` before the service restarts.
-9. Recreate changed services in this recipe.
+9. Recreate all services in this recipe.
 10. Recreate services in other deployments whose `kitshn.depends_on` label includes this recipe, rolling their logs first.
 11. Wait for health checks when they exist.
 12. Regenerate deployment `Caddyfile` from recipe `Caddyfile.j2`.

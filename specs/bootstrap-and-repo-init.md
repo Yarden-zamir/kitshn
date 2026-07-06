@@ -57,8 +57,8 @@ Recipes are not registered separately. `kitshn deploy` creates the deployment, p
 
 Optional init flags add optional contract examples:
 
-- `--docker` writes a commented `compose.yml` with KitSHn runtime env and label examples.
-- `--routing` writes a commented `Caddyfile.j2` and `.gitignore` for the generated `Caddyfile` artifact.
+- `--docker` writes a commented `compose.yml` with KitSHn runtime env, Unix socket ingress, and label examples.
+- `--routing` writes a commented `Caddyfile.j2` that routes to `unix//{{ paths.default_socket }}` and `.gitignore` for the generated `Caddyfile` artifact.
 
 Commands:
 
