@@ -95,3 +95,4 @@ Workflow infrastructure uses the same namespace:
 - `opened`, `synchronize`, `reopened` → deploy.
 - `closed` → destroy. Ephemeral entries also DELETE the GitHub Environment.
 - `/persistent` and `/logs` for the PR env survive destroy by default.
+- PRs from forks are resolved but do not deploy or destroy. The reusable workflow runs deploy/teardown only when the PR head repository is the same repository as the base repository, so untrusted fork PRs do not receive deploy secrets or reach the VPS.

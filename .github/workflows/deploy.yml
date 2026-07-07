@@ -36,7 +36,10 @@ jobs:
 
   deploy:
     needs: resolve
-    if: needs.resolve.outputs.matched == 'true' && needs.resolve.outputs.action == 'deploy'
+    if: >-
+      needs.resolve.outputs.matched == 'true' &&
+      needs.resolve.outputs.action == 'deploy' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.env }}
     steps:
@@ -58,7 +61,10 @@ jobs:
 
   teardown:
     needs: resolve
-    if: needs.resolve.outputs.matched == 'true' && needs.resolve.outputs.action == 'destroy'
+    if: >-
+      needs.resolve.outputs.matched == 'true' &&
+      needs.resolve.outputs.action == 'destroy' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.env }}
     steps:
