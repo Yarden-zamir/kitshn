@@ -1,13 +1,19 @@
 # Bootstrap And Repo Init
 Bootstrap prepares the VPS and is idempotent.
 
-Local users are expected to install the CLI before using it:
+Local users can install the CLI before using it:
 
 ```bash
 brew install yarden-zamir/tap/kitshn
 ```
 
-The reusable CI workflow may still run the hosted CLI directly; that is a CI implementation detail, not the local user workflow.
+or run the hosted CLI directly for one-off use:
+
+```bash
+uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn <command>
+```
+
+Remote machines always use the hosted CLI through `uvx`. GitHub Actions runs `ci-*` commands with `uvx`, and the VPS deploy/destroy commands executed over SSH also use `uvx`. The VPS should have `uv` available, but does not need a persistent `kitshn` install.
 
 Bootstrap verifies:
 
@@ -52,6 +58,8 @@ kitshn installers
 kitshn bootstrap-remote <ssh-target>
 kitshn doctor
 ```
+
+Run the same commands as `uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ...` when the local CLI is not installed.
 
 `kitshn doctor` performs the verification checks without making changes.
 

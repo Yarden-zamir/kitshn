@@ -92,7 +92,7 @@ def _kitshn_md(source_commit: str) -> str:
     origin = f"{KITSHN_REPO_URL}/blob/{source_commit}/{KITSHN_SOURCE_FILE}"
     return f"""# KitSHn Recipe
 
-This repository is a KitSHn recipe repo. KitSHn deploys recipe repos from GitHub Actions onto a VPS by resolving GitHub events to deployment environments, copying deployment params, and running `kitshn deploy` on the VPS.
+This repository is a KitSHn recipe repo. KitSHn deploys recipe repos from GitHub Actions onto a VPS by resolving GitHub events to deployment environments, copying deployment params, and running the hosted KitSHn CLI through `uvx` on the VPS.
 
 ## Contract
 
@@ -104,6 +104,7 @@ This repository is a KitSHn recipe repo. KitSHn deploys recipe repos from GitHub
 - Socket ingress is the default routing pattern. Compose services can bind `${{KITSHN_DEFAULT_SOCKET}}` and Caddy can route to `{{{{ paths.default_socket }}}}`.
 - GitHub vars and secrets starting with `KITSHN_` become deployment params with the prefix stripped, except reserved infrastructure keys.
 - `KITSHN_SSH_KEY` and `KITSHN_VPS_HOST` are required for GitHub Actions to deploy to the VPS.
+- Local users may run KitSHn from Homebrew or `uvx`; CI and VPS commands use hosted `uvx` and do not require a persistent VPS `kitshn` install.
 
 ## Origin
 
@@ -152,8 +153,6 @@ def _compose_yml() -> str:
 #     command: ["UNIX-LISTEN:${KITSHN_DEFAULT_SOCKET},fork,unlink-early,mode=666", "TCP:app:80"]
 #     volumes:
 #       - ${KITSHN_SOCKET_DIR}:${KITSHN_SOCKET_DIR}
-#     networks:
-#       - kitshn-edge
 #     depends_on:
 #       - app
 #     healthcheck:

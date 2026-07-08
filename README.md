@@ -5,14 +5,20 @@ KitSHn is a small VPS deployment system for GitHub repos.
 repo changed -> GitHub Actions SSHes to VPS -> kitshn deploy <owner/repo>
 ```
 
-## Install
-Install the CLI on your computer:
+## Run The CLI
+On your computer, either install the CLI:
 
 ```bash
 brew install yarden-zamir/tap/kitshn
 ```
 
-The VPS also needs `kitshn` available to non-interactive SSH sessions. Install it there the same way when Homebrew is available, or use the project `uv` workflow from [Bootstrap And Repo Init](specs/bootstrap-and-repo-init.md).
+or run the hosted CLI directly:
+
+```bash
+uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn --help
+```
+
+Remote machines are different: GitHub Actions and VPS deploy/destroy commands always run the hosted CLI through `uvx`. Do not install or pin a persistent `kitshn` binary on the VPS for CI deploys. Bootstrap only needs to make `uv`, Docker, Caddy, Git, and `gh` available.
 
 ## Bootstrap A VPS
 Run once per VPS:
@@ -23,6 +29,8 @@ kitshn bootstrap --install-missing --installer ubuntu
 kitshn doctor
 ```
 
+Use the same commands through `uvx ... kitshn` if you have not installed the local Homebrew formula.
+
 Bootstrap verifies Docker, Caddy, deployment roots, the shared Docker network, and Caddy imports. See [Filesystem](specs/filesystem.md), [Caddy Ingress](specs/caddy.md), and [CLI](specs/cli.md).
 
 ## Deploy A Repo
@@ -32,6 +40,8 @@ From the service repo:
 kitshn init --docker --routing
 kitshn recipe auth --vps-host deploy@example.com
 ```
+
+The examples use `kitshn` for readability; `uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ...` is equivalent for local one-off use.
 
 Use `--routing` only for public HTTP services. KitSHn defaults public HTTP to Unix socket ingress:
 
@@ -51,7 +61,7 @@ Commit and push the generated files. The default `.kitshn.yaml` deploys `main` t
 Watch the GitHub Actions run, then diagnose on the VPS:
 
 ```bash
-kitshn diagnose <owner/repo> --environment prod
+uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn diagnose <owner/repo> --environment prod
 ```
 
 For PR previews, diagnose `pr-<number>`. Public PR routes still require DNS, usually wildcard DNS pointing at the VPS.

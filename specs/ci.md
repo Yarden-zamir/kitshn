@@ -62,7 +62,7 @@ The caller workflow must grant the reusable workflow at least `contents: read` a
 ## Reusable workflow
 `Yarden-zamir/kitshn/.github/workflows/deploy.yml` is the only supported CI entry point for `kitshn deploy` and `kitshn destroy`.
 
-Workflow steps run KitSHn directly from the hosted GitHub ref. Remote VPS deploy/destroy commands also use this hosted CLI through `uvx`, with `$HOME/.local/bin` prepended for non-interactive SSH sessions:
+Workflow steps run KitSHn directly from the hosted GitHub ref. Remote VPS deploy/destroy commands also use this hosted CLI through `uvx`, with `$HOME/.local/bin` prepended for non-interactive SSH sessions. The VPS needs `uvx`, not an installed `kitshn` binary:
 
 ```bash
 uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn <ci-command>
