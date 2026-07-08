@@ -6,7 +6,7 @@ import stat
 from typing import Literal
 
 from .caddy import CADDY_BASE_CONFIG
-from .compose import compose_command, has_compose_file
+from .compose import compose_command, compose_services, has_compose_file, render_compose_config
 from .models import Deployment, Recipe, Roots
 from .runner import CommandRunner
 
@@ -46,6 +46,7 @@ def diagnose_deployment(
     )
     if compose_exists:
         checks.append(_command_check("compose ps", compose_command(deployment, "ps", "--format", "json"), runner, cwd=deployment.deployment_root, env=deployment.runtime_env))
+        checks.extend(_socket_proxy_network_checks(deployment, runner))
 
     caddyfile = deployment.generated_caddyfile
     checks.append(_path_check("generated Caddyfile", caddyfile, want_file=True, warn_when_missing=True))
@@ -109,9 +110,51 @@ def _command_check(
     env: dict[str, str] | None = None,
 ) -> DiagnoseCheck:
     result = runner.run(args, cwd=cwd, env=env, capture=True, check=False)
-    detail = (result.stderr.strip() or result.stdout.strip()).splitlines()
+    output = result.stderr.strip() or result.stdout.strip()
+    detail = output.splitlines()
     state: Literal["ok", "fail"] = "ok" if result.returncode == 0 else "fail"
-    return DiagnoseCheck(name, state, detail[-1] if detail else "")
+    message = detail[-1] if detail else ""
+    if state == "fail":
+        hint = _failure_hint(name, output)
+        if hint:
+            message = f"{message} | hint: {hint}" if message else f"hint: {hint}"
+    return DiagnoseCheck(name, state, message)
+
+
+def _socket_proxy_network_checks(
+    deployment: Deployment,
+    runner: CommandRunner,
+) -> list[DiagnoseCheck]:
+    config = render_compose_config(deployment, runner)
+    checks: list[DiagnoseCheck] = []
+    for service in compose_services(config):
+        normalized_name = service.name.replace("_", "-").lower()
+        if "socket" not in normalized_name or "proxy" not in normalized_name:
+            continue
+        extra_networks = [network for network in service.networks if network != "default"]
+        if extra_networks:
+            checks.append(
+                DiagnoseCheck(
+                    f"{service.name} networks",
+                    "warn",
+                    "socket proxies should usually use only the project-local default network; extra networks: "
+                    + ", ".join(extra_networks),
+                )
+            )
+    return checks
+
+
+def _failure_hint(name: str, output: str) -> str:
+    lowered = output.lower()
+    if "ambiguous site definition" in lowered:
+        return "check that Caddyfile.j2 uses a unique hostname per environment, especially pr-* previews"
+    if name.startswith("curl "):
+        if "connection refused" in lowered:
+            return "socket proxy reached the socket but could not reach the app; check TCP target, health, and proxy networks"
+        if "empty reply" in lowered or "connection reset" in lowered:
+            return "socket target accepted the connection but did not return HTTP; check app/proxy logs and target protocol"
+        return "check socket-proxy logs, app health, and whether proxy-to-app traffic stays on the project-local network"
+    return ""
 
 
 def _unix_socket_targets(caddyfile: Path) -> list[Path]:

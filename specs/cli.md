@@ -14,6 +14,7 @@ kitshn resolve --recipe <owner/repo> --event <push|pull_request|workflow_dispatc
 kitshn logs [<owner/repo> [service]] [--environment <name>] [--follow] [--files]
 kitshn status [owner/repo] [--environment <name>]
 kitshn diagnose <owner/repo> [--environment <name>]
+kitshn compose <owner/repo> [--environment <name>] -- <docker-compose-args>...
 kitshn skill show
 kitshn skill link-claude
 kitshn skill link-opencode
@@ -52,6 +53,13 @@ kitshn affected <owner/repo> [--from <sha>] [--to <sha>]
 - `kitshn logs <owner/repo> <service>` shows Docker stdout/stderr logs for one Compose service.
 - `--files` reads file logs under `/logs/<owner>/<repo>/<environment>` instead of Docker logs.
 - `--follow` follows the selected log source.
+
+`compose` behavior:
+
+- Runs Docker Compose in the deployment checkout with KitSHn's exact `--project-name`, `--env-file`, working directory, and runtime env.
+- Use for manual VPS debugging instead of raw `docker compose`, which can miss required params and produce misleading blank-variable warnings.
+- Use `--` before Docker Compose args when passing Compose flags.
+- Example: `kitshn compose owner/repo --environment prod -- ps --format json`.
 
 `skill` behavior:
 

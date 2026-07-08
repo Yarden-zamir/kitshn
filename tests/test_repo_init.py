@@ -82,9 +82,12 @@ def test_init_recipe_repo_adds_optional_docker_and_routing_files(tmp_path: Path)
     assert "# TCP-only image example" in compose
     assert "#   app:" in compose
     assert "alpine/socat" in compose
+    assert "#       - kitshn-edge" not in compose
     assert "services: {}" in compose
     assert "# Caddyfiles support comments with #." in caddyfile
-    assert "# example.com {" in caddyfile
+    assert "# Preview-safe hostname example:" in caddyfile
+    assert 'environment == "prod"' in caddyfile
+    assert 'pr.{{ environment.removeprefix("pr-") }}.example.com' in caddyfile
     assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == "Caddyfile\n"
 
 

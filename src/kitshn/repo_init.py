@@ -104,6 +104,7 @@ This repository is a KitSHn recipe repo. KitSHn deploys recipe repos from GitHub
 - Socket ingress is the default routing pattern. Compose services can bind `${{KITSHN_DEFAULT_SOCKET}}` and Caddy can route to `{{{{ paths.default_socket }}}}`.
 - GitHub vars and secrets starting with `KITSHN_` become deployment params with the prefix stripped, except reserved infrastructure keys.
 - `KITSHN_SSH_KEY` and `KITSHN_VPS_HOST` are required for GitHub Actions to deploy to the VPS.
+- Run `kitshn recipe auth --vps-host <ssh-target>` before the first deploy-triggering push so those infrastructure keys exist.
 - Local users may run KitSHn from Homebrew or `uvx`; CI and VPS commands use hosted `uvx` and do not require a persistent VPS `kitshn` install.
 
 ## Origin
@@ -168,8 +169,12 @@ def _caddyfile_j2() -> str:
     return """# Define this recipe's public Caddy route here.
 # Caddyfiles support comments with #.
 #
-# Example:
-# example.com {
+# Preview-safe hostname example:
+# {% if environment == "prod" -%}
+# example.com
+# {%- else -%}
+# pr.{{ environment.removeprefix("pr-") }}.example.com
+# {%- endif %} {
 #     reverse_proxy unix//{{ paths.default_socket }}
 # }
 """

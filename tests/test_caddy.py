@@ -3,8 +3,9 @@ from pathlib import Path
 import pytest
 
 from kitshn.caddy import apply_caddyfile, render_caddy_manifest, render_caddyfile
+from kitshn.errors import KitshnError
 from kitshn.models import Deployment, Recipe, Roots
-from kitshn.runner import CommandRunner
+from kitshn.runner import CommandResult, CommandRunner
 
 
 def test_caddy_render_receives_full_params_file(tmp_path: Path) -> None:
@@ -72,9 +73,29 @@ def test_apply_caddyfile_restores_manifest_when_validation_fails(tmp_path: Path)
     assert deployment.caddy_manifest_file.read_text(encoding="utf-8") == "old manifest\n"
 
 
+def test_apply_caddyfile_hints_for_ambiguous_sites(tmp_path: Path) -> None:
+    deployment = _deployment(tmp_path)
+
+    with pytest.raises(KitshnError, match="environment-aware"):
+        apply_caddyfile(deployment, "example.com {\n}\n", AmbiguousSiteRunner())
+
+
 class FailingRunner(CommandRunner):
     def run(self, *args, **kwargs):
         raise RuntimeError("caddy validation failed")
+
+
+class AmbiguousSiteRunner(CommandRunner):
+    def run(self, args, **kwargs):
+        command = list(args)
+        if command[:2] == ["caddy", "validate"]:
+            return CommandResult(
+                args=args,
+                returncode=1,
+                stdout="",
+                stderr="Error: adapting config using caddyfile: ambiguous site definition: example.com",
+            )
+        return CommandResult(args=args, returncode=0, stdout="", stderr="")
 
 
 def _deployment(tmp_path: Path) -> Deployment:

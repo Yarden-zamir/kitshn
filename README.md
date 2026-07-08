@@ -18,6 +18,8 @@ or run the hosted CLI directly:
 uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn --help
 ```
 
+Use the full `uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ...` form. Do not use bare `uvx kitshn`; that may resolve an old PyPI package.
+
 Remote machines are different: GitHub Actions and VPS deploy/destroy commands always run the hosted CLI through `uvx`. Do not install or pin a persistent `kitshn` binary on the VPS for CI deploys. Bootstrap only needs to make `uv`, Docker, Caddy, Git, and `gh` available.
 
 ## Bootstrap A VPS
@@ -30,6 +32,7 @@ kitshn doctor
 ```
 
 Use the same commands through `uvx ... kitshn` if you have not installed the local Homebrew formula.
+For a fresh remote VPS, use `kitshn bootstrap-remote <ssh-target> --install-missing --installer <installer>`; it installs/verifies remote `uv` and then runs hosted KitSHn through `uvx`.
 
 Bootstrap verifies Docker, Caddy, deployment roots, the shared Docker network, and Caddy imports. See [Filesystem](specs/filesystem.md), [Caddy Ingress](specs/caddy.md), and [CLI](specs/cli.md).
 
@@ -55,6 +58,8 @@ Apps can listen on `${KITSHN_DEFAULT_SOCKET}` directly. TCP-only images can use 
 
 Set runtime params as GitHub vars/secrets named `KITSHN_<NAME>`; the app receives `<NAME>`. `KITSHN_VPS_HOST` and `KITSHN_SSH_KEY` are reserved infrastructure keys and are not forwarded. See [CI Rules](specs/ci.md).
 
+Run `kitshn recipe auth` before the first push that should deploy. If Actions runs before `KITSHN_VPS_HOST` and `KITSHN_SSH_KEY` exist, rerun the workflow after auth is configured.
+
 Commit and push the generated files. The default `.kitshn.yaml` deploys `main` to `prod` and pull requests to `pr-<number>`.
 
 ## Verify
@@ -65,6 +70,12 @@ uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn diagnose <owner
 ```
 
 For PR previews, diagnose `pr-<number>`. Public PR routes still require DNS, usually wildcard DNS pointing at the VPS.
+
+For manual Compose debugging on the VPS, prefer KitSHn's wrapper instead of raw `docker compose`:
+
+```bash
+uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn compose <owner/repo> --environment prod -- ps
+```
 
 ## Agent Skill
 Show or install the minimal deployment skill for future agent sessions:

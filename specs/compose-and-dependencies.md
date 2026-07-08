@@ -25,7 +25,7 @@ Image rules:
 - Required runtime params use Compose interpolation like `${TOKEN:?TOKEN is required}` so `docker compose config` fails early.
 - Public HTTP services should prefer Unix socket ingress by mounting `${KITSHN_SOCKET_DIR}:${KITSHN_SOCKET_DIR}` and listening on `${KITSHN_DEFAULT_SOCKET}`.
 - Images that only expose TCP can use a Compose sidecar such as `alpine/socat` to bind `${KITSHN_DEFAULT_SOCKET}` and forward to `TCP:<service>:<port>`.
-- Keep socket proxy-to-app traffic on the project-local default network. Do not put both sides of the socket proxy only on a shared external network such as `kitshn-edge`; service DNS aliases can collide across prod and PR deployments with the same service names.
+- Keep socket proxy-to-app traffic on the project-local default network. Do not attach the socket proxy to a shared external network such as `kitshn-edge`; service DNS aliases can collide across prod and PR deployments with the same service names.
 - KitSHn force-recreates recipe services on deploy because the socket directory is cleared before Compose runs.
 - Compose service names should be stable because other services may route to them by Docker DNS name.
 

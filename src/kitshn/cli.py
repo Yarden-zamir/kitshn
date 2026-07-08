@@ -20,6 +20,7 @@ from .ci import (
     write_github_output,
     write_params_from_github,
 )
+from .compose import run_compose_command
 from .deploy import (
     affected_deployments,
     deploy_recipe,
@@ -99,10 +100,27 @@ def bootstrap(
 
 
 @app.command(name="bootstrap-remote")
-def bootstrap_remote(ssh_target: str) -> None:
-    """Run kitshn bootstrap on a remote SSH target."""
+def bootstrap_remote(
+    ssh_target: str,
+    *,
+    install_missing: Annotated[
+        bool,
+        Parameter("--install-missing", help="Install missing system dependencies before setup."),
+    ] = False,
+    installer: Annotated[
+        InstallerChoice | None,
+        Parameter("--installer", help="Installer module to use with --install-missing."),
+    ] = None,
+    dry_run: Annotated[bool, Parameter("--dry-run", help="Print commands without running them.")] = False,
+) -> None:
+    """Install/verify uv on a remote host and run hosted KitSHn bootstrap."""
 
-    run_bootstrap_remote(ssh_target, CommandRunner())
+    run_bootstrap_remote(
+        ssh_target,
+        CommandRunner(dry_run=dry_run),
+        install_missing=install_missing,
+        installer_name=str(installer) if installer else None,
+    )
     print(f"{REMOTE} bootstrapped remote host")
     print("status=bootstrapped-remote")
     print(f"target={ssh_target}")
@@ -362,6 +380,20 @@ def status(
     entries = status_entries(recipe, environment=environment)
     print(status_json(entries))
     _safe_log(InvocationLog(command="status", status="ok"), roots_from_env())
+
+
+@app.command(name="compose")
+def compose_cli(
+    recipe: str,
+    args: list[str],
+    *,
+    environment: Annotated[str, Parameter("--environment", help="GitHub Environment name.")] = "prod",
+) -> None:
+    """Run docker compose for a deployment with KitSHn's exact env and params."""
+
+    deployment = Deployment.create(Recipe.parse(recipe), environment, roots_from_env())
+    run_compose_command(deployment, args, CommandRunner())
+    _safe_log(InvocationLog(command="compose", status="ok", deployment=deployment), deployment.roots)
 
 
 @app.command

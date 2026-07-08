@@ -19,6 +19,7 @@ class ComposeService:
     image: str | None
     pull_policy: str | None
     has_healthcheck: bool
+    networks: list[str]
 
 
 def has_compose_file(deployment: Deployment) -> bool:
@@ -70,6 +71,7 @@ def compose_services(config: dict[str, Any]) -> list[ComposeService]:
                     else None
                 ),
                 has_healthcheck="healthcheck" in raw_service,
+                networks=_networks_as_list(raw_service.get("networks", [])),
             )
         )
     return services
@@ -161,6 +163,23 @@ def compose_service_status(deployment: Deployment, runner: CommandRunner) -> lis
     return _parse_compose_ps_json(result.stdout)
 
 
+def run_compose_command(
+    deployment: Deployment,
+    args: list[str],
+    runner: CommandRunner,
+) -> None:
+    if not has_compose_file(deployment):
+        msg = f"deployment has no compose file: {deployment.identity}"
+        raise KitshnError(msg)
+    if not deployment.params_file.exists():
+        msg = f"deployment has no params file: {deployment.params_file}"
+        raise KitshnError(msg)
+    if not args:
+        msg = "compose command requires docker compose arguments, for example: kitshn compose owner/repo -- ps"
+        raise KitshnError(msg)
+    runner.run(compose_command(deployment, *args), cwd=deployment.deployment_root, env=deployment.runtime_env)
+
+
 def wait_for_healthchecks(
     deployment: Deployment,
     services: Iterable[ComposeService],
@@ -234,6 +253,17 @@ def _labels_as_dict(raw_labels: Any) -> dict[str, str]:
     if raw_labels in (None, []):
         return {}
     msg = "compose labels must be a mapping or list"
+    raise KitshnError(msg)
+
+
+def _networks_as_list(raw_networks: Any) -> list[str]:
+    if isinstance(raw_networks, dict):
+        return [str(key) for key in raw_networks]
+    if isinstance(raw_networks, list):
+        return [str(value) for value in raw_networks]
+    if raw_networks in (None, []):
+        return []
+    msg = "compose networks must be a mapping or list"
     raise KitshnError(msg)
 
 

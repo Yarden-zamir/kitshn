@@ -60,6 +60,9 @@ kitshn doctor
 ```
 
 Run the same commands as `uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ...` when the local CLI is not installed.
+Do not use bare `uvx kitshn`; use the full GitHub `--from` source so you do not accidentally run an old PyPI package.
+
+`bootstrap-remote` SSHes to the target, installs `uv` with Astral's installer when `uvx` is missing, prepends `$HOME/.local/bin`, then runs hosted `uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn bootstrap ...`. It does not require or install a persistent `kitshn` binary on the remote host.
 
 `kitshn doctor` performs the verification checks without making changes.
 
@@ -74,7 +77,7 @@ Recipes are not registered separately. `kitshn deploy` creates the deployment, p
 Optional init flags add optional contract examples:
 
 - `--docker` writes a commented `compose.yml` with KitSHn runtime env, Unix socket ingress, and label examples.
-- `--routing` writes a commented `Caddyfile.j2` that routes to `unix//{{ paths.default_socket }}` and `.gitignore` for the generated `Caddyfile` artifact.
+- `--routing` writes a commented preview-safe `Caddyfile.j2` hostname example that routes to `unix//{{ paths.default_socket }}` and `.gitignore` for the generated `Caddyfile` artifact.
 
 Commands:
 
@@ -93,3 +96,5 @@ kitshn recipe auth --vps-host <ssh-target>
 ```
 
 It assumes the repo already exists, has a GitHub remote, and the local `gh` CLI is authenticated. It derives the GitHub repo name with `gh repo view`, generates a per-recipe SSH key, authorizes that public key locally when `--vps-host` is omitted or over SSH when supplied, and sets the GitHub Actions secret/variable needed by the reusable workflow. When `--vps-host` is an SSH alias, KitSHn uses the alias for SSH and stores the resolved `user@hostname` from `ssh -G` in `KITSHN_VPS_HOST`.
+
+Run recipe auth before the first deploy-triggering push. A workflow that starts before `KITSHN_VPS_HOST` and `KITSHN_SSH_KEY` exist will fail and must be rerun after auth is configured.

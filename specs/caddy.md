@@ -41,5 +41,18 @@ Socket ingress:
 - Compose services can bind mount `${KITSHN_SOCKET_DIR}:${KITSHN_SOCKET_DIR}` and listen on `${KITSHN_DEFAULT_SOCKET}`.
 - TCP-only images can use a socket proxy sidecar that listens on `${KITSHN_DEFAULT_SOCKET}` and forwards to the app's internal Compose service port over the project-local default network.
 - Caddy routes to sockets with `reverse_proxy unix//{{ paths.default_socket }}`.
+- Public HTTP recipes with PR previews must render unique hostnames per environment. If prod and `pr-*` render the same hostname, Caddy fails with an ambiguous site definition.
+
+Preview-safe hostname pattern:
+
+```jinja
+{% if environment == "prod" -%}
+example.com
+{%- else -%}
+pr.{{ environment.removeprefix("pr-") }}.example.com
+{%- endif %} {
+    reverse_proxy unix//{{ paths.default_socket }}
+}
+```
 
 `Caddyfile.j2` should treat `params` as sensitive. Use it only for values that must be rendered into Caddy config.

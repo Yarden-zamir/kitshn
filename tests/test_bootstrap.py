@@ -1,7 +1,7 @@
 from pathlib import Path
 from collections.abc import Mapping, Sequence
 
-from kitshn.bootstrap import bootstrap, doctor, expected_caddy_import
+from kitshn.bootstrap import bootstrap, bootstrap_remote, doctor, expected_caddy_import
 from kitshn.models import Roots
 from kitshn.runner import CommandResult, CommandRunner
 
@@ -17,6 +17,7 @@ class FakeRunner(CommandRunner):
         self.executables = executables
         self.failures = failures or set()
         self.results = results or {}
+        self.commands: list[tuple[str, ...]] = []
 
     def exists(self, executable: str) -> bool:
         return executable in self.executables
@@ -32,6 +33,7 @@ class FakeRunner(CommandRunner):
         input_text: str | None = None,
     ) -> CommandResult:
         command = tuple(args)
+        self.commands.append(command)
         if command in self.results:
             return self.results[command]
         if command in self.failures:
@@ -115,6 +117,18 @@ def test_bootstrap_replaces_stale_caddy_imports(tmp_path: Path) -> None:
         "}\n"
         f"import {roots.deployments}/Caddyfile\n"
     )
+
+
+def test_bootstrap_remote_uses_hosted_uvx() -> None:
+    runner = FakeRunner({"ssh"})
+
+    bootstrap_remote("prod-vps", runner, install_missing=True, installer_name="ubuntu")
+
+    command = runner.commands[0]
+    assert command[0:2] == ("ssh", "prod-vps")
+    assert "curl -LsSf https://astral.sh/uv/install.sh | sh" in command[2]
+    assert "uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn bootstrap" in command[2]
+    assert "--install-missing --installer ubuntu" in command[2]
 
 
 def _roots(tmp_path: Path) -> Roots:

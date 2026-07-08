@@ -5,6 +5,7 @@ import os
 
 from jinja2 import Environment, StrictUndefined
 
+from .errors import KitshnError
 from .filesystem import read_env_file, walk_deployments
 from .models import Deployment, Roots
 from .runner import CommandRunner
@@ -96,8 +97,24 @@ def render_caddy_manifest(roots: Roots) -> str:
 
 
 def validate_and_reload_caddy(runner: CommandRunner) -> None:
-    runner.run(["caddy", "validate", "--config", str(CADDY_BASE_CONFIG)])
+    validate = runner.run(
+        ["caddy", "validate", "--config", str(CADDY_BASE_CONFIG)],
+        capture=True,
+        check=False,
+    )
+    if validate.returncode != 0:
+        detail = validate.stderr.strip() or validate.stdout.strip()
+        hint = _caddy_failure_hint(detail)
+        suffix = f" | hint: {hint}" if hint else ""
+        msg = f"caddy validation failed: {detail}{suffix}"
+        raise KitshnError(msg)
     runner.run(["caddy", "reload", "--config", str(CADDY_BASE_CONFIG)])
+
+
+def _caddy_failure_hint(output: str) -> str:
+    if "ambiguous site definition" in output.lower():
+        return "make Caddyfile.j2 hostnames environment-aware so prod and pr-* do not render the same site"
+    return ""
 
 
 def _atomic_write(path: Path, content: str) -> None:

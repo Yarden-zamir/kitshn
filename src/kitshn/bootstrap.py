@@ -6,6 +6,7 @@ from pathlib import Path
 import getpass
 import os
 import pwd
+import shlex
 import shutil
 import stat
 from typing import Literal
@@ -127,8 +128,36 @@ def doctor(
     return report
 
 
-def bootstrap_remote(target: str, runner: CommandRunner) -> None:
-    runner.run(["ssh", target, "kitshn", "bootstrap"])
+def bootstrap_remote(
+    target: str,
+    runner: CommandRunner,
+    *,
+    install_missing: bool = False,
+    installer_name: str | None = None,
+) -> None:
+    bootstrap_args = [
+        "uvx",
+        "--from",
+        "git+https://github.com/Yarden-zamir/kitshn.git",
+        "kitshn",
+        "bootstrap",
+    ]
+    if install_missing:
+        bootstrap_args.append("--install-missing")
+    if installer_name is not None:
+        bootstrap_args.extend(["--installer", installer_name])
+
+    remote_command = "\n".join(
+        [
+            "set -e",
+            "if ! command -v uvx >/dev/null 2>&1; then",
+            "  curl -LsSf https://astral.sh/uv/install.sh | sh",
+            "fi",
+            "export PATH=$HOME/.local/bin:$PATH",
+            shlex.join(bootstrap_args),
+        ]
+    )
+    runner.run(["ssh", target, remote_command])
 
 
 def _ensure_user_exists(user: str) -> None:
