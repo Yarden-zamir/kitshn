@@ -248,7 +248,7 @@ def skill_link_opencode() -> None:
 
 @app.command
 def deploy(
-    recipe: str,
+    recipe: Annotated[str, Parameter(help="Fully qualified owner/repo name.")],
     *,
     params_file: Annotated[Path, Parameter("--params-file", help="Opaque params.env file.")],
     ref: Annotated[str | None, Parameter("--ref", help="Branch, tag, or SHA to deploy.")] = None,
@@ -286,7 +286,7 @@ def deploy(
 
 @app.command
 def destroy(
-    recipe: str,
+    recipe: Annotated[str, Parameter(help="Fully qualified owner/repo name.")],
     *,
     environment: Annotated[str, Parameter("--environment", help="GitHub Environment name.")],
     purge: Annotated[bool, Parameter("--purge", help="Delete persistent data and file logs.")] = False,
@@ -358,14 +358,24 @@ def resolve(
 
 @app.command
 def logs(
-    recipe: str | None = None,
-    service: str | None = None,
+    recipe: Annotated[
+        str | None,
+        Parameter(help="Fully qualified owner/repo name. Omit to read KitSHn's own log."),
+    ] = None,
+    service: Annotated[
+        str | None,
+        Parameter(help="Compose service name. Omit for all services in the deployment."),
+    ] = None,
     *,
     environment: Annotated[str, Parameter("--environment", help="GitHub Environment name.")] = "prod",
     follow: Annotated[bool, Parameter("--follow", help="Follow selected logs.")] = False,
     files: Annotated[bool, Parameter("--files", help="Read file logs instead of Docker logs.")] = False,
 ) -> None:
-    """Show KitSHn, Docker, or file logs."""
+    """Show KitSHn, Docker, or file logs.
+
+    Use instead of raw `docker logs`, which does not know the deployment's
+    Compose project name.
+    """
 
     show_logs(recipe, service, environment=environment, files=files, follow=follow)
     deployment = _deployment_or_none(recipe, environment)
@@ -374,11 +384,18 @@ def logs(
 
 @app.command
 def status(
-    recipe: str | None = None,
+    recipe: Annotated[
+        str | None,
+        Parameter(help="Fully qualified owner/repo name. Omit to list every deployment."),
+    ] = None,
     *,
     environment: Annotated[str | None, Parameter("--environment", help="GitHub Environment name.")] = None,
 ) -> None:
-    """Show deployment status as JSON."""
+    """Show deployment status as JSON.
+
+    Reports checkout ref, Compose services and health, Caddy route presence, the
+    default socket path, and the last deploy entry.
+    """
 
     entries = status_entries(recipe, environment=environment)
     print(status_json(entries))
@@ -387,12 +404,19 @@ def status(
 
 @app.command(name="compose")
 def compose_cli(
-    recipe: str,
-    args: list[str],
+    recipe: Annotated[str, Parameter(help="Fully qualified owner/repo name.")],
+    args: Annotated[
+        list[str],
+        Parameter(help="Docker Compose arguments after a `--` separator, for example: -- ps --format json"),
+    ],
     *,
     environment: Annotated[str, Parameter("--environment", help="GitHub Environment name.")] = "prod",
 ) -> None:
-    """Run docker compose for a deployment with KitSHn's exact env and params."""
+    """Run docker compose for a deployment with KitSHn's exact env and params.
+
+    Use instead of raw `docker compose`, which misses the project name and params
+    file and emits misleading blank-variable warnings.
+    """
 
     deployment = Deployment.create(Recipe.parse(recipe), environment, roots_from_env())
     run_compose_command(deployment, args, CommandRunner())
@@ -401,11 +425,15 @@ def compose_cli(
 
 @params_app.command(name="list")
 def params_list(
-    recipe: str,
+    recipe: Annotated[str, Parameter(help="Fully qualified owner/repo name.")],
     *,
     environment: Annotated[str, Parameter("--environment", help="GitHub Environment name.")] = "prod",
 ) -> None:
-    """List deployment param names without printing values."""
+    """List deployment param names without printing values.
+
+    Params come from GitHub vars/secrets named KITSHN_<NAME>; the deployment
+    receives <NAME>.
+    """
 
     deployment = Deployment.create(Recipe.parse(recipe), environment, roots_from_env())
     summaries = param_summaries(deployment)
@@ -420,8 +448,8 @@ def params_list(
 
 @params_app.command(name="get")
 def params_get(
-    recipe: str,
-    key: str,
+    recipe: Annotated[str, Parameter(help="Fully qualified owner/repo name.")],
+    key: Annotated[str, Parameter(help="Param name as the deployment sees it, without the KITSHN_ prefix.")],
     *,
     environment: Annotated[str, Parameter("--environment", help="GitHub Environment name.")] = "prod",
     show: Annotated[
@@ -429,7 +457,11 @@ def params_get(
         Parameter("--show", help="Print the param value to stdout. Values may be secrets."),
     ] = False,
 ) -> None:
-    """Show one deployment param. Requires --show to print the value."""
+    """Show one deployment param. Requires --show to print the value.
+
+    Values are stored quoted and escaped for Docker Compose. This decodes them,
+    so prefer it over parsing params.env with grep or cut.
+    """
 
     deployment = Deployment.create(Recipe.parse(recipe), environment, roots_from_env())
     value = param_value(deployment, key)
@@ -444,7 +476,7 @@ def params_get(
 
 @app.command
 def diagnose(
-    recipe: str,
+    recipe: Annotated[str, Parameter(help="Fully qualified owner/repo name.")],
     *,
     environment: Annotated[str, Parameter("--environment", help="GitHub Environment name.")] = "prod",
 ) -> int:
@@ -475,7 +507,7 @@ def diagnose(
 
 @app.command
 def start(
-    recipe: str,
+    recipe: Annotated[str, Parameter(help="Fully qualified owner/repo name.")],
     *,
     environment: Annotated[str, Parameter("--environment", help="GitHub Environment name.")] = "prod",
 ) -> None:
@@ -491,7 +523,7 @@ def start(
 
 @app.command
 def stop(
-    recipe: str,
+    recipe: Annotated[str, Parameter(help="Fully qualified owner/repo name.")],
     *,
     environment: Annotated[str, Parameter("--environment", help="GitHub Environment name.")] = "prod",
 ) -> None:
@@ -507,7 +539,7 @@ def stop(
 
 @app.command
 def restart(
-    recipe: str,
+    recipe: Annotated[str, Parameter(help="Fully qualified owner/repo name.")],
     *,
     environment: Annotated[str, Parameter("--environment", help="GitHub Environment name.")] = "prod",
 ) -> None:
@@ -522,7 +554,9 @@ def restart(
 
 
 @app.command
-def affected(recipe: str) -> None:
+def affected(
+    recipe: Annotated[str, Parameter(help="Fully qualified owner/repo name.")],
+) -> None:
     """List deployments/services depending on a recipe."""
 
     print(f"{INFO} affected services")
