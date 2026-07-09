@@ -15,6 +15,8 @@ kitshn logs [<owner/repo> [service]] [--environment <name>] [--follow] [--files]
 kitshn status [owner/repo] [--environment <name>]
 kitshn diagnose <owner/repo> [--environment <name>]
 kitshn compose <owner/repo> [--environment <name>] -- <docker-compose-args>...
+kitshn params list <owner/repo> [--environment <name>]
+kitshn params get <owner/repo> <KEY> [--environment <name>] [--show]
 kitshn skill show
 kitshn skill link-claude
 kitshn skill link-opencode
@@ -58,6 +60,12 @@ kitshn affected <owner/repo> [--from <sha>] [--to <sha>]
 
 - Runs Docker Compose in the deployment checkout with KitSHn's exact `--project-name`, `--env-file`, working directory, and runtime env.
 - Use for manual VPS debugging instead of raw `docker compose`, which can miss required params and produce misleading blank-variable warnings.
+
+`params` behavior:
+
+- `params list` prints the params file path and each param name with `set` or `empty`. It never prints values.
+- `params get` prints whether the key is set; `--show` prints the value on stdout.
+- Values are decoded from the on-disk quoting that Compose requires, so `params get --show` returns the exact runtime value. Hand-parsing `params.env` with `grep`/`cut` returns the surrounding quotes instead.
 - Use `--` before Docker Compose args when passing Compose flags.
 - Example: `kitshn compose owner/repo --environment prod -- ps --format json`.
 

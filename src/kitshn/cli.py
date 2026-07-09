@@ -35,6 +35,7 @@ from .filesystem import roots_from_env
 from .installer_registry import installer_choices, load_installers
 from .logs import show_logs
 from .models import Deployment, Recipe
+from .params import param_summaries, param_value
 from .recipe_auth import authorize_recipe
 from .repo_init import init_recipe_repo
 from .resolve import ResolveInput, resolve_deployment
@@ -68,6 +69,8 @@ recipe_app = App(name="recipe", help="Manage recipe repository configuration.")
 app.command(recipe_app)
 skill_app = App(name="skill", help="Show or install the KitSHn deployment agent skill.")
 app.command(skill_app)
+params_app = App(name="params", help="Inspect deployment params on the VPS.")
+app.command(params_app)
 
 
 @app.command
@@ -394,6 +397,49 @@ def compose_cli(
     deployment = Deployment.create(Recipe.parse(recipe), environment, roots_from_env())
     run_compose_command(deployment, args, CommandRunner())
     _safe_log(InvocationLog(command="compose", status="ok", deployment=deployment), deployment.roots)
+
+
+@params_app.command(name="list")
+def params_list(
+    recipe: str,
+    *,
+    environment: Annotated[str, Parameter("--environment", help="GitHub Environment name.")] = "prod",
+) -> None:
+    """List deployment param names without printing values."""
+
+    deployment = Deployment.create(Recipe.parse(recipe), environment, roots_from_env())
+    summaries = param_summaries(deployment)
+    print(f"{KEY} deployment params")
+    print(f"params_file={deployment.params_file}")
+    _print_table(
+        ("param", "value"),
+        [(item.key, "empty" if item.empty else "set") for item in summaries],
+    )
+    _safe_log(InvocationLog(command="params list", status="ok", deployment=deployment), deployment.roots)
+
+
+@params_app.command(name="get")
+def params_get(
+    recipe: str,
+    key: str,
+    *,
+    environment: Annotated[str, Parameter("--environment", help="GitHub Environment name.")] = "prod",
+    show: Annotated[
+        bool,
+        Parameter("--show", help="Print the param value to stdout. Values may be secrets."),
+    ] = False,
+) -> None:
+    """Show one deployment param. Requires --show to print the value."""
+
+    deployment = Deployment.create(Recipe.parse(recipe), environment, roots_from_env())
+    value = param_value(deployment, key)
+    if not show:
+        print(f"{KEY} {key} is {'empty' if not value else 'set'}")
+        print(f"params_file={deployment.params_file}")
+        print(f"{INFO} pass --show to print the value")
+    else:
+        print(value)
+    _safe_log(InvocationLog(command="params get", status="ok", deployment=deployment), deployment.roots)
 
 
 @app.command

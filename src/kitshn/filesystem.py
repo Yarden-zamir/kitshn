@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 import os
 from pathlib import Path
 import shutil
@@ -123,6 +124,14 @@ def walk_deployments(roots: Roots) -> Iterator[Deployment]:
 
 
 def _unquote_env_value(value: str) -> str:
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+    # ci.write_params_from_github writes values with json.dumps, so double-quoted
+    # values must be JSON-decoded to recover embedded quotes and backslashes.
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return value[1:-1]
+        return decoded if isinstance(decoded, str) else value[1:-1]
+    if len(value) >= 2 and value[0] == value[-1] == "'":
         return value[1:-1]
     return value

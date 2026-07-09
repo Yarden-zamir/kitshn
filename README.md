@@ -71,11 +71,20 @@ uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn diagnose <owner
 
 For PR previews, diagnose `pr-<number>`. Public PR routes still require DNS, usually wildcard DNS pointing at the VPS.
 
-For manual Compose debugging on the VPS, prefer KitSHn's wrapper instead of raw `docker compose`:
+## Operate
+Run these on the VPS instead of raw `docker` or `docker compose`, which miss KitSHn's project name and params file. Each takes `--environment` and defaults to `prod`. See [CLI](specs/cli.md).
 
 ```bash
-uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn compose <owner/repo> --environment prod -- ps
+kitshn status <owner/repo>                 # ref, services, health, route, socket, last deploy
+kitshn logs <owner/repo> [service]         # docker logs; --follow to tail, --files for file logs
+kitshn compose <owner/repo> -- ps          # docker compose with the deployment's exact context
+kitshn params list <owner/repo>            # param names, no values
+kitshn params get <owner/repo> TOKEN --show  # one value, correctly unquoted
 ```
+
+Deployed services publish no host ports, so `127.0.0.1:<port>` does not reach them. Use the public Caddy route, `kitshn compose ... -- exec`, or the shared `kitshn-edge` network.
+
+Recipes that only deploy `main -> prod` can still deploy any environment name on demand with the workflow's `workflow_dispatch` input. Make `Caddyfile.j2` hostnames environment-aware first, or Caddy rejects the duplicate site definition.
 
 ## Agent Skill
 Show or install the minimal deployment skill for future agent sessions:

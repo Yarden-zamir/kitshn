@@ -20,6 +20,8 @@ jobs:
       - uses: actions/checkout@v5
 
       - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
 
       - id: resolve
         env:
@@ -44,6 +46,8 @@ jobs:
     environment: ${{ needs.resolve.outputs.env }}
     steps:
       - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
 
       - name: Build params file
         env:
@@ -69,6 +73,8 @@ jobs:
     environment: ${{ needs.resolve.outputs.env }}
     steps:
       - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
 
       - name: Destroy over SSH
         env:

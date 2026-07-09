@@ -25,12 +25,28 @@ Use when adding KitSHn deployment files to a service repo or fixing a KitSHn dep
 - Do recipe auth before the first deploy-triggering push, otherwise Actions will fail until `KITSHN_VPS_HOST` and `KITSHN_SSH_KEY` exist.
 - Set params as GitHub `KITSHN_<NAME>` vars/secrets; runtime receives `<NAME>`.
 - Commit only generated/edited deployment files, push, watch Actions, then run hosted `uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn diagnose <owner/repo> --environment <env>` on the VPS.
-- For manual Compose debugging on the VPS, use `uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn compose <owner/repo> --environment <env> -- ...`, not raw `docker compose`.
+
+## Verify And Debug On The VPS
+Prefer these over raw `docker` and `docker compose`. All take `--environment <env>`, defaulting to `prod`.
+
+- `kitshn diagnose <owner/repo>` — health of Compose, sockets, generated Caddyfile, and Caddy config. Start here.
+- `kitshn status [owner/repo]` — JSON: checkout ref, services, health, Caddy route, socket path, last deploy.
+- `kitshn logs <owner/repo> [service]` — Docker logs for the deployment. `--follow` to tail, `--files` for file logs. Bare `kitshn logs` shows KitSHn's own log.
+- `kitshn compose <owner/repo> -- <args>` — Docker Compose with KitSHn's exact project name, env file, and cwd.
+- `kitshn params list <owner/repo>` — param names and whether each is set, without printing values.
+- `kitshn params get <owner/repo> <KEY> --show` — one param value, correctly unquoted.
+
+## Iterate Without Deploying Prod
+- Recipes whose only entry is `main -> prod` still accept a manual deploy to any environment name via the `workflow_dispatch` input. Use it for a staging environment instead of testing on prod.
+- A dispatched non-prod environment reuses the recipe's `Caddyfile.j2`. If that template hardcodes the prod hostname, Caddy fails with `ambiguous site definition`. Make the hostname environment-aware first.
+- To exercise code against shared services without any deploy, run a throwaway container on the shared network: `docker run --rm --network kitshn-edge <image>`.
 
 ## Caveats
 - Do not print or transfer secret values unless explicitly approved.
 - Local users may install `kitshn` or use `uvx`; remote CI/VPS commands always use hosted `uvx`, not a persistent VPS install.
 - `KITSHN_VPS_HOST` and `KITSHN_SSH_KEY` are infrastructure keys and are not forwarded to apps.
+- Deployed services publish no host ports. `127.0.0.1:<port>` will not reach them. Go through the public Caddy route, `kitshn compose ... -- exec`, or the shared `kitshn-edge` network.
+- Read params with `kitshn params get`, not by hand. Values in `params.env` are quoted and escaped for Compose; a naive `cut`/`grep` yields the surrounding quotes and produces confusing auth failures.
 - Private repos require `gh auth login` on the VPS deployment user.
 - Host Caddy cannot resolve Compose service DNS; use Unix sockets or a socket-proxy sidecar, not host ports.
 - Socket proxies should normally use only the project-local default Compose network. Put app services on shared networks only for intentional cross-recipe traffic.
