@@ -1,100 +1,93 @@
 # CLI
-Core commands:
 
-```bash
-kitshn bootstrap
-kitshn bootstrap --install-missing --installer <installer>
-kitshn installers
-kitshn doctor
-kitshn init [--docker] [--routing]
-kitshn recipe auth [--recipe <path>] [--vps-host <ssh-target>]
-kitshn deploy <owner/repo> --params-file <path> [--ref <ref>] [--environment <name>]
-kitshn destroy <owner/repo> --environment <name> [--purge]
-kitshn resolve --recipe <owner/repo> --event <push|pull_request|workflow_dispatch> [event flags]
-kitshn logs [<owner/repo> [service]] [--environment <name>] [--follow] [--files]
-kitshn status [owner/repo] [--environment <name>]
-kitshn diagnose <owner/repo> [--environment <name>]
-kitshn compose <owner/repo> [--environment <name>] -- <docker-compose-args>...
-kitshn params list <owner/repo> [--environment <name>]
-kitshn params get <owner/repo> <KEY> [--environment <name>] [--show]
-kitshn skill show
-kitshn skill link-claude
-kitshn skill link-opencode
-```
+Flags, arguments, and usage live in `kitshn <command> --help`. This spec records behavior
+that `--help` cannot express: invariants, side effects, and failure semantics.
 
-Lifecycle helpers can be added when needed:
-
-```bash
-kitshn start <owner/repo> [--environment <name>]
-kitshn stop <owner/repo> [--environment <name>]
-kitshn restart <owner/repo> [--environment <name>]
-kitshn affected <owner/repo> [--from <sha>] [--to <sha>]
-```
-
-`status` for a single deployment reports:
-
-- checkout ref
-- running Compose services
-- healthcheck state per service
-- Caddy route presence
-- default Unix socket path and whether it exists
-- last deploy entry from `/logs/.kitshn/kitshn.log`
-
-`diagnose` for a single deployment checks:
-
-- deployment root, params file, Compose file, generated Caddyfile, and socket directory
-- generated Caddyfile `unix//...` targets exist and are sockets
-- optional `curl --unix-socket` probes when curl is available
-- `docker compose ps --format json` when a Compose file exists
-- host Caddy config validation
-
-`logs` behavior:
-
-- `kitshn logs` shows KitSHn's own log stream from `/logs/.kitshn/kitshn.log`.
-- `kitshn logs <owner/repo>` shows Docker stdout/stderr logs for all Compose services in the deployment.
-- `kitshn logs <owner/repo> <service>` shows Docker stdout/stderr logs for one Compose service.
-- `--files` reads file logs under `/logs/<owner>/<repo>/<environment>` instead of Docker logs.
-- `--follow` follows the selected log source.
-
-`compose` behavior:
-
-- Runs Docker Compose in the deployment checkout with KitSHn's exact `--project-name`, `--env-file`, working directory, and runtime env.
-- Use for manual VPS debugging instead of raw `docker compose`, which can miss required params and produce misleading blank-variable warnings.
-
-`params` behavior:
-
-- `params list` prints the params file path and each param name with `set` or `empty`. It never prints values.
-- `params get` prints whether the key is set; `--show` prints the value on stdout.
-- Values are decoded from the on-disk quoting that Compose requires, so `params get --show` returns the exact runtime value. Hand-parsing `params.env` with `grep`/`cut` returns the surrounding quotes instead.
-- Use `--` before Docker Compose args when passing Compose flags.
-- Example: `kitshn compose owner/repo --environment prod -- ps --format json`.
-
-`skill` behavior:
-
-- `skill show` prints the bundled minimal deployment agent skill.
-- `skill link-claude` symlinks the bundled skill to `~/.claude/skills/kitshn-deploy-service`.
-- `skill link-opencode` symlinks the bundled skill to `~/.opencode/skills/kitshn-deploy-service`.
-- Existing non-matching skill paths are never overwritten.
-
-`doctor` verifies server readiness:
-
-- Docker and Docker Compose are available.
-- Git, GitHub CLI (`gh`), uv, and Caddy are available.
-- Missing dependencies are reported explicitly.
-- Matching optional installer modules are reported when dependencies are missing.
-- canonical roots exist with expected ownership and permissions.
-- shared Docker networks such as `kitshn-edge` exist.
-- GitHub CLI auth status is shown. Public repos work without auth; private repos need `gh auth login` on the VPS deployment user.
-- Caddy config validates.
-
-Rules:
+## Universal Rules
 
 - Recipe arguments are always fully qualified `owner/repo` names.
-- Environment arguments are GitHub Environment names.
-- CLI output should be script-friendly by default.
-- `init` writes the fixed required recipe contract files. `--docker` and `--routing` add optional example contract files.
-- `recipe auth` derives the GitHub repo from `gh`, generates a per-recipe SSH key, authorizes the public key locally or over SSH, and sets `KITSHN_SSH_KEY` plus `KITSHN_VPS_HOST` through `gh`. If `--vps-host` is an SSH alias, it stores the resolved `user@hostname`, not the alias.
-- Logs should support both Docker stdout/stderr and file logs under `/logs`.
-- `deploy` requires `--params-file` pointing at a key/value file. The file is treated as opaque — the `KITSHN_` selection and prefix-stripping happen in CI before the file is built.
-- `resolve` is a pure function. It writes `env=`, `action=`, `ephemeral=` lines suitable for `$GITHUB_OUTPUT` and exits non-zero with no output when no `.kitshn.yaml` entry matches.
-- Every invocation appends a structured JSON line to `/logs/.kitshn/kitshn.log` with: `timestamp`, `command`, `deployment` (`<owner>/<repo>/<environment>`), `ref`, `compose_project`, `changed_services`, `triggered_by`, `status`.
+- Environment arguments are GitHub Environment names, sanitized per [Primitives](primitives.md).
+- Output is script-friendly by default: `key=value` lines or JSON, not prose.
+- Every invocation appends a structured JSON line to `/logs/.kitshn/kitshn.log` with
+  `timestamp`, `command`, `deployment`, `ref`, `compose_project`, `changed_services`,
+  `triggered_by`, and `status`. Log-append failures never fail the command.
+
+## Deploy And Destroy
+
+- `deploy` requires `--params-file` pointing at a key/value file. The file is opaque: the
+  `KITSHN_` selection and prefix-stripping happen in CI before the file is built.
+- `destroy --purge` additionally deletes persistent data and file logs.
+
+## Resolve
+
+- `resolve` is a pure function of its inputs and `.kitshn.yaml`.
+- It writes `env=`, `action=`, and `ephemeral=` lines suitable for `$GITHUB_OUTPUT`.
+- It exits non-zero with no output when no `.kitshn.yaml` entry matches.
+- `workflow_dispatch` bypasses `.kitshn.yaml` entries and deploys the requested environment
+  name directly, so any recipe can deploy a non-prod environment on demand.
+
+## Status
+
+Reports, per deployment: checkout ref, running Compose services, healthcheck state per
+service, Caddy route presence, the default Unix socket path and whether it exists, and the
+last deploy entry from `/logs/.kitshn/kitshn.log`.
+
+## Diagnose
+
+Checks, in order: deployment root, params file, Compose file, socket directory, `docker
+compose ps`, socket-proxy network attachment, generated Caddyfile, its `unix//...` targets
+exist and are sockets, optional `curl --unix-socket` probes when curl is available, and host
+Caddy config validation.
+
+Exits non-zero when any check fails. Warnings do not fail the command.
+
+Failure hints are attached for known-confusing cases: `ambiguous site definition` points at
+non-environment-aware Caddy hostnames; `connection refused` on a socket probe points at the
+proxy-to-app hop rather than the socket itself.
+
+## Logs
+
+- No recipe: KitSHn's own log stream from `/logs/.kitshn/kitshn.log`.
+- Recipe: Docker stdout/stderr for all Compose services in the deployment.
+- Recipe and service: Docker stdout/stderr for one service.
+- `--files` reads file logs under `/logs/<owner>/<repo>/<environment>` instead.
+
+## Compose
+
+Runs Docker Compose in the deployment checkout with KitSHn's exact `--project-name`,
+`--env-file`, working directory, and runtime env. Exists because raw `docker compose` in the
+same directory misses required params and emits misleading blank-variable warnings.
+
+## Params
+
+- `params list` prints the params file path and each param name as `set` or `empty`. It never
+  prints values.
+- `params get` prints presence only; `--show` prints the value on stdout.
+- Values are stored quoted and escaped for Compose (`ci.write_params_from_github` uses
+  `json.dumps`). Reads decode that encoding, so `--show` returns the exact runtime value.
+  Hand-parsing `params.env` returns the surrounding quotes instead.
+
+## Recipe Auth
+
+Derives the GitHub repo from `gh`, generates a per-recipe SSH key, authorizes the public key
+locally or over SSH, and sets `KITSHN_SSH_KEY` plus `KITSHN_VPS_HOST` through `gh`. If
+`--vps-host` is an SSH alias, it stores the resolved `user@hostname`, not the alias.
+
+## Init
+
+Writes the fixed required recipe contract files. `--docker` and `--routing` add optional
+example contract files. Refuses to overwrite existing files without `--force`.
+
+## Skill
+
+`skill show` prints the bundled agent skill. `skill link-claude` and `skill link-opencode`
+symlink it into `~/.claude/skills/` and `~/.opencode/skills/`. Existing non-matching skill
+paths are never overwritten.
+
+## Doctor
+
+Verifies, without changing state: Docker and Docker Compose available; Git, `gh`, uv, and
+Caddy available; canonical roots exist with expected ownership and permissions; shared Docker
+networks such as `kitshn-edge` exist; Caddy config validates. Reports `gh` auth status —
+public repos work unauthenticated, private repos need `gh auth login` on the VPS deployment
+user. Missing dependencies are reported explicitly, with matching installer modules.

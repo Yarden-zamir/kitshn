@@ -109,22 +109,24 @@ This repository is a KitSHn recipe repo. KitSHn deploys recipe repos from GitHub
 
 ## Operating This Deployment
 
-Run these on the VPS. They take `--environment <env>` and default to `prod`. Prefer them over raw
-`docker` and `docker compose`, which miss KitSHn's project name and params file.
+Run these on the VPS. They take `--environment <env>` and default to `prod`. Pass `--help` to any
+of them for flags. Prefer them over raw `docker` and `docker compose`, which do not know this
+deployment's Compose project name or params file.
 
-- `kitshn diagnose <owner/repo>` checks Compose, sockets, generated Caddy routing, and Caddy config.
-- `kitshn status <owner/repo>` reports ref, services, health, route, socket, and last deploy as JSON.
-- `kitshn logs <owner/repo> [service]` shows Docker logs; `--follow` tails and `--files` reads file logs.
-- `kitshn compose <owner/repo> -- <args>` runs Docker Compose with this deployment's exact context.
-- `kitshn params list <owner/repo>` lists param names without values.
-- `kitshn params get <owner/repo> <KEY> --show` prints one param value, correctly unquoted.
+- `kitshn diagnose <owner/repo>` — start here; checks Compose, sockets, Caddy routing and config.
+- `kitshn status <owner/repo>` — ref, services, health, route, socket, and last deploy, as JSON.
+- `kitshn logs <owner/repo> [service]` — Docker logs for this deployment.
+- `kitshn compose <owner/repo> -- <args>` — Docker Compose with this deployment's exact context.
+- `kitshn params list <owner/repo>` — param names without values.
+- `kitshn params get <owner/repo> <KEY> --show` — one param value, correctly decoded. Do not
+  hand-parse `params.env`; its values are quoted and escaped for Compose.
 
-Services publish no host ports. They are reachable through the public Caddy route, through
+Services publish no host ports. Reach them through the public Caddy route, through
 `kitshn compose ... -- exec`, or from the shared `kitshn-edge` Docker network. `127.0.0.1:<port>`
 does not reach them.
 
-Recipes that only deploy `main -> prod` can still deploy any other environment name on demand
-through the workflow's `workflow_dispatch` input. Make `Caddyfile.j2` hostnames environment-aware
+This recipe can deploy any environment name on demand through the workflow's `workflow_dispatch`
+input, even if it only maps `main -> prod`. Make `Caddyfile.j2` hostnames environment-aware
 before doing so, or Caddy will reject the duplicate site definition.
 
 ## Origin
