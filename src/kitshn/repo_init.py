@@ -107,6 +107,26 @@ This repository is a KitSHn recipe repo. KitSHn deploys recipe repos from GitHub
 - Run `kitshn recipe auth --vps-host <ssh-target>` before the first deploy-triggering push so those infrastructure keys exist.
 - Local users may run KitSHn from Homebrew or `uvx`; CI and VPS commands use hosted `uvx` and do not require a persistent VPS `kitshn` install.
 
+## Operating This Deployment
+
+Run these on the VPS. They take `--environment <env>` and default to `prod`. Prefer them over raw
+`docker` and `docker compose`, which miss KitSHn's project name and params file.
+
+- `kitshn diagnose <owner/repo>` checks Compose, sockets, generated Caddy routing, and Caddy config.
+- `kitshn status <owner/repo>` reports ref, services, health, route, socket, and last deploy as JSON.
+- `kitshn logs <owner/repo> [service]` shows Docker logs; `--follow` tails and `--files` reads file logs.
+- `kitshn compose <owner/repo> -- <args>` runs Docker Compose with this deployment's exact context.
+- `kitshn params list <owner/repo>` lists param names without values.
+- `kitshn params get <owner/repo> <KEY> --show` prints one param value, correctly unquoted.
+
+Services publish no host ports. They are reachable through the public Caddy route, through
+`kitshn compose ... -- exec`, or from the shared `kitshn-edge` Docker network. `127.0.0.1:<port>`
+does not reach them.
+
+Recipes that only deploy `main -> prod` can still deploy any other environment name on demand
+through the workflow's `workflow_dispatch` input. Make `Caddyfile.j2` hostnames environment-aware
+before doing so, or Caddy will reject the duplicate site definition.
+
 ## Origin
 
 - Generated from: {origin}
