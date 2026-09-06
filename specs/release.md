@@ -9,7 +9,9 @@ Releases are automatic. `.github/workflows/release.yml` runs on every push to `m
 3. Otherwise it creates tag `vX.Y.Z`, pushes it, and creates a GitHub release with generated
    notes.
 4. It then calls `Yarden-zamir/homebrew-tap/.github/workflows/sync-formula.yml` with the tag
-   and the `TOKEN` secret. The sync renders `.homebrew/kitshn.rb` into the tap, updates the
+   and the `TOKEN` secret. `TOKEN` must exist on the KitSHn repo as a personal access token
+   with write access to `Yarden-zamir/homebrew-tap`, the same one the other publisher repos
+   use; without it the sync falls back to `github.token`, which cannot push to the tap. The sync renders `.homebrew/kitshn.rb` into the tap, updates the
    tap README, validates style and drift, and opens an automerge pull request.
 
 The release is created with `GITHUB_TOKEN`, and events created by that token do not start
