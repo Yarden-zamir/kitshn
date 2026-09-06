@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from kitshn.caddy import apply_caddyfile, render_caddy_manifest, render_caddyfile
+from kitshn.caddy import apply_caddyfile, infer_public_url, render_caddy_manifest, render_caddyfile, site_addresses
 from kitshn.errors import KitshnError
 from kitshn.models import Deployment, Recipe, Roots
 from kitshn.runner import CommandResult, CommandRunner
@@ -106,3 +106,44 @@ def _deployment(tmp_path: Path) -> Deployment:
         logs=tmp_path / "logs",
     )
     return Deployment.create(Recipe.parse("owner/repo"), "prod", roots)
+
+
+def test_site_addresses_skip_global_options_snippets_and_nested_blocks() -> None:
+    caddyfile = """{
+    email admin@example.com
+}
+(shared) {
+    encode gzip
+}
+# comment
+example.com, www.example.com {
+    reverse_proxy unix//sock {
+        header_up Host {host}
+    }
+}
+http://internal.example.com:8080 {
+}
+"""
+    assert site_addresses(caddyfile) == ["example.com", "www.example.com", "http://internal.example.com:8080"]
+
+
+@pytest.mark.parametrize(
+    ("template", "environment", "expected"),
+    [
+        ('{% if environment == "prod" -%}\nsite.example.com\n{%- else -%}\npr.{{ environment.removeprefix("pr-") }}.site.example.com\n{%- endif %} {\n    reverse_proxy unix//{{ paths.default_socket }}\n}\n', "prod", "https://site.example.com"),
+        ('{% if environment == "prod" -%}\nsite.example.com\n{%- else -%}\npr.{{ environment.removeprefix("pr-") }}.site.example.com\n{%- endif %} {\n    reverse_proxy unix//{{ paths.default_socket }}\n}\n', "pr-7", "https://pr.7.site.example.com"),
+        ("http://plain.example.com {\n}\n", "prod", "http://plain.example.com"),
+        ("http://internal.example.com:8080 {\n}\n", "prod", "http://internal.example.com:8080"),
+        ("*.example.com {\n}\n", "prod", None),
+        ("a.example.com {\n}\nb.example.com {\n}\n", "prod", None),
+        (":443 {\n    reverse_proxy unix//{{ paths.default_socket }}\n}\n", "prod", None),
+        ("dozzle.example.com {\n    basic_auth {\n        {{ params.USER }} {{ params.HASH }}\n    }\n}\n", "prod", "https://dozzle.example.com"),
+    ],
+)
+def test_infer_public_url_only_returns_a_single_concrete_host(tmp_path: Path, template: str, environment: str, expected: str | None) -> None:
+    deployment = Deployment.create(Recipe.parse("owner/repo"), environment, _deployment(tmp_path).roots)
+    template_path = tmp_path / "Caddyfile.j2"
+    template_path.write_text(template, encoding="utf-8")
+
+    assert infer_public_url(template_path, deployment) == expected
+    assert infer_public_url(tmp_path / "missing.j2", deployment) is None

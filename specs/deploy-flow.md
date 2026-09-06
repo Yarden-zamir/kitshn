@@ -17,6 +17,8 @@ One deploy operation:
 
 Compose is fail-forward. Caddy keeps the previous generated Caddyfile when validation fails.
 
+After `deploy` returns, the reusable workflow verifies the result from the GitHub runner: it requests the public URL inferred from `Caddyfile.j2` until it answers 2xx, writes the URL, status, and content type to the job summary, and attaches them to the GitHub deployment. A recipe without one concrete hostname skips the check. From the laptop, `kitshn track` performs the same verification plus a `kitshn status` check on the VPS; see [CLI](cli.md).
+
 `deploy` reads params from `--params-file`. CI builds this file from `KITSHN_*` vars/secrets and pushes it over SSH. The VPS does not call the GitHub API.
 
 `destroy` of an ephemeral env deletes the GitHub Environment after teardown (handled by the CI workflow, not the CLI).

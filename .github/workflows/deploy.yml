@@ -16,6 +16,7 @@ jobs:
       action: ${{ steps.resolve.outputs.action }}
       ephemeral: ${{ steps.resolve.outputs.ephemeral }}
       ref: ${{ steps.resolve.outputs.ref }}
+      url: ${{ steps.resolve.outputs.url }}
     steps:
       - uses: actions/checkout@v5
 
@@ -49,6 +50,12 @@ jobs:
         with:
           enable-cache: false
 
+      - name: Check deploy credentials
+        env:
+          KITSHN_VPS_HOST: ${{ vars.KITSHN_VPS_HOST }}
+          KITSHN_SSH_KEY: ${{ secrets.KITSHN_SSH_KEY }}
+        run: uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ci-preflight
+
       - name: Build params file
         env:
           KITSHN_VARS_JSON: ${{ toJson(vars) }}
@@ -63,6 +70,13 @@ jobs:
           KITSHN_REF: ${{ needs.resolve.outputs.ref }}
         run: uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ci-deploy --params-file params.env
 
+      - name: Verify public route
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          KITSHN_ENVIRONMENT: ${{ needs.resolve.outputs.env }}
+          KITSHN_URL: ${{ needs.resolve.outputs.url }}
+        run: uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ci-verify
+
   teardown:
     needs: resolve
     if: >-
@@ -75,6 +89,12 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: false
+
+      - name: Check deploy credentials
+        env:
+          KITSHN_VPS_HOST: ${{ vars.KITSHN_VPS_HOST }}
+          KITSHN_SSH_KEY: ${{ secrets.KITSHN_SSH_KEY }}
+        run: uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ci-preflight
 
       - name: Destroy over SSH
         env:

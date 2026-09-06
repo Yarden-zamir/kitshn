@@ -4,7 +4,15 @@ import subprocess
 
 import pytest
 
-from kitshn.ci import deploy_over_ssh, destroy_over_ssh, resolve_github_action, write_params_from_github
+from kitshn.ci import (
+    deploy_over_ssh,
+    destroy_over_ssh,
+    preflight_auth,
+    resolve_github_action,
+    verify_public_route,
+    write_params_from_github,
+)
+from kitshn.httpcheck import HttpResponse
 from kitshn.errors import KitshnError
 
 
@@ -63,6 +71,7 @@ deploy:
         "action=deploy",
         "ephemeral=false",
         "ref=abcdef123456",
+        "url=",
     ]
 
 
@@ -93,6 +102,7 @@ deploy:
         "action=deploy",
         "ephemeral=true",
         "ref=head-sha",
+        "url=",
     ]
 
 
@@ -145,3 +155,112 @@ def test_destroy_over_ssh_uses_hosted_cli_on_remote(monkeypatch) -> None:
     remote_command = commands[0][-1]
     assert "export PATH=$HOME/.local/bin:$PATH" in remote_command
     assert "uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn destroy" in remote_command
+
+
+def test_preflight_auth_names_missing_keys_and_the_fix(monkeypatch, capsys) -> None:
+    monkeypatch.delenv("KITSHN_VPS_HOST", raising=False)
+    monkeypatch.setenv("KITSHN_SSH_KEY", "key")
+
+    with pytest.raises(KitshnError, match="missing KITSHN_VPS_HOST: run `kitshn recipe auth"):
+        preflight_auth()
+    assert capsys.readouterr().out.startswith("::error::missing KITSHN_VPS_HOST")
+
+    monkeypatch.setenv("KITSHN_VPS_HOST", "deploy@vps")
+    preflight_auth()
+
+
+def test_resolve_github_action_emits_the_inferred_public_url(tmp_path, monkeypatch) -> None:
+    (tmp_path / ".kitshn.yaml").write_text("deploy:\n  - on: push\n    branch: main\n    name: prod\n", encoding="utf-8")
+    (tmp_path / "Caddyfile.j2").write_text("site.example.com {\n    reverse_proxy unix//{{ paths.default_socket }}\n}\n", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+    monkeypatch.setenv("GITHUB_SHA", "abcdef123456")
+    monkeypatch.setenv("GITHUB_REF_NAME", "main")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "Owner/site")
+
+    result = resolve_github_action(tmp_path / ".kitshn.yaml")
+
+    assert result.url == "https://site.example.com"
+    assert "url=https://site.example.com" in result.output_lines()
+
+
+def test_verify_public_route_writes_summary_and_fails_on_bad_status(tmp_path, monkeypatch, capsys) -> None:
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("KITSHN_URL", "https://site.example.com")
+    monkeypatch.setenv("KITSHN_VERIFY_TIMEOUT", "0")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    verify_public_route(fetch=lambda _url: HttpResponse(200, "text/html", ""), sleep=lambda _s: None)
+
+    assert "| https://site.example.com | 200 | text/html |" in summary.read_text(encoding="utf-8")
+    assert "status=200" in capsys.readouterr().out
+
+    with pytest.raises(KitshnError, match="public route returned 502"):
+        verify_public_route(fetch=lambda _url: HttpResponse(502, "text/plain", "bad"), sleep=lambda _s: None)
+
+
+def test_verify_public_route_skips_without_url(tmp_path, monkeypatch) -> None:
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("KITSHN_URL", "")
+
+    verify_public_route(fetch=lambda _url: (_ for _ in ()).throw(AssertionError("must not fetch")))
+
+    assert "No public URL inferred" in summary.read_text(encoding="utf-8")
+
+
+def test_verify_public_route_posts_deployment_status_with_url(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    monkeypatch.setenv("KITSHN_URL", "https://site.example.com")
+    monkeypatch.setenv("KITSHN_VERIFY_TIMEOUT", "0")
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "Owner/site")
+    monkeypatch.setenv("GITHUB_SHA", "abc")
+    monkeypatch.setenv("KITSHN_ENVIRONMENT", "prod")
+    calls: list[tuple[str, str, bytes | None]] = []
+
+    class FakeApiResponse:
+        def __init__(self, body: bytes) -> None:
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return self.body
+
+    def open_url(request):
+        calls.append((request.get_method(), request.full_url, request.data))
+        return FakeApiResponse(b'[{"id": 77}]' if request.get_method() == "GET" else b"{}")
+
+    verify_public_route(
+        fetch=lambda _url: HttpResponse(200, "text/html", ""), sleep=lambda _s: None, open_url=open_url
+    )
+
+    assert calls[0][0] == "GET" and "sha=abc" in calls[0][1] and "environment=prod" in calls[0][1]
+    method, url, data = calls[1]
+    assert method == "POST" and url.endswith("/deployments/77/statuses")
+    assert data is not None
+    payload = json.loads(data)
+    assert payload["state"] == "success"
+    assert payload["environment_url"] == "https://site.example.com"
+    assert payload["description"] == "200 text/html"
+
+
+def test_verify_public_route_records_unreachable_routes_before_failing(tmp_path, monkeypatch) -> None:
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("KITSHN_URL", "https://pr.9.site.example.com")
+    monkeypatch.setenv("KITSHN_VERIFY_TIMEOUT", "0")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    def fetch(_url: str) -> HttpResponse:
+        raise KitshnError("Name or service not known")
+
+    with pytest.raises(KitshnError, match="public route unreachable"):
+        verify_public_route(fetch=fetch, sleep=lambda _s: None)
+
+    assert "| https://pr.9.site.example.com | unreachable | Name or service not known |" in summary.read_text(encoding="utf-8")

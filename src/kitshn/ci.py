@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import json
 import os
@@ -9,17 +10,24 @@ import shlex
 import subprocess
 import sys
 import tempfile
-from typing import cast
+import time
+from typing import Any, cast
 import urllib.error
+import urllib.parse
 import urllib.request
 
+from .caddy import infer_public_url
 from .errors import KitshnError, NoMatchingDeployment
+from .httpcheck import Fetch, HttpResponse, fetch_url
+from .models import Deployment, Recipe
 from .resolve import DeployEvent, ResolveInput, resolve_deployment
 
 RESERVED_PARAM_NAMES = {"KITSHN_VPS_HOST", "KITSHN_SSH_KEY"}
 ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 HOSTED_CLI = ["uvx", "--from", "git+https://github.com/Yarden-zamir/kitshn.git", "kitshn"]
 REMOTE_PATH_PREFIX = "export PATH=$HOME/.local/bin:$PATH"
+RECIPE_AUTH_HINT = "run `kitshn recipe auth --vps-host <ssh-target>` in the recipe repo, then rerun this workflow"
+DEFAULT_VERIFY_TIMEOUT = 120
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +37,7 @@ class ActionResolveResult:
     action: str | None = None
     ephemeral: bool | None = None
     ref: str | None = None
+    url: str | None = None
 
     def output_lines(self) -> list[str]:
         lines = [f"matched={str(self.matched).lower()}"]
@@ -40,6 +49,7 @@ class ActionResolveResult:
             lines.append(f"ephemeral={str(self.ephemeral).lower()}")
         if self.ref is not None:
             lines.append(f"ref={self.ref}")
+        lines.append(f"url={self.url or ''}")
         return lines
 
 
@@ -86,7 +96,165 @@ def resolve_github_action(config: Path = Path(".kitshn.yaml")) -> ActionResolveR
         action=result.action,
         ephemeral=result.ephemeral,
         ref=ref,
+        url=_resolved_public_url(config.parent, result.env),
     )
+
+
+def _resolved_public_url(recipe_dir: Path, environment: str) -> str | None:
+    repository = os.environ.get("GITHUB_REPOSITORY")
+    if not repository:
+        return None
+    deployment = Deployment.create(Recipe.parse(repository), environment)
+    return infer_public_url(recipe_dir / "Caddyfile.j2", deployment)
+
+
+def preflight_auth() -> None:
+    """Fail before touching the VPS when the recipe never ran `kitshn recipe auth`."""
+
+    missing = [name for name in ("KITSHN_VPS_HOST", "KITSHN_SSH_KEY") if not os.environ.get(name)]
+    if missing:
+        names = " and ".join(missing)
+        print(f"::error::missing {names}; {RECIPE_AUTH_HINT}")
+        msg = f"missing {names}: {RECIPE_AUTH_HINT}"
+        raise KitshnError(msg)
+
+
+OpenUrl = Callable[[urllib.request.Request], Any]
+
+
+def verify_public_route(
+    fetch: Fetch | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    open_url: OpenUrl = urllib.request.urlopen,
+) -> None:
+    """Request the deployed public URL, write the job summary, and mark the GitHub deployment.
+
+    KITSHN_URL is empty when the recipe has no single public hostname; then only a note is
+    written. A non-2xx response fails the step.
+    """
+
+    url = os.environ.get("KITSHN_URL") or ""
+    summary_path = _optional_path(os.environ.get("GITHUB_STEP_SUMMARY"))
+    if not url:
+        _append_summary(summary_path, "## KitSHn deploy\n\nNo public URL inferred from `Caddyfile.j2`; skipped the route check.\n")
+        print("url= (no public route to verify)")
+        return
+
+    timeout = _int_env("KITSHN_VERIFY_TIMEOUT", DEFAULT_VERIFY_TIMEOUT)
+    try:
+        response = _fetch_until_ok(url, fetch or fetch_url, timeout, sleep)
+    except KitshnError as error:
+        _append_summary(summary_path, _summary_table(url, "unreachable", str(error)))
+        _set_deployment_status(url, "failure", f"unreachable: {error}", open_url)
+        msg = f"public route unreachable after {timeout}s: {url}: {error}"
+        raise KitshnError(msg) from error
+    print(f"url={url}")
+    print(f"status={response.status}")
+    print(f"content_type={response.content_type}")
+    _append_summary(summary_path, _summary_table(url, str(response.status), response.content_type or "-"))
+    _set_deployment_status(
+        url,
+        "success" if response.ok else "failure",
+        f"{response.status} {response.content_type}",
+        open_url,
+    )
+    if not response.ok:
+        msg = f"public route returned {response.status}: {url}"
+        raise KitshnError(msg)
+
+
+def _summary_table(url: str, status: str, content_type: str) -> str:
+    return (
+        "## KitSHn deploy\n\n"
+        "| URL | Status | Content-Type |\n|---|---|---|\n"
+        f"| {url} | {status} | {content_type} |\n"
+    )
+
+
+def _fetch_until_ok(url: str, fetch: Fetch, timeout: int, sleep: Callable[[float], None]) -> HttpResponse:
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            response = fetch(url)
+            if response.ok or time.monotonic() >= deadline:
+                return response
+            print(f"waiting: {url} returned {response.status}")
+        except KitshnError as error:
+            if time.monotonic() >= deadline:
+                raise
+            print(f"waiting: {url}: {error}")
+        sleep(5)
+
+
+def _append_summary(path: Path | None, markdown: str) -> None:
+    if path is None:
+        print(markdown, end="")
+        return
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(markdown)
+
+
+def _set_deployment_status(url: str, state: str, description: str, open_url: OpenUrl) -> None:
+    """Attach the URL and check result to the GitHub deployment created by `environment:`."""
+
+    repository = os.environ.get("GITHUB_REPOSITORY")
+    token = os.environ.get("GITHUB_TOKEN")
+    sha = os.environ.get("GITHUB_SHA")
+    environment = os.environ.get("KITSHN_ENVIRONMENT")
+    if not (repository and token and sha and environment):
+        return
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    query = urllib.parse.urlencode({"sha": sha, "environment": environment, "per_page": 1})
+    try:
+        with open_url(
+            urllib.request.Request(f"https://api.github.com/repos/{repository}/deployments?{query}", headers=headers)
+        ) as api_response:
+            deployments = json.loads(api_response.read().decode("utf-8"))
+        if not deployments:
+            print("warning: no GitHub deployment found to attach the URL to", file=sys.stderr)
+            return
+        payload = {
+            "state": state,
+            "environment_url": url,
+            "description": description[:140],
+            "auto_inactive": False,
+        }
+        if run_url := _run_url():
+            payload["log_url"] = run_url
+        request = urllib.request.Request(
+            f"https://api.github.com/repos/{repository}/deployments/{deployments[0]['id']}/statuses",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={**headers, "Content-Type": "application/json"},
+            method="POST",
+        )
+        with open_url(request):
+            return
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, IndexError) as error:
+        print(f"warning: cannot attach URL to GitHub deployment: {error}", file=sys.stderr)
+
+
+def _run_url() -> str | None:
+    server = os.environ.get("GITHUB_SERVER_URL")
+    repository = os.environ.get("GITHUB_REPOSITORY")
+    run_id = os.environ.get("GITHUB_RUN_ID")
+    if server and repository and run_id:
+        return f"{server}/{repository}/actions/runs/{run_id}"
+    return None
+
+
+def _int_env(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except ValueError as error:
+        msg = f"{name} must be an integer number of seconds, got {value!r}"
+        raise KitshnError(msg) from error
 
 
 def write_github_output(lines: list[str], output_path: Path | None = None) -> None:

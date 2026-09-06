@@ -1,22 +1,37 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
 import json
 import os
+from typing import Literal
 
 from .errors import KitshnError
 from .runner import CommandRunner
 
 KITSHN_REPO_URL = "https://github.com/Yarden-zamir/kitshn"
 KITSHN_SOURCE_FILE = "src/kitshn/repo_init.py"
+PLACEHOLDER_HOSTNAME = "example.com"
+DEFAULT_SITE_DIR = "site"
+
+Template = Literal["static"]
+
+# Order matters: a push before `recipe auth` starts a workflow that fails on missing secrets.
+CHECKLIST = (
+    "create the GitHub repo if it does not exist: gh repo create <owner/repo> --private --source . --remote origin",
+    "kitshn recipe auth --vps-host <ssh-target>   # before the first push; reads the git remote",
+    "kitshn try   # optional: build and run the recipe locally, or --vps-host <ssh-target> to run it on the VPS",
+    "git add -A && git commit && git push",
+    "kitshn track   # follows the Actions run and verifies the deployment",
+)
 
 
 @dataclass(frozen=True, slots=True)
 class InitResult:
     created_files: list[Path]
     source_commit: str
+    checklist: list[str] = field(default_factory=lambda: list(CHECKLIST))
 
 
 def init_recipe_repo(
@@ -25,15 +40,33 @@ def init_recipe_repo(
     runner: CommandRunner,
     docker: bool = False,
     routing: bool = False,
+    template: Template | None = None,
+    hostname: str | None = None,
+    site_dir: str | None = None,
     force: bool = False,
 ) -> InitResult:
+    if template is not None and (docker or routing):
+        msg = f"--template {template} already writes compose.yml and Caddyfile.j2; drop --docker and --routing"
+        raise KitshnError(msg)
+    if template is None and (hostname is not None or site_dir is not None):
+        msg = "--hostname and --site-dir only apply with --template static"
+        raise KitshnError(msg)
+
     source_commit = _kitshn_source_commit(runner)
     files = _required_files(source_commit)
+    checklist = list(CHECKLIST)
     if docker:
         files[Path("compose.yml")] = _compose_yml()
     if routing:
         files[Path("Caddyfile.j2")] = _caddyfile_j2()
         files[Path(".gitignore")] = "Caddyfile\n"
+    if template == "static":
+        resolved_hostname = hostname or PLACEHOLDER_HOSTNAME
+        resolved_site_dir = (site_dir or DEFAULT_SITE_DIR).strip("/")
+        files.update(static_site_files(resolved_hostname, resolved_site_dir))
+        checklist.insert(0, f"put the files to serve under {resolved_site_dir}/")
+        if hostname is None:
+            checklist.insert(1, f"replace {PLACEHOLDER_HOSTNAME} in Caddyfile.j2 with the public hostname")
 
     created: list[Path] = []
     for relative, content in files.items():
@@ -44,7 +77,7 @@ def init_recipe_repo(
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         created.append(target)
-    return InitResult(created_files=created, source_commit=source_commit)
+    return InitResult(created_files=created, source_commit=source_commit, checklist=checklist)
 
 
 def _required_files(source_commit: str) -> dict[Path, str]:
@@ -98,7 +131,7 @@ This repository is a KitSHn recipe repo. KitSHn deploys recipe repos from GitHub
 
 - `.kitshn.yaml` maps GitHub events to deployment environments.
 - `.github/workflows/kitshn.yml` calls the KitSHn reusable deploy workflow and grants it required GitHub token permissions.
-- `kitshn.md` documents the recipe contract and the KitSHn source commit that generated it.
+- `kitshn.md` documents the recipe contract and the KitSHn source commit that generated it. Rewrite the prose freely, but keep the Origin section at the end so `kitshn` can tell which template version produced this recipe.
 - Optional `compose.yml` defines container services for Docker Compose deployments.
 - Optional `Caddyfile.j2` defines public routing and is rendered on the VPS into a generated `Caddyfile`.
 - Socket ingress is the default routing pattern. Compose services can bind `${{KITSHN_DEFAULT_SOCKET}}` and Caddy can route to `{{{{ paths.default_socket }}}}`.
@@ -136,11 +169,109 @@ before doing so, or Caddy will reject the duplicate site definition.
 """
 
 
+def static_site_files(hostname: str, site_dir: str) -> dict[Path, str]:
+    """Files for a static site served by Caddy inside the container, bound to the KitSHn socket."""
+
+    return {
+        Path("Dockerfile"): f"""FROM caddy:2-alpine
+
+COPY container/Caddyfile /etc/caddy/Caddyfile
+COPY {site_dir} /srv
+""",
+        Path("container/Caddyfile"): _static_container_caddyfile(),
+        Path("compose.yml"): _static_compose_yml(),
+        Path("Caddyfile.j2"): _static_caddyfile_j2(hostname),
+        Path(".dockerignore"): """.git
+.github
+Caddyfile
+Caddyfile.j2
+*.md
+.DS_Store
+""",
+        Path(".gitignore"): "Caddyfile\n",
+    }
+
+
+def _static_container_caddyfile() -> str:
+    return """# Caddy inside the container. The host Caddy (Caddyfile.j2) terminates TLS and proxies
+# the public hostname to this Unix socket, so this file serves plain HTTP on the socket.
+{
+	auto_https off
+	admin off
+}
+
+http:// {
+	# Caddy binds the KitSHn socket directly and removes a stale socket file left by a
+	# previous container, so no socat sidecar is needed. 0666 lets the host Caddy connect.
+	bind unix/{$KITSHN_DEFAULT_SOCKET}|0666
+	root * /srv
+
+	# encode only compresses its default MIME types. A custom Content-Type set with `header`
+	# is not in that list, and `header` runs before encode sees the type, so list every type
+	# to compress here explicitly.
+	encode zstd gzip {
+		match {
+			header Content-Type text/*
+			header Content-Type application/json*
+			header Content-Type application/javascript*
+			header Content-Type application/xml*
+			header Content-Type application/manifest+json*
+			header Content-Type image/svg+xml*
+		}
+	}
+
+	# Examples. Uncomment and adapt.
+	# @sw path /sw.js
+	# header @sw Cache-Control "no-cache"
+	# header /assets/* Cache-Control "public, max-age=604800"
+	# @gpx path *.gpx
+	# header @gpx Content-Type application/gpx+xml
+	# header @gpx Content-Disposition attachment
+
+	file_server
+}
+"""
+
+
+def _static_compose_yml() -> str:
+    return """services:
+  site:
+    build: .
+    pull_policy: build
+    environment:
+      KITSHN_RECIPE: ${KITSHN_RECIPE}
+      KITSHN_ENVIRONMENT: ${KITSHN_ENVIRONMENT}
+      KITSHN_DEPLOYMENT: ${KITSHN_DEPLOYMENT}
+      KITSHN_SOCKET_DIR: ${KITSHN_SOCKET_DIR}
+      KITSHN_DEFAULT_SOCKET: ${KITSHN_DEFAULT_SOCKET}
+    volumes:
+      - ${KITSHN_SOCKET_DIR}:${KITSHN_SOCKET_DIR}
+    healthcheck:
+      test: ["CMD", "test", "-S", "${KITSHN_DEFAULT_SOCKET}"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+"""
+
+
+def _static_caddyfile_j2(hostname: str) -> str:
+    return f"""{{% if environment == "prod" -%}}
+{hostname}
+{{%- else -%}}
+pr.{{{{ environment.removeprefix("pr-") }}}}.{hostname}
+{{%- endif %}} {{
+    reverse_proxy unix//{{{{ paths.default_socket }}}}
+}}
+"""
+
+
 def _compose_yml() -> str:
     return """# Define this recipe's Docker Compose services here.
 # KitSHn runs docker compose with this file during deployment.
 #
-# Direct Unix socket example for apps that can listen on a socket:
+# Direct Unix socket example for apps that can listen on a socket (preferred; no sidecar):
 # services:
 #   app:
 #     build: .
@@ -163,7 +294,7 @@ def _compose_yml() -> str:
 #     labels:
 #       kitshn.depends_on: "owner/another-recipe"
 #
-# TCP-only image example using a socket proxy sidecar:
+# Socket proxy sidecar, only for images that cannot bind a Unix socket themselves:
 # services:
 #   app:
 #     image: nginx:alpine

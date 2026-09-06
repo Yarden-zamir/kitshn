@@ -79,7 +79,7 @@ def test_init_recipe_repo_adds_optional_docker_and_routing_files(tmp_path: Path)
     compose = (tmp_path / "compose.yml").read_text(encoding="utf-8")
     caddyfile = (tmp_path / "Caddyfile.j2").read_text(encoding="utf-8")
     assert "# Direct Unix socket example" in compose
-    assert "# TCP-only image example" in compose
+    assert "# Socket proxy sidecar, only for images that cannot bind a Unix socket" in compose
     assert "#   app:" in compose
     assert "alpine/socat" in compose
     assert "#       - kitshn-edge" not in compose
@@ -162,3 +162,59 @@ def test_recipe_auth_can_authorize_remote_vps_host(tmp_path: Path) -> None:
         "--body",
         "deploy@vps.example.com",
     )
+
+
+def test_init_static_template_writes_a_complete_caddy_socket_recipe(tmp_path: Path) -> None:
+    result = init_recipe_repo(
+        target_dir=tmp_path, runner=RecordingRunner(), template="static", hostname="site.example.com"
+    )
+
+    names = [path.relative_to(tmp_path).as_posix() for path in result.created_files]
+    assert names == [
+        ".kitshn.yaml",
+        ".github/workflows/kitshn.yml",
+        "kitshn.md",
+        "Dockerfile",
+        "container/Caddyfile",
+        "compose.yml",
+        "Caddyfile.j2",
+        ".dockerignore",
+        ".gitignore",
+    ]
+    container_caddyfile = (tmp_path / "container" / "Caddyfile").read_text(encoding="utf-8")
+    assert "bind unix/{$KITSHN_DEFAULT_SOCKET}|0666" in container_caddyfile
+    assert "encode zstd gzip {\n\t\tmatch {\n\t\t\theader Content-Type text/*" in container_caddyfile
+    assert "stale socket" in container_caddyfile
+    assert "socat" not in (tmp_path / "compose.yml").read_text(encoding="utf-8")
+    compose = (tmp_path / "compose.yml").read_text(encoding="utf-8")
+    assert "${KITSHN_SOCKET_DIR}:${KITSHN_SOCKET_DIR}" in compose
+    assert 'test: ["CMD", "test", "-S", "${KITSHN_DEFAULT_SOCKET}"]' in compose
+    caddyfile = (tmp_path / "Caddyfile.j2").read_text(encoding="utf-8")
+    assert "site.example.com" in caddyfile and 'pr.{{ environment.removeprefix("pr-") }}.site.example.com' in caddyfile
+    assert (tmp_path / "Dockerfile").read_text(encoding="utf-8") == "FROM caddy:2-alpine\n\nCOPY container/Caddyfile /etc/caddy/Caddyfile\nCOPY site /srv\n"
+    assert result.checklist[0] == "put the files to serve under site/"
+    assert not any("example.com in Caddyfile.j2" in step for step in result.checklist)
+
+
+def test_init_static_template_defaults_flag_the_placeholder_hostname(tmp_path: Path) -> None:
+    result = init_recipe_repo(target_dir=tmp_path, runner=RecordingRunner(), template="static")
+
+    assert "example.com" in (tmp_path / "Caddyfile.j2").read_text(encoding="utf-8")
+    assert result.checklist[1] == "replace example.com in Caddyfile.j2 with the public hostname"
+
+
+def test_init_template_rejects_conflicting_flags(tmp_path: Path) -> None:
+    with pytest.raises(KitshnError, match="drop --docker and --routing"):
+        init_recipe_repo(target_dir=tmp_path, runner=RecordingRunner(), template="static", docker=True)
+    with pytest.raises(KitshnError, match="only apply with --template static"):
+        init_recipe_repo(target_dir=tmp_path, runner=RecordingRunner(), hostname="x.example.com")
+
+
+def test_init_checklist_orders_recipe_auth_before_push_and_footer_is_documented(tmp_path: Path) -> None:
+    result = init_recipe_repo(target_dir=tmp_path, runner=RecordingRunner())
+
+    steps = " | ".join(result.checklist)
+    assert steps.index("gh repo create") < steps.index("kitshn recipe auth") < steps.index("git push") < steps.index("kitshn track")
+    kitshn_md = (tmp_path / "kitshn.md").read_text(encoding="utf-8")
+    assert "keep the Origin section" in kitshn_md
+    assert kitshn_md.rstrip().endswith("KitSHn commit: `abc123`")

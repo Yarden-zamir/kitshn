@@ -1,6 +1,6 @@
 # Environment URLs And GitHub Deployments
 
-Status: planned, not implemented.
+Status: URL inference is implemented, the rest is planned.
 
 Two problems drive this work:
 
@@ -10,13 +10,15 @@ Two problems drive this work:
 ## Decisions Already Made
 
 - No `url:` field in `.kitshn.yaml`. The URL is derived, not declared.
-- The URL is resolved from **live Caddy**, not by parsing `Caddyfile.j2` or the generated `Caddyfile`.
+- The URL is derived by rendering `Caddyfile.j2` for the environment and reading its site addresses; see [Caddy Ingress](caddy.md). This replaced the live-Caddy plan below: rendering works on the laptop and in the `resolve` job, where no VPS or params exist, and the same "exactly one concrete host or nothing" rule keeps it from guessing. Revisit if a recipe's hostname ever depends on `params`, which the render cannot see.
 - If a single clear URL cannot be derived, attach **no URL**. Do not guess.
 - Stable environments keep using GitHub Environments. Ephemeral PR previews stop creating them.
 
-## URL Inference From Live Caddy
+Implemented today: `ci-resolve` emits `url`, `ci-verify` requests it and posts a deployment status with `environment_url`, and `kitshn track` requests it from the laptop.
 
-After Caddy reload, query the local admin API:
+## URL Inference From Live Caddy (superseded)
+
+The original plan, kept for the cases it enumerated. After Caddy reload, query the local admin API:
 
 ```bash
 curl http://127.0.0.1:2019/config/apps/http/servers

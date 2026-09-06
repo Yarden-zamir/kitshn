@@ -28,7 +28,7 @@ def authorize_recipe(
     force: bool = False,
     authorized_keys: Path | None = None,
 ) -> RecipeAuthResult:
-    recipe = _github_recipe(recipe_dir, runner)
+    recipe = github_recipe(recipe_dir, runner)
     private_key = (key_path or _default_key_path(recipe)).expanduser()
     public_key = Path(f"{private_key}.pub")
     _prepare_key_path(private_key, public_key, force=force)
@@ -83,13 +83,30 @@ def authorize_recipe(
     )
 
 
-def _github_recipe(recipe_dir: Path, runner: CommandRunner) -> Recipe:
+def github_recipe(recipe_dir: Path, runner: CommandRunner) -> Recipe:
+    """The owner/repo of the GitHub remote in `recipe_dir`, read through `gh`."""
+
     result = runner.run(
         ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
         cwd=recipe_dir,
         capture=True,
     )
     return Recipe.parse(result.stdout.strip())
+
+
+def github_recipe_or_none(recipe_dir: Path, runner: CommandRunner) -> Recipe | None:
+    """Like github_recipe, but None when the directory has no GitHub remote or `gh` fails."""
+
+    result = runner.run(
+        ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
+        cwd=recipe_dir,
+        capture=True,
+        check=False,
+    )
+    name = result.stdout.strip()
+    if result.returncode != 0 or name.count("/") != 1:
+        return None
+    return Recipe.parse(name)
 
 
 def _default_key_path(recipe: Recipe) -> Path:

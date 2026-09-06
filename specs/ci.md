@@ -72,9 +72,11 @@ The workflow YAML should stay declarative. Non-trivial logic belongs in KitSHn C
 
 Jobs:
 
-- `resolve` — no `environment:` binding. Runs `kitshn ci-resolve` and emits `matched`, `env`, `action`, `ephemeral`, and `ref`.
-- `deploy` — `environment: ${{ needs.resolve.outputs.env }}`. Runs `kitshn ci-write-params`, scps to the VPS through `kitshn ci-deploy`, and runs the hosted KitSHn CLI remotely through `uvx`.
-- `teardown` — `environment: ${{ needs.resolve.outputs.env }}`. Runs `kitshn ci-destroy`, which runs the hosted KitSHn CLI remotely through `uvx`. When `ephemeral` is `true`, `kitshn ci-delete-environment` calls `DELETE /repos/{owner}/{repo}/environments/{name}`.
+- `resolve` — no `environment:` binding. Runs `kitshn ci-resolve` and emits `matched`, `env`, `action`, `ephemeral`, `ref`, and `url` (the public URL inferred from `Caddyfile.j2`, or empty).
+- `deploy` — `environment: ${{ needs.resolve.outputs.env }}`. Runs `kitshn ci-preflight`, which fails before any SSH with the `kitshn recipe auth` command when `KITSHN_VPS_HOST` or `KITSHN_SSH_KEY` is missing; then `kitshn ci-write-params`; then `kitshn ci-deploy`, which scps params to the VPS and runs the hosted KitSHn CLI remotely through `uvx`; then `kitshn ci-verify`, which requests the public URL and records status, content type, and URL in the job summary and on the GitHub deployment.
+- `teardown` — `environment: ${{ needs.resolve.outputs.env }}`. Runs `kitshn ci-preflight`, then `kitshn ci-destroy`, which runs the hosted KitSHn CLI remotely through `uvx`. When `ephemeral` is `true`, `kitshn ci-delete-environment` calls `DELETE /repos/{owner}/{repo}/environments/{name}`.
+
+`setup-uv` runs with `enable-cache: false` in every job. Recipe repos have no lockfile for it to key on, and the default `auto` mode printed a cache warning on every run.
 
 The `environment:` binding on deploy/teardown attaches the run to the GitHub Environment and applies its protection rules and secrets. `environment:` also auto-creates the Environment on first use, so dynamic names like `pr-42` need no `PUT`.
 
