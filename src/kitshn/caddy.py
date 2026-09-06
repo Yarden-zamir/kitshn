@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import os
 
-from jinja2 import Environment, StrictUndefined
+from jinja2 import Environment, StrictUndefined, Undefined
 
 from .errors import KitshnError
 from .filesystem import read_env_file, walk_deployments
@@ -129,3 +129,61 @@ def _template_path(deployment: Deployment) -> Path | None:
     if caddyfile_j2.exists():
         return caddyfile_j2
     return None
+
+
+def infer_public_url(template_path: Path, deployment: Deployment) -> str | None:
+    """Infer the single public URL a recipe's `Caddyfile.j2` serves for one environment.
+
+    Renders the template with the deployment context but without params, so it works on the
+    laptop and in CI where `params.env` does not exist. Returns None when the rendered site
+    addresses contain zero, several, or wildcard hosts: KitSHn never guesses a URL.
+    """
+
+    if not template_path.exists():
+        return None
+    env = Environment(autoescape=False, undefined=Undefined)
+    template = env.from_string(template_path.read_text(encoding="utf-8"))
+    rendered = template.render(
+        recipe=deployment.recipe.full_name,
+        environment=deployment.environment,
+        deployment=deployment.identity,
+        paths={
+            "deployment": str(deployment.deployment_root),
+            "params": str(deployment.params_root),
+            "params_file": str(deployment.params_file),
+            "persistent": str(deployment.persistent_root),
+            "logs": str(deployment.logs_root),
+            "socket": str(deployment.socket_root),
+            "default_socket": str(deployment.default_socket),
+        },
+        params={},
+    )
+    urls = {url for address in site_addresses(rendered) if (url := _concrete_url(address))}
+    if len(urls) != 1:
+        return None
+    return urls.pop()
+
+
+def site_addresses(caddyfile: str) -> list[str]:
+    """Return the site addresses of every top-level site block in a rendered Caddyfile."""
+
+    addresses: list[str] = []
+    depth = 0
+    for raw_line in caddyfile.splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if depth == 0 and line not in {"{", "}"} and not line.startswith("("):
+            head = line.removesuffix("{").strip()
+            addresses.extend(part.strip() for part in head.split(",") if part.strip())
+        depth += line.count("{") - line.count("}")
+    return addresses
+
+
+def _concrete_url(address: str) -> str | None:
+    scheme = "http" if address.startswith("http://") else "https"
+    host = address.removeprefix("https://").removeprefix("http://")
+    host = host.split("/", 1)[0].split(":", 1)[0]
+    if not host or "*" in host or "." not in host or host == "localhost":
+        return None
+    return f"{scheme}://{host}"
