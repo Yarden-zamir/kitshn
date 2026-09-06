@@ -1,0 +1,59 @@
+name: release
+
+# Every push to main whose pyproject.toml version has no vX.Y.Z tag yet becomes a release:
+# tag, GitHub release with generated notes, then the Homebrew tap sync. A release created
+# with GITHUB_TOKEN does not trigger homebrew.yml, so this workflow calls the sync directly.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.release.outputs.released }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+
+      - name: Check that pyproject.toml, __init__.py, and uv.lock agree
+        run: uv run pytest tests/test_version.py -q
+
+      - name: Tag and release when the version is new
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v$(uv version --short)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo "$tag already exists; nothing to release"
+            exit 0
+          fi
+          git tag "$tag"
+          git push origin "$tag"
+          gh release create "$tag" --title "$tag" --generate-notes
+          echo "released=true" >> "$GITHUB_OUTPUT"
+
+  homebrew:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    uses: Yarden-zamir/homebrew-tap/.github/workflows/sync-formula.yml@main
+    with:
+      formula: kitshn
+      tag: ${{ needs.release.outputs.tag }}
+      repository: Yarden-zamir/kitshn
+    secrets:
+      token: ${{ secrets.TOKEN }}
