@@ -133,6 +133,7 @@ http://internal.example.com:8080 {
         ('{% if environment == "prod" -%}\nsite.example.com\n{%- else -%}\npr.{{ environment.removeprefix("pr-") }}.site.example.com\n{%- endif %} {\n    reverse_proxy unix//{{ paths.default_socket }}\n}\n', "prod", "https://site.example.com"),
         ('{% if environment == "prod" -%}\nsite.example.com\n{%- else -%}\npr.{{ environment.removeprefix("pr-") }}.site.example.com\n{%- endif %} {\n    reverse_proxy unix//{{ paths.default_socket }}\n}\n', "pr-7", "https://pr.7.site.example.com"),
         ("http://plain.example.com {\n}\n", "prod", "http://plain.example.com"),
+        ("http://internal.example.com:8080 {\n}\n", "prod", "http://internal.example.com:8080"),
         ("*.example.com {\n}\n", "prod", None),
         ("a.example.com {\n}\nb.example.com {\n}\n", "prod", None),
         (":443 {\n    reverse_proxy unix//{{ paths.default_socket }}\n}\n", "prod", None),

@@ -18,6 +18,7 @@ from .caddy import infer_public_url
 from .errors import KitshnError, NoMatchingDeployment
 from .httpcheck import Fetch, fetch_url
 from .models import Deployment, Recipe
+from .recipe_auth import github_recipe
 from .remote import check_vps_reachable, run_on_vps
 from .resolve import ResolveInput, resolve_deployment
 from .runner import CommandRunner
@@ -78,7 +79,7 @@ def track_deploy(
     sleep: Sleep = time.sleep,
 ) -> TrackReport:
     fetch = fetch or fetch_url
-    recipe = _github_recipe(directory, runner)
+    recipe = github_recipe(directory, runner)
     commit = sha or _git_output(directory, runner, "rev-parse", "HEAD")
     branch = _git_output(directory, runner, "rev-parse", "--abbrev-ref", "HEAD")
     report = TrackReport(recipe=recipe, sha=commit)
@@ -236,10 +237,19 @@ def _wait_for_vps_status(
             capture=True,
         )
         if result.returncode == 0 and result.stdout.strip():
-            entries = json.loads(result.stdout)
-            problems = status_problems(entries[0], sha) if entries else ["deployment not found on VPS"]
-            if not problems:
-                return TrackStep("vps status", "ok", f"{deployment.identity} at {sha[:12]}, services healthy")
+            try:
+                entries = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                # A login shell that echoes from ~/.profile pollutes stdout; retry rather than crash.
+                entries = None
+            if entries is None:
+                problems = ["kitshn status did not return JSON; check the VPS login shell for stray output"]
+            elif not entries:
+                problems = ["deployment not found on VPS"]
+            else:
+                problems = status_problems(entries[0], sha)
+                if not problems:
+                    return TrackStep("vps status", "ok", f"{deployment.identity} at {sha[:12]}, services healthy")
         else:
             problems = [result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "kitshn status failed"]
         if time.monotonic() >= deadline:
@@ -288,15 +298,6 @@ def _resolve_environment(directory: Path, runner: CommandRunner, branch: str, sh
             pass
     msg = f"no .kitshn.yaml entry matches branch {branch!r}; pass --environment"
     raise KitshnError(msg)
-
-
-def _github_recipe(directory: Path, runner: CommandRunner) -> Recipe:
-    result = runner.run(
-        ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
-        cwd=directory,
-        capture=True,
-    )
-    return Recipe.parse(result.stdout.strip())
 
 
 def _github_variable(recipe: Recipe, name: str, runner: CommandRunner) -> str:

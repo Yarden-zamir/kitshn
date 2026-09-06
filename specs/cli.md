@@ -33,7 +33,9 @@ reported as errors, never as "current".
 `try` builds and runs the recipe's `compose.yml` without touching routing or deployments:
 
 - Fails with a clear message when the directory has no `compose.yml` or `compose.yaml`, when
-  `docker info` fails locally, or when the VPS SSH probe fails.
+  `--params-file` does not exist, when `docker info` fails locally, or when the VPS SSH probe
+  fails. It also refuses to run locally under Docker Desktop, whose host bind mounts cannot
+  carry Unix sockets, and points at `--vps-host`.
 - Creates one temporary root and derives every KitSHn path from it, so the socket, params,
   data, and log directories never overlap a real deployment. The environment name is
   `try-<pid>`, which makes the Compose project name unique per run.
@@ -45,8 +47,9 @@ reported as errors, never as "current".
 - Cleans up with `down --remove-orphans --volumes --rmi local` and removes the temporary root,
   unless `--keep` is passed; then it prints the curl and cleanup commands.
 - `--vps-host` copies the recipe with `rsync` (honoring `.gitignore`, excluding `.git`) to
-  `/tmp/kitshn-try-<name>-<pid>/src` on the VPS, runs hosted `kitshn try` there, and removes
-  the remote directory afterwards. It warns first that the build and containers run on the
+  `/tmp/kitshn-try-<name>-<pid>/src` on the VPS (created with `umask 077`; a copied params
+  file gets mode `600`), resolves the recipe name locally and passes it with `--recipe`, runs
+  hosted `kitshn try` there, and removes the remote directory afterwards. It warns first that the build and containers run on the
   production host, that images, containers, networks, and volumes are created there, and what
   cleanup removes. Pulled base images stay in the VPS image cache.
 
@@ -149,7 +152,9 @@ public URL inferred from `Caddyfile.j2` for the resolved environment, or empty.
 `KITSHN_SSH_KEY` is missing. `ci-verify` requests `KITSHN_URL` until it returns 2xx or
 `KITSHN_VERIFY_TIMEOUT` seconds pass, writes the URL, status, and content type to the job
 summary, posts a deployment status with `environment_url` on the job's GitHub deployment, and
-fails on a non-2xx final response. With no URL it writes a note and succeeds.
+fails on a non-2xx final response. When the URL never answers before the timeout (for example
+a preview hostname without DNS), it still writes the summary row and a `failure` deployment
+status, then fails. With no URL it writes a note and succeeds.
 
 ## Skill
 

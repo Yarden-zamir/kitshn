@@ -45,7 +45,8 @@ exists, persistence needs, and dependencies on other recipes.
 4. `kitshn recipe auth --vps-host <vps>`. It reads the repo from the git remote through `gh`,
    so worktree layouts are fine. It must precede the first push.
 5. Optional but cheap: `kitshn try`, or `kitshn try --vps-host <vps>` when Docker is not
-   running locally. It builds and runs `compose.yml` in a throwaway directory with the socket
+   running locally or is Docker Desktop (its bind mounts cannot carry Unix sockets; `try`
+   says so and refuses). It builds and runs `compose.yml` in a throwaway directory with the socket
    in a temp dir, curls the socket, prints the last logs on failure, and cleans up. It never
    touches routing or deployments. On the VPS it uses the production host's Docker and disk.
 6. Commit the deployment files, push, then `kitshn track`. It follows the Actions run for

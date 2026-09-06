@@ -2,6 +2,7 @@ from pathlib import Path
 from collections.abc import Mapping, Sequence
 import json
 
+from kitshn.errors import KitshnError
 from kitshn.httpcheck import HttpResponse
 from kitshn.runner import CommandResult, CommandRunner
 from kitshn.track import DEFAULT_TIMEOUTS, TrackTimeouts, status_problems, track_deploy
@@ -111,6 +112,25 @@ def test_track_reports_stale_ref_after_vps_timeout(tmp_path: Path) -> None:
     vps = next(step for step in report.steps if step.name == "vps status")
     assert vps.state == "fail"
     assert "ref is old" in vps.detail
+
+
+def test_track_reports_a_route_that_keeps_raising(tmp_path: Path) -> None:
+    def fetch(_url: str) -> HttpResponse:
+        raise KitshnError("Name or service not known")
+
+    report = track_deploy(
+        directory=_recipe_dir(tmp_path),
+        runner=TrackRunner(),
+        url="https://custom.example.com",
+        timeouts=TrackTimeouts(route=0),
+        fetch=fetch,
+        sleep=lambda _seconds: None,
+    )
+
+    route = next(step for step in report.steps if step.name == "public route")
+    assert route.state == "fail"
+    assert route.detail == "Name or service not known https://custom.example.com"
+    assert report.url == "https://custom.example.com"
 
 
 def test_status_problems_names_each_failure() -> None:

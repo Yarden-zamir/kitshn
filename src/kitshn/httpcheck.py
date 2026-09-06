@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import http.client
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from .errors import KitshnError
@@ -27,6 +29,9 @@ Fetch = Callable[[str], HttpResponse]
 
 
 def fetch_url(url: str) -> HttpResponse:
+    if urllib.parse.urlsplit(url).scheme not in {"http", "https"}:
+        msg = f"URL must start with http:// or https://: {url!r}"
+        raise KitshnError(msg)
     request = urllib.request.Request(url, headers={"User-Agent": "kitshn"})
     try:
         with urllib.request.urlopen(request, timeout=15) as response:
@@ -43,4 +48,7 @@ def fetch_url(url: str) -> HttpResponse:
         )
     except urllib.error.URLError as error:
         msg = f"{error.reason}"
+        raise KitshnError(msg) from error
+    except (OSError, http.client.HTTPException) as error:
+        msg = f"{error.__class__.__name__}: {error}"
         raise KitshnError(msg) from error

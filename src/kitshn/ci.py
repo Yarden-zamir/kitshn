@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import cast
+from typing import Any, cast
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -119,7 +119,14 @@ def preflight_auth() -> None:
         raise KitshnError(msg)
 
 
-def verify_public_route(fetch: Fetch | None = None, sleep: Callable[[float], None] = time.sleep) -> None:
+OpenUrl = Callable[[urllib.request.Request], Any]
+
+
+def verify_public_route(
+    fetch: Fetch | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    open_url: OpenUrl = urllib.request.urlopen,
+) -> None:
     """Request the deployed public URL, write the job summary, and mark the GitHub deployment.
 
     KITSHN_URL is empty when the recipe has no single public hostname; then only a note is
@@ -133,20 +140,35 @@ def verify_public_route(fetch: Fetch | None = None, sleep: Callable[[float], Non
         print("url= (no public route to verify)")
         return
 
-    response = _fetch_until_ok(url, fetch or fetch_url, _int_env("KITSHN_VERIFY_TIMEOUT", DEFAULT_VERIFY_TIMEOUT), sleep)
+    timeout = _int_env("KITSHN_VERIFY_TIMEOUT", DEFAULT_VERIFY_TIMEOUT)
+    try:
+        response = _fetch_until_ok(url, fetch or fetch_url, timeout, sleep)
+    except KitshnError as error:
+        _append_summary(summary_path, _summary_table(url, "unreachable", str(error)))
+        _set_deployment_status(url, "failure", f"unreachable: {error}", open_url)
+        msg = f"public route unreachable after {timeout}s: {url}: {error}"
+        raise KitshnError(msg) from error
     print(f"url={url}")
     print(f"status={response.status}")
     print(f"content_type={response.content_type}")
-    _append_summary(
-        summary_path,
-        "## KitSHn deploy\n\n"
-        "| URL | Status | Content-Type |\n|---|---|---|\n"
-        f"| {url} | {response.status} | {response.content_type or '-'} |\n",
+    _append_summary(summary_path, _summary_table(url, str(response.status), response.content_type or "-"))
+    _set_deployment_status(
+        url,
+        "success" if response.ok else "failure",
+        f"{response.status} {response.content_type}",
+        open_url,
     )
-    _set_deployment_status(url, response)
     if not response.ok:
         msg = f"public route returned {response.status}: {url}"
         raise KitshnError(msg)
+
+
+def _summary_table(url: str, status: str, content_type: str) -> str:
+    return (
+        "## KitSHn deploy\n\n"
+        "| URL | Status | Content-Type |\n|---|---|---|\n"
+        f"| {url} | {status} | {content_type} |\n"
+    )
 
 
 def _fetch_until_ok(url: str, fetch: Fetch, timeout: int, sleep: Callable[[float], None]) -> HttpResponse:
@@ -172,7 +194,7 @@ def _append_summary(path: Path | None, markdown: str) -> None:
         handle.write(markdown)
 
 
-def _set_deployment_status(url: str, response: HttpResponse) -> None:
+def _set_deployment_status(url: str, state: str, description: str, open_url: OpenUrl) -> None:
     """Attach the URL and check result to the GitHub deployment created by `environment:`."""
 
     repository = os.environ.get("GITHUB_REPOSITORY")
@@ -188,18 +210,17 @@ def _set_deployment_status(url: str, response: HttpResponse) -> None:
     }
     query = urllib.parse.urlencode({"sha": sha, "environment": environment, "per_page": 1})
     try:
-        with urllib.request.urlopen(
-            urllib.request.Request(f"https://api.github.com/repos/{repository}/deployments?{query}", headers=headers),
-            timeout=30,
-        ) as response:
-            deployments = json.loads(response.read().decode("utf-8"))
+        with open_url(
+            urllib.request.Request(f"https://api.github.com/repos/{repository}/deployments?{query}", headers=headers)
+        ) as api_response:
+            deployments = json.loads(api_response.read().decode("utf-8"))
         if not deployments:
             print("warning: no GitHub deployment found to attach the URL to", file=sys.stderr)
             return
         payload = {
-            "state": "success" if response.ok else "failure",
+            "state": state,
             "environment_url": url,
-            "description": f"{response.status} {response.content_type}"[:140],
+            "description": description[:140],
             "auto_inactive": False,
         }
         if run_url := _run_url():
@@ -210,9 +231,9 @@ def _set_deployment_status(url: str, response: HttpResponse) -> None:
             headers={**headers, "Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=30):
+        with open_url(request):
             return
-    except (urllib.error.URLError, json.JSONDecodeError, KeyError, TypeError) as error:
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, IndexError) as error:
         print(f"warning: cannot attach URL to GitHub deployment: {error}", file=sys.stderr)
 
 

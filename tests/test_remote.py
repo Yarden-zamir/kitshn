@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 import pytest
 
 from kitshn.errors import KitshnError
-from kitshn.remote import check_vps_reachable, remote_ssh_args, strip_vps_host
+from kitshn.remote import check_vps_reachable, forward_invocation_to_vps, remote_ssh_args, strip_vps_host
 from kitshn.runner import CommandResult, CommandRunner
 
 
@@ -44,3 +44,40 @@ def test_check_vps_reachable_reports_ssh_failure() -> None:
 
     with pytest.raises(KitshnError, match="cannot reach VPS over SSH: deploy@vps: Connection timed out"):
         check_vps_reachable("deploy@vps", UnreachableRunner())
+
+
+def test_forward_invocation_strips_vps_host_and_returns_remote_exit_code(monkeypatch) -> None:
+    monkeypatch.setattr("sys.argv", ["kitshn", "diagnose", "owner/repo", "--vps-host", "deploy@vps"])
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO())
+
+    class Runner(CommandRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.commands: list[tuple[str, ...]] = []
+
+        def run(
+            self,
+            args: Sequence[str],
+            *,
+            cwd: Path | None = None,
+            env: Mapping[str, str] | None = None,
+            check: bool = True,
+            capture: bool = False,
+            input_text: str | None = None,
+        ) -> CommandResult:
+            self.commands.append(tuple(args))
+            if args[-1] == "true":
+                return CommandResult(args=args, returncode=0, stdout="", stderr="")
+            return CommandResult(args=args, returncode=3, stdout="", stderr="")
+
+    runner = Runner()
+    assert forward_invocation_to_vps("deploy@vps", runner) == 3
+    remote = runner.commands[-1][-1]
+    assert "kitshn diagnose owner/repo'" in remote and "--vps-host" not in remote
+
+
+def test_fetch_url_rejects_urls_without_a_scheme() -> None:
+    from kitshn.httpcheck import fetch_url
+
+    with pytest.raises(KitshnError, match="must start with http"):
+        fetch_url("gr52.example.com")

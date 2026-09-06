@@ -62,5 +62,5 @@ pr.{{ environment.removeprefix("pr-") }}.example.com
 Public URL inference:
 
 - `kitshn track` and `ci-resolve` render `Caddyfile.j2` for the environment with the deployment context and an empty `params` mapping, then read the site addresses of every top-level site block.
-- Exactly one distinct concrete host across those addresses yields `https://<host>` (`http://` when the address says so). Zero hosts, wildcard hosts, `localhost`, port-only addresses, or several distinct hosts yield no URL. KitSHn never guesses.
+- Exactly one distinct concrete host across those addresses yields `https://<host>` (`http://` when the address says so; an explicit port is kept). Zero hosts, wildcard hosts, `localhost`, port-only addresses, or several distinct hosts yield no URL. KitSHn never guesses.
 - The rendered text is discarded; it is never written to the VPS.

@@ -18,6 +18,7 @@ from typing import Any
 from .compose import compose_command, compose_services, wait_for_healthchecks
 from .errors import KitshnError
 from .models import Deployment, Recipe, Roots
+from .recipe_auth import github_recipe_or_none
 from .remote import check_vps_reachable, run_on_vps
 from .runner import CommandRunner
 
@@ -58,12 +59,24 @@ def find_compose_file(directory: Path) -> Path:
 
 
 def ensure_docker_running(runner: CommandRunner) -> None:
-    result = runner.run(["docker", "info"], capture=True, check=False)
+    result = runner.run(
+        ["docker", "info", "--format", "{{.OperatingSystem}}"], capture=True, check=False
+    )
     if result.returncode != 0:
         detail = result.stderr.strip().splitlines()[-1:] or [f"exit {result.returncode}"]
         msg = (
             f"Docker is not running or not reachable: {detail[0]}. Start Docker, "
             "or pass --vps-host to try the recipe on the VPS instead"
+        )
+        raise KitshnError(msg)
+    # Docker Desktop shares host directories through a file server that cannot carry Unix
+    # sockets, so a container binding ${KITSHN_DEFAULT_SOCKET} under the temp root fails with
+    # "operation not supported". Every routed recipe binds that socket. Revisit if Docker
+    # Desktop gains socket support on bind mounts or if try gains a TCP-only mode.
+    if "docker desktop" in result.stdout.lower():
+        msg = (
+            "Docker Desktop cannot bind Unix sockets on host bind mounts, which every routed "
+            "recipe needs; use kitshn try --vps-host <ssh-target> instead"
         )
         raise KitshnError(msg)
 
@@ -80,6 +93,9 @@ def try_recipe(
     temp_root: Path | None = None,
 ) -> TryResult:
     compose_file = find_compose_file(directory)
+    if params_file is not None and not params_file.is_file():
+        msg = f"params file does not exist: {params_file}"
+        raise KitshnError(msg)
     ensure_docker_running(runner)
     recipe = Recipe.parse(recipe_name) if recipe_name else _local_recipe(directory, runner)
 
@@ -152,10 +168,15 @@ def try_on_vps(
     """Copy the recipe to a throwaway directory on the VPS and run `kitshn try` there."""
 
     find_compose_file(directory)
+    if params_file is not None and not params_file.is_file():
+        msg = f"params file does not exist: {params_file}"
+        raise KitshnError(msg)
     if not runner.exists("rsync"):
         msg = "rsync is required to try a recipe on the VPS; install rsync locally"
         raise KitshnError(msg)
     check_vps_reachable(vps_host, runner)
+    # The copy on the VPS has no .git, so resolve the recipe name here and pass it along.
+    recipe = Recipe.parse(recipe_name) if recipe_name else _local_recipe(directory, runner)
 
     remote_root = f"/tmp/kitshn-try-{_slug(directory.resolve().name)}-{os.getpid()}"
     remote_src = f"{remote_root}/src"
@@ -165,7 +186,7 @@ def try_on_vps(
     print("⚠️  pulled base images stay in the VPS image cache")
     print(f"remote_dir={remote_root}")
 
-    runner.run(["ssh", vps_host, f"mkdir -p {remote_src}"])
+    runner.run(["ssh", vps_host, f"umask 077 && mkdir -p {remote_src}"])
     try:
         runner.run(
             [
@@ -179,12 +200,21 @@ def try_on_vps(
                 f"{vps_host}:{remote_src}/",
             ]
         )
-        remote_args = ["try", "--directory", remote_src, "--path", path, "--health-timeout", str(health_timeout)]
-        if recipe_name:
-            remote_args.extend(["--recipe", recipe_name])
+        remote_args = [
+            "try",
+            "--directory",
+            remote_src,
+            "--recipe",
+            recipe.full_name,
+            "--path",
+            path,
+            "--health-timeout",
+            str(health_timeout),
+        ]
         if params_file is not None:
             remote_params = f"{remote_root}/params.env"
             runner.run(["scp", str(params_file), f"{vps_host}:{remote_params}"])
+            runner.run(["ssh", vps_host, f"chmod 600 {remote_params}"])
             remote_args.extend(["--params-file", remote_params])
         if keep:
             remote_args.append("--keep")
@@ -197,16 +227,7 @@ def try_on_vps(
 
 
 def _local_recipe(directory: Path, runner: CommandRunner) -> Recipe:
-    result = runner.run(
-        ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
-        cwd=directory,
-        capture=True,
-        check=False,
-    )
-    name = result.stdout.strip()
-    if result.returncode == 0 and name.count("/") == 1:
-        return Recipe.parse(name)
-    return Recipe("local", _slug(directory.resolve().name))
+    return github_recipe_or_none(directory, runner) or Recipe("local", _slug(directory.resolve().name))
 
 
 def _slug(value: str) -> str:
@@ -221,7 +242,11 @@ def _render_config(deployment: Deployment, runner: CommandRunner) -> dict[str, A
         env=deployment.runtime_env,
         capture=True,
     )
-    config = json.loads(result.stdout) if result.stdout.strip() else {}
+    try:
+        config = json.loads(result.stdout) if result.stdout.strip() else {}
+    except json.JSONDecodeError as error:
+        msg = "docker compose config did not return valid JSON"
+        raise KitshnError(msg) from error
     if not isinstance(config, dict):
         msg = "docker compose config JSON must be an object"
         raise KitshnError(msg)

@@ -128,7 +128,7 @@ kitshn try --vps-host deploy@example.com
 a temp dir, waits for healthchecks, curls the socket, prints the last logs on failure, and
 cleans up. It never touches routing or deployments. With `--vps-host` it copies the recipe to
 `/tmp` on the VPS and runs the same flow there, which is the answer when Docker is not running
-locally. That uses the production host's Docker, disk, and image cache; the command says what
+locally or is Docker Desktop, whose bind mounts cannot carry Unix sockets. That uses the production host's Docker, disk, and image cache; the command says what
 it removes afterwards. Pass `--keep` to leave the containers running and get the curl and
 cleanup commands.
 

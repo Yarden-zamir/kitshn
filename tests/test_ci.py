@@ -207,3 +207,60 @@ def test_verify_public_route_skips_without_url(tmp_path, monkeypatch) -> None:
     verify_public_route(fetch=lambda _url: (_ for _ in ()).throw(AssertionError("must not fetch")))
 
     assert "No public URL inferred" in summary.read_text(encoding="utf-8")
+
+
+def test_verify_public_route_posts_deployment_status_with_url(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    monkeypatch.setenv("KITSHN_URL", "https://site.example.com")
+    monkeypatch.setenv("KITSHN_VERIFY_TIMEOUT", "0")
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "Owner/site")
+    monkeypatch.setenv("GITHUB_SHA", "abc")
+    monkeypatch.setenv("KITSHN_ENVIRONMENT", "prod")
+    calls: list[tuple[str, str, bytes | None]] = []
+
+    class FakeApiResponse:
+        def __init__(self, body: bytes) -> None:
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return self.body
+
+    def open_url(request):
+        calls.append((request.get_method(), request.full_url, request.data))
+        return FakeApiResponse(b'[{"id": 77}]' if request.get_method() == "GET" else b"{}")
+
+    verify_public_route(
+        fetch=lambda _url: HttpResponse(200, "text/html", ""), sleep=lambda _s: None, open_url=open_url
+    )
+
+    assert calls[0][0] == "GET" and "sha=abc" in calls[0][1] and "environment=prod" in calls[0][1]
+    method, url, data = calls[1]
+    assert method == "POST" and url.endswith("/deployments/77/statuses")
+    assert data is not None
+    payload = json.loads(data)
+    assert payload["state"] == "success"
+    assert payload["environment_url"] == "https://site.example.com"
+    assert payload["description"] == "200 text/html"
+
+
+def test_verify_public_route_records_unreachable_routes_before_failing(tmp_path, monkeypatch) -> None:
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("KITSHN_URL", "https://pr.9.site.example.com")
+    monkeypatch.setenv("KITSHN_VERIFY_TIMEOUT", "0")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    def fetch(_url: str) -> HttpResponse:
+        raise KitshnError("Name or service not known")
+
+    with pytest.raises(KitshnError, match="public route unreachable"):
+        verify_public_route(fetch=fetch, sleep=lambda _s: None)
+
+    assert "| https://pr.9.site.example.com | unreachable | Name or service not known |" in summary.read_text(encoding="utf-8")

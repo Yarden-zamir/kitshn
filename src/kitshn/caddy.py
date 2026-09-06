@@ -182,8 +182,8 @@ def site_addresses(caddyfile: str) -> list[str]:
 
 def _concrete_url(address: str) -> str | None:
     scheme = "http" if address.startswith("http://") else "https"
-    host = address.removeprefix("https://").removeprefix("http://")
-    host = host.split("/", 1)[0].split(":", 1)[0]
+    host_port = address.removeprefix("https://").removeprefix("http://").split("/", 1)[0]
+    host = host_port.split(":", 1)[0]
     if not host or "*" in host or "." not in host or host == "localhost":
         return None
-    return f"{scheme}://{host}"
+    return f"{scheme}://{host_port}"
