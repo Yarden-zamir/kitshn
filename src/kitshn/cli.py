@@ -16,7 +16,9 @@ from .ci import (
     delete_github_environment,
     deploy_over_ssh,
     destroy_over_ssh,
+    preflight_auth,
     resolve_github_action,
+    verify_public_route,
     write_github_output,
     write_params_from_github,
 )
@@ -37,10 +39,14 @@ from .logs import show_logs
 from .models import Deployment, Recipe
 from .params import param_summaries, param_value
 from .recipe_auth import authorize_recipe
-from .repo_init import init_recipe_repo
+from .remote import forward_invocation_to_vps
+from .repo_init import Template, init_recipe_repo
 from .resolve import ResolveInput, resolve_deployment
 from .runner import CommandRunner
 from .structured_log import InvocationLog, append_invocation_log
+from .track import DEFAULT_TIMEOUTS, TrackTimeouts, track_deploy
+from .try_recipe import DEFAULT_HEALTH_TIMEOUT, try_on_vps, try_recipe
+from .version_check import self_check as run_self_check
 
 app = App(
     name="kitshn",
@@ -64,6 +70,14 @@ InstallerChoice = StrEnum(
     "InstallerChoice",
     {choice.upper().replace("-", "_"): choice for choice in installer_choices()},
 )
+
+VpsHost = Annotated[
+    str | None,
+    Parameter(
+        "--vps-host",
+        help="Run this command on the VPS over SSH instead of locally. Uses the hosted CLI there.",
+    ),
+]
 
 recipe_app = App(name="recipe", help="Manage recipe repository configuration.")
 app.command(recipe_app)
@@ -164,15 +178,37 @@ def init(
         bool,
         Parameter("--routing", help="Add a minimal Caddyfile.j2 routing contract file."),
     ] = False,
+    template: Annotated[
+        Template | None,
+        Parameter(
+            "--template",
+            help="Write a complete recipe. `static`: a Caddy container serving files on the KitSHn socket.",
+        ),
+    ] = None,
+    hostname: Annotated[
+        str | None,
+        Parameter("--hostname", help="Public hostname for --template static. Defaults to a placeholder."),
+    ] = None,
+    site_dir: Annotated[
+        str | None,
+        Parameter("--site-dir", help="Directory copied into the image for --template static. Default: site."),
+    ] = None,
     force: Annotated[bool, Parameter("--force", help="Overwrite existing files.")] = False,
 ) -> None:
-    """Create KitSHn recipe contract files in a repository."""
+    """Create KitSHn recipe contract files in a repository.
+
+    Prints the ordered next steps. Run `kitshn recipe auth` before the first push:
+    a push before it starts a workflow that fails on missing secrets.
+    """
 
     result = init_recipe_repo(
         target_dir=directory,
         runner=CommandRunner(),
         docker=docker,
         routing=routing,
+        template=template,
+        hostname=hostname,
+        site_dir=site_dir,
         force=force,
     )
     print(f"{OK} recipe initialized")
@@ -182,7 +218,154 @@ def init(
     print(f"kitshn_commit={result.source_commit}")
     for path in result.created_files:
         print(f"file={path}")
+    print("")
+    print(f"{INFO} next steps, in this order:")
+    for index, step in enumerate(result.checklist, start=1):
+        print(f"  {index}. {step}")
     _safe_log(InvocationLog(command="init", status="ok"), roots_from_env())
+
+
+@app.command(name="self-check")
+def self_check() -> int:
+    """Compare the installed CLI with the latest KitSHn release and print how to upgrade.
+
+    Exits non-zero when the installed version is older than the latest release or tag.
+    """
+
+    report = run_self_check()
+    print(f"{OK if report.current else '⚠️'} kitshn {'is current' if report.current else 'is outdated'}")
+    print(f"installed={report.installed}")
+    print(f"latest={report.latest}")
+    print(f"latest_source={report.latest_source}")
+    print(f"install_source={report.install_source}")
+    if not report.current:
+        print(f"{INFO} upgrade with:")
+        for command in report.upgrade_commands:
+            print(f"  {command}")
+    return 0 if report.current else 1
+
+
+@app.command(name="try")
+def try_cli(
+    *,
+    directory: Annotated[Path, Parameter("--directory", help="Recipe repo path.")] = Path("."),
+    vps_host: Annotated[
+        str | None,
+        Parameter("--vps-host", help="Copy the recipe to a throwaway directory on this SSH target and run there."),
+    ] = None,
+    recipe: Annotated[
+        str | None,
+        Parameter("--recipe", help="owner/repo name for KITSHN_RECIPE. Defaults to the GitHub repo or the directory name."),
+    ] = None,
+    params_file: Annotated[
+        Path | None,
+        Parameter("--params-file", help="Optional params.env to use instead of an empty one."),
+    ] = None,
+    path: Annotated[str, Parameter("--path", help="HTTP path to request over the socket.")] = "/",
+    keep: Annotated[bool, Parameter("--keep", help="Leave the containers and temp directory running.")] = False,
+    health_timeout: Annotated[
+        int,
+        Parameter("--health-timeout", help="Seconds to wait for healthchecks and the socket."),
+    ] = DEFAULT_HEALTH_TIMEOUT,
+) -> int:
+    """Build and run this recipe's compose.yml in a throwaway directory, then clean up.
+
+    Touches no routing or deployment: every KitSHn path lives under one temp
+    directory, and the socket gets a curl check. With --vps-host the build and
+    containers run on the production host, which is more representative than a
+    laptop without Docker, but does use its disk and image cache.
+    """
+
+    runner = CommandRunner()
+    if vps_host is not None:
+        return try_on_vps(
+            directory=directory,
+            vps_host=vps_host,
+            runner=runner,
+            recipe_name=recipe,
+            params_file=params_file,
+            path=path,
+            keep=keep,
+            health_timeout=health_timeout,
+        )
+    result = try_recipe(
+        directory=directory,
+        runner=runner,
+        recipe_name=recipe,
+        params_file=params_file,
+        path=path,
+        keep=keep,
+        health_timeout=health_timeout,
+    )
+    ok = result.http_check is not None and result.http_check.startswith("2")
+    print(f"{OK if ok else FAIL} recipe {'served' if ok else 'did not serve'} {path} over the socket")
+    print(f"http_check={result.http_check or 'skipped'}")
+    if result.kept:
+        print(f"curl={result.curl_command}")
+        print(f"{INFO} clean up with:")
+        for command in result.cleanup_commands:
+            print(f"  {command}")
+    return 0 if ok or result.http_check is None else 1
+
+
+@app.command
+def track(
+    *,
+    directory: Annotated[Path, Parameter("--directory", help="Recipe repo path.")] = Path("."),
+    sha: Annotated[str | None, Parameter("--sha", help="Commit to follow. Defaults to HEAD.")] = None,
+    environment: Annotated[
+        str | None,
+        Parameter("--environment", help="Deployed environment. Defaults to resolving .kitshn.yaml for the branch."),
+    ] = None,
+    vps_host: Annotated[
+        str | None,
+        Parameter("--vps-host", help="SSH target for the VPS check. Defaults to the KITSHN_VPS_HOST GitHub variable."),
+    ] = None,
+    url: Annotated[
+        str | None,
+        Parameter("--url", help="Public URL to request. Defaults to the single hostname in Caddyfile.j2."),
+    ] = None,
+    expect: Annotated[
+        str | None,
+        Parameter("--expect", help="Text that must appear in the public response body."),
+    ] = None,
+    run_start_timeout: Annotated[
+        int, Parameter("--run-start-timeout", help="Seconds to wait for the Actions run to appear.")
+    ] = DEFAULT_TIMEOUTS.run_start,
+    run_timeout: Annotated[
+        int, Parameter("--run-timeout", help="Seconds to wait for the Actions run to finish.")
+    ] = DEFAULT_TIMEOUTS.run,
+    vps_timeout: Annotated[
+        int, Parameter("--vps-timeout", help="Seconds to wait for healthy services at the new ref.")
+    ] = DEFAULT_TIMEOUTS.vps,
+    route_timeout: Annotated[
+        int, Parameter("--route-timeout", help="Seconds to wait for a 2xx public response.")
+    ] = DEFAULT_TIMEOUTS.route,
+) -> int:
+    """Follow a pushed commit through Actions, the VPS deploy, and the public route.
+
+    Run from the laptop after `git push`. Needs `gh` auth and SSH access to the VPS.
+    """
+
+    report = track_deploy(
+        directory=directory,
+        runner=CommandRunner(),
+        sha=sha,
+        environment=environment,
+        vps_host=vps_host,
+        url=url,
+        expect=expect,
+        timeouts=TrackTimeouts(
+            run_start=run_start_timeout, run=run_timeout, vps=vps_timeout, route=route_timeout
+        ),
+    )
+    print("")
+    print(f"{OK if report.ok else FAIL} deployment {'verified' if report.ok else 'not verified'}")
+    _print_table(
+        ("status", "step", "detail"),
+        [(_check_icon(step.state), step.name, step.detail) for step in report.steps],
+    )
+    return 0 if report.ok else 1
 
 
 @recipe_app.command(name="auth")
@@ -370,16 +553,20 @@ def logs(
     environment: Annotated[str, Parameter("--environment", help="GitHub Environment name.")] = "prod",
     follow: Annotated[bool, Parameter("--follow", help="Follow selected logs.")] = False,
     files: Annotated[bool, Parameter("--files", help="Read file logs instead of Docker logs.")] = False,
-) -> None:
+    vps_host: VpsHost = None,
+) -> int:
     """Show KitSHn, Docker, or file logs.
 
     Use instead of raw `docker logs`, which does not know the deployment's
     Compose project name.
     """
 
+    if vps_host is not None:
+        return forward_invocation_to_vps(vps_host)
     show_logs(recipe, service, environment=environment, files=files, follow=follow)
     deployment = _deployment_or_none(recipe, environment)
     _safe_log(InvocationLog(command="logs", status="ok", deployment=deployment), roots_from_env())
+    return 0
 
 
 @app.command
@@ -390,16 +577,20 @@ def status(
     ] = None,
     *,
     environment: Annotated[str | None, Parameter("--environment", help="GitHub Environment name.")] = None,
-) -> None:
+    vps_host: VpsHost = None,
+) -> int:
     """Show deployment status as JSON.
 
     Reports checkout ref, Compose services and health, Caddy route presence, the
     default socket path, and the last deploy entry.
     """
 
+    if vps_host is not None:
+        return forward_invocation_to_vps(vps_host)
     entries = status_entries(recipe, environment=environment)
     print(status_json(entries))
     _safe_log(InvocationLog(command="status", status="ok"), roots_from_env())
+    return 0
 
 
 @app.command(name="compose")
@@ -411,16 +602,20 @@ def compose_cli(
     ],
     *,
     environment: Annotated[str, Parameter("--environment", help="GitHub Environment name.")] = "prod",
-) -> None:
+    vps_host: VpsHost = None,
+) -> int:
     """Run docker compose for a deployment with KitSHn's exact env and params.
 
     Use instead of raw `docker compose`, which misses the project name and params
     file and emits misleading blank-variable warnings.
     """
 
+    if vps_host is not None:
+        return forward_invocation_to_vps(vps_host)
     deployment = Deployment.create(Recipe.parse(recipe), environment, roots_from_env())
     run_compose_command(deployment, args, CommandRunner())
     _safe_log(InvocationLog(command="compose", status="ok", deployment=deployment), deployment.roots)
+    return 0
 
 
 @params_app.command(name="list")
@@ -428,13 +623,16 @@ def params_list(
     recipe: Annotated[str, Parameter(help="Fully qualified owner/repo name.")],
     *,
     environment: Annotated[str, Parameter("--environment", help="GitHub Environment name.")] = "prod",
-) -> None:
+    vps_host: VpsHost = None,
+) -> int:
     """List deployment param names without printing values.
 
     Params come from GitHub vars/secrets named KITSHN_<NAME>; the deployment
     receives <NAME>.
     """
 
+    if vps_host is not None:
+        return forward_invocation_to_vps(vps_host)
     deployment = Deployment.create(Recipe.parse(recipe), environment, roots_from_env())
     summaries = param_summaries(deployment)
     print(f"{KEY} deployment params")
@@ -444,6 +642,7 @@ def params_list(
         [(item.key, "empty" if item.empty else "set") for item in summaries],
     )
     _safe_log(InvocationLog(command="params list", status="ok", deployment=deployment), deployment.roots)
+    return 0
 
 
 @params_app.command(name="get")
@@ -456,13 +655,16 @@ def params_get(
         bool,
         Parameter("--show", help="Print the param value to stdout. Values may be secrets."),
     ] = False,
-) -> None:
+    vps_host: VpsHost = None,
+) -> int:
     """Show one deployment param. Requires --show to print the value.
 
     Values are stored quoted and escaped for Docker Compose. This decodes them,
     so prefer it over parsing params.env with grep or cut.
     """
 
+    if vps_host is not None:
+        return forward_invocation_to_vps(vps_host)
     deployment = Deployment.create(Recipe.parse(recipe), environment, roots_from_env())
     value = param_value(deployment, key)
     if not show:
@@ -472,6 +674,7 @@ def params_get(
     else:
         print(value)
     _safe_log(InvocationLog(command="params get", status="ok", deployment=deployment), deployment.roots)
+    return 0
 
 
 @app.command
@@ -479,9 +682,12 @@ def diagnose(
     recipe: Annotated[str, Parameter(help="Fully qualified owner/repo name.")],
     *,
     environment: Annotated[str, Parameter("--environment", help="GitHub Environment name.")] = "prod",
+    vps_host: VpsHost = None,
 ) -> int:
     """Diagnose one deployment's Compose, socket, and Caddy state."""
 
+    if vps_host is not None:
+        return forward_invocation_to_vps(vps_host)
     roots = roots_from_env()
     checks = diagnose_deployment(
         recipe,
@@ -582,6 +788,20 @@ def ci_write_params(
     """Write params.env from GitHub vars/secrets JSON."""
 
     write_params_from_github(output)
+
+
+@app.command(name="ci-preflight", show=False)
+def ci_preflight() -> None:
+    """Fail early when KITSHN_VPS_HOST or KITSHN_SSH_KEY is missing."""
+
+    preflight_auth()
+
+
+@app.command(name="ci-verify", show=False)
+def ci_verify() -> None:
+    """Request the deployed public URL and record the result in the job summary and deployment."""
+
+    verify_public_route()
 
 
 @app.command(name="ci-deploy", show=False)

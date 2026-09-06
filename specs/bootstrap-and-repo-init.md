@@ -53,13 +53,23 @@ and logs roots on first run and clones the recipe into the deployment root. `sta
 - `.kitshn.yaml` with at least one entry, defaulting to `main` → `prod` plus a `pr-{pr}` ephemeral entry.
 - `.github/workflows/kitshn.yml` calling the hosted reusable workflow with `secrets: inherit`
   and the required `contents: read` plus `deployments: write` permissions.
-- `kitshn.md` explaining the recipe contract and recording the KitSHn source commit that generated it.
+- `kitshn.md` explaining the recipe contract and always ending with an Origin section that
+  records the KitSHn source commit that generated it. Hand-edited copies must keep that section.
 
 Optional flags add optional contract examples:
 
 - `--docker` writes a commented `compose.yml` with KitSHn runtime env, Unix socket ingress, and label examples.
 - `--routing` writes a commented preview-safe `Caddyfile.j2` routing to `unix//{{ paths.default_socket }}`,
   and a `.gitignore` for the generated `Caddyfile` artifact.
+- `--template static` writes a complete static-site recipe: `Dockerfile` (`caddy:2-alpine`
+  copying `container/Caddyfile` and the `--site-dir`, default `site`), `container/Caddyfile`
+  binding `unix/{$KITSHN_DEFAULT_SOCKET}|0666` with an explicit `encode` match block,
+  `compose.yml` with the socket volume and a socket healthcheck, an environment-aware
+  `Caddyfile.j2` for `--hostname` (placeholder `example.com` when omitted), `.dockerignore`,
+  and `.gitignore`. It cannot combine with `--docker` or `--routing`.
+
+`init` ends by printing the ordered checklist: create the GitHub repo without pushing, run
+`recipe auth`, optionally `try`, push, then `track`.
 
 ## Recipe Auth
 

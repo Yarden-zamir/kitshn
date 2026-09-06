@@ -17,7 +17,8 @@ This records lessons from deploying several real services with KitSHn and the ar
 - App-level routing still differs by runtime capability. Direct Unix sockets are simplest when the app supports them; arbitrary TCP-only images need a sidecar proxy.
 - Public PR preview routes depend on DNS, not just KitSHn and Caddy. Missing wildcard DNS made otherwise healthy PR deployments unreachable from the public internet.
 - Remote OpenCode introduced cross-recipe secret and network coupling that was not visible enough in the recipe contract.
-- Debugging failed deploys still requires reading GitHub logs and remote Docker state separately. `kitshn diagnose` covers current remote state, but not the full GitHub run timeline or last failed deploy log.
+- Debugging failed deploys used to require reading GitHub logs and remote Docker state separately. `kitshn track` now follows the run, the VPS status, and the public route from the laptop, and every VPS-only command takes `--vps-host`.
+- Deploying a static site (gr52) needed a research cycle on whether Caddy in a container can bind the KitSHn socket and clean a stale socket file. It can; `kitshn init --template static` encodes that.
 
 ## Architecture Changes To Consider
 - Add a first-class `params` or `secrets` declaration to `.kitshn.yaml`, including required/optional flags and documentation strings. Use it to validate that required GitHub `KITSHN_*` vars/secrets exist before SSH deploy.
@@ -28,7 +29,7 @@ This records lessons from deploying several real services with KitSHn and the ar
 - Add a deploy report artifact or timeline entry that captures ref, environment, params keys, Compose services, Caddy output path, affected dependents, healthcheck results, and final URLs.
 - Consider optional route strategies explicitly: `tcp`, `unix-socket`, or `none`, instead of relying entirely on handwritten Compose/Caddy coordination.
 - Add a safer secret-copy helper for common cross-recipe cases, such as sharing an upstream service password into a dependent recipe's `KITSHN_*` secret without printing it.
-- Extend `kitshn diagnose` or add `kitshn logs --last-deploy` to include GitHub run status and remote deploy logs, not only current VPS state.
+- Add `kitshn logs --last-deploy` for the remote deploy log of the last run. `kitshn track` covers the GitHub run and current VPS state.
 
 ## Documentation Updates To Make
 - Emphasize that `KITSHN_` is a GitHub-side selector and not the runtime name. Runtime apps reference the stripped key.

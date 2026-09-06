@@ -3,7 +3,7 @@
 ## Project Shape
 - Python 3.14 `uv` project; use `uv run ...` for project commands and do not use raw `python`/`pip`.
 - CLI entrypoint is `kitshn = kitshn.cli:main`; command definitions live in `src/kitshn/cli.py`.
-- There is no Makefile, pre-commit config, or test/lint GitHub workflow. `.github/workflows/deploy.yml` is the reusable deploy workflow that recipe repos call.
+- There is no Makefile, pre-commit config, or test/lint GitHub workflow. `.github/workflows/deploy.yml` is the reusable deploy workflow that recipe repos call. `.github/workflows/release.yml` tags, releases, and syncs the Homebrew tap on every push to `main` with a new `pyproject.toml` version; see `specs/release.md`.
 
 ## Commands
 - Install/sync deps: `uv sync`.
@@ -25,7 +25,9 @@
 - Deploy clears `<deployment>/.kitshn/sockets` and then runs Compose `up -d --remove-orphans --force-recreate`; do not remove force-recreate unless socket lifecycle is redesigned.
 - Socket proxy examples must keep proxy-to-app traffic on the project-local default network; do not attach socket proxies to shared `kitshn-edge` unless the socket proxy itself intentionally serves cross-recipe traffic.
 - `kitshn.depends_on` Compose labels trigger dependent service recreation after a recipe deploy; matching is case-insensitive `owner/repo`.
-- `src/kitshn/caddy.py` renders only `Caddyfile.j2`; generated `Caddyfile` files are deployment artifacts and feed the generated manifest at `<deployments>/Caddyfile`.
+- `src/kitshn/caddy.py` renders only `Caddyfile.j2`; generated `Caddyfile` files are deployment artifacts and feed the generated manifest at `<deployments>/Caddyfile`. `infer_public_url` renders the template without params and returns a URL only for exactly one concrete host.
+- `src/kitshn/remote.py` forwards a CLI invocation to the VPS (`--vps-host`) as `bash -lc` plus the hosted `uvx` CLI; `src/kitshn/try_recipe.py` and `src/kitshn/track.py` own `kitshn try` and `kitshn track`; `src/kitshn/version_check.py` owns `kitshn self-check`.
+- `tests/test_version.py` asserts that `pyproject.toml`, `src/kitshn/__init__.py`, and `uv.lock` agree; bump all three (run `uv lock`) together.
 
 ## Testing Notes
 - Unit tests use fake `CommandRunner` implementations and temp `Roots`; do not add tests that require real Docker, Caddy, SSH, or GitHub auth unless explicitly making an integration suite.
@@ -33,4 +35,4 @@
 - When changing generated contract files, update `tests/test_repo_init.py` alongside the templates.
 
 ## Related Guidance
-- `.claude/skills/kitshn-deploy-service/SKILL.md` is for downstream service repos deployed with KitSHn, not for this CLI implementation itself.
+- `.claude/skills/kitshn-deploy-service` is a symlink to `src/kitshn/resources/kitshn-deploy-service`, the skill for downstream service repos deployed with KitSHn, not for this CLI implementation itself. Edit the bundled copy.
