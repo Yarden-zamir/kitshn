@@ -180,9 +180,16 @@ Preview hostnames need DNS, usually a wildcard `*.example.com` record pointing a
 
 ### Secrets And Config
 
-Create GitHub variables and secrets named `KITSHN_<NAME>`. The container receives `<NAME>`,
-without the prefix. `KITSHN_VPS_HOST` and `KITSHN_SSH_KEY` are reserved for KitSHn itself and
-are never passed to your app.
+Create GitHub variables and secrets named `KITSHN_<NAME>`. Compose receives `<NAME>`, without
+the prefix, for interpolation. A container gets the value only when `compose.yml` maps it, for
+example `TOKEN: ${TOKEN:?TOKEN is required}`. `KITSHN_VPS_HOST` and `KITSHN_SSH_KEY` are
+reserved for KitSHn itself and are never passed to your app.
+
+GitHub variables and secrets are the only source of params. KitSHn runs Compose with
+`--env-file <params.env>`, so Compose does not read a `.env` file in the repo. Values and
+`COMPOSE_PROFILES` in a repo `.env` have no effect in a deploy. A value that is not secret and
+belongs to the repo can go in `compose.yml`, or in `compose.override.yml`, which Compose loads
+beside `compose.yml`.
 
 ## Operate
 
