@@ -73,6 +73,16 @@ host port. Caddy on the host: `reverse_proxy unix//{{ paths.default_socket }}`.
 - `track` and the workflow infer the public URL from `Caddyfile.j2` only when it renders one
   concrete hostname for the environment. Wildcards or several hosts mean no URL check.
 
+## Params And Config
+- Put each runtime value in a GitHub variable or secret named `KITSHN_<NAME>`, in the GitHub
+  Environment of the deployment. `ci-write-params` writes it to `params.env` as `<NAME>`.
+- KitSHn runs every Compose command with `--env-file <params.env>`. Compose then does not read
+  a `.env` file in the repo. Do not put values or `COMPOSE_PROFILES` in a repo `.env`.
+- A container gets a param only when `compose.yml` maps it: `TOKEN: ${TOKEN:?TOKEN is required}`.
+- A value that is not secret and belongs to the repo can go in `compose.yml`, or in
+  `compose.override.yml`, which Compose loads beside `compose.yml`. A build step can write it.
+- After a deploy, check the names with `kitshn params list <owner/repo>`.
+
 ## Debug From The Laptop
 Prefer these over raw `docker` and `docker compose`, which miss the project name and params
 file. All take `--environment` (default `prod`) and `--vps-host <vps>`.

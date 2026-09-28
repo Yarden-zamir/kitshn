@@ -9,6 +9,8 @@ docker compose --env-file /params/<owner>/<repo>/<environment>/params.env config
 
 KitSHn uses the same `--env-file /params/<owner>/<repo>/<environment>/params.env` argument for every Compose command in the deploy flow, including config rendering, pulling external images, building local images, and applying changes. `KITSHN_PARAMS_FILE` is exported into the runtime env as a pointer for app code, not as a Compose input.
 
+Because of `--env-file`, Compose does not read a `.env` file in the recipe. Params come only from GitHub variables and secrets. KitSHn does not add `env_file` to services: a container gets a param only when `compose.yml` maps it. KitSHn passes no `-f`, so Compose loads `compose.override.yml` beside `compose.yml` when the recipe has one.
+
 KitSHn reads:
 
 - services
