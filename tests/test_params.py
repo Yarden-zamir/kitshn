@@ -69,9 +69,10 @@ def test_read_params_rejects_missing_params_file(tmp_path) -> None:
 
 
 class GhRunner(CommandRunner):
-    def __init__(self, *, environment_exists: bool = True) -> None:
+    def __init__(self, *, environment_exists: bool = True, api_error: str | None = None) -> None:
         super().__init__()
         self.environment_exists = environment_exists
+        self.api_error = api_error
         self.calls: list[tuple[tuple[str, ...], str | None]] = []
 
     def run(
@@ -86,6 +87,8 @@ class GhRunner(CommandRunner):
     ) -> CommandResult:
         command = tuple(args)
         self.calls.append((command, input_text))
+        if command[:2] == ("gh", "api") and self.api_error is not None:
+            return CommandResult(args=args, returncode=1, stdout="", stderr=self.api_error)
         if command[:2] == ("gh", "api") and "--method" not in command and not self.environment_exists:
             return CommandResult(args=args, returncode=1, stdout="", stderr="gh: Not Found (HTTP 404)")
         return CommandResult(args=args, returncode=0, stdout="", stderr="")
@@ -129,12 +132,11 @@ def test_params_set_repo_wide_variable_skips_the_environment_check() -> None:
     result = _set(runner, name="LOG_TZ", value="UTC", environment=None, secret=False)
 
     assert result.scope == "repository"
-    assert [call[0][:3] for call in runner.calls] == [("gh", "variable", "set")]
-    assert runner.calls[0][0][-2:] == ("--body", "UTC")
+    assert runner.calls == [(("gh", "variable", "set", "KITSHN_LOG_TZ", "--repo", "Owner/site"), "UTC")]
 
 
 def test_params_set_refuses_a_missing_environment_unless_asked_to_create_it() -> None:
-    with pytest.raises(KitshnError, match="does not exist.*--create-environment"):
+    with pytest.raises(KitshnError, match="not found.*--create-environment"):
         _set(GhRunner(environment_exists=False))
 
     runner = GhRunner(environment_exists=False)
@@ -150,6 +152,7 @@ def test_params_set_refuses_a_missing_environment_unless_asked_to_create_it() ->
         ("BAD-NAME", "x", "letters, digits, and underscores"),
         ("SSH_KEY", "x", "reserved"),
         ("TOKEN", "", "empty value"),
+        ("TOKEN", "\r\n\n", "empty value"),
     ],
 )
 def test_params_set_rejects_names_and_values_that_would_fail_silently(name, value, match) -> None:
@@ -157,3 +160,19 @@ def test_params_set_rejects_names_and_values_that_would_fail_silently(name, valu
     with pytest.raises(KitshnError, match=match):
         _set(runner, name=name, value=value)
     assert runner.calls == []
+
+
+def test_params_set_reports_other_github_api_failures_as_they_are() -> None:
+    runner = GhRunner(api_error="gh: Bad credentials (HTTP 401)")
+
+    with pytest.raises(KitshnError, match="cannot check GitHub Environment 'prod'.*HTTP 401"):
+        _set(runner)
+    assert all(call[0][1] != "secret" for call in runner.calls)
+
+
+def test_params_set_encodes_the_environment_name_in_the_api_path() -> None:
+    runner = GhRunner()
+
+    _set(runner, environment="pr 1/x")
+
+    assert runner.calls[0][0] == ("gh", "api", "repos/Owner/site/environments/pr%201%2Fx")

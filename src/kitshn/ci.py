@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import string
 import subprocess
 import sys
 import tempfile
@@ -177,9 +178,11 @@ def _summary_table(url: str, status: str, content_type: str) -> str:
 
 
 def _track_hint() -> str:
-    sha = os.environ.get("GITHUB_SHA")
+    # KITSHN_REF is the ref the deploy checked out: the head SHA for a pull request, not the
+    # merge SHA in GITHUB_SHA. A workflow_dispatch ref can be a branch name; track needs a SHA.
+    sha = os.environ.get("KITSHN_REF", "")
     environment = os.environ.get("KITSHN_ENVIRONMENT")
-    if not (sha and environment):
+    if not (environment and len(sha) == 40 and all(char in string.hexdigits for char in sha)):
         return ""
     return (
         "\nConfirm this deploy from the recipe repo on your computer:\n\n"
@@ -313,7 +316,7 @@ def deploy_over_ssh(params_file: Path) -> None:
     remote_params = f"/tmp/kitshn-{run_id}-{run_attempt}.env"
 
     with _ssh_key_file(ssh_key) as key_file:
-        ssh_args = ["-i", str(key_file), "-o", "StrictHostKeyChecking=accept-new"]
+        ssh_args = ["-i", str(key_file), "-o", "StrictHostKeyChecking=accept-new", "-o", "ServerAliveInterval=30"]
         _run(["scp", *ssh_args, str(params_file), f"{vps_host}:{remote_params}"])
         remote_command = "; ".join(
             [
@@ -346,7 +349,7 @@ def destroy_over_ssh() -> None:
     environment = _required_env("KITSHN_ENVIRONMENT")
 
     with _ssh_key_file(ssh_key) as key_file:
-        ssh_args = ["-i", str(key_file), "-o", "StrictHostKeyChecking=accept-new"]
+        ssh_args = ["-i", str(key_file), "-o", "StrictHostKeyChecking=accept-new", "-o", "ServerAliveInterval=30"]
         remote_command = shlex.join(
             [*HOSTED_CLI, "destroy", repository, "--environment", environment]
         )

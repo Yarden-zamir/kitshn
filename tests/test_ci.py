@@ -271,9 +271,24 @@ def test_verify_summary_prints_the_track_command_for_this_run(tmp_path, monkeypa
     summary = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
     monkeypatch.setenv("KITSHN_URL", "")
-    monkeypatch.setenv("GITHUB_SHA", "abc123")
+    head_sha = "a" * 40
+    # On a pull request GITHUB_SHA is the merge commit; the deploy and track use the head SHA.
+    monkeypatch.setenv("GITHUB_SHA", "b" * 40)
+    monkeypatch.setenv("KITSHN_REF", head_sha)
     monkeypatch.setenv("KITSHN_ENVIRONMENT", "pr-4")
 
     verify_public_route()
 
-    assert "kitshn track --sha abc123 --environment pr-4" in summary.read_text(encoding="utf-8")
+    assert f"kitshn track --sha {head_sha} --environment pr-4" in summary.read_text(encoding="utf-8")
+
+
+def test_verify_summary_omits_the_track_command_for_a_branch_ref(tmp_path, monkeypatch) -> None:
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("KITSHN_URL", "")
+    monkeypatch.setenv("KITSHN_REF", "feature-branch")
+    monkeypatch.setenv("KITSHN_ENVIRONMENT", "demo")
+
+    verify_public_route()
+
+    assert "kitshn track" not in summary.read_text(encoding="utf-8")

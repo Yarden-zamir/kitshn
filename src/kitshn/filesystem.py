@@ -34,9 +34,7 @@ DEPLOY_LOCK_TIMEOUT_SECONDS = 1800
 
 
 @contextmanager
-def host_deploy_lock(
-    roots: Roots, holder: str, *, timeout_seconds: float = DEPLOY_LOCK_TIMEOUT_SECONDS
-) -> Iterator[None]:
+def host_deploy_lock(roots: Roots, holder: str, *, timeout_seconds: float | None = None) -> Iterator[None]:
     """Serialize deploys and destroys of all recipes on one host.
 
     Deploys of different recipes share the Caddy manifest, the Caddy reload, and the deploy
@@ -44,11 +42,18 @@ def host_deploy_lock(
     deployment, so only a host-wide lock keeps two recipes from racing on those.
     """
 
+    timeout = DEPLOY_LOCK_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    lock_path = roots.deployments / DEPLOY_LOCK_NAME
     roots.deployments.mkdir(parents=True, exist_ok=True)
-    fd = os.open(roots.deployments / DEPLOY_LOCK_NAME, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
+    except PermissionError as error:
+        owner = lock_path.owner() if lock_path.exists() else "unknown"
+        msg = f"cannot open the host deploy lock {lock_path} (owner {owner}); run every deploy as the same user"
+        raise KitshnError(msg) from error
     with os.fdopen(fd, "r+", encoding="utf-8") as handle:
-        deadline = time.monotonic() + timeout_seconds
-        announced = False
+        deadline = time.monotonic() + timeout
+        next_notice = 0.0
         while True:
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -57,11 +62,14 @@ def host_deploy_lock(
                 handle.seek(0)
                 current = handle.read().strip() or "another deploy"
                 if time.monotonic() >= deadline:
-                    msg = f"timed out after {timeout_seconds:g}s waiting for the host deploy lock held by {current}"
+                    msg = f"timed out after {timeout:g}s waiting for the host deploy lock held by {current}"
                     raise KitshnError(msg) from None
-                if not announced:
+                # A regular notice doubles as a liveness probe: when the GitHub job is cancelled,
+                # the SSH pipe closes and this print raises BrokenPipeError before the lock is
+                # taken, so an abandoned waiter never deploys later.
+                if time.monotonic() >= next_notice:
                     print(f"waiting for the host deploy lock held by {current}", file=sys.stderr, flush=True)
-                    announced = True
+                    next_notice = time.monotonic() + 20
                 time.sleep(1)
         handle.seek(0)
         handle.truncate()

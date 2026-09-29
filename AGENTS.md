@@ -24,7 +24,7 @@
 - `src/kitshn/compose.py` runs Docker Compose as `docker compose --project-name <deployment> --env-file <params.env> ...`; only `compose.yml` and `compose.yaml` are deployment compose files.
 - Deploy clears `<deployment>/.kitshn/sockets` after pull and build succeed and then runs Compose `up -d --remove-orphans --force-recreate`; do not remove force-recreate unless socket lifecycle is redesigned.
 - Deploy never deletes the live generated `Caddyfile` before `apply_caddyfile`; every Caddy reload rebuilds the manifest from the Caddyfiles that exist, so a missing one drops that route for all recipes' reloads.
-- `deploy` and `destroy` run under `filesystem.host_deploy_lock`, a `flock` on `<deployments>/.kitshn-deploy.lock`.
+- `deploy` and `destroy` run under `filesystem.host_deploy_lock`, a `flock` on `<deployments>/.kitshn-deploy.lock`, except with `--dry-run`. The reusable workflow's per-deployment `concurrency` groups order pushes; the lock only serializes recipes.
 - Socket proxy examples must keep proxy-to-app traffic on the project-local default network; do not attach socket proxies to shared `kitshn-edge` unless the socket proxy itself intentionally serves cross-recipe traffic.
 - `kitshn.depends_on` Compose labels trigger dependent service recreation after a recipe deploy; matching is case-insensitive `owner/repo`.
 - `src/kitshn/caddy.py` renders only `Caddyfile.j2`; generated `Caddyfile` files are deployment artifacts and feed the generated manifest at `<deployments>/Caddyfile`. `infer_public_url` renders the template without params and returns a URL only for exactly one concrete host.

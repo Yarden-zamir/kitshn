@@ -19,14 +19,16 @@ Compose is fail-forward. Caddy keeps the previous generated Caddyfile when valid
 
 The previous generated `Caddyfile` stays in place until step 12 replaces it. A deploy that fails at any earlier step keeps its route. This matters because every Caddy reload, by any recipe, rebuilds `/deployments/Caddyfile` from the generated Caddyfiles that exist.
 
-After step 2, `deploy` prints a GitHub `::warning` line when the checkout has a `.env` file, which Compose does not read, or when the default socket path is longer than the Unix socket limit of 107 bytes.
+After step 2, `deploy` fails when the recipe commits a root `Caddyfile`, which is the generated artifact. It first writes the previous generated content back, so the route survives. It also prints a GitHub `::warning` line when the checkout has a `.env` file, which Compose does not read, or when the default socket path is longer than the Unix socket limit of 107 bytes.
 
 Host deploy lock:
 
 - `deploy` and `destroy` hold an exclusive `flock` on `/deployments/.kitshn-deploy.lock` for their whole run.
 - Deploys of different recipes share the Caddy manifest, the Caddy reload, and the deploy user's `~/.gitconfig`, which `gh auth setup-git` rewrites. Without the lock, two recipes that deploy at the same time race on these.
-- A deploy that waits prints the holder once on stderr. It fails after 30 minutes with the holder in the message.
-- The lock file holds the current holder's deployment identity and process ID, and is empty when free.
+- A deploy that waits prints the holder on stderr every 20 seconds. When the GitHub job is cancelled, that print fails on the closed SSH pipe, so the abandoned waiter exits before it takes the lock. It fails after 30 minutes with the holder in the message.
+- The lock file holds the current holder's deployment identity and process ID. It is normally empty when free; a killed holder leaves stale text, which the next holder overwrites.
+- A lock file that the deploy user cannot open, for example one created by `sudo`, fails the deploy with the file owner in the message.
+- `--dry-run` does not take the lock.
 
 After `deploy` returns, the reusable workflow verifies the result from the GitHub runner: it requests the public URL inferred from `Caddyfile.j2` until it answers 2xx, writes the URL, status, and content type to the job summary, and attaches them to the GitHub deployment. A recipe without one concrete hostname skips the check. From the laptop, `kitshn track` performs the same verification plus a `kitshn status` check on the VPS; see [CLI](cli.md).
 
@@ -34,4 +36,4 @@ After `deploy` returns, the reusable workflow verifies the result from the GitHu
 
 `destroy` of an ephemeral env deletes the GitHub Environment after teardown (handled by the CI workflow, not the CLI).
 
-CI uses GitHub Actions concurrency groups per `<owner>/<repo>/<environment>`. The host deploy lock serializes deploys across recipes on one VPS.
+CI uses GitHub Actions concurrency groups per `<owner>/<repo>/<environment>` on the `deploy` and `teardown` jobs, with `cancel-in-progress: false`. GitHub keeps only the newest pending job per group, so pushes to one deployment apply in order. The host deploy lock serializes deploys across recipes on one VPS; it does not order them.

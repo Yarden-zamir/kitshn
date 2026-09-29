@@ -92,10 +92,14 @@ def ignored_dotenv_warning(recipe_dir: Path) -> str | None:
     for raw_line in dotenv.read_text(encoding="utf-8", errors="replace").splitlines():
         line = raw_line.strip()
         if line and not line.startswith("#") and "=" in line:
-            keys.append(line.split("=", 1)[0].removeprefix("export ").strip())
+            key = line.split("=", 1)[0].removeprefix("export ").strip()
+            # Continuation lines of multi-line quoted values are not keys.
+            if key.isidentifier():
+                keys.append(key)
     names = ", ".join(keys) if keys else "no keys"
     return (
-        f".env in the recipe is not read ({names}). KitSHn runs Compose with --env-file params.env. "
+        f".env in the recipe is not used for interpolation or COMPOSE_PROFILES ({names}). "
+        "KitSHn runs Compose with --env-file params.env. A service env_file entry still reads it. "
         "Use GitHub vars or secrets named KITSHN_<NAME> (kitshn params set), or compose.override.yml."
     )
 

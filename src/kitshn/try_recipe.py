@@ -98,7 +98,12 @@ def try_recipe(
         raise KitshnError(msg)
     ensure_docker_running(runner)
     recipe = Recipe.parse(recipe_name) if recipe_name else _local_recipe(directory, runner)
-    if dotenv := ignored_dotenv_warning(directory):
+    # A git-ignored local .env is normal for plain `docker compose up`; only a committed one
+    # reaches the deploy.
+    tracked_dotenv = runner.run(
+        ["git", "ls-files", "--error-unmatch", ".env"], cwd=directory, capture=True, check=False
+    )
+    if tracked_dotenv.returncode == 0 and (dotenv := ignored_dotenv_warning(directory)):
         print(f"⚠️  {dotenv}")
 
     root = temp_root or Path(tempfile.mkdtemp(prefix="kitshn-try-"))

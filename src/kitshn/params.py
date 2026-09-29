@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import urllib.parse
 
 from .ci import ENV_KEY_RE, RESERVED_PARAM_NAMES
 from .errors import KitshnError
@@ -72,7 +73,8 @@ def set_github_param(
     if github_name in RESERVED_PARAM_NAMES:
         msg = f"{github_name} is reserved for deploy access; set it with kitshn recipe auth"
         raise KitshnError(msg)
-    if not value:
+    # gh trims trailing CR and LF from stdin, so a value of only newlines would arrive empty.
+    if not value.rstrip("\r\n"):
         msg = f"refusing to set {github_name} to an empty value"
         raise KitshnError(msg)
 
@@ -83,18 +85,14 @@ def set_github_param(
         env_args = ["--env", environment]
 
     kind = "secret" if secret else "variable"
-    if secret:
-        runner.run(["gh", "secret", "set", github_name, "--repo", recipe.full_name, *env_args], input_text=value)
-    else:
-        runner.run(
-            ["gh", "variable", "set", github_name, "--repo", recipe.full_name, *env_args, "--body", value]
-        )
+    # Both go on stdin: the value stays out of the process list, and gh trims them the same way.
+    runner.run(["gh", kind, "set", github_name, "--repo", recipe.full_name, *env_args], input_text=value)
     scope = f"environment:{environment}" if environment is not None else "repository"
     return ParamWrite(github_name=github_name, scope=scope, kind=kind, created_environment=created)
 
 
 def _ensure_environment(recipe: Recipe, environment: str, *, create: bool, runner: CommandRunner) -> bool:
-    path = f"repos/{recipe.full_name}/environments/{environment}"
+    path = f"repos/{recipe.full_name}/environments/{urllib.parse.quote(environment, safe='')}"
     result = runner.run(["gh", "api", path], capture=True, check=False)
     if result.returncode == 0:
         return False
@@ -104,8 +102,9 @@ def _ensure_environment(recipe: Recipe, environment: str, *, create: bool, runne
         raise KitshnError(msg)
     if not create:
         msg = (
-            f"GitHub Environment {environment!r} does not exist in {recipe.full_name}. The first deploy "
-            "creates it; pass --create-environment to create it now, or check the name for a typo"
+            f"GitHub Environment {environment!r} not found in {recipe.full_name}, or the repo is not "
+            "visible to your gh login. The first deploy creates the Environment; pass "
+            "--create-environment to create it now, or check the name for a typo"
         )
         raise KitshnError(msg)
     runner.run(["gh", "api", "--method", "PUT", path], capture=True)

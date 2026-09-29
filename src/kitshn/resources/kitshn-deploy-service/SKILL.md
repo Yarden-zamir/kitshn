@@ -87,7 +87,7 @@ host port. Caddy on the host: `reverse_proxy unix//{{ paths.default_socket }}`.
 - A container gets a param only when `compose.yml` maps it: `TOKEN: ${TOKEN:?TOKEN is required}`.
 - A value that is not secret and belongs to the repo can go in `compose.yml`, or in
   `compose.override.yml`, which Compose loads beside `compose.yml`. A build step can write it.
-- Set params with `kitshn params set <owner/repo> <NAME>`, value on stdin. It adds the prefix,
+- Set params with `pbpaste | kitshn params set <owner/repo> <NAME>` or `< file`. It adds the prefix,
   scopes to `prod` by default, and fails on a typo in the Environment name. `--var` for values
   that are not secret, `--repo-wide` only when previews need the value too.
 - After a deploy, check the names with `kitshn params list <owner/repo>`.

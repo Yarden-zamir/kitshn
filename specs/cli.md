@@ -43,7 +43,7 @@ reported as errors, never as "current".
   file, so build contexts resolve against the recipe directory.
 - Waits for healthchecks and for the default socket, then requests `--path` over the socket
   with `curl` and reports the HTTP status and content type.
-- Prints a warning when the recipe directory has a `.env` file, which `try` and deploys do not read.
+- Prints a warning when git tracks a `.env` file in the recipe directory, which deploys do not use for interpolation. A git-ignored local `.env` gets no warning.
 - Prints the last 50 lines of Compose logs when the check fails or an error occurs.
 - Cleans up with `down --remove-orphans --volumes --rmi local` and removes the temporary root,
   unless `--keep` is passed; then it prints the curl and cleanup commands.
@@ -129,11 +129,13 @@ same directory misses required params and emits misleading blank-variable warnin
 - `params set` runs on the laptop through `gh`, not on the VPS. It writes the GitHub secret, or
   with `--var` the variable, `KITSHN_<NAME>`. The scope is the `prod` Environment by default,
   `--environment` names another, and `--repo-wide` sets it for the repository, which pull
-  request previews see too. It reads the value from stdin, or prompts without echo on a
-  terminal, and removes one trailing newline. Secret values go to `gh` on stdin, never in
-  arguments. It rejects a name with the `KITSHN_` prefix, a name that is not a valid variable
-  name, the reserved `VPS_HOST` and `SSH_KEY`, and an empty value. It fails when the
-  Environment does not exist, unless `--create-environment` is passed.
+  request previews see too. It reads the value from stdin and refuses to run with a terminal on
+  stdin, because a one-line prompt would leave the other lines of a pasted multi-line value
+  for the shell. Secrets and variables both go to `gh` on stdin, never in arguments, and `gh`
+  removes trailing carriage returns and newlines. It rejects a name with the `KITSHN_` prefix, a name that is not a valid variable
+  name, the reserved `VPS_HOST` and `SSH_KEY`, and a value that is empty after that trimming.
+  It fails when the Environment is not found, unless `--create-environment` is passed. GitHub
+  also answers "not found" for a repo that the `gh` login cannot see, and the message says so.
 - Values are stored quoted and escaped for Compose (`ci.write_params_from_github` uses
   `json.dumps`). Reads decode that encoding, so `--show` returns the exact runtime value.
   Hand-parsing `params.env` returns the surrounding quotes instead.
@@ -163,7 +165,7 @@ public URL inferred from `Caddyfile.j2` for the resolved environment, or empty.
 `KITSHN_SSH_KEY` is missing. `ci-verify` requests `KITSHN_URL` until it returns 2xx or
 `KITSHN_VERIFY_TIMEOUT` seconds pass, writes the URL, status, and content type to the job
 summary, posts a deployment status with `environment_url` on the job's GitHub deployment, and
-fails on a non-2xx final response. When `GITHUB_SHA` and `KITSHN_ENVIRONMENT` are set, the summary ends with the `kitshn track --sha <sha> --environment <env>` command for that run. When the URL never answers before the timeout (for example
+fails on a non-2xx final response. When `KITSHN_REF`, the ref the deploy checked out, is a full commit SHA, the summary ends with the `kitshn track --sha <sha> --environment <env>` command for that run. For a pull request that is the head SHA, not the merge SHA in `GITHUB_SHA`. When the URL never answers before the timeout (for example
 a preview hostname without DNS), it still writes the summary row and a `failure` deployment
 status, then fails. With no URL it writes a note and succeeds.
 

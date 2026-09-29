@@ -207,7 +207,8 @@ kitshn params list owner/repo --vps-host deploy@example.com
 Prefer these over raw `docker` and `docker compose`, which do not know the deployment's
 project name or params file and will mislead you. Start with `diagnose`.
 
-To set a param, pipe the value into `kitshn params set owner/repo TOKEN`. It writes the
+To set a param, pipe the value into `kitshn params set owner/repo TOKEN`, for example with
+`pbpaste |` or `< token.txt`. It writes the
 GitHub secret `KITSHN_TOKEN` in the `prod` Environment, and fails on a typo in the
 Environment name. Pass `--var` for a value that is not secret.
 

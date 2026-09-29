@@ -45,6 +45,11 @@ jobs:
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.env }}
+    # Deploy and teardown of one deployment run in push order. GitHub keeps only the newest
+    # pending job per group, so a stale push never deploys after a newer one.
+    concurrency:
+      group: kitshn-${{ github.repository }}-${{ needs.resolve.outputs.env }}
+      cancel-in-progress: false
     steps:
       - uses: astral-sh/setup-uv@v7
         with:
@@ -74,6 +79,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           KITSHN_ENVIRONMENT: ${{ needs.resolve.outputs.env }}
+          KITSHN_REF: ${{ needs.resolve.outputs.ref }}
           KITSHN_URL: ${{ needs.resolve.outputs.url }}
         run: uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ci-verify
 
@@ -85,6 +91,11 @@ jobs:
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.env }}
+    # Deploy and teardown of one deployment run in push order. GitHub keeps only the newest
+    # pending job per group, so a stale push never deploys after a newer one.
+    concurrency:
+      group: kitshn-${{ github.repository }}-${{ needs.resolve.outputs.env }}
+      cancel-in-progress: false
     steps:
       - uses: astral-sh/setup-uv@v7
         with:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import getpass
 from pathlib import Path
 import sys
 from enum import StrEnum
@@ -701,16 +700,21 @@ def params_set(
 ) -> None:
     """Set a deployment param as the GitHub secret or variable `KITSHN_<NAME>`.
 
-    Reads the value from stdin, or prompts without echo on a terminal. One
-    trailing newline is removed. Takes effect on the next deploy. Runs on
-    your computer with `gh`, not on the VPS.
+    Reads the value from stdin, for example `pbpaste | kitshn params set ...`
+    or `< file`. `gh` removes trailing newlines. Takes effect on the next
+    deploy. Runs on your computer with `gh`, not on the VPS.
     """
 
     if repo_wide and environment is not None:
         msg = "pass either --environment or --repo-wide, not both"
         raise KitshnError(msg)
     target = None if repo_wide else (environment or "prod")
-    value = getpass.getpass(f"{name}: ") if sys.stdin.isatty() else sys.stdin.read().removesuffix("\n")
+    if sys.stdin.isatty():
+        # A prompt reads one line. A pasted multi-line value such as a PEM key would leave its
+        # other lines for the shell to run and record in its history.
+        msg = f"pipe the value on stdin, for example: pbpaste | kitshn params set {recipe} {name}"
+        raise KitshnError(msg)
+    value = sys.stdin.read()
     result = set_github_param(
         Recipe.parse(recipe),
         name,
