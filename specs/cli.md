@@ -43,6 +43,7 @@ reported as errors, never as "current".
   file, so build contexts resolve against the recipe directory.
 - Waits for healthchecks and for the default socket, then requests `--path` over the socket
   with `curl` and reports the HTTP status and content type.
+- Prints a warning when the recipe directory has a `.env` file, which `try` and deploys do not read.
 - Prints the last 50 lines of Compose logs when the check fails or an error occurs.
 - Cleans up with `down --remove-orphans --volumes --rmi local` and removes the temporary root,
   unless `--keep` is passed; then it prints the curl and cleanup commands.
@@ -74,6 +75,8 @@ Exits non-zero when any step fails.
 
 ## Deploy And Destroy
 
+- `deploy` and `destroy` hold the host deploy lock; see [Deploy Flow](deploy-flow.md).
+
 - `deploy` requires `--params-file` pointing at a key/value file. The file is opaque: the
   `KITSHN_` selection and prefix-stripping happen in CI before the file is built.
 - `destroy --purge` additionally deletes persistent data and file logs.
@@ -94,7 +97,7 @@ last deploy entry from `/logs/.kitshn/kitshn.log`.
 
 ## Diagnose
 
-Checks, in order: deployment root, params file, Compose file, socket directory, `docker
+Checks, in order: deployment root, params file, socket directory, a warning when the default socket path is longer than 107 bytes, Compose file, `docker
 compose ps`, socket-proxy network attachment, generated Caddyfile, its `unix//...` targets
 exist and are sockets, optional `curl --unix-socket` probes when curl is available, and host
 Caddy config validation.
@@ -123,6 +126,14 @@ same directory misses required params and emits misleading blank-variable warnin
 - `params list` prints the params file path and each param name as `set` or `empty`. It never
   prints values.
 - `params get` prints presence only; `--show` prints the value on stdout.
+- `params set` runs on the laptop through `gh`, not on the VPS. It writes the GitHub secret, or
+  with `--var` the variable, `KITSHN_<NAME>`. The scope is the `prod` Environment by default,
+  `--environment` names another, and `--repo-wide` sets it for the repository, which pull
+  request previews see too. It reads the value from stdin, or prompts without echo on a
+  terminal, and removes one trailing newline. Secret values go to `gh` on stdin, never in
+  arguments. It rejects a name with the `KITSHN_` prefix, a name that is not a valid variable
+  name, the reserved `VPS_HOST` and `SSH_KEY`, and an empty value. It fails when the
+  Environment does not exist, unless `--create-environment` is passed.
 - Values are stored quoted and escaped for Compose (`ci.write_params_from_github` uses
   `json.dumps`). Reads decode that encoding, so `--show` returns the exact runtime value.
   Hand-parsing `params.env` returns the surrounding quotes instead.
@@ -152,7 +163,7 @@ public URL inferred from `Caddyfile.j2` for the resolved environment, or empty.
 `KITSHN_SSH_KEY` is missing. `ci-verify` requests `KITSHN_URL` until it returns 2xx or
 `KITSHN_VERIFY_TIMEOUT` seconds pass, writes the URL, status, and content type to the job
 summary, posts a deployment status with `environment_url` on the job's GitHub deployment, and
-fails on a non-2xx final response. When the URL never answers before the timeout (for example
+fails on a non-2xx final response. When `GITHUB_SHA` and `KITSHN_ENVIRONMENT` are set, the summary ends with the `kitshn track --sha <sha> --environment <env>` command for that run. When the URL never answers before the timeout (for example
 a preview hostname without DNS), it still writes the summary row and a `failure` deployment
 status, then fails. With no URL it writes a note and succeeds.
 

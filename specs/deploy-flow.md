@@ -1,11 +1,11 @@
 # Deploy Flow
-One deploy operation:
+One deploy operation. The whole operation runs under the host deploy lock, see below.
 
 1. Ensure deployment root, params root, persistent root, logs root, and log symlink exist.
 2. Fetch from the GitHub remote and check out the requested branch, tag, or SHA in `/deployments/<owner>/<repo>/<environment>`.
 3. Use git in the checkout to determine current and target refs.
 4. Copy `--params-file` atomically into `/params/<owner>/<repo>/<environment>/params.env` with mode `600`.
-5. Clear and recreate `/deployments/<owner>/<repo>/<environment>/.kitshn/sockets` for runtime Unix socket leftovers.
+5. Clear and recreate `/deployments/<owner>/<repo>/<environment>/.kitshn/sockets` for runtime Unix socket leftovers. This runs after step 6 succeeds and just before step 7, so a failed pull or build keeps the running containers and their socket serving.
 6. Pull external images and build local images with Compose using `--env-file`.
 7. Run Compose with `--env-file` when the recipe has Compose. Recipe services are applied with `docker compose up -d --remove-orphans --force-recreate` so services that bind Unix sockets are recreated after socket cleanup.
 8. Roll logs under `KITSHN_LOG_DIR` for each service that will be recreated: rename existing log files in the service's log subdirectory to `<name>.<timestamp>` before the service restarts.
@@ -17,10 +17,21 @@ One deploy operation:
 
 Compose is fail-forward. Caddy keeps the previous generated Caddyfile when validation fails.
 
+The previous generated `Caddyfile` stays in place until step 12 replaces it. A deploy that fails at any earlier step keeps its route. This matters because every Caddy reload, by any recipe, rebuilds `/deployments/Caddyfile` from the generated Caddyfiles that exist.
+
+After step 2, `deploy` prints a GitHub `::warning` line when the checkout has a `.env` file, which Compose does not read, or when the default socket path is longer than the Unix socket limit of 107 bytes.
+
+Host deploy lock:
+
+- `deploy` and `destroy` hold an exclusive `flock` on `/deployments/.kitshn-deploy.lock` for their whole run.
+- Deploys of different recipes share the Caddy manifest, the Caddy reload, and the deploy user's `~/.gitconfig`, which `gh auth setup-git` rewrites. Without the lock, two recipes that deploy at the same time race on these.
+- A deploy that waits prints the holder once on stderr. It fails after 30 minutes with the holder in the message.
+- The lock file holds the current holder's deployment identity and process ID, and is empty when free.
+
 After `deploy` returns, the reusable workflow verifies the result from the GitHub runner: it requests the public URL inferred from `Caddyfile.j2` until it answers 2xx, writes the URL, status, and content type to the job summary, and attaches them to the GitHub deployment. A recipe without one concrete hostname skips the check. From the laptop, `kitshn track` performs the same verification plus a `kitshn status` check on the VPS; see [CLI](cli.md).
 
 `deploy` reads params from `--params-file`. CI builds this file from `KITSHN_*` vars/secrets and pushes it over SSH. The VPS does not call the GitHub API.
 
 `destroy` of an ephemeral env deletes the GitHub Environment after teardown (handled by the CI workflow, not the CLI).
 
-CI uses GitHub Actions concurrency groups per `<owner>/<repo>/<environment>`.
+CI uses GitHub Actions concurrency groups per `<owner>/<repo>/<environment>`. The host deploy lock serializes deploys across recipes on one VPS.

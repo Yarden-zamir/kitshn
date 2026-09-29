@@ -138,7 +138,7 @@ cleanup commands.
 kitshn track
 ```
 
-`track` waits for the GitHub Actions run for `HEAD`, prints job transitions, checks
+Run it after every push, not only the first one. `track` waits for the GitHub Actions run for `HEAD`, prints job transitions, checks
 `kitshn status` on the VPS for the new ref and healthy services, then requests the public URL
 inferred from `Caddyfile.j2` and reports status and content type. `--expect <text>` also
 checks the body. Every step has a `--*-timeout` flag. The workflow performs the same public
@@ -206,6 +206,10 @@ kitshn params list owner/repo --vps-host deploy@example.com
 
 Prefer these over raw `docker` and `docker compose`, which do not know the deployment's
 project name or params file and will mislead you. Start with `diagnose`.
+
+To set a param, pipe the value into `kitshn params set owner/repo TOKEN`. It writes the
+GitHub secret `KITSHN_TOKEN` in the `prod` Environment, and fails on a typo in the
+Environment name. Pass `--var` for a value that is not secret.
 
 To read a secret's real value, use `kitshn params get owner/repo TOKEN --show`. Values are
 stored quoted and escaped for Compose, so `grep` and `cut` return the quote characters too.
