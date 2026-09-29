@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
+import fcntl
 import json
 import os
 from pathlib import Path
 import shutil
-from typing import Iterable, Iterator
+import sys
+import time
 
 from .errors import KitshnError
 from .models import Deployment, Roots
@@ -21,6 +25,54 @@ def roots_from_env() -> Roots:
             logs=root / "logs",
         )
     return Roots()
+
+
+DEPLOY_LOCK_NAME = ".kitshn-deploy.lock"
+# A deploy that hangs past this holds up every other recipe on the host. Raise it if a
+# recipe's image build legitimately takes longer.
+DEPLOY_LOCK_TIMEOUT_SECONDS = 1800
+
+
+@contextmanager
+def host_deploy_lock(
+    roots: Roots, holder: str, *, timeout_seconds: float = DEPLOY_LOCK_TIMEOUT_SECONDS
+) -> Iterator[None]:
+    """Serialize deploys and destroys of all recipes on one host.
+
+    Deploys of different recipes share the Caddy manifest, the Caddy reload, and the deploy
+    user's ~/.gitconfig, which `gh auth setup-git` rewrites. CI concurrency groups are per
+    deployment, so only a host-wide lock keeps two recipes from racing on those.
+    """
+
+    roots.deployments.mkdir(parents=True, exist_ok=True)
+    fd = os.open(roots.deployments / DEPLOY_LOCK_NAME, os.O_RDWR | os.O_CREAT, 0o644)
+    with os.fdopen(fd, "r+", encoding="utf-8") as handle:
+        deadline = time.monotonic() + timeout_seconds
+        announced = False
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                handle.seek(0)
+                current = handle.read().strip() or "another deploy"
+                if time.monotonic() >= deadline:
+                    msg = f"timed out after {timeout_seconds:g}s waiting for the host deploy lock held by {current}"
+                    raise KitshnError(msg) from None
+                if not announced:
+                    print(f"waiting for the host deploy lock held by {current}", file=sys.stderr, flush=True)
+                    announced = True
+                time.sleep(1)
+        handle.seek(0)
+        handle.truncate()
+        handle.write(f"{holder} (pid {os.getpid()})\n")
+        handle.flush()
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            handle.truncate()
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def ensure_deployment_paths(deployment: Deployment) -> None:

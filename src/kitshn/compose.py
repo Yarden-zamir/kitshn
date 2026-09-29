@@ -3,10 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import time
+from pathlib import Path
 from typing import Any, Iterable
 
 from .errors import KitshnError
-from .filesystem import roll_service_logs, walk_deployments
+from .filesystem import reset_socket_paths, roll_service_logs, walk_deployments
 from .models import Deployment, Recipe, Roots
 from .runner import CommandRunner
 
@@ -77,10 +78,33 @@ def compose_services(config: dict[str, Any]) -> list[ComposeService]:
     return services
 
 
+def ignored_dotenv_warning(recipe_dir: Path) -> str | None:
+    """Explain that a recipe `.env` has no effect, or None when the recipe has none.
+
+    KitSHn passes `--env-file <params.env>` to every Compose command, so Compose never reads
+    `.env`. Values and COMPOSE_PROFILES in it silently do nothing.
+    """
+
+    dotenv = recipe_dir / ".env"
+    if not dotenv.is_file():
+        return None
+    keys: list[str] = []
+    for raw_line in dotenv.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            keys.append(line.split("=", 1)[0].removeprefix("export ").strip())
+    names = ", ".join(keys) if keys else "no keys"
+    return (
+        f".env in the recipe is not read ({names}). KitSHn runs Compose with --env-file params.env. "
+        "Use GitHub vars or secrets named KITSHN_<NAME> (kitshn params set), or compose.override.yml."
+    )
+
+
 def apply_compose(deployment: Deployment, runner: CommandRunner) -> list[str]:
     config = render_compose_config(deployment, runner)
     services = compose_services(config)
     if not services:
+        reset_socket_paths(deployment)
         return []
 
     service_names = [service.name for service in services]
@@ -100,6 +124,9 @@ def apply_compose(deployment: Deployment, runner: CommandRunner) -> list[str]:
             env=deployment.runtime_env,
         )
 
+    # Clear sockets only once images are ready: a failed pull or build keeps the running
+    # containers and their live socket serving.
+    reset_socket_paths(deployment)
     roll_service_logs(deployment.logs_root, service_names)
     runner.run(
         compose_command(deployment, "up", "-d", "--remove-orphans", "--force-recreate"),
