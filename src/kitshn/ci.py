@@ -136,7 +136,11 @@ def verify_public_route(
     url = os.environ.get("KITSHN_URL") or ""
     summary_path = _optional_path(os.environ.get("GITHUB_STEP_SUMMARY"))
     if not url:
-        _append_summary(summary_path, "## KitSHn deploy\n\nNo public URL inferred from `Caddyfile.j2`; skipped the route check.\n")
+        _append_summary(
+            summary_path,
+            "## KitSHn deploy\n\nNo public URL inferred from `Caddyfile.j2`; skipped the route check.\n"
+            + _track_hint(),
+        )
         print("url= (no public route to verify)")
         return
 
@@ -168,6 +172,18 @@ def _summary_table(url: str, status: str, content_type: str) -> str:
         "## KitSHn deploy\n\n"
         "| URL | Status | Content-Type |\n|---|---|---|\n"
         f"| {url} | {status} | {content_type} |\n"
+        + _track_hint()
+    )
+
+
+def _track_hint() -> str:
+    sha = os.environ.get("GITHUB_SHA")
+    environment = os.environ.get("KITSHN_ENVIRONMENT")
+    if not (sha and environment):
+        return ""
+    return (
+        "\nConfirm this deploy from the recipe repo on your computer:\n\n"
+        f"```bash\nkitshn track --sha {sha} --environment {environment}\n```\n"
     )
 
 
