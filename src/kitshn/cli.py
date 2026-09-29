@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import getpass
 from pathlib import Path
 import sys
 from enum import StrEnum
@@ -37,7 +38,7 @@ from .filesystem import roots_from_env
 from .installer_registry import installer_choices, load_installers
 from .logs import show_logs
 from .models import Deployment, Recipe
-from .params import param_summaries, param_value
+from .params import param_summaries, param_value, set_github_param
 from .recipe_auth import authorize_recipe
 from .remote import forward_invocation_to_vps
 from .repo_init import Template, init_recipe_repo
@@ -83,7 +84,7 @@ recipe_app = App(name="recipe", help="Manage recipe repository configuration.")
 app.command(recipe_app)
 skill_app = App(name="skill", help="Show or install the KitSHn deployment agent skill.")
 app.command(skill_app)
-params_app = App(name="params", help="Inspect deployment params on the VPS.")
+params_app = App(name="params", help="Read deployment params on the VPS, or set them in GitHub.")
 app.command(params_app)
 
 
@@ -627,8 +628,8 @@ def params_list(
 ) -> int:
     """List deployment param names without printing values.
 
-    Params come from GitHub vars/secrets named KITSHN_<NAME>; the deployment
-    receives <NAME>.
+    Params come from GitHub vars/secrets named `KITSHN_<NAME>`; the deployment
+    receives `<NAME>`.
     """
 
     if vps_host is not None:
@@ -675,6 +676,57 @@ def params_get(
         print(value)
     _safe_log(InvocationLog(command="params get", status="ok", deployment=deployment), deployment.roots)
     return 0
+
+
+@params_app.command(name="set")
+def params_set(
+    recipe: Annotated[str, Parameter(help="Fully qualified owner/repo name.")],
+    name: Annotated[str, Parameter(help="Param name as the deployment sees it, without the KITSHN_ prefix.")],
+    *,
+    environment: Annotated[
+        str | None,
+        Parameter("--environment", help="GitHub Environment to scope the param to. Default: prod."),
+    ] = None,
+    repo_wide: Annotated[
+        bool,
+        Parameter("--repo-wide", help="Set it for the whole repo. Pull request previews see it too."),
+    ] = False,
+    var: Annotated[
+        bool, Parameter("--var", help="Store as a GitHub variable, not a secret. Only for values that are not secret.")
+    ] = False,
+    create_environment: Annotated[
+        bool,
+        Parameter("--create-environment", help="Create the GitHub Environment when it does not exist yet."),
+    ] = False,
+) -> None:
+    """Set a deployment param as the GitHub secret or variable `KITSHN_<NAME>`.
+
+    Reads the value from stdin, or prompts without echo on a terminal. One
+    trailing newline is removed. Takes effect on the next deploy. Runs on
+    your computer with `gh`, not on the VPS.
+    """
+
+    if repo_wide and environment is not None:
+        msg = "pass either --environment or --repo-wide, not both"
+        raise KitshnError(msg)
+    target = None if repo_wide else (environment or "prod")
+    value = getpass.getpass(f"{name}: ") if sys.stdin.isatty() else sys.stdin.read().removesuffix("\n")
+    result = set_github_param(
+        Recipe.parse(recipe),
+        name,
+        value,
+        environment=target,
+        secret=not var,
+        create_environment=create_environment,
+        runner=CommandRunner(),
+    )
+    print(f"{KEY} param set")
+    print("status=set")
+    print(f"github_name={result.github_name}")
+    print(f"kind={result.kind}")
+    print(f"scope={result.scope}")
+    print(f"created_environment={str(result.created_environment).lower()}")
+    print(f"{INFO} takes effect on the next deploy: push, or rerun the last workflow run")
 
 
 @app.command
