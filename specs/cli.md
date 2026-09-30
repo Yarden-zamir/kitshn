@@ -30,7 +30,7 @@ reported as errors, never as "current".
 
 ## Try
 
-`try` builds and runs the recipe's `compose.yml` without touching routing or deployments:
+`try` builds and runs the recipe's `compose.yml` without touching routing or deployments. It answers the "test without a prod deploy" gap in [#10](https://github.com/Yarden-zamir/kitshn/issues/10):
 
 - Fails with a clear message when the directory has no `compose.yml` or `compose.yaml`, when
   `--params-file` does not exist, when `docker info` fails locally, or when the VPS SSH probe
@@ -55,7 +55,7 @@ reported as errors, never as "current".
 
 ## Track
 
-`track` follows one commit from the laptop, in order, each step with its own timeout flag:
+`track` follows one commit from the laptop, in order, each step with its own timeout flag. [#11](https://github.com/Yarden-zamir/kitshn/issues/11) made it the way to confirm every deploy:
 
 1. Find the GitHub Actions run for the commit (`HEAD` unless `--sha`). No run within
    `--run-start-timeout` fails with a hint to push.
@@ -105,7 +105,7 @@ Exits non-zero when any check fails. Warnings do not fail the command.
 
 Failure hints are attached for known-confusing cases: `ambiguous site definition` points at
 non-environment-aware Caddy hostnames; `connection refused` on a socket probe points at the
-proxy-to-app hop rather than the socket itself.
+proxy-to-app hop rather than the socket itself. These hints come from [#9](https://github.com/Yarden-zamir/kitshn/issues/9).
 
 ## Logs
 
@@ -129,7 +129,7 @@ same directory misses required params and emits misleading blank-variable warnin
   `gh variable set`; the README lists the mistakes to avoid.
 - Values are stored quoted and escaped for Compose (`ci.write_params_from_github` uses
   `json.dumps`). Reads decode that encoding, so `--show` returns the exact runtime value.
-  Hand-parsing `params.env` returns the surrounding quotes instead.
+  Hand-parsing `params.env` returns the surrounding quotes instead ([#10](https://github.com/Yarden-zamir/kitshn/issues/10)).
 
 ## Recipe Auth
 
@@ -163,7 +163,11 @@ status, then fails. With no URL it writes a note and succeeds.
 ## Skill
 
 `skill show` prints the bundled agent skill. `skill link-claude` and `skill link-opencode`
-symlink it into `~/.claude/skills/` and `~/.opencode/skills/`. Existing non-matching skill
+symlink it into `~/.claude/skills/` and `~/.opencode/skills/`. The link targets `KITSHN_SKILL_DIR`
+when it is set. The Homebrew wrapper sets it to the formula's `opt` path, so the link follows
+`brew upgrade`. A link from `uvx`, which runs from uv's cache, breaks when the cache is pruned;
+link from Homebrew or `uv tool install`. An existing link to another `kitshn-deploy-service`
+directory is replaced. Existing non-matching skill
 paths are never overwritten.
 
 ## Doctor

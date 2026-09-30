@@ -21,7 +21,7 @@ The previous generated `Caddyfile` stays in place until step 12 replaces it. A d
 
 After step 2, `deploy` prints a GitHub `::warning` line when the checkout has a `.env` file, which Compose does not read, or when the default socket path is longer than the Unix socket limit of 107 bytes.
 
-Host deploy lock:
+Host deploy lock ([#11](https://github.com/Yarden-zamir/kitshn/issues/11)):
 
 - `deploy` and `destroy` hold an exclusive `flock` on `/deployments/.kitshn-deploy.lock` for their whole run.
 - Deploys of different recipes share the Caddy manifest and the Caddy reload. A first deploy or a destroy changes the list of routes; a concurrent deploy that writes the manifest last would drop that route. A deploy also recreates dependent services in other deployments, which can be deploying at the same moment. The lock prevents these races.
