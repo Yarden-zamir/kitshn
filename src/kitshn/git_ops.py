@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import shutil
 
 from .errors import KitshnError
 from .models import Deployment
@@ -9,7 +11,7 @@ from .runner import CommandRunner
 
 def checkout_recipe(deployment: Deployment, ref: str | None, runner: CommandRunner) -> tuple[str | None, str]:
     root = deployment.deployment_root
-    _configure_github_git_auth(runner)
+    auth = _github_auth_args(runner)
     if not (root / ".git").exists():
         runner.run(["git", "init"], cwd=root)
         runner.run(["git", "remote", "add", "origin", deployment.recipe.remote_url], cwd=root)
@@ -20,6 +22,7 @@ def checkout_recipe(deployment: Deployment, ref: str | None, runner: CommandRunn
     runner.run(
         [
             "git",
+            *auth,
             "fetch",
             "--prune",
             "origin",
@@ -29,7 +32,7 @@ def checkout_recipe(deployment: Deployment, ref: str | None, runner: CommandRunn
         cwd=root,
     )
 
-    target = ref or _remote_default_branch(root, runner)
+    target = ref or _remote_default_branch(root, runner, auth)
     checkout_target = _checkout_target(root, target, runner)
     runner.run(["git", "checkout", "--force", "--detach", checkout_target], cwd=root)
     checked_out = _current_ref(root, runner)
@@ -46,7 +49,7 @@ def _current_ref(root: Path, runner: CommandRunner) -> str | None:
     return result.stdout.strip() or None
 
 
-def _remote_default_branch(root: Path, runner: CommandRunner) -> str:
+def _remote_default_branch(root: Path, runner: CommandRunner, auth: list[str]) -> str:
     result = runner.run(
         ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
         cwd=root,
@@ -57,7 +60,7 @@ def _remote_default_branch(root: Path, runner: CommandRunner) -> str:
         return result.stdout.strip().removeprefix("refs/remotes/origin/")
 
     result = runner.run(
-        ["git", "ls-remote", "--symref", "origin", "HEAD"], cwd=root, capture=True
+        ["git", *auth, "ls-remote", "--symref", "origin", "HEAD"], cwd=root, capture=True
     )
     for line in result.stdout.splitlines():
         if line.startswith("ref:\trefs/heads/") and line.endswith("\tHEAD"):
@@ -78,11 +81,18 @@ def _checkout_target(root: Path, ref: str, runner: CommandRunner) -> str:
     return ref
 
 
-def _configure_github_git_auth(runner: CommandRunner) -> None:
+def _github_auth_args(runner: CommandRunner) -> list[str]:
+    """Git options that use gh as the credential helper for github.com, for one command only.
+
+    This is how gh runs its own git commands. `gh auth setup-git` writes the same setting into
+    the deploy user's ~/.gitconfig instead, and concurrent deploys raced on that file's lock.
+    Git asks the helper only when the remote requires auth, so public repos never call it, and
+    a private repo without `gh auth login` fails the fetch as before.
+    """
+
     if not runner.exists("gh"):
-        return
-    status = runner.run(
-        ["gh", "auth", "status", "--hostname", "github.com"], capture=True, check=False
-    )
-    if status.returncode == 0:
-        runner.run(["gh", "auth", "setup-git", "--hostname", "github.com"])
+        return []
+    gh_path = shutil.which("gh") or "gh"
+    key = "credential.https://github.com.helper"
+    # The empty value first drops helpers from global config, as gh does.
+    return ["-c", f"{key}=", "-c", f"{key}=!{json.dumps(gh_path)} auth git-credential"]

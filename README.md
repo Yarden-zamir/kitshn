@@ -191,6 +191,27 @@ GitHub variables and secrets are the only source of params. KitSHn runs Compose 
 belongs to the repo can go in `compose.yml`, or in `compose.override.yml`, which Compose loads
 beside `compose.yml`.
 
+Set params with `gh`. Pipe a secret from a file, so it stays out of your shell history:
+
+```bash
+gh secret set KITSHN_TOKEN --env prod --repo owner/repo < token.txt
+gh variable set KITSHN_LOG_TZ --env prod --repo owner/repo --body UTC
+```
+
+Mistakes that fail late:
+
+- **A missing or mistyped `KITSHN_` prefix.** GitHub stores the value, but KitSHn does not
+  forward it. Compose then fails on `${TOKEN:?...}`, or the app runs without it.
+- **A multi-line value pasted at the prompt.** The prompt reads one line, and the shell runs the
+  other lines. Pipe multi-line values, such as keys, from a file. `gh` removes trailing newlines.
+- **The wrong scope.** A secret without `--env` is repo-wide, and pull request previews see it.
+  Use `--env prod` for production-only values.
+- **An Environment that does not exist yet.** The first deploy creates it, so `--env prod`
+  fails before that. Create it first with `gh api --method PUT repos/owner/repo/environments/prod`.
+
+A new value takes effect on the next deploy. Push, or rerun the last workflow run. Then check
+the names with `kitshn params list owner/repo --vps-host deploy@example.com`.
+
 ## Operate
 
 Run these from your machine with `--vps-host`; they run on the VPS through a login shell.
@@ -206,11 +227,6 @@ kitshn params list owner/repo --vps-host deploy@example.com
 
 Prefer these over raw `docker` and `docker compose`, which do not know the deployment's
 project name or params file and will mislead you. Start with `diagnose`.
-
-To set a param, pipe the value into `kitshn params set owner/repo TOKEN`, for example with
-`pbpaste |` or `< token.txt`. It writes the
-GitHub secret `KITSHN_TOKEN` in the `prod` Environment, and fails on a typo in the
-Environment name. Pass `--var` for a value that is not secret.
 
 To read a secret's real value, use `kitshn params get owner/repo TOKEN --show`. Values are
 stored quoted and escaped for Compose, so `grep` and `cut` return the quote characters too.

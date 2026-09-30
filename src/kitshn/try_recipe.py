@@ -15,7 +15,7 @@ import tempfile
 import time
 from typing import Any
 
-from .compose import compose_command, compose_services, ignored_dotenv_warning, wait_for_healthchecks
+from .compose import compose_command, compose_services, wait_for_healthchecks
 from .errors import KitshnError
 from .models import Deployment, Recipe, Roots
 from .recipe_auth import github_recipe_or_none
@@ -98,13 +98,6 @@ def try_recipe(
         raise KitshnError(msg)
     ensure_docker_running(runner)
     recipe = Recipe.parse(recipe_name) if recipe_name else _local_recipe(directory, runner)
-    # A git-ignored local .env is normal for plain `docker compose up`; only a committed one
-    # reaches the deploy.
-    tracked_dotenv = runner.run(
-        ["git", "ls-files", "--error-unmatch", ".env"], cwd=directory, capture=True, check=False
-    )
-    if tracked_dotenv.returncode == 0 and (dotenv := ignored_dotenv_warning(directory)):
-        print(f"⚠️  {dotenv}")
 
     root = temp_root or Path(tempfile.mkdtemp(prefix="kitshn-try-"))
     roots = Roots(

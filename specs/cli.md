@@ -43,7 +43,6 @@ reported as errors, never as "current".
   file, so build contexts resolve against the recipe directory.
 - Waits for healthchecks and for the default socket, then requests `--path` over the socket
   with `curl` and reports the HTTP status and content type.
-- Prints a warning when git tracks a `.env` file in the recipe directory, which deploys do not use for interpolation. A git-ignored local `.env` gets no warning.
 - Prints the last 50 lines of Compose logs when the check fails or an error occurs.
 - Cleans up with `down --remove-orphans --volumes --rmi local` and removes the temporary root,
   unless `--keep` is passed; then it prints the curl and cleanup commands.
@@ -126,16 +125,8 @@ same directory misses required params and emits misleading blank-variable warnin
 - `params list` prints the params file path and each param name as `set` or `empty`. It never
   prints values.
 - `params get` prints presence only; `--show` prints the value on stdout.
-- `params set` runs on the laptop through `gh`, not on the VPS. It writes the GitHub secret, or
-  with `--var` the variable, `KITSHN_<NAME>`. The scope is the `prod` Environment by default,
-  `--environment` names another, and `--repo-wide` sets it for the repository, which pull
-  request previews see too. It reads the value from stdin and refuses to run with a terminal on
-  stdin, because a one-line prompt would leave the other lines of a pasted multi-line value
-  for the shell. Secrets and variables both go to `gh` on stdin, never in arguments, and `gh`
-  removes trailing carriage returns and newlines. It rejects a name with the `KITSHN_` prefix, a name that is not a valid variable
-  name, the reserved `VPS_HOST` and `SSH_KEY`, and a value that is empty after that trimming.
-  It fails when the Environment is not found, unless `--create-environment` is passed. GitHub
-  also answers "not found" for a repo that the `gh` login cannot see, and the message says so.
+- KitSHn has no command that writes params. They are set with `gh secret set` and
+  `gh variable set`; the README lists the mistakes to avoid.
 - Values are stored quoted and escaped for Compose (`ci.write_params_from_github` uses
   `json.dumps`). Reads decode that encoding, so `--show` returns the exact runtime value.
   Hand-parsing `params.env` returns the surrounding quotes instead.

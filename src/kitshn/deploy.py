@@ -23,7 +23,6 @@ from .filesystem import (
     roots_from_env,
     walk_deployments,
 )
-from .errors import KitshnError
 from .git_ops import checkout_recipe
 from .models import Deployment, Recipe, Roots
 from .runner import CommandRunner
@@ -58,7 +57,6 @@ def deploy_recipe(
         # that fails earlier keeps its route, so the next Caddy reload by any recipe keeps it too.
         previous_caddy = read_active_caddyfile(deployment)
         previous_ref, checked_out_ref = checkout_recipe(deployment, ref, runner)
-        _refuse_tracked_caddyfile(deployment, previous_caddy, runner)
         for warning in deploy_warnings(deployment):
             # Printed at once, not returned, so it reaches the workflow log even when a later
             # step fails. The GitHub runner turns this line into an annotation.
@@ -83,27 +81,6 @@ def deploy_recipe(
 def _deploy_lock(roots: Roots, deployment: Deployment, runner: CommandRunner) -> AbstractContextManager[None]:
     # A dry run changes no shared state, so it must not wait behind a real deploy.
     return nullcontext() if runner.dry_run else host_deploy_lock(roots, deployment.identity)
-
-
-def _refuse_tracked_caddyfile(deployment: Deployment, previous_caddy: str | None, runner: CommandRunner) -> None:
-    """Fail when the recipe commits a root `Caddyfile`, which is KitSHn's generated artifact.
-
-    The checkout then overwrote or deleted the live generated file. Put the previous content
-    back first, so the route survives the next Caddy reload by any recipe.
-    """
-
-    tracked = runner.run(
-        ["git", "ls-files", "--error-unmatch", "Caddyfile"],
-        cwd=deployment.deployment_root,
-        capture=True,
-        check=False,
-    )
-    if tracked.returncode != 0:
-        return
-    if previous_caddy is not None:
-        deployment.generated_caddyfile.write_text(previous_caddy, encoding="utf-8")
-    msg = "the recipe commits a root Caddyfile; KitSHn generates it from Caddyfile.j2. Remove it from git and add it to .gitignore"
-    raise KitshnError(msg)
 
 
 def deploy_warnings(deployment: Deployment) -> list[str]:

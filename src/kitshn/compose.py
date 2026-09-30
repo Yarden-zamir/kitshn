@@ -100,7 +100,7 @@ def ignored_dotenv_warning(recipe_dir: Path) -> str | None:
     return (
         f".env in the recipe is not used for interpolation or COMPOSE_PROFILES ({names}). "
         "KitSHn runs Compose with --env-file params.env. A service env_file entry still reads it. "
-        "Use GitHub vars or secrets named KITSHN_<NAME> (kitshn params set), or compose.override.yml."
+        "Use GitHub vars or secrets named KITSHN_<NAME>, or compose.override.yml."
     )
 
 

@@ -37,8 +37,8 @@ DEPLOY_LOCK_TIMEOUT_SECONDS = 1800
 def host_deploy_lock(roots: Roots, holder: str, *, timeout_seconds: float | None = None) -> Iterator[None]:
     """Serialize deploys and destroys of all recipes on one host.
 
-    Deploys of different recipes share the Caddy manifest, the Caddy reload, and the deploy
-    user's ~/.gitconfig, which `gh auth setup-git` rewrites. CI concurrency groups are per
+    Deploys of different recipes share the Caddy manifest and the Caddy reload, and a deploy
+    recreates dependent services in other deployments. CI concurrency groups are per
     deployment, so only a host-wide lock keeps two recipes from racing on those.
     """
 

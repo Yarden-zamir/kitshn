@@ -17,10 +17,9 @@ from kitshn.runner import CommandResult, CommandRunner
 class DeployRunner(CommandRunner):
     """Fails the first command whose arguments contain `fail_on`."""
 
-    def __init__(self, fail_on: str, *, tracked: frozenset[str] = frozenset(), socket: Path | None = None) -> None:
+    def __init__(self, fail_on: str, *, socket: Path | None = None) -> None:
         super().__init__()
         self.fail_on = fail_on
-        self.tracked = tracked
         self.socket = socket
         self.socket_at: dict[str, bool] = {}
         self.commands: list[tuple[str, ...]] = []
@@ -44,9 +43,6 @@ class DeployRunner(CommandRunner):
             for step in ("build", "up"):
                 if step in command:
                     self.socket_at[step] = self.socket.exists()
-        if command[:3] == ("git", "ls-files", "--error-unmatch"):
-            code = 0 if command[3] in self.tracked else 1
-            return CommandResult(args=args, returncode=code, stdout="", stderr="")
         if self.fail_on in command:
             raise KitshnError(f"command failed (1): {' '.join(command)}")
         if command[:2] == ("git", "rev-parse"):
@@ -131,7 +127,7 @@ def test_ignored_dotenv_warning_names_the_keys(tmp_path: Path) -> None:
 
     assert warning is not None
     assert "(COMPOSE_PROFILES, LOG_TZ)" in warning
-    assert "kitshn params set" in warning
+    assert "KITSHN_<NAME>" in warning
 
 
 def test_deploy_warnings_cover_dotenv_and_long_socket_paths(tmp_path: Path) -> None:
@@ -169,21 +165,6 @@ def test_a_render_failure_keeps_the_live_route(tmp_path: Path) -> None:
 
     with pytest.raises(Exception, match="undefined_name"):
         _deploy(deployment, params, DeployRunner("never"))
-
-    assert deployment.generated_caddyfile.read_text(encoding="utf-8") == "site.example.com {\n}\n"
-
-
-def test_a_tracked_root_caddyfile_is_refused_and_the_live_route_restored(tmp_path: Path) -> None:
-    deployment, params = _live_deployment(tmp_path)
-
-    class CheckoutOverwrites(DeployRunner):
-        def run(self, args, **kwargs):
-            if tuple(args[:2]) == ("git", "checkout"):
-                deployment.generated_caddyfile.write_text("committed {\n}\n", encoding="utf-8")
-            return super().run(args, **kwargs)
-
-    with pytest.raises(KitshnError, match="commits a root Caddyfile"):
-        _deploy(deployment, params, CheckoutOverwrites("never", tracked=frozenset({"Caddyfile"})))
 
     assert deployment.generated_caddyfile.read_text(encoding="utf-8") == "site.example.com {\n}\n"
 

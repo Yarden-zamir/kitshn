@@ -87,11 +87,16 @@ host port. Caddy on the host: `reverse_proxy unix//{{ paths.default_socket }}`.
 - A container gets a param only when `compose.yml` maps it: `TOKEN: ${TOKEN:?TOKEN is required}`.
 - A value that is not secret and belongs to the repo can go in `compose.yml`, or in
   `compose.override.yml`, which Compose loads beside `compose.yml`. A build step can write it.
-- Set params with `pbpaste | kitshn params set <owner/repo> <NAME>` or `< file`. It adds the prefix,
-  scopes to `prod` by default, and fails on a typo in the Environment name. `--var` for values
-  that are not secret, `--repo-wide` only when previews need the value too.
-- After a deploy, check the names with `kitshn params list <owner/repo>`.
-- `deploy` and `try` warn when the repo has a `.env`. Treat that warning as a bug.
+- Set a secret with `gh secret set KITSHN_<NAME> --env prod --repo <owner/repo> < file`, a
+  variable with `gh variable set ... --body <value>`. Always pipe secrets from a file: the
+  prompt reads one line, and the shell runs the other lines of a pasted key.
+- Check the prefix twice. `gh` accepts any name, and KitSHn forwards only `KITSHN_*`.
+- Without `--env`, the value is repo-wide and pull request previews see it.
+- `--env prod` fails until the first deploy creates the Environment. To set params before
+  that, run `gh api --method PUT repos/<owner/repo>/environments/prod` first.
+- A new value applies on the next deploy. Then check the names with
+  `kitshn params list <owner/repo> --vps-host <vps>`.
+- A deploy warns when the repo has a `.env`. Treat that warning as a bug.
 
 ## Debug From The Laptop
 Prefer these over raw `docker` and `docker compose`, which miss the project name and params
