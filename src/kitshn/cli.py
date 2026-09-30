@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sys
 from enum import StrEnum
@@ -889,6 +890,10 @@ def _safe_log(entry: InvocationLog, roots) -> None:
 
 
 def _skill_dir() -> Path:
+    # The Homebrew wrapper runs KitSHn from uv's cache, whose path changes with every version.
+    # It exports the formula's `opt` path instead, which follows `brew upgrade`.
+    if override := os.environ.get("KITSHN_SKILL_DIR"):
+        return Path(override)
     return Path(__file__).parent / "resources" / "kitshn-deploy-service"
 
 
@@ -906,7 +911,11 @@ def _link_skill(skills_root: Path) -> Path:
     skills_root.mkdir(parents=True, exist_ok=True)
     if target.is_symlink() and target.resolve() == source.resolve():
         return target
-    if target.exists() or target.is_symlink():
+    # A link to another copy of this skill, for example an older version's path, is ours to
+    # replace. Anything else is the user's and stays.
+    if target.is_symlink() and Path(os.readlink(target)).name == source.name:
+        target.unlink()
+    elif target.exists() or target.is_symlink():
         raise KitshnError(f"refusing to replace existing skill path: {target}")
     target.symlink_to(source, target_is_directory=True)
     return target

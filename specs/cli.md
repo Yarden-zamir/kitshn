@@ -164,7 +164,11 @@ status, then fails. With no URL it writes a note and succeeds.
 ## Skill
 
 `skill show` prints the bundled agent skill. `skill link-claude` and `skill link-opencode`
-symlink it into `~/.claude/skills/` and `~/.opencode/skills/`. Existing non-matching skill
+symlink it into `~/.claude/skills/` and `~/.opencode/skills/`. The link targets `KITSHN_SKILL_DIR`
+when it is set. The Homebrew wrapper sets it to the formula's `opt` path, so the link follows
+`brew upgrade`. A link from `uvx`, which runs from uv's cache, breaks when the cache is pruned;
+link from Homebrew or `uv tool install`. An existing link to another `kitshn-deploy-service`
+directory is replaced. Existing non-matching skill
 paths are never overwritten.
 
 ## Doctor

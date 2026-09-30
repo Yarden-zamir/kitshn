@@ -9,7 +9,7 @@ docker compose --env-file /params/<owner>/<repo>/<environment>/params.env config
 
 KitSHn uses the same `--env-file /params/<owner>/<repo>/<environment>/params.env` argument for every Compose command in the deploy flow, including config rendering, pulling external images, building local images, and applying changes. `KITSHN_PARAMS_FILE` is exported into the runtime env as a pointer for app code, not as a Compose input.
 
-Because of `--env-file`, Compose does not read a `.env` file in the recipe. Params come only from GitHub variables and secrets. KitSHn does not add `env_file` to services: a container gets a param only when `compose.yml` maps it. KitSHn passes no `-f`, so Compose loads `compose.override.yml` beside `compose.yml` when the recipe has one. `deploy` prints a warning that names the keys when the checkout has a `.env` file. A service `env_file: .env` entry still reads the file into that container.
+Because of `--env-file`, Compose does not read a `.env` file in the recipe ([#11](https://github.com/Yarden-zamir/kitshn/issues/11)). Params come only from GitHub variables and secrets. KitSHn does not add `env_file` to services: a container gets a param only when `compose.yml` maps it. KitSHn passes no `-f`, so Compose loads `compose.override.yml` beside `compose.yml` when the recipe has one. `deploy` prints a warning that names the keys when the checkout has a `.env` file. A service `env_file: .env` entry still reads the file into that container.
 
 KitSHn reads:
 
@@ -28,7 +28,7 @@ Image rules:
 - Public HTTP services should prefer Unix socket ingress by mounting `${KITSHN_SOCKET_DIR}:${KITSHN_SOCKET_DIR}` and listening on `${KITSHN_DEFAULT_SOCKET}`.
 - Apps and servers that can bind a Unix socket, including Caddy in a container, need no sidecar.
 - Only images that cannot bind a Unix socket use a Compose sidecar such as `alpine/socat` to bind `${KITSHN_DEFAULT_SOCKET}` and forward to `TCP:<service>:<port>`.
-- Keep socket proxy-to-app traffic on the project-local default network. Do not attach the socket proxy to a shared external network such as `kitshn-edge`; service DNS aliases can collide across prod and PR deployments with the same service names.
+- Keep socket proxy-to-app traffic on the project-local default network ([#9](https://github.com/Yarden-zamir/kitshn/issues/9)). Do not attach the socket proxy to a shared external network such as `kitshn-edge`; service DNS aliases can collide across prod and PR deployments with the same service names.
 - KitSHn force-recreates recipe services on deploy because the socket directory is cleared before Compose runs.
 - Compose service names should be stable because other services may route to them by Docker DNS name.
 

@@ -1,6 +1,12 @@
 # Lessons And Architecture Follow-ups
 This records lessons from deploying several real services with KitSHn and the architecture changes worth considering next.
 
+Deployment reviews are GitHub issues with the `review` label. Each one links the recipe repos and commits it comes from, and the status of its suggestions:
+
+- [#9](https://github.com/Yarden-zamir/kitshn/issues/9): changeLorg first deploy, 2026-07-08.
+- [#10](https://github.com/Yarden-zamir/kitshn/issues/10): opencode-openai-proxy and opencode-telegram-bot iteration, 2026-07-08.
+- [#11](https://github.com/Yarden-zamir/kitshn/issues/11): trek sites gr52 and yam2yam on one VPS, 2026-09.
+
 ## What Worked
 - The core model stayed useful: a recipe repo plus `.kitshn.yaml` was enough to deploy prod services, PR previews, singleton bots, and utility apps.
 - Local users and agents can either install KitSHn through Homebrew for a stable `kitshn` command or run the hosted CLI with `uvx`. CI and remote VPS commands always run the hosted CLI through `uvx` so deploy behavior follows the reusable workflow ref and avoids stale VPS installs.
@@ -18,7 +24,7 @@ This records lessons from deploying several real services with KitSHn and the ar
 - Public PR preview routes depend on DNS, not just KitSHn and Caddy. Missing wildcard DNS made otherwise healthy PR deployments unreachable from the public internet.
 - Remote OpenCode introduced cross-recipe secret and network coupling that was not visible enough in the recipe contract.
 - Debugging failed deploys used to require reading GitHub logs and remote Docker state separately. `kitshn track` now follows the run, the VPS status, and the public route from the laptop, and every VPS-only command takes `--vps-host`.
-- Two recipes that deployed at the same time on one VPS raced on `~/.gitconfig`. The failed deploy had already deleted its generated `Caddyfile`, so the other recipe's Caddy reload dropped its route. See the trek sites deployment review in https://github.com/Yarden-zamir/kitshn/pull/7. Deploys now pass the git credential helper per command instead of writing `~/.gitconfig`, hold a host deploy lock, and keep their route and socket when they fail.
+- Two recipes that deployed at the same time on one VPS raced on `~/.gitconfig`. The failed deploy had already deleted its generated `Caddyfile`, so the other recipe's Caddy reload dropped its route. See [#11](https://github.com/Yarden-zamir/kitshn/issues/11). Deploys now pass the git credential helper per command instead of writing `~/.gitconfig`, hold a host deploy lock, and keep their route and socket when they fail.
 - Deploying a static site (gr52) needed a research cycle on whether Caddy in a container can bind the KitSHn socket and clean a stale socket file. It can; `kitshn init --template static` encodes that.
 
 ## Architecture Changes To Consider

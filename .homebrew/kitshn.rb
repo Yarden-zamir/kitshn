@@ -16,6 +16,7 @@ class Kitshn < Formula
     (bin/"kitshn").write <<~SH
       #!/bin/bash
       export KITSHN_SOURCE_REF="{{TAG}}"
+      export KITSHN_SKILL_DIR="#{opt_libexec}/src/kitshn/resources/kitshn-deploy-service"
       exec "#{formula_opt_bin("uv")}/uv" run --no-project --python 3.14 \
         --with 'kitshn @ file://#{libexec}' \
         kitshn "$@"
