@@ -11,6 +11,7 @@ import shutil
 import stat
 from typing import Literal
 
+from .caddy import caddy_validate_command
 from .errors import KitshnError
 from .installer_registry import Installer, get_installer, suggested_installers
 from .models import Roots
@@ -120,9 +121,7 @@ def doctor(
                 "public repos work without auth; private repos need: gh auth login",
             )
 
-    caddy_check = runner.run(
-        ["caddy", "validate", "--config", str(caddyfile)], capture=True, check=False
-    )
+    caddy_check = runner.run(caddy_validate_command(runner, caddyfile), capture=True, check=False)
     report.add("caddy config", caddy_check.returncode == 0, _result_detail(caddy_check.stdout, caddy_check.stderr))
     report.installers = suggested_installers(runner) if _has_missing_dependencies(report) else []
     return report

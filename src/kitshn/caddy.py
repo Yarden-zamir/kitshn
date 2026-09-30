@@ -96,9 +96,36 @@ def render_caddy_manifest(roots: Roots) -> str:
     return "\n".join(lines) + "\n"
 
 
+def caddy_service_user(runner: CommandRunner) -> str | None:
+    """The user that the `caddy` systemd unit runs as, or None when it is unknown or root."""
+
+    if not runner.exists("systemctl"):
+        return None
+    result = runner.run(["systemctl", "show", "-p", "User", "--value", "caddy"], capture=True, check=False)
+    user = result.stdout.strip()
+    return user if result.returncode == 0 and user and user != "root" else None
+
+
+def caddy_validate_command(runner: CommandRunner, config: Path = CADDY_BASE_CONFIG) -> list[str]:
+    """`caddy validate` as the Caddy service user when KitSHn runs as root.
+
+    Validation opens every `log { output file ... }` target and creates a missing one. Run as
+    root, that file is root-owned, and the service cannot open it on reload. As the service
+    user, validation also fails for the same permission reasons that the reload would.
+    A deploy user that is neither root nor the service user cannot switch users, so it
+    validates as itself. Revisit if KitSHn supports such deploy users with file logs.
+    """
+
+    command = ["caddy", "validate", "--config", str(config)]
+    user = caddy_service_user(runner)
+    if user is not None and os.geteuid() == 0 and runner.exists("runuser"):
+        return ["runuser", "-u", user, "--", *command]
+    return command
+
+
 def validate_and_reload_caddy(runner: CommandRunner) -> None:
     validate = runner.run(
-        ["caddy", "validate", "--config", str(CADDY_BASE_CONFIG)],
+        caddy_validate_command(runner),
         capture=True,
         check=False,
     )

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import grp
 from pathlib import Path
+import pwd
 import stat
 from typing import Literal
 
-from .caddy import CADDY_BASE_CONFIG
+from .caddy import caddy_service_user, caddy_validate_command
 from .compose import compose_command, compose_services, has_compose_file, render_compose_config
 from .models import Deployment, Recipe, Roots
 from .runner import CommandRunner
@@ -68,8 +70,11 @@ def diagnose_deployment(
             )
         )
 
+    caddy_user = caddy_service_user(runner) if socket_targets else None
     for socket_path in socket_targets:
         checks.append(_socket_check(socket_path))
+        if caddy_user is not None and socket_path.exists():
+            checks.append(_socket_access_check(socket_path, caddy_user))
         if runner.exists("curl"):
             checks.append(
                 _command_check(
@@ -81,7 +86,7 @@ def diagnose_deployment(
         else:
             checks.append(DiagnoseCheck(f"curl {socket_path.name}", "warn", "curl not found"))
 
-    checks.append(_command_check("caddy validate", ["caddy", "validate", "--config", str(CADDY_BASE_CONFIG)], runner))
+    checks.append(_command_check("caddy validate", caddy_validate_command(runner), runner))
     return checks
 
 
@@ -99,6 +104,47 @@ def _path_check(
         return DiagnoseCheck(name, "ok", str(path))
     state: Literal["warn", "fail"] = "warn" if warn_when_missing else "fail"
     return DiagnoseCheck(name, state, f"missing: {path}")
+
+
+def _socket_access_check(path: Path, user: str) -> DiagnoseCheck:
+    """Check that the host Caddy's user can connect: search every parent, write the socket."""
+
+    name = f"{user} access {path.name}"
+    try:
+        entry = pwd.getpwnam(user)
+    except KeyError:
+        return DiagnoseCheck(name, "warn", f"user {user} not found")
+    gids = {entry.pw_gid} | {group.gr_gid for group in grp.getgrall() if user in group.gr_mem}
+    problem = unix_access_problem(path, entry.pw_uid, gids)
+    if problem is None:
+        return DiagnoseCheck(name, "ok", str(path))
+    # The curl probe runs as the deploy user, often root, so it passes while Caddy gets 502.
+    return DiagnoseCheck(name, "fail", f"{problem} | hint: bind the socket with mode 0666, as the static template does")
+
+
+def unix_access_problem(socket_path: Path, uid: int, gids: set[int]) -> str | None:
+    """Why `uid` with `gids` cannot connect to `socket_path`, or None when it can.
+
+    Connecting needs search (x) on every parent directory and write (w) on the socket.
+    """
+
+    def allowed(path: Path, owner_bit: int, group_bit: int, other_bit: int) -> bool:
+        info = path.stat()
+        if uid == 0:
+            return True
+        if info.st_uid == uid:
+            return bool(info.st_mode & owner_bit)
+        if info.st_gid in gids:
+            return bool(info.st_mode & group_bit)
+        return bool(info.st_mode & other_bit)
+
+    for parent in reversed(socket_path.parents):
+        if not allowed(parent, stat.S_IXUSR, stat.S_IXGRP, stat.S_IXOTH):
+            return f"cannot search {parent} (mode {stat.S_IMODE(parent.stat().st_mode):04o})"
+    if not allowed(socket_path, stat.S_IWUSR, stat.S_IWGRP, stat.S_IWOTH):
+        mode = stat.S_IMODE(socket_path.stat().st_mode)
+        return f"cannot write {socket_path} (mode {mode:04o}, uid {socket_path.stat().st_uid})"
+    return None
 
 
 def _socket_check(path: Path) -> DiagnoseCheck:
