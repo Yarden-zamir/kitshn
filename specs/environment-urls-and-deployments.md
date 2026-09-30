@@ -4,7 +4,7 @@ Status: URL inference is implemented, the rest is planned.
 
 Two problems drive this work:
 
-1. A merged PR leaves a stale `pr-<n>` GitHub Environment behind. `changeLorg` still has `pr-1` and `pr-2` ([#9](https://github.com/Yarden-zamir/kitshn/issues/9)).
+1. A merged PR leaves a stale `pr-<n>` GitHub Environment behind. `changeLorg` still has `pr-1` and `pr-2`.
 2. There is no link from the GitHub PR/Environment UI to the live preview.
 
 ## Decisions Already Made

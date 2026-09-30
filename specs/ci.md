@@ -78,7 +78,7 @@ Jobs:
 
 `deploy` and `teardown` share a concurrency group per `<owner>/<repo>/<environment>` with `cancel-in-progress: false`, so they apply in push order. `ci-deploy` and `ci-destroy` pass `ServerAliveInterval=30` to `ssh`, so a long wait for the host deploy lock keeps the connection alive.
 
-`setup-uv` runs with `enable-cache: false` in every job ([#10](https://github.com/Yarden-zamir/kitshn/issues/10)). Recipe repos have no lockfile for it to key on, and the default `auto` mode printed a cache warning on every run.
+`setup-uv` runs with `enable-cache: false` in every job. Recipe repos have no lockfile for it to key on, and the default `auto` mode printed a cache warning on every run.
 
 The `environment:` binding on deploy/teardown attaches the run to the GitHub Environment and applies its protection rules and secrets. `environment:` also auto-creates the Environment on first use, so dynamic names like `pr-42` need no `PUT`.
 

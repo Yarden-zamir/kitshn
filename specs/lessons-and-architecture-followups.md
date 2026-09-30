@@ -25,7 +25,7 @@ Deployment reviews are GitHub issues with the `review` label. Each one links the
 - Remote OpenCode introduced cross-recipe secret and network coupling that was not visible enough in the recipe contract.
 - Debugging failed deploys used to require reading GitHub logs and remote Docker state separately. `kitshn track` now follows the run, the VPS status, and the public route from the laptop, and every VPS-only command takes `--vps-host`.
 - Two recipes that deployed at the same time on one VPS raced on `~/.gitconfig`. The failed deploy had already deleted its generated `Caddyfile`, so the other recipe's Caddy reload dropped its route. See [#11](https://github.com/Yarden-zamir/kitshn/issues/11). Deploys now pass the git credential helper per command instead of writing `~/.gitconfig`, hold a host deploy lock, and keep their route and socket when they fail.
-- Deploying a static site (gr52) needed a research cycle on whether Caddy in a container can bind the KitSHn socket and clean a stale socket file. It can; `kitshn init --template static` encodes that. See [#11](https://github.com/Yarden-zamir/kitshn/issues/11).
+- Deploying a static site (gr52) needed a research cycle on whether Caddy in a container can bind the KitSHn socket and clean a stale socket file. It can; `kitshn init --template static` encodes that.
 
 ## Architecture Changes To Consider
 - Add a first-class `params` or `secrets` declaration to `.kitshn.yaml`, including required/optional flags and documentation strings. Use it to validate that required GitHub `KITSHN_*` vars/secrets exist before SSH deploy.

@@ -43,7 +43,7 @@ Socket ingress:
 - Caddy's `encode` compresses only its default MIME types, and `header` directives run before `encode` sees the type. A custom `Content-Type` set with `header` is only compressed when listed in an explicit `encode { match { header Content-Type ... } }` block.
 - Only images that cannot bind a Unix socket need a socket proxy sidecar that listens on `${KITSHN_DEFAULT_SOCKET}` and forwards to the app's internal Compose service port over the project-local default network.
 - Caddy routes to sockets with `reverse_proxy unix//{{ paths.default_socket }}`.
-- Public HTTP recipes with PR previews must render unique hostnames per environment ([#9](https://github.com/Yarden-zamir/kitshn/issues/9)). If prod and `pr-*` render the same hostname, Caddy fails with an ambiguous site definition.
+- Public HTTP recipes with PR previews must render unique hostnames per environment. If prod and `pr-*` render the same hostname, Caddy fails with an ambiguous site definition.
 
 Preview-safe hostname pattern:
 
