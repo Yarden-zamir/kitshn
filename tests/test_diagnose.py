@@ -81,3 +81,19 @@ def _write_deployment_files(deployment: Deployment) -> None:
         f"example.com {{\n    reverse_proxy unix//{deployment.default_socket}\n}}\n",
         encoding="utf-8",
     )
+
+
+def test_diagnose_warns_when_the_default_socket_path_is_too_long(tmp_path: Path) -> None:
+    roots = Roots(
+        deployments=tmp_path / ("d" * 60),
+        params=tmp_path / "params",
+        persistent=tmp_path / "persistent",
+        logs=tmp_path / "logs",
+    )
+    recipe = "owner/" + "r" * 40
+
+    checks = diagnose_deployment(recipe, environment="prod", roots=roots, runner=DiagnoseRunner())
+
+    check = next(check for check in checks if check.name == "default socket path")
+    assert check.state == "warn"
+    assert "over the Unix socket limit" in check.detail

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import string
 import subprocess
 import sys
 import tempfile
@@ -136,7 +137,11 @@ def verify_public_route(
     url = os.environ.get("KITSHN_URL") or ""
     summary_path = _optional_path(os.environ.get("GITHUB_STEP_SUMMARY"))
     if not url:
-        _append_summary(summary_path, "## KitSHn deploy\n\nNo public URL inferred from `Caddyfile.j2`; skipped the route check.\n")
+        _append_summary(
+            summary_path,
+            "## KitSHn deploy\n\nNo public URL inferred from `Caddyfile.j2`; skipped the route check.\n"
+            + _track_hint(),
+        )
         print("url= (no public route to verify)")
         return
 
@@ -168,6 +173,20 @@ def _summary_table(url: str, status: str, content_type: str) -> str:
         "## KitSHn deploy\n\n"
         "| URL | Status | Content-Type |\n|---|---|---|\n"
         f"| {url} | {status} | {content_type} |\n"
+        + _track_hint()
+    )
+
+
+def _track_hint() -> str:
+    # KITSHN_REF is the ref the deploy checked out: the head SHA for a pull request, not the
+    # merge SHA in GITHUB_SHA. A workflow_dispatch ref can be a branch name; track needs a SHA.
+    sha = os.environ.get("KITSHN_REF", "")
+    environment = os.environ.get("KITSHN_ENVIRONMENT")
+    if not (environment and len(sha) == 40 and all(char in string.hexdigits for char in sha)):
+        return ""
+    return (
+        "\nConfirm this deploy from the recipe repo on your computer:\n\n"
+        f"```bash\nkitshn track --sha {sha} --environment {environment}\n```\n"
     )
 
 
@@ -297,7 +316,7 @@ def deploy_over_ssh(params_file: Path) -> None:
     remote_params = f"/tmp/kitshn-{run_id}-{run_attempt}.env"
 
     with _ssh_key_file(ssh_key) as key_file:
-        ssh_args = ["-i", str(key_file), "-o", "StrictHostKeyChecking=accept-new"]
+        ssh_args = ["-i", str(key_file), "-o", "StrictHostKeyChecking=accept-new", "-o", "ServerAliveInterval=30"]
         _run(["scp", *ssh_args, str(params_file), f"{vps_host}:{remote_params}"])
         remote_command = "; ".join(
             [
@@ -330,7 +349,7 @@ def destroy_over_ssh() -> None:
     environment = _required_env("KITSHN_ENVIRONMENT")
 
     with _ssh_key_file(ssh_key) as key_file:
-        ssh_args = ["-i", str(key_file), "-o", "StrictHostKeyChecking=accept-new"]
+        ssh_args = ["-i", str(key_file), "-o", "StrictHostKeyChecking=accept-new", "-o", "ServerAliveInterval=30"]
         remote_command = shlex.join(
             [*HOSTED_CLI, "destroy", repository, "--environment", environment]
         )

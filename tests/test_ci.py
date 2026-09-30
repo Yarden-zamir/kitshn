@@ -193,6 +193,7 @@ def test_verify_public_route_writes_summary_and_fails_on_bad_status(tmp_path, mo
     verify_public_route(fetch=lambda _url: HttpResponse(200, "text/html", ""), sleep=lambda _s: None)
 
     assert "| https://site.example.com | 200 | text/html |" in summary.read_text(encoding="utf-8")
+    assert "kitshn track" not in summary.read_text(encoding="utf-8")
     assert "status=200" in capsys.readouterr().out
 
     with pytest.raises(KitshnError, match="public route returned 502"):
@@ -264,3 +265,30 @@ def test_verify_public_route_records_unreachable_routes_before_failing(tmp_path,
         verify_public_route(fetch=fetch, sleep=lambda _s: None)
 
     assert "| https://pr.9.site.example.com | unreachable | Name or service not known |" in summary.read_text(encoding="utf-8")
+
+
+def test_verify_summary_prints_the_track_command_for_this_run(tmp_path, monkeypatch) -> None:
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("KITSHN_URL", "")
+    head_sha = "a" * 40
+    # On a pull request GITHUB_SHA is the merge commit; the deploy and track use the head SHA.
+    monkeypatch.setenv("GITHUB_SHA", "b" * 40)
+    monkeypatch.setenv("KITSHN_REF", head_sha)
+    monkeypatch.setenv("KITSHN_ENVIRONMENT", "pr-4")
+
+    verify_public_route()
+
+    assert f"kitshn track --sha {head_sha} --environment pr-4" in summary.read_text(encoding="utf-8")
+
+
+def test_verify_summary_omits_the_track_command_for_a_branch_ref(tmp_path, monkeypatch) -> None:
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("KITSHN_URL", "")
+    monkeypatch.setenv("KITSHN_REF", "feature-branch")
+    monkeypatch.setenv("KITSHN_ENVIRONMENT", "demo")
+
+    verify_public_route()
+
+    assert "kitshn track" not in summary.read_text(encoding="utf-8")

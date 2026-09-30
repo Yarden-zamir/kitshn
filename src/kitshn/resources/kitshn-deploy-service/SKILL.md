@@ -49,10 +49,16 @@ exists, persistence needs, and dependencies on other recipes.
    says so and refuses). It builds and runs `compose.yml` in a throwaway directory with the socket
    in a temp dir, curls the socket, prints the last logs on failure, and cleans up. It never
    touches routing or deployments. On the VPS it uses the production host's Docker and disk.
-6. Commit the deployment files, push, then `kitshn track`. It follows the Actions run for
-   HEAD, then checks `kitshn status` on the VPS for the new ref and healthy services, then
-   requests the public URL from `Caddyfile.j2` (`--expect <text>` checks the body). Every
-   step has a `--*-timeout` flag.
+6. Commit the deployment files, push, then `kitshn track`. See "After Every Push".
+
+## After Every Push
+- Run `kitshn track --expect <text>` from the recipe repo. It follows the Actions run for
+  HEAD, checks `kitshn status` on the VPS for the new ref and healthy services, then requests
+  the public URL from `Caddyfile.j2`. Every step has a `--*-timeout` flag.
+- Do not poll the public URL for a string. The old page can contain it too, and `track`
+  already checks the deployed ref.
+- Pushing several recipes at once is safe. Deploys on one VPS wait for a host-wide lock.
+- The workflow summary of each run prints the `kitshn track` command for that run.
 
 ## Public HTTP Ingress
 Host Caddy cannot resolve Compose service DNS, so routing goes through a Unix socket, never a
@@ -81,7 +87,16 @@ host port. Caddy on the host: `reverse_proxy unix//{{ paths.default_socket }}`.
 - A container gets a param only when `compose.yml` maps it: `TOKEN: ${TOKEN:?TOKEN is required}`.
 - A value that is not secret and belongs to the repo can go in `compose.yml`, or in
   `compose.override.yml`, which Compose loads beside `compose.yml`. A build step can write it.
-- After a deploy, check the names with `kitshn params list <owner/repo>`.
+- Set a secret with `gh secret set KITSHN_<NAME> --env prod --repo <owner/repo> < file`, a
+  variable with `gh variable set ... --body <value>`. Always pipe secrets from a file: the
+  prompt reads one line, and the shell runs the other lines of a pasted key.
+- Check the prefix twice. `gh` accepts any name, and KitSHn forwards only `KITSHN_*`.
+- Without `--env`, the value is repo-wide and pull request previews see it.
+- `--env prod` fails until the first deploy creates the Environment. To set params before
+  that, run `gh api --method PUT repos/<owner/repo>/environments/prod` first.
+- A new value applies on the next deploy. Then check the names with
+  `kitshn params list <owner/repo> --vps-host <vps>`.
+- A deploy warns when the repo has a `.env`. Treat that warning as a bug.
 
 ## Debug From The Laptop
 Prefer these over raw `docker` and `docker compose`, which miss the project name and params
@@ -90,7 +105,9 @@ file. All take `--environment` (default `prod`) and `--vps-host <vps>`.
 - `kitshn diagnose <owner/repo>`: start here; checks Compose, sockets, Caddy routing and config.
 - `kitshn status <owner/repo>`: ref, services, health, route, socket, last deploy, as JSON.
 - `kitshn logs <owner/repo> [service]`: Docker logs. Bare `kitshn logs` shows KitSHn's own log.
-- `kitshn compose <owner/repo> -- <args>`: Compose with the deployment's exact context.
+- `kitshn compose <owner/repo> -- <args>`: Compose with the deployment's exact context. To send
+  input to a service from inside the network, use `-- exec -T <service> <command>` with stdin
+  piped, not `docker exec`.
 - `kitshn params list <owner/repo>`, `kitshn params get <owner/repo> <KEY> --show`.
 - A failed workflow run: `gh run view <id> --log-failed`; `track` prints it for you.
 

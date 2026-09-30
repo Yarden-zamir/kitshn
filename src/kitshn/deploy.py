@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
@@ -11,13 +12,14 @@ from .compose import (
     compose_down,
     compose_service_status,
     has_compose_file,
+    ignored_dotenv_warning,
     recreate_dependent_services,
 )
 from .filesystem import (
     atomic_copy_params,
     ensure_deployment_paths,
+    host_deploy_lock,
     remove_tree,
-    reset_socket_paths,
     roots_from_env,
     walk_deployments,
 )
@@ -49,19 +51,23 @@ def deploy_recipe(
     roots = roots or roots_from_env()
     deployment = Deployment.create(Recipe.parse(recipe_name), environment, roots)
 
-    ensure_deployment_paths(deployment)
-    previous_caddy = read_active_caddyfile(deployment)
-    if deployment.generated_caddyfile.exists():
-        deployment.generated_caddyfile.unlink()
-    previous_ref, checked_out_ref = checkout_recipe(deployment, ref, runner)
-    atomic_copy_params(params_file, deployment)
-    reset_socket_paths(deployment)
-    changed_services = apply_compose(deployment, runner)
-    changed_services.extend(
-        recreate_dependent_services(deployment.recipe, deployment, deployment.roots, runner)
-    )
-    rendered_caddy = render_caddyfile(deployment)
-    caddy_reloaded = apply_caddyfile(deployment, rendered_caddy, runner, previous_active=previous_caddy)
+    with _deploy_lock(roots, deployment, runner):
+        ensure_deployment_paths(deployment)
+        # The live generated Caddyfile stays in place until apply_caddyfile replaces it. A deploy
+        # that fails earlier keeps its route, so the next Caddy reload by any recipe keeps it too.
+        previous_caddy = read_active_caddyfile(deployment)
+        previous_ref, checked_out_ref = checkout_recipe(deployment, ref, runner)
+        for warning in deploy_warnings(deployment):
+            # Printed at once, not returned, so it reaches the workflow log even when a later
+            # step fails. The GitHub runner turns this line into an annotation.
+            print(f"::warning title=KitSHn::{warning}", flush=True)
+        atomic_copy_params(params_file, deployment)
+        changed_services = apply_compose(deployment, runner)
+        changed_services.extend(
+            recreate_dependent_services(deployment.recipe, deployment, deployment.roots, runner)
+        )
+        rendered_caddy = render_caddyfile(deployment)
+        caddy_reloaded = apply_caddyfile(deployment, rendered_caddy, runner, previous_active=previous_caddy)
 
     return DeployResult(
         deployment=deployment,
@@ -70,6 +76,22 @@ def deploy_recipe(
         changed_services=changed_services,
         caddy_reloaded=caddy_reloaded,
     )
+
+
+def _deploy_lock(roots: Roots, deployment: Deployment, runner: CommandRunner) -> AbstractContextManager[None]:
+    # A dry run changes no shared state, so it must not wait behind a real deploy.
+    return nullcontext() if runner.dry_run else host_deploy_lock(roots, deployment.identity)
+
+
+def deploy_warnings(deployment: Deployment) -> list[str]:
+    warnings: list[str] = []
+    if dotenv := ignored_dotenv_warning(deployment.deployment_root):
+        warnings.append(dotenv)
+    if deployment.default_socket_too_long:
+        warnings.append(
+            f"default socket path is longer than the Unix socket limit and cannot be bound: {deployment.default_socket}"
+        )
+    return warnings
 
 
 def destroy_deployment(
@@ -84,14 +106,15 @@ def destroy_deployment(
     roots = roots or roots_from_env()
     deployment = Deployment.create(Recipe.parse(recipe_name), environment, roots)
 
-    compose_down(deployment, runner)
-    previous_caddy = read_active_caddyfile(deployment)
-    apply_caddyfile(deployment, None, runner, previous_active=previous_caddy)
-    remove_tree(deployment.deployment_root)
-    remove_tree(deployment.params_root)
-    if purge:
-        remove_tree(deployment.persistent_root)
-        remove_tree(deployment.logs_root)
+    with _deploy_lock(roots, deployment, runner):
+        compose_down(deployment, runner)
+        previous_caddy = read_active_caddyfile(deployment)
+        apply_caddyfile(deployment, None, runner, previous_active=previous_caddy)
+        remove_tree(deployment.deployment_root)
+        remove_tree(deployment.params_root)
+        if purge:
+            remove_tree(deployment.persistent_root)
+            remove_tree(deployment.logs_root)
     return deployment
 
 

@@ -627,8 +627,8 @@ def params_list(
 ) -> int:
     """List deployment param names without printing values.
 
-    Params come from GitHub vars/secrets named KITSHN_<NAME>; the deployment
-    receives <NAME>.
+    Params come from GitHub vars/secrets named `KITSHN_<NAME>`; the deployment
+    receives `<NAME>`.
     """
 
     if vps_host is not None:

@@ -8,6 +8,8 @@ from .errors import KitshnError
 
 _ENV_INVALID_RE = re.compile(r"[^a-z0-9-]+")
 _ENV_REPEAT_RE = re.compile(r"-+")
+# Linux sockaddr_un.sun_path holds 108 bytes including the terminating NUL.
+UNIX_SOCKET_PATH_MAX_BYTES = 107
 
 
 def sanitize_environment_name(value: str) -> str:
@@ -108,6 +110,10 @@ class Deployment:
     @property
     def default_socket(self) -> Path:
         return self.socket_root / "app.sock"
+
+    @property
+    def default_socket_too_long(self) -> bool:
+        return len(str(self.default_socket).encode()) > UNIX_SOCKET_PATH_MAX_BYTES
 
     @property
     def caddy_manifest_file(self) -> Path:

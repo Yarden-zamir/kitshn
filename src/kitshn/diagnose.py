@@ -35,6 +35,14 @@ def diagnose_deployment(
     checks.append(_path_check("deployment root", deployment.deployment_root, want_dir=True))
     checks.append(_path_check("params file", deployment.params_file, want_file=True))
     checks.append(_path_check("socket dir", deployment.socket_root, want_dir=True))
+    if deployment.default_socket_too_long:
+        checks.append(
+            DiagnoseCheck(
+                "default socket path",
+                "warn",
+                f"{len(str(deployment.default_socket).encode())} bytes, over the Unix socket limit; shorten the repo or environment name",
+            )
+        )
 
     compose_exists = has_compose_file(deployment)
     checks.append(

@@ -74,6 +74,8 @@ Exits non-zero when any step fails.
 
 ## Deploy And Destroy
 
+- `deploy` and `destroy` hold the host deploy lock; see [Deploy Flow](deploy-flow.md).
+
 - `deploy` requires `--params-file` pointing at a key/value file. The file is opaque: the
   `KITSHN_` selection and prefix-stripping happen in CI before the file is built.
 - `destroy --purge` additionally deletes persistent data and file logs.
@@ -94,7 +96,7 @@ last deploy entry from `/logs/.kitshn/kitshn.log`.
 
 ## Diagnose
 
-Checks, in order: deployment root, params file, Compose file, socket directory, `docker
+Checks, in order: deployment root, params file, socket directory, a warning when the default socket path is longer than 107 bytes, Compose file, `docker
 compose ps`, socket-proxy network attachment, generated Caddyfile, its `unix//...` targets
 exist and are sockets, optional `curl --unix-socket` probes when curl is available, and host
 Caddy config validation.
@@ -123,6 +125,8 @@ same directory misses required params and emits misleading blank-variable warnin
 - `params list` prints the params file path and each param name as `set` or `empty`. It never
   prints values.
 - `params get` prints presence only; `--show` prints the value on stdout.
+- KitSHn has no command that writes params. They are set with `gh secret set` and
+  `gh variable set`; the README lists the mistakes to avoid.
 - Values are stored quoted and escaped for Compose (`ci.write_params_from_github` uses
   `json.dumps`). Reads decode that encoding, so `--show` returns the exact runtime value.
   Hand-parsing `params.env` returns the surrounding quotes instead.
@@ -152,7 +156,7 @@ public URL inferred from `Caddyfile.j2` for the resolved environment, or empty.
 `KITSHN_SSH_KEY` is missing. `ci-verify` requests `KITSHN_URL` until it returns 2xx or
 `KITSHN_VERIFY_TIMEOUT` seconds pass, writes the URL, status, and content type to the job
 summary, posts a deployment status with `environment_url` on the job's GitHub deployment, and
-fails on a non-2xx final response. When the URL never answers before the timeout (for example
+fails on a non-2xx final response. When `KITSHN_REF`, the ref the deploy checked out, is a full commit SHA, the summary ends with the `kitshn track --sha <sha> --environment <env>` command for that run. For a pull request that is the head SHA, not the merge SHA in `GITHUB_SHA`. When the URL never answers before the timeout (for example
 a preview hostname without DNS), it still writes the summary row and a `failure` deployment
 status, then fails. With no URL it writes a note and succeeds.
 

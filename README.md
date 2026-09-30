@@ -138,7 +138,7 @@ cleanup commands.
 kitshn track
 ```
 
-`track` waits for the GitHub Actions run for `HEAD`, prints job transitions, checks
+Run it after every push, not only the first one. `track` waits for the GitHub Actions run for `HEAD`, prints job transitions, checks
 `kitshn status` on the VPS for the new ref and healthy services, then requests the public URL
 inferred from `Caddyfile.j2` and reports status and content type. `--expect <text>` also
 checks the body. Every step has a `--*-timeout` flag. The workflow performs the same public
@@ -190,6 +190,27 @@ GitHub variables and secrets are the only source of params. KitSHn runs Compose 
 `COMPOSE_PROFILES` in a repo `.env` have no effect in a deploy. A value that is not secret and
 belongs to the repo can go in `compose.yml`, or in `compose.override.yml`, which Compose loads
 beside `compose.yml`.
+
+Set params with `gh`. Pipe a secret from a file, so it stays out of your shell history:
+
+```bash
+gh secret set KITSHN_TOKEN --env prod --repo owner/repo < token.txt
+gh variable set KITSHN_LOG_TZ --env prod --repo owner/repo --body UTC
+```
+
+Mistakes that fail late:
+
+- **A missing or mistyped `KITSHN_` prefix.** GitHub stores the value, but KitSHn does not
+  forward it. Compose then fails on `${TOKEN:?...}`, or the app runs without it.
+- **A multi-line value pasted at the prompt.** The prompt reads one line, and the shell runs the
+  other lines. Pipe multi-line values, such as keys, from a file. `gh` removes trailing newlines.
+- **The wrong scope.** A secret without `--env` is repo-wide, and pull request previews see it.
+  Use `--env prod` for production-only values.
+- **An Environment that does not exist yet.** The first deploy creates it, so `--env prod`
+  fails before that. Create it first with `gh api --method PUT repos/owner/repo/environments/prod`.
+
+A new value takes effect on the next deploy. Push, or rerun the last workflow run. Then check
+the names with `kitshn params list owner/repo --vps-host deploy@example.com`.
 
 ## Operate
 
