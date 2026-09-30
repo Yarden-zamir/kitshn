@@ -97,3 +97,17 @@ def test_diagnose_warns_when_the_default_socket_path_is_too_long(tmp_path: Path)
     check = next(check for check in checks if check.name == "default socket path")
     assert check.state == "warn"
     assert "over the Unix socket limit" in check.detail
+
+
+def test_diagnose_checks_a_socket_shared_by_several_routes_once(tmp_path: Path) -> None:
+    deployment = _deployment(tmp_path)
+    _write_deployment_files(deployment)
+    deployment.generated_caddyfile.write_text(
+        f"a.example.com {{\n    reverse_proxy unix//{deployment.default_socket}\n}}\n"
+        f"b.example.com {{\n    reverse_proxy unix//{deployment.default_socket}\n}}\n",
+        encoding="utf-8",
+    )
+
+    checks = diagnose_deployment("owner/repo", environment="prod", roots=deployment.roots, runner=DiagnoseRunner())
+
+    assert [check.name for check in checks].count("socket app.sock") == 1

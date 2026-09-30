@@ -98,8 +98,9 @@ last deploy entry from `/logs/.kitshn/kitshn.log`.
 
 Checks, in order: deployment root, params file, socket directory, a warning when the default socket path is longer than 107 bytes, Compose file, `docker
 compose ps`, socket-proxy network attachment, generated Caddyfile, its `unix//...` targets
-exist and are sockets, optional `curl --unix-socket` probes when curl is available, and host
-Caddy config validation.
+exist and are sockets, whether the Caddy service user can connect to each socket, optional
+`curl --unix-socket` probes when curl is available, and host Caddy config validation. Each
+socket is checked once, even when several routes use it.
 
 Exits non-zero when any check fails. Warnings do not fail the command.
 
@@ -170,6 +171,6 @@ paths are never overwritten.
 
 Verifies, without changing state: Docker and Docker Compose available; Git, `gh`, uv, and
 Caddy available; canonical roots exist with expected ownership and permissions; shared Docker
-networks such as `kitshn-edge` exist; Caddy config validates. Reports `gh` auth status —
+networks such as `kitshn-edge` exist; Caddy config validates, as the Caddy service user when KitSHn runs as root. Reports `gh` auth status —
 public repos work unauthenticated, private repos need `gh auth login` on the VPS deployment
 user. Missing dependencies are reported explicitly, with matching installer modules.

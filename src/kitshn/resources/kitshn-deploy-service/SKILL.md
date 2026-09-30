@@ -64,7 +64,11 @@ exists, persistence needs, and dependencies on other recipes.
 Host Caddy cannot resolve Compose service DNS, so routing goes through a Unix socket, never a
 host port. Caddy on the host: `reverse_proxy unix//{{ paths.default_socket }}`.
 
-- App can bind a socket: listen on `${KITSHN_DEFAULT_SOCKET}`. No sidecar.
+- App can bind a socket: listen on `${KITSHN_DEFAULT_SOCKET}`. No sidecar. The socket must be
+  mode `0666`: the host Caddy runs as `caddy`, and the container's socket is owned by root.
+  uvicorn `--uds`, socat `mode=666`, and Caddy `bind ...|0666` do this. `diagnose` checks it.
+- A `log { output file ... }` block in `Caddyfile.j2` works: KitSHn validates as the `caddy`
+  user, so the log file gets the right owner. The log directory must be writable by `caddy`.
 - Static files: Caddy in the container binds the socket itself with
   `bind unix/{$KITSHN_DEFAULT_SOCKET}|0666` and removes a stale socket file left by the
   previous container on start. This is tested; do not research it or add socat.

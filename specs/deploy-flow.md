@@ -13,7 +13,7 @@ One deploy operation. The whole operation runs under the host deploy lock, see b
 10. Recreate services in other deployments whose `kitshn.depends_on` label includes this recipe, rolling their logs first.
 11. Wait for health checks when they exist.
 12. Regenerate deployment `Caddyfile` from recipe `Caddyfile.j2`.
-13. Validate and reload Caddy once if generated Caddyfiles changed.
+13. Validate and reload Caddy once if generated Caddyfiles changed. Validation runs as the Caddy service user; see [Caddy Ingress](caddy.md).
 
 Compose is fail-forward. Caddy keeps the previous generated Caddyfile when validation fails.
 

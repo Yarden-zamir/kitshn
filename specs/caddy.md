@@ -43,6 +43,16 @@ Socket ingress:
 - Caddy's `encode` compresses only its default MIME types, and `header` directives run before `encode` sees the type. A custom `Content-Type` set with `header` is only compressed when listed in an explicit `encode { match { header Content-Type ... } }` block.
 - Only images that cannot bind a Unix socket need a socket proxy sidecar that listens on `${KITSHN_DEFAULT_SOCKET}` and forwards to the app's internal Compose service port over the project-local default network.
 - Caddy routes to sockets with `reverse_proxy unix//{{ paths.default_socket }}`.
+
+Permission model:
+
+- The host Caddy runs as its systemd service user, `caddy` on the supported installers. KitSHn runs as the deploy user, often root.
+- Containers usually run as root, so a socket file on the host is owned by root. The host Caddy can connect only when the socket is writable by others, so bind it with mode `0666`. Caddy's `bind unix/...|0666`, socat's `mode=666`, and uvicorn's `--uds` all do this.
+- Every parent directory of the socket must be searchable by the Caddy user. KitSHn creates them with mode `0755`.
+- Mode `0666` lets any local user connect to the app socket. That fits a single-purpose VPS; the socket is not reachable from the network.
+- `diagnose` checks both rules for the Caddy service user and fails the socket with a hint when the user cannot connect. Its `curl` probe runs as the deploy user, so it passes even when Caddy gets a 502.
+- When KitSHn runs as root, it runs `caddy validate` as the Caddy service user with `runuser`, in `deploy`, `diagnose`, and `doctor`. Validation creates any missing `log { output file ... }` target. As root, that file would be root-owned, and the service could not open it on reload. `caddy reload` goes through the admin API and needs no switch.
+- The service user comes from `systemctl show -p User caddy`. Without systemd or `runuser`, or when the unit runs as root, validation runs as the deploy user.
 - Public HTTP recipes with PR previews must render unique hostnames per environment. If prod and `pr-*` render the same hostname, Caddy fails with an ambiguous site definition.
 
 Preview-safe hostname pattern:

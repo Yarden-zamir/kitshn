@@ -219,5 +219,8 @@ def _unix_socket_targets(caddyfile: Path) -> list[Path]:
     for token in caddyfile.read_text(encoding="utf-8").split():
         cleaned = token.strip('"\'')
         if cleaned.startswith("unix//"):
-            targets.append(Path(cleaned.removeprefix("unix//")))
+            target = Path(cleaned.removeprefix("unix//"))
+            # Several routes can share one socket; check each socket once.
+            if target not in targets:
+                targets.append(target)
     return targets
