@@ -218,3 +218,13 @@ def test_init_checklist_orders_recipe_auth_before_push_and_footer_is_documented(
     kitshn_md = (tmp_path / "kitshn.md").read_text(encoding="utf-8")
     assert "keep the Origin section" in kitshn_md
     assert kitshn_md.rstrip().endswith("KitSHn commit: `abc123`")
+
+
+def test_kitshn_md_carries_the_static_badge_and_the_live_badge_line(tmp_path: Path) -> None:
+    init_recipe_repo(target_dir=tmp_path, runner=RecordingRunner())
+
+    kitshn_md = (tmp_path / "kitshn.md").read_text(encoding="utf-8")
+    assert "assets/badge-deployed-with-kitshn.svg" in kitshn_md
+    assert "img.shields.io/github/deployments/owner/repo/prod" in kitshn_md
+    # The Origin section stays last.
+    assert kitshn_md.index("## Badge") < kitshn_md.index("## Origin")

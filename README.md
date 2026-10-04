@@ -1,4 +1,9 @@
+<img src="assets/kitshn-icon.svg" width="72" alt="KitSHn pot icon">
+
 # KitSHn
+
+[![release](https://img.shields.io/github/v/release/Yarden-zamir/kitshn?labelColor=2F3532&color=3E6B55)](https://github.com/Yarden-zamir/kitshn/releases)
+[![license](https://img.shields.io/github/license/Yarden-zamir/kitshn?labelColor=2F3532&color=3E6B55)](LICENSE)
 
 KitSHn deploys GitHub repos onto a VPS you own. Push to `main`, and GitHub Actions SSHes into
 your server and brings the new version up. Open a pull request, and you get a preview
@@ -144,6 +149,30 @@ inferred from `Caddyfile.j2` and reports status and content type. `--expect <tex
 checks the body. Every step has a `--*-timeout` flag. The workflow performs the same public
 route check after each deploy and writes status, content type, and URL into the job summary
 and the GitHub deployment.
+
+### Add A Badge
+
+Show in the recipe's README that it deploys with KitSHn. Neither badge needs a server.
+
+[![deployed with kitshn](https://raw.githubusercontent.com/Yarden-zamir/kitshn/main/assets/badge-deployed-with-kitshn.svg)](https://github.com/Yarden-zamir/kitshn)
+
+```markdown
+[![deployed with kitshn](https://raw.githubusercontent.com/Yarden-zamir/kitshn/main/assets/badge-deployed-with-kitshn.svg)](https://github.com/Yarden-zamir/kitshn)
+```
+
+The live badge shows the state of the latest `prod` deploy: success, failure, or in progress.
+It is the [shields.io GitHub Deployments badge](https://shields.io/badges/git-hub-deployments)
+with the KitSHn pot, and it reads the deployment statuses that the workflow writes. Replace
+`owner/repo` and the link:
+
+[![kitshn prod](https://img.shields.io/github/deployments/Yarden-zamir/gr52/prod?label=kitshn%20%C2%B7%20prod&labelColor=2F3532&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNCAxNCI+PGcgZmlsbD0iI2ZmZiI+PHJlY3QgeD0iNiIgeT0iMS4yIiB3aWR0aD0iMiIgaGVpZ2h0PSIxLjYiIHJ4PSIwLjUiLz48cmVjdCB4PSIyLjIiIHk9IjMuNCIgd2lkdGg9IjkuNiIgaGVpZ2h0PSIxLjUiIHJ4PSIwLjc1Ii8+PHJlY3QgeD0iMyIgeT0iNS42IiB3aWR0aD0iOCIgaGVpZ2h0PSI2LjYiIHJ4PSIxLjYiLz48cmVjdCB4PSIwLjgiIHk9IjYuOCIgd2lkdGg9IjIuNCIgaGVpZ2h0PSIxLjQiIHJ4PSIwLjciLz48cmVjdCB4PSIxMC44IiB5PSI2LjgiIHdpZHRoPSIyLjQiIGhlaWdodD0iMS40IiByeD0iMC43Ii8+PC9nPjwvc3ZnPgo=)](https://gr52.yarden-zamir.com)
+
+```markdown
+[![kitshn prod](https://img.shields.io/github/deployments/owner/repo/prod?label=kitshn%20%C2%B7%20prod&labelColor=2F3532&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNCAxNCI+PGcgZmlsbD0iI2ZmZiI+PHJlY3QgeD0iNiIgeT0iMS4yIiB3aWR0aD0iMiIgaGVpZ2h0PSIxLjYiIHJ4PSIwLjUiLz48cmVjdCB4PSIyLjIiIHk9IjMuNCIgd2lkdGg9IjkuNiIgaGVpZ2h0PSIxLjUiIHJ4PSIwLjc1Ii8+PHJlY3QgeD0iMyIgeT0iNS42IiB3aWR0aD0iOCIgaGVpZ2h0PSI2LjYiIHJ4PSIxLjYiLz48cmVjdCB4PSIwLjgiIHk9IjYuOCIgd2lkdGg9IjIuNCIgaGVpZ2h0PSIxLjQiIHJ4PSIwLjciLz48cmVjdCB4PSIxMC44IiB5PSI2LjgiIHdpZHRoPSIyLjQiIGhlaWdodD0iMS40IiByeD0iMC43Ii8+PC9nPjwvc3ZnPgo=)](https://example.com)
+```
+
+It works for public repos only, because shields cannot read a private repo's deployments.
+shields caches it for about two minutes.
 
 ### Public HTTP Services
 
