@@ -60,6 +60,10 @@ exists, persistence needs, and dependencies on other recipes.
 - Pushing several recipes at once is safe. Deploys on one VPS wait for a host-wide lock.
 - The workflow summary of each run prints the `kitshn track` command for that run.
 
+## README Badge
+- `kitshn.md` has the badge lines. The static badge needs nothing. The live badge is the shields
+  GitHub Deployments badge with the KitSHn pot. It works for public repos only.
+
 ## Public HTTP Ingress
 Host Caddy cannot resolve Compose service DNS, so routing goes through a Unix socket, never a
 host port. Caddy on the host: `reverse_proxy unix//{{ paths.default_socket }}`.

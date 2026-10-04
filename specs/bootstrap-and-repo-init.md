@@ -54,7 +54,8 @@ and logs roots on first run and clones the recipe into the deployment root. `sta
 - `.github/workflows/kitshn.yml` calling the hosted reusable workflow with `secrets: inherit`
   and the required `contents: read` plus `deployments: write` permissions.
 - `kitshn.md` explaining the recipe contract and always ending with an Origin section that
-  records the KitSHn source commit that generated it. Hand-edited copies must keep that section.
+  records the KitSHn source commit that generated it. It starts with the static "deployed with
+  kitshn" badge, and a Badge section gives the Markdown for the live badge. Hand-edited copies must keep that section.
 
 Optional flags add optional contract examples:
 
