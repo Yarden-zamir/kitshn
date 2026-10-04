@@ -14,7 +14,7 @@ Two problems drive this work:
 - If a single clear URL cannot be derived, attach **no URL**. Do not guess.
 - Stable environments keep using GitHub Environments. Ephemeral PR previews stop creating them.
 
-Implemented today: `ci-resolve` emits `url`, `ci-verify` requests it and posts a deployment status with `environment_url`, and `kitshn track` requests it from the laptop.
+Implemented today: `ci-resolve` emits `url`, the deploy job sets it as `environment.url`, which GitHub stores as the deployment's `environment_url`, `ci-verify` requests it and posts the result as a deployment status, and `kitshn track` requests it from the laptop. A status posted with `environment_url` does not set it for deployments that Actions creates.
 
 ## URL Inference From Live Caddy (superseded)
 

@@ -185,13 +185,7 @@ def infer_public_url(template_path: Path, deployment: Deployment) -> str | None:
         },
         params={},
     )
-    return single_public_url(rendered)
-
-
-def single_public_url(caddyfile: str) -> str | None:
-    """The one concrete public URL in a rendered Caddyfile, or None when there is not exactly one."""
-
-    urls = {url for address in site_addresses(caddyfile) if (url := _concrete_url(address))}
+    urls = {url for address in site_addresses(rendered) if (url := _concrete_url(address))}
     if len(urls) != 1:
         return None
     return urls.pop()

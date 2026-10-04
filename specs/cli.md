@@ -156,7 +156,8 @@ public URL inferred from `Caddyfile.j2` for the resolved environment, or empty.
 `ci-preflight` fails with the `kitshn recipe auth` command when `KITSHN_VPS_HOST` or
 `KITSHN_SSH_KEY` is missing. `ci-verify` requests `KITSHN_URL` until it returns 2xx or
 `KITSHN_VERIFY_TIMEOUT` seconds pass, writes the URL, status, and content type to the job
-summary, posts a deployment status with `environment_url` on the job's GitHub deployment, and
+summary, posts a deployment status with the check result as its description on the job's GitHub
+deployment, and
 fails on a non-2xx final response. When `KITSHN_REF`, the ref the deploy checked out, is a full commit SHA, the summary ends with the `kitshn track --sha <sha> --environment <env>` command for that run. For a pull request that is the head SHA, not the merge SHA in `GITHUB_SHA`. When the URL never answers before the timeout (for example
 a preview hostname without DNS), it still writes the summary row and a `failure` deployment
 status, then fails. With no URL it writes a note and succeeds.
