@@ -184,3 +184,15 @@ def test_try_on_vps_copies_params_with_owner_only_permissions_and_keeps_on_reque
     remote_try = next(command for command in runner.commands if "kitshn try" in command[-1])[-1]
     assert "--params-file /tmp/kitshn-try-" in remote_try and remote_try.endswith("--keep'")
     assert not any("rm -rf" in command[-1] for command in runner.commands)
+
+
+def test_try_on_vps_names_the_remote_folder_after_the_repo(tmp_path: Path) -> None:
+    worktree = tmp_path / "main"
+    worktree.mkdir()
+    (worktree / "compose.yml").write_text("services: {}\n", encoding="utf-8")
+    runner = TryRunner()
+
+    try_on_vps(directory=worktree, vps_host="deploy@vps", runner=runner)
+
+    rsync = next(command for command in runner.commands if command[0] == "rsync")
+    assert rsync[-1].startswith("deploy@vps:/tmp/kitshn-try-site-")

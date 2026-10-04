@@ -178,13 +178,15 @@ def try_on_vps(
     # The copy on the VPS has no .git, so resolve the recipe name here and pass it along.
     recipe = Recipe.parse(recipe_name) if recipe_name else _local_recipe(directory, runner)
 
-    remote_root = f"/tmp/kitshn-try-{_slug(directory.resolve().name)}-{os.getpid()}"
+    # Named after the repo: in a worktree layout the local folder is often just `main`.
+    remote_root = f"/tmp/kitshn-try-{_slug(recipe.repo)}-{os.getpid()}"
     remote_src = f"{remote_root}/src"
     print("⚠️  this builds and runs the recipe on the production host " + vps_host)
     print("⚠️  Docker images, containers, networks, and volumes are created there")
     print(f"⚠️  cleanup removes the containers, anonymous volumes, locally built images, and {remote_root}")
     print("⚠️  pulled base images stay in the VPS image cache")
-    print(f"remote_dir={remote_root}")
+    # Flush before the remote build streams its output, or a piped stdout shows these last.
+    print(f"remote_dir={remote_root}", flush=True)
 
     runner.run(["ssh", vps_host, f"umask 077 && mkdir -p {remote_src}"])
     try:
