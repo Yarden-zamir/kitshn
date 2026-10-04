@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from .caddy import apply_caddyfile, read_active_caddyfile, render_caddyfile
+from .caddy import apply_caddyfile, read_active_caddyfile, render_caddyfile, single_public_url
 from .compose import (
     apply_compose,
     compose_down,
@@ -26,6 +26,7 @@ from .filesystem import (
 from .git_ops import checkout_recipe
 from .models import Deployment, Recipe, Roots
 from .runner import CommandRunner
+from .status_export import remove_status, write_status
 from .structured_log import last_deploy_entry
 
 
@@ -52,22 +53,33 @@ def deploy_recipe(
     deployment = Deployment.create(Recipe.parse(recipe_name), environment, roots)
 
     with _deploy_lock(roots, deployment, runner):
-        ensure_deployment_paths(deployment)
-        # The live generated Caddyfile stays in place until apply_caddyfile replaces it. A deploy
-        # that fails earlier keeps its route, so the next Caddy reload by any recipe keeps it too.
-        previous_caddy = read_active_caddyfile(deployment)
-        previous_ref, checked_out_ref = checkout_recipe(deployment, ref, runner)
-        for warning in deploy_warnings(deployment):
-            # Printed at once, not returned, so it reaches the workflow log even when a later
-            # step fails. The GitHub runner turns this line into an annotation.
-            print(f"::warning title=KitSHn::{warning}", flush=True)
-        atomic_copy_params(params_file, deployment)
-        changed_services = apply_compose(deployment, runner)
-        changed_services.extend(
-            recreate_dependent_services(deployment.recipe, deployment, deployment.roots, runner)
-        )
-        rendered_caddy = render_caddyfile(deployment)
-        caddy_reloaded = apply_caddyfile(deployment, rendered_caddy, runner, previous_active=previous_caddy)
+        record = not runner.dry_run
+        if record:
+            write_status(deployment, "deploying")
+        try:
+            ensure_deployment_paths(deployment)
+            # The live generated Caddyfile stays in place until apply_caddyfile replaces it. A
+            # deploy that fails earlier keeps its route, so the next Caddy reload keeps it too.
+            previous_caddy = read_active_caddyfile(deployment)
+            previous_ref, checked_out_ref = checkout_recipe(deployment, ref, runner)
+            for warning in deploy_warnings(deployment):
+                # Printed at once, not returned, so it reaches the workflow log even when a later
+                # step fails. The GitHub runner turns this line into an annotation.
+                print(f"::warning title=KitSHn::{warning}", flush=True)
+            atomic_copy_params(params_file, deployment)
+            changed_services = apply_compose(deployment, runner)
+            changed_services.extend(
+                recreate_dependent_services(deployment.recipe, deployment, deployment.roots, runner)
+            )
+            rendered_caddy = render_caddyfile(deployment)
+            caddy_reloaded = apply_caddyfile(deployment, rendered_caddy, runner, previous_active=previous_caddy)
+        except BaseException:
+            if record:
+                write_status(deployment, "failed")
+            raise
+        if record:
+            url = single_public_url(rendered_caddy) if rendered_caddy is not None else None
+            write_status(deployment, "live", ref=checked_out_ref, url=url)
 
     return DeployResult(
         deployment=deployment,
@@ -115,6 +127,8 @@ def destroy_deployment(
         if purge:
             remove_tree(deployment.persistent_root)
             remove_tree(deployment.logs_root)
+        if not runner.dry_run:
+            remove_status(deployment)
     return deployment
 
 
