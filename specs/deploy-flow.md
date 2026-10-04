@@ -21,14 +21,6 @@ The previous generated `Caddyfile` stays in place until step 12 replaces it. A d
 
 After step 2, `deploy` prints a GitHub `::warning` line when the checkout has a `.env` file, which Compose does not read, or when the default socket path is longer than the Unix socket limit of 107 bytes.
 
-Deployment status file:
-
-- Inside the lock, `deploy` writes `/logs/.kitshn/status/<owner>/<repo>/<environment>.json` with `state` set to `deploying`.
-- On success it writes `live`, with `ref`, `deployed_at`, the single public `url` from the generated `Caddyfile` (or `null`), and `deploys`, the success times of the last 60 days.
-- On any failure it writes `failed` and keeps the last live `ref`, `url`, and `deployed_at`, which still serve.
-- `destroy` removes the file. `--dry-run` writes nothing. A write failure prints a warning and never fails the deploy.
-- The files hold no params and no recipe content, so a consumer can mount only this folder, read-only.
-
 Host deploy lock ([#11](https://github.com/Yarden-zamir/kitshn/issues/11)):
 
 - `deploy` and `destroy` hold an exclusive `flock` on `/deployments/.kitshn-deploy.lock` for their whole run.

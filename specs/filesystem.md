@@ -6,7 +6,6 @@ Canonical deployment-owned paths use `owner/repo/environment` ordering.
 /deployments/<owner>/<repo>/<environment>/.kitshn/sockets
 /deployments/Caddyfile
 /deployments/.kitshn-deploy.lock
-/logs/.kitshn/status/<owner>/<repo>/<environment>.json
 /params/<owner>/<repo>/<environment>
 /persistent/<owner>/<repo>/<environment>
 /logs/<owner>/<repo>/<environment>
@@ -59,7 +58,6 @@ Persistent data:
 Logs:
 
 - KitSHn logs go under `/logs/.kitshn`.
-- `/logs/.kitshn/status/<owner>/<repo>/<environment>.json` holds each deployment's status for read-only consumers such as the badge server. See [Deploy Flow](deploy-flow.md).
 - `kitshn logs` without a recipe reads `/logs/.kitshn/kitshn.log`.
 - Apps log to stdout.
 - File logs go under `KITSHN_LOG_DIR`.

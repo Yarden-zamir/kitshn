@@ -44,7 +44,11 @@ jobs:
       needs.resolve.outputs.action == 'deploy' &&
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
-    environment: ${{ needs.resolve.outputs.env }}
+    # For deployments that Actions creates, GitHub takes environment_url from this setting and
+    # ignores the one in a posted status. Without it, deployments show no link to the site.
+    environment:
+      name: ${{ needs.resolve.outputs.env }}
+      url: ${{ needs.resolve.outputs.url }}
     # Deploy and teardown of one deployment run in push order. GitHub keeps only the newest
     # pending job per group, so a stale push never deploys after a newer one.
     concurrency:
