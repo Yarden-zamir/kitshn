@@ -16,7 +16,7 @@ that `--help` cannot express: invariants, side effects, and failure semantics.
 
 ## Remote Execution
 
-`diagnose`, `status`, `logs`, `compose`, `params list`, and `params get` accept `--vps-host`.
+`diagnose`, `status`, `logs`, `compose`, `params list`, `params get`, and `prune` accept `--vps-host`.
 With it, the command first probes the host with a non-interactive SSH connection and fails
 with the SSH error when unreachable, then re-runs the same invocation there, minus
 `--vps-host`, as `bash -lc` with `$HOME/.local/bin` prepended to PATH and the hosted
@@ -82,12 +82,29 @@ Exits non-zero when any step fails.
 
 - `deploy` requires `--params-file` pointing at a key/value file. The file is opaque: the
   `KITSHN_` selection and prefix-stripping happen in CI before the file is built.
-- `destroy --purge` additionally deletes persistent data and file logs.
+- `destroy` removes the deployment's containers, networks, and locally built images by Compose
+  project name, from the deployments root, where no compose file is. So it works when the
+  checkout is gone or its compose file changed since the last deploy. Pulled images stay cached.
+- `destroy --purge` additionally deletes persistent data and file logs. `--keep <path>`, repeatable,
+  deletes them except the given paths, which start with `persistent` or `logs`. `--purge` and
+  `--keep` cannot be combined. `--volumes` also deletes the project's named volumes.
+- `destroy --dry-run` prints the Compose command and every path it would remove, and removes
+  nothing, including the route.
+
+## Prune
+
+- `prune <owner/repo>` finds environments of the recipe whose deployment folder is gone but whose
+  `/persistent`, `/logs`, or `/params` folder remains. For each, it lists the folders and their
+  size, and the named volumes and built images whose Compose project label equals that
+  environment's project name exactly. A prefix match would catch other recipes that share it.
+- Without `--yes` it only lists. With `--yes` it deletes them under the host deploy lock, and
+  skips an environment that a deploy made live again meanwhile. `--environment` limits it to one.
+- It never touches a deployed environment. It takes `--vps-host`.
 
 ## Resolve
 
 - `resolve` is a pure function of its inputs and `.kitshn.yaml`.
-- It writes `env=`, `action=`, and `ephemeral=` lines suitable for `$GITHUB_OUTPUT`.
+- It writes `env=`, `action=`, `ephemeral=`, and `keep=` lines suitable for `$GITHUB_OUTPUT`.
 - It exits non-zero with no output when no `.kitshn.yaml` entry matches.
 - `workflow_dispatch` bypasses `.kitshn.yaml` entries and deploys the requested environment
   name directly, so any recipe can deploy a non-prod environment on demand.

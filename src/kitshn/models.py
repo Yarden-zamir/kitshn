@@ -8,6 +8,8 @@ from .errors import KitshnError
 
 _ENV_INVALID_RE = re.compile(r"[^a-z0-9-]+")
 _ENV_REPEAT_RE = re.compile(r"-+")
+# The per-environment folders whose content a teardown can keep, by their KitSHn root name.
+KEEP_ROOTS = ("persistent", "logs")
 # Linux sockaddr_un.sun_path holds 108 bytes including the terminating NUL.
 UNIX_SOCKET_PATH_MAX_BYTES = 107
 
@@ -94,6 +96,15 @@ class Deployment:
     @property
     def persistent_root(self) -> Path:
         return self.roots.persistent / self.recipe.owner / self.recipe.repo / self.environment
+
+    def keep_root(self, name: str) -> Path:
+        """The environment's folder under the KitSHn root named `name`, one of KEEP_ROOTS."""
+
+        roots = {"persistent": self.persistent_root, "logs": self.logs_root}
+        if name not in roots:
+            msg = f"unknown data folder: {name}"
+            raise KitshnError(msg)
+        return roots[name]
 
     @property
     def logs_root(self) -> Path:

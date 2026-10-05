@@ -21,7 +21,7 @@ from .caddy import infer_public_url
 from .errors import KitshnError, NoMatchingDeployment
 from .httpcheck import Fetch, HttpResponse, fetch_url
 from .models import Deployment, Recipe
-from .resolve import DeployEvent, ResolveInput, resolve_deployment
+from .resolve import DeployEvent, ResolveInput, keep_output, parse_keep, resolve_deployment
 
 RESERVED_PARAM_NAMES = {"KITSHN_VPS_HOST", "KITSHN_SSH_KEY"}
 ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -39,6 +39,7 @@ class ActionResolveResult:
     ephemeral: bool | None = None
     ref: str | None = None
     url: str | None = None
+    keep: tuple[str, ...] | None = None
 
     def output_lines(self) -> list[str]:
         lines = [f"matched={str(self.matched).lower()}"]
@@ -51,6 +52,7 @@ class ActionResolveResult:
         if self.ref is not None:
             lines.append(f"ref={self.ref}")
         lines.append(f"url={self.url or ''}")
+        lines.append(f"keep={keep_output(self.keep)}")
         return lines
 
 
@@ -98,6 +100,7 @@ def resolve_github_action(config: Path = Path(".kitshn.yaml")) -> ActionResolveR
         ephemeral=result.ephemeral,
         ref=ref,
         url=_resolved_public_url(config.parent, result.env),
+        keep=result.keep,
     )
 
 
@@ -351,10 +354,33 @@ def destroy_over_ssh() -> None:
     with _ssh_key_file(ssh_key) as key_file:
         ssh_args = ["-i", str(key_file), "-o", "StrictHostKeyChecking=accept-new", "-o", "ServerAliveInterval=30"]
         remote_command = shlex.join(
-            [*HOSTED_CLI, "destroy", repository, "--environment", environment]
+            [*HOSTED_CLI, "destroy", repository, "--environment", environment, *teardown_flags()]
         )
         remote_command = "; ".join([REMOTE_PATH_PREFIX, remote_command])
         _run(["ssh", *ssh_args, vps_host, remote_command])
+
+
+def teardown_flags() -> list[str]:
+    """`destroy` flags for a pull request teardown, from the entry's `keep` list in KITSHN_KEEP.
+
+    A teardown always removes named volumes. Without `keep`, the data folders stay; `keep: []`
+    removes them; a list removes everything in them but the listed paths.
+    """
+
+    raw = os.environ.get("KITSHN_KEEP") or ""
+    try:
+        keep = parse_keep(json.loads(raw)) if raw else None
+    except json.JSONDecodeError as error:
+        msg = f"KITSHN_KEEP must be a JSON list, got {raw!r}"
+        raise KitshnError(msg) from error
+    flags = ["--volumes"]
+    if keep is None:
+        return flags
+    if not keep:
+        return [*flags, "--purge"]
+    for path in keep:
+        flags.extend(["--keep", path])
+    return flags
 
 
 def delete_github_environment() -> None:

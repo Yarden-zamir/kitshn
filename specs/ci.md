@@ -27,6 +27,11 @@ Fields per entry:
 - `branch` — glob, required when `on: push`.
 - `name` — env identity. Literal or template using `{branch}`, `{pr}`, `{sha7}`.
 - `ephemeral` — `true` means destroy also deletes the GitHub Environment. Defaults to `false`.
+- `keep` — for `pull_request` entries: paths the teardown keeps, relative to the environment's
+  data folders, such as `logs` or `persistent/uploads`. Each path starts with `persistent` or
+  `logs`, stays inside it, and has no `..`; anything else fails the resolve job. Without `keep`,
+  the teardown keeps both folders whole. With a list, it removes everything in them but the
+  listed paths, so `keep: []` removes both. Named volumes and built images are removed either way.
 
 First matching entry wins. No match means no auto-deploy.
 
@@ -72,9 +77,9 @@ The workflow YAML should stay declarative. Non-trivial logic belongs in KitSHn C
 
 Jobs:
 
-- `resolve` — no `environment:` binding. Runs `kitshn ci-resolve` and emits `matched`, `env`, `action`, `ephemeral`, `ref`, and `url` (the public URL inferred from `Caddyfile.j2`, or empty).
+- `resolve` — no `environment:` binding. Runs `kitshn ci-resolve` and emits `matched`, `env`, `action`, `ephemeral`, `ref`, `url` (the public URL inferred from `Caddyfile.j2`, or empty), and `keep` (the matched entry's `keep` list as JSON, or empty when unset).
 - `deploy` — `environment: ${{ needs.resolve.outputs.env }}`, with `url` set to the resolved public URL. GitHub stores a deployment's `environment_url` from this setting, not from a posted status, so this gives each deployment its "View deployment" link. Runs `kitshn ci-preflight`, which fails before any SSH with the `kitshn recipe auth` command when `KITSHN_VPS_HOST` or `KITSHN_SSH_KEY` is missing; then `kitshn ci-write-params`; then `kitshn ci-deploy`, which scps params to the VPS and runs the hosted KitSHn CLI remotely through `uvx`; then `kitshn ci-verify`, which requests the public URL and records status, content type, and URL in the job summary and on the GitHub deployment. The summary also prints the `kitshn track` command for the run.
-- `teardown` — `environment: ${{ needs.resolve.outputs.env }}`. Runs `kitshn ci-preflight`, then `kitshn ci-destroy`, which runs the hosted KitSHn CLI remotely through `uvx`. When `ephemeral` is `true`, `kitshn ci-delete-environment` calls `DELETE /repos/{owner}/{repo}/environments/{name}`.
+- `teardown` — `environment: ${{ needs.resolve.outputs.env }}`. Runs `kitshn ci-preflight`, then `kitshn ci-destroy`, which runs the hosted KitSHn CLI remotely through `uvx` as `kitshn destroy ... --volumes`, plus `--purge` for `keep: []` or one `--keep` per listed path. When `ephemeral` is `true`, `kitshn ci-delete-environment` calls `DELETE /repos/{owner}/{repo}/environments/{name}`.
 
 `deploy` and `teardown` share a concurrency group per `<owner>/<repo>/<environment>` with `cancel-in-progress: false`, so they apply in push order. `ci-deploy` and `ci-destroy` pass `ServerAliveInterval=30` to `ssh`, so a long wait for the host deploy lock keeps the connection alive.
 
@@ -98,5 +103,5 @@ Workflow infrastructure uses the same namespace:
 ## PR lifecycle
 - `opened`, `synchronize`, `reopened` → deploy.
 - `closed` → destroy. Ephemeral entries also DELETE the GitHub Environment.
-- `/persistent` and `/logs` for the PR env survive destroy by default.
+- The teardown removes the preview's containers, networks, built images, named volumes, route, checkout, and params. `/persistent` and `/logs` for the PR env survive by default; the entry's `keep` list narrows that. `kitshn prune` removes what closed previews kept.
 - PRs from forks are resolved but do not deploy or destroy. The reusable workflow runs deploy/teardown only when the PR head repository is the same repository as the base repository, so untrusted fork PRs do not receive deploy secrets or reach the VPS.

@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from .caddy import apply_caddyfile, read_active_caddyfile, render_caddyfile
@@ -19,12 +19,14 @@ from .filesystem import (
     atomic_copy_params,
     ensure_deployment_paths,
     host_deploy_lock,
+    remove_except,
     remove_tree,
     roots_from_env,
     walk_deployments,
 )
+from .errors import KitshnError
 from .git_ops import checkout_recipe
-from .models import Deployment, Recipe, Roots
+from .models import KEEP_ROOTS, Deployment, Recipe, Roots
 from .runner import CommandRunner
 from .structured_log import last_deploy_entry
 
@@ -99,22 +101,48 @@ def destroy_deployment(
     *,
     environment: str,
     purge: bool = False,
+    keep: tuple[str, ...] | None = None,
+    volumes: bool = False,
     roots: Roots | None = None,
     runner: CommandRunner | None = None,
 ) -> Deployment:
+    """Remove one deployment. The checkout and params always go; data folders by `purge`/`keep`.
+
+    `purge` removes both data folders. `keep` removes everything in them but the listed paths,
+    such as `logs` or `persistent/uploads`. Neither keeps both whole. `volumes` also removes the
+    project's named volumes.
+    """
+
+    if purge and keep is not None:
+        msg = "pass either --purge or --keep, not both"
+        raise KitshnError(msg)
     runner = runner or CommandRunner()
     roots = roots or roots_from_env()
     deployment = Deployment.create(Recipe.parse(recipe_name), environment, roots)
 
+    def remove(path: Path) -> None:
+        if runner.dry_run:
+            if path.exists() or path.is_symlink():
+                print(f"+ rm -rf {path}")
+        else:
+            remove_tree(path)
+
     with _deploy_lock(roots, deployment, runner):
-        compose_down(deployment, runner)
-        previous_caddy = read_active_caddyfile(deployment)
-        apply_caddyfile(deployment, None, runner, previous_active=previous_caddy)
-        remove_tree(deployment.deployment_root)
-        remove_tree(deployment.params_root)
+        compose_down(deployment, runner, volumes=volumes)
+        if runner.dry_run:
+            print(f"+ remove route {deployment.generated_caddyfile} and reload Caddy")
+        else:
+            previous_caddy = read_active_caddyfile(deployment)
+            apply_caddyfile(deployment, None, runner, previous_active=previous_caddy)
+        remove(deployment.deployment_root)
+        remove(deployment.params_root)
         if purge:
-            remove_tree(deployment.persistent_root)
-            remove_tree(deployment.logs_root)
+            remove(deployment.persistent_root)
+            remove(deployment.logs_root)
+        elif keep is not None:
+            for name in KEEP_ROOTS:
+                inside = [PurePosixPath(path).relative_to(name) for path in keep if PurePosixPath(path).parts[0] == name]
+                remove_except(deployment.keep_root(name), inside, remove)
     return deployment
 
 

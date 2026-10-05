@@ -169,14 +169,20 @@ def recreate_dependent_services(
     return changed
 
 
-def compose_down(deployment: Deployment, runner: CommandRunner) -> None:
-    if not has_compose_file(deployment):
-        return
-    runner.run(
-        compose_command(deployment, "down", "--remove-orphans"),
-        cwd=deployment.deployment_root,
-        env=deployment.runtime_env,
-    )
+def compose_down(deployment: Deployment, runner: CommandRunner, *, volumes: bool = False) -> None:
+    """Remove the project's containers, networks, and locally built images, by project name.
+
+    Compose finds them by their project label, so a checkout that is gone, or whose compose file
+    changed since the last deploy, still tears down fully. It runs from the deployments root,
+    where there is no compose file, so Compose loads none and needs no params. Locally built
+    images are rebuilt on the next deploy; pulled images stay in the cache.
+    """
+
+    args = ["docker", "compose", "--project-name", deployment.compose_project, "down", "--remove-orphans", "--rmi", "local"]
+    if volumes:
+        args.append("--volumes")
+    deployment.roots.deployments.mkdir(parents=True, exist_ok=True)
+    runner.run(args, cwd=deployment.roots.deployments)
 
 
 def compose_service_status(deployment: Deployment, runner: CommandRunner) -> list[dict[str, Any]]:

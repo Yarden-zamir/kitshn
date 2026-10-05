@@ -125,6 +125,20 @@ way to hit that.
 Then fill in `compose.yml`, commit, and push. The default `.kitshn.yaml` deploys `main` to
 `prod` and each pull request to `pr-<number>`.
 
+When a pull request closes, its preview is torn down: containers, built images, named volumes,
+route, and checkout go. Its data and logs folders stay, so you can still look at them. To keep
+less, list what stays in the entry:
+
+```yaml
+- on: pull_request
+  name: pr-{pr}
+  ephemeral: true
+  keep: [logs, persistent/uploads]   # keep: [] keeps nothing
+```
+
+To clean up what closed previews kept, run
+`kitshn prune owner/repo --vps-host deploy@example.com`. It lists first; `--yes` deletes.
+
 ### Try Before Pushing
 
 ```bash

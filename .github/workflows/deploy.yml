@@ -17,6 +17,7 @@ jobs:
       ephemeral: ${{ steps.resolve.outputs.ephemeral }}
       ref: ${{ steps.resolve.outputs.ref }}
       url: ${{ steps.resolve.outputs.url }}
+      keep: ${{ steps.resolve.outputs.keep }}
     steps:
       - uses: actions/checkout@v5
 
@@ -116,6 +117,7 @@ jobs:
           KITSHN_VPS_HOST: ${{ vars.KITSHN_VPS_HOST }}
           KITSHN_SSH_KEY: ${{ secrets.KITSHN_SSH_KEY }}
           KITSHN_ENVIRONMENT: ${{ needs.resolve.outputs.env }}
+          KITSHN_KEEP: ${{ needs.resolve.outputs.keep }}
         run: uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ci-destroy
 
       - name: Delete ephemeral GitHub Environment

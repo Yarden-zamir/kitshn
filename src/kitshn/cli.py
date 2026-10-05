@@ -39,10 +39,11 @@ from .installer_registry import installer_choices, load_installers
 from .logs import show_logs
 from .models import Deployment, Recipe
 from .params import param_summaries, param_value
+from .prune import find_leftovers, remove_leftovers
 from .recipe_auth import authorize_recipe
 from .remote import forward_invocation_to_vps
 from .repo_init import Template, init_recipe_repo
-from .resolve import ResolveInput, resolve_deployment
+from .resolve import ResolveInput, parse_keep, resolve_deployment
 from .runner import CommandRunner
 from .structured_log import InvocationLog, append_invocation_log
 from .track import DEFAULT_TIMEOUTS, TrackTimeouts, track_deploy
@@ -474,15 +475,32 @@ def destroy(
     *,
     environment: Annotated[str, Parameter("--environment", help="GitHub Environment name.")],
     purge: Annotated[bool, Parameter("--purge", help="Delete persistent data and file logs.")] = False,
-    dry_run: Annotated[bool, Parameter("--dry-run", help="Print commands without running them.")] = False,
+    keep: Annotated[
+        list[str] | None,
+        Parameter(
+            "--keep",
+            help="Delete persistent data and file logs except this path, such as logs or persistent/uploads. Repeatable.",
+        ),
+    ] = None,
+    volumes: Annotated[bool, Parameter("--volumes", help="Also delete the deployment's named Docker volumes.")] = False,
+    dry_run: Annotated[bool, Parameter("--dry-run", help="Print what would be removed without removing it.")] = False,
 ) -> None:
-    """Destroy one deployment."""
+    """Destroy one deployment.
+
+    Always removes the containers, networks, locally built images, route, checkout, and
+    params. Persistent data and file logs stay unless --purge or --keep says otherwise.
+    """
 
     deployment = destroy_deployment(
-        recipe, environment=environment, purge=purge, runner=CommandRunner(dry_run=dry_run)
+        recipe,
+        environment=environment,
+        purge=purge,
+        keep=parse_keep(keep) if keep is not None else None,
+        volumes=volumes,
+        runner=CommandRunner(dry_run=dry_run),
     )
-    print(f"{TRASH} destroyed")
-    print("status=destroyed")
+    print(f"{TRASH} destroyed" if not dry_run else f"{INFO} dry run: nothing was removed")
+    print("status=destroyed" if not dry_run else "status=dry-run")
     print(f"deployment={deployment.identity}")
     print(f"environment={deployment.environment}")
     print(f"purge={str(purge).lower()}")
@@ -710,6 +728,54 @@ def diagnose(
         roots,
     )
     return 0 if all(check.ok for check in checks) else 1
+
+
+@app.command
+def prune(
+    recipe: Annotated[str, Parameter(help="Fully qualified owner/repo name.")],
+    *,
+    environment: Annotated[
+        str | None, Parameter("--environment", help="Only this removed environment, such as pr-12.")
+    ] = None,
+    yes: Annotated[bool, Parameter("--yes", help="Delete what is listed. Without it, only list.")] = False,
+    vps_host: VpsHost = None,
+) -> int:
+    """List, or with --yes delete, what removed environments of a recipe left on the host.
+
+    Covers data folders, file logs, params, named volumes, and built images of environments
+    whose deployment is gone, such as closed pull request previews. Live deployments are
+    never touched.
+    """
+
+    if vps_host is not None:
+        return forward_invocation_to_vps(vps_host)
+    roots = roots_from_env()
+    runner = CommandRunner()
+    leftovers = find_leftovers(Recipe.parse(recipe), roots, runner, environment)
+    print(f"{TRASH} {len(leftovers)} removed environment(s) with leftovers")
+    _print_table(
+        ("environment", "folders", "size", "volumes", "images"),
+        [
+            (item.deployment.environment, str(len(item.folders)), _human_bytes(item.folder_bytes), str(len(item.volumes)), str(len(item.images)))
+            for item in leftovers
+        ],
+    )
+    if not leftovers:
+        return 0
+    if not yes:
+        print(f"{INFO} nothing deleted; pass --yes to delete these")
+        return 0
+    remove_leftovers(leftovers, roots, runner)
+    print("status=pruned")
+    _safe_log(InvocationLog(command="prune", status="ok", extra={"recipe": recipe, "environments": [item.deployment.environment for item in leftovers]}), roots)
+    return 0
+
+
+def _human_bytes(count: int) -> str:
+    for unit, size in (("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)):
+        if count >= size:
+            return f"{count / size:.1f} {unit}"
+    return f"{count} B"
 
 
 @app.command
