@@ -10,7 +10,9 @@ that `--help` cannot express: invariants, side effects, and failure semantics.
 - Output is script-friendly by default: `key=value` lines or JSON, not prose.
 - Every invocation appends a structured JSON line to `/logs/.kitshn/kitshn.log` with
   `timestamp`, `command`, `deployment`, `ref`, `compose_project`, `changed_services`,
-  `triggered_by`, and `status`. Log-append failures never fail the command.
+  `triggered_by`, and `status`. A failed entry adds `error`. When the failed command names a
+  recipe and an environment (or its default environment), the entry also carries that
+  `deployment` and `compose_project`. Log-append failures never fail the command.
 
 ## Remote Execution
 
@@ -92,7 +94,7 @@ Exits non-zero when any step fails.
 
 Reports, per deployment: checkout ref, running Compose services, healthcheck state per
 service, Caddy route presence, the default Unix socket path and whether it exists, and the
-last deploy entry from `/logs/.kitshn/kitshn.log`.
+last deploy entry from `/logs/.kitshn/kitshn.log`, successful or failed.
 
 ## Diagnose
 

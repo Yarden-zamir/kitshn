@@ -5,6 +5,9 @@
 [![release](https://img.shields.io/github/v/release/Yarden-zamir/kitshn?labelColor=2F3532&color=3E6B55)](https://github.com/Yarden-zamir/kitshn/releases)
 [![license](https://img.shields.io/github/license/Yarden-zamir/kitshn?labelColor=2F3532&color=3E6B55)](LICENSE)
 
+Website: [kitshn.yarden-zamir.com](https://kitshn.yarden-zamir.com), with live deployments
+and a badge builder.
+
 KitSHn deploys GitHub repos onto a VPS you own. Push to `main`, and GitHub Actions SSHes into
 your server and brings the new version up. Open a pull request, and you get a preview
 deployment at its own URL. Close it, and the preview disappears.
@@ -153,6 +156,8 @@ and the GitHub deployment.
 ### Add A Badge
 
 Show in the recipe's README that it deploys with KitSHn. Neither badge needs a server.
+The [badge builder on kitshn.yarden-zamir.com](https://kitshn.yarden-zamir.com/#badge-title)
+makes the live badge for a repo and shows a preview before you copy it.
 
 [![deployed with kitshn](https://raw.githubusercontent.com/Yarden-zamir/kitshn/main/assets/badge-deployed-with-kitshn.svg)](https://github.com/Yarden-zamir/kitshn)
 

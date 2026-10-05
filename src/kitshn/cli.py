@@ -6,7 +6,7 @@ import sys
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from cyclopts import App, Parameter
+from cyclopts import App, CycloptsError, Parameter
 
 from . import __version__
 from .bootstrap import DoctorReport
@@ -835,7 +835,15 @@ def main() -> int:
         result = app(result_action="return_int_as_exit_code_else_zero")
     except KitshnError as error:
         print(f"kitshn: {error}", file=sys.stderr)
-        _safe_log(InvocationLog(command=_command_name(), status="failed", extra={"error": str(error)}), roots_from_env())
+        _safe_log(
+            InvocationLog(
+                command=_command_name(),
+                status="failed",
+                deployment=_failed_deployment(),
+                extra={"error": str(error)},
+            ),
+            roots_from_env(),
+        )
         return 1
     return int(result or 0)
 
@@ -929,3 +937,22 @@ def _deployment_or_none(recipe: str | None, environment: str) -> Deployment | No
 
 def _command_name() -> str:
     return sys.argv[1] if len(sys.argv) > 1 else "kitshn"
+
+
+def _failed_deployment() -> Deployment | None:
+    """Rebuild the deployment that a failed invocation names, from its parsed arguments.
+
+    Only the `recipe` and `environment` arguments are read, so no other argument value
+    reaches the log.
+    """
+
+    try:
+        _, bound, _ = app.parse_args(sys.argv[1:], print_error=False, exit_on_error=False)
+        bound.apply_defaults()
+        recipe = bound.arguments.get("recipe")
+        environment = bound.arguments.get("environment")
+        if not isinstance(recipe, str) or not isinstance(environment, str):
+            return None
+        return Deployment.create(Recipe.parse(recipe), environment, roots_from_env())
+    except (CycloptsError, KitshnError):
+        return None
