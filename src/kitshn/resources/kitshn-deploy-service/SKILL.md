@@ -137,5 +137,8 @@ file. All take `--environment` (default `prod`) and `--vps-host <vps>`.
 - `kitshn.md` ends with an Origin section naming the KitSHn commit that generated it. Rewrite
   the prose, keep that section.
 - Private repos require `gh auth login` as the VPS deployment user.
+- A closed preview keeps its data and logs folders unless its entry sets `keep`, but loses its
+  named volumes. Store preview data you want to keep under `${KITSHN_DATA_DIR}`, not in a named
+  volume. `kitshn prune <owner/repo> --vps-host <vps>` lists and, with `--yes`, removes them.
 - Singleton stateful services should usually keep only `main -> prod`; previews need isolated
   state and DNS.

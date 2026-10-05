@@ -72,6 +72,7 @@ deploy:
         "ephemeral=false",
         "ref=abcdef123456",
         "url=",
+        "keep=",
     ]
 
 
@@ -103,6 +104,7 @@ deploy:
         "ephemeral=true",
         "ref=head-sha",
         "url=",
+        "keep=",
     ]
 
 

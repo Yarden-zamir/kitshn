@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
-from pathlib import Path
+import json
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 import yaml
 
 from .errors import KitshnError, NoMatchingDeployment
-from .models import sanitize_environment_name
+from .models import KEEP_ROOTS, sanitize_environment_name
 
 DeployEvent = Literal["push", "pull_request", "workflow_dispatch"]
 
@@ -28,13 +29,47 @@ class ResolveResult:
     env: str
     action: Literal["deploy", "destroy"]
     ephemeral: bool
+    # Paths a teardown keeps, relative to the environment's data folders. None keeps all.
+    keep: tuple[str, ...] | None = None
 
     def github_output_lines(self) -> list[str]:
         return [
             f"env={self.env}",
             f"action={self.action}",
             f"ephemeral={str(self.ephemeral).lower()}",
+            f"keep={keep_output(self.keep)}",
         ]
+
+
+def keep_output(keep: tuple[str, ...] | None) -> str:
+    """`keep` as one output line: empty when unset, else a JSON list."""
+
+    return "" if keep is None else json.dumps(list(keep))
+
+
+def parse_keep(value: object) -> tuple[str, ...] | None:
+    """Validate a `keep` list: paths such as `logs` or `persistent/uploads`.
+
+    Each path starts with a data folder that KitSHn keeps per environment, has no `..`, and is
+    not absolute. Anything else fails, so a typo does not delete data the author meant to keep.
+    """
+
+    if value is None:
+        return None
+    shape = "keep must be a list of paths, such as [logs, persistent/uploads]"
+    if not isinstance(value, list):
+        raise KitshnError(shape)
+    paths: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise KitshnError(shape)
+        parts = PurePosixPath(item).parts
+        if not parts or item.startswith("/") or ".." in parts or parts[0] not in KEEP_ROOTS:
+            roots = ", ".join(KEEP_ROOTS)
+            msg = f"keep path {item!r} must start with one of {roots} and stay inside it"
+            raise KitshnError(msg)
+        paths.append(PurePosixPath(*parts).as_posix())
+    return tuple(paths)
 
 
 def load_deploy_entries(config_path: Path) -> list[dict[str, Any]]:
@@ -87,6 +122,7 @@ def resolve_deployment(config_path: Path, event: ResolveInput) -> ResolveResult:
             env=sanitize_environment_name(_format_environment(raw_name, event)),
             action=action,
             ephemeral=bool(entry.get("ephemeral", False)),
+            keep=parse_keep(entry.get("keep")),
         )
 
     raise NoMatchingDeployment

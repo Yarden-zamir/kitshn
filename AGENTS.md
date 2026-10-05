@@ -21,7 +21,7 @@
 - `src/kitshn/resolve.py` resolves `.kitshn.yaml`; first matching entry wins, `workflow_dispatch` uses the requested environment directly, and the unquoted YAML key `on` is intentionally normalized from PyYAML's boolean parse.
 - `src/kitshn/repo_init.py` owns generated recipe files (`.kitshn.yaml`, `.github/workflows/kitshn.yml`, `kitshn.md`, optional `compose.yml`, `Caddyfile.j2`, `.gitignore`). Tests assert exact generated snippets.
 - `src/kitshn/ci.py` forwards only GitHub vars/secrets named `KITSHN_*` into `params.env` with the prefix stripped; `KITSHN_VPS_HOST` and `KITSHN_SSH_KEY` are reserved infrastructure keys and are not forwarded.
-- `src/kitshn/compose.py` runs Docker Compose as `docker compose --project-name <deployment> --env-file <params.env> ...`; only `compose.yml` and `compose.yaml` are deployment compose files.
+- `src/kitshn/compose.py` runs Docker Compose as `docker compose --project-name <deployment> --env-file <params.env> ...`; only `compose.yml` and `compose.yaml` are deployment compose files. The exception is `compose_down`, which removes by project name alone, from the deployments root, so a teardown never depends on the checkout's compose file.
 - Deploy clears `<deployment>/.kitshn/sockets` after pull and build succeed and then runs Compose `up -d --remove-orphans --force-recreate`; do not remove force-recreate unless socket lifecycle is redesigned.
 - Deploy never deletes the live generated `Caddyfile` before `apply_caddyfile`; every Caddy reload rebuilds the manifest from the Caddyfiles that exist, so a missing one drops that route for all recipes' reloads.
 - `git_ops` passes `gh auth git-credential` with `git -c` on fetch and `ls-remote`; never run `gh auth setup-git`, which rewrites the shared `~/.gitconfig`.

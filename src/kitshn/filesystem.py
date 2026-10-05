@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 import fcntl
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
 import sys
 import time
@@ -138,6 +138,26 @@ def read_env_file(path: Path) -> dict[str, str]:
                 raise KitshnError(msg)
             values[key] = _unquote_env_value(value.strip())
     return values
+
+
+def remove_except(root: Path, keep: Iterable[PurePosixPath], remove: Callable[[Path], None]) -> None:
+    """Remove everything under `root` except the `keep` paths, which are relative to `root`.
+
+    An empty relative path keeps `root` whole. `remove` deletes one path, so a dry run can print
+    instead of deleting.
+    """
+
+    kept = [path.parts for path in keep]
+    if not root.exists() or () in kept:
+        return
+    for child in sorted(root.iterdir()):
+        below = [parts[1:] for parts in kept if parts and parts[0] == child.name]
+        if () in below:
+            continue
+        if below and child.is_dir() and not child.is_symlink():
+            remove_except(child, [PurePosixPath(*parts) for parts in below], remove)
+        else:
+            remove(child)
 
 
 def remove_tree(path: Path) -> None:

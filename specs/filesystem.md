@@ -36,8 +36,9 @@ Params:
 
 Destroy:
 
-- `kitshn destroy` removes Compose services, the deployment Caddyfile, `/deployments/<owner>/<repo>/<environment>`, and `/params/<owner>/<repo>/<environment>`.
-- `/persistent` and `/logs` are preserved unless `--purge` is passed.
+- `kitshn destroy` removes Compose services, networks, and locally built images, the deployment Caddyfile, `/deployments/<owner>/<repo>/<environment>`, and `/params/<owner>/<repo>/<environment>`. `--volumes` also removes named volumes.
+- `/persistent` and `/logs` are preserved unless `--purge` removes both, or `--keep <path>` removes everything in them but the given paths.
+- `kitshn prune <owner/repo>` lists, and with `--yes` removes, what a removed environment left: its `/persistent`, `/logs`, and `/params` folders, and the named volumes and built images of its Compose project.
 
 Runtime env:
 
