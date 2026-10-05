@@ -158,3 +158,18 @@ def test_cli_track_timeout_defaults_are_the_documented_values() -> None:
     assert defaults["run_timeout"] == DEFAULT_TIMEOUTS.run == 1200
     assert defaults["vps_timeout"] == DEFAULT_TIMEOUTS.vps == 120
     assert defaults["route_timeout"] == DEFAULT_TIMEOUTS.route == 180
+
+
+def test_track_counts_a_login_wall_as_serving_but_expect_needs_a_2xx_body(tmp_path: Path) -> None:
+    def fetch(_url: str) -> HttpResponse:
+        return HttpResponse(status=401, content_type="text/plain", body="login")
+
+    plain = track_deploy(directory=_recipe_dir(tmp_path), runner=TrackRunner(), fetch=fetch, sleep=lambda _s: None)
+    assert next(step for step in plain.steps if step.name == "public route").state == "ok"
+
+    expecting = track_deploy(
+        directory=_recipe_dir(tmp_path), runner=TrackRunner(), expect="build 42", fetch=fetch,
+        timeouts=TrackTimeouts(route=0), sleep=lambda _s: None,
+    )
+    route = next(step for step in expecting.steps if step.name == "public route")
+    assert route.state == "fail" and "no 2xx body" in route.detail

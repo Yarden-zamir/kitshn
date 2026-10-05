@@ -68,7 +68,9 @@ reported as errors, never as "current".
 4. Read `kitshn status` on the VPS over SSH (`--vps-host`, defaulting to the repo's
    `KITSHN_VPS_HOST` variable) until the ref equals the commit, every service is running and
    healthy when healthchecked, and the default socket exists when a route exists.
-5. Request the public URL inferred from `Caddyfile.j2` (or `--url`) until it returns 2xx and,
+5. Request the public URL inferred from `Caddyfile.j2` (or `--url`) until it answers with a
+   status below 500, so a login wall or a 404 at `/` counts as serving. With `--expect`, it waits
+   for a 2xx response and,
    with `--expect`, contains the text. No single concrete hostname means a warning, not a
    failure.
 
@@ -156,11 +158,11 @@ prepends its own steps and flags the placeholder hostname when `--hostname` was 
 Hidden `ci-*` commands exist for the reusable workflow. `ci-resolve` also emits `url=`, the
 public URL inferred from `Caddyfile.j2` for the resolved environment, or empty.
 `ci-preflight` fails with the `kitshn recipe auth` command when `KITSHN_VPS_HOST` or
-`KITSHN_SSH_KEY` is missing. `ci-verify` requests `KITSHN_URL` until it returns 2xx or
+`KITSHN_SSH_KEY` is missing. `ci-verify` requests `KITSHN_URL` until it answers below 500 or
 `KITSHN_VERIFY_TIMEOUT` seconds pass, writes the URL, status, and content type to the job
 summary, posts a deployment status with the check result as its description on the job's GitHub
 deployment, and
-fails on a non-2xx final response. When `KITSHN_REF`, the ref the deploy checked out, is a full commit SHA, the summary ends with the `kitshn track --sha <sha> --environment <env>` command for that run. For a pull request that is the head SHA, not the merge SHA in `GITHUB_SHA`. When the URL never answers before the timeout (for example
+fails when the final response is 5xx. A 4xx, such as a login wall or a 404 at `/`, means the site serves and passes. When `KITSHN_REF`, the ref the deploy checked out, is a full commit SHA, the summary ends with the `kitshn track --sha <sha> --environment <env>` command for that run. For a pull request that is the head SHA, not the merge SHA in `GITHUB_SHA`. When the URL never answers before the timeout (for example
 a preview hostname without DNS), it still writes the summary row and a `failure` deployment
 status, then fails. With no URL it writes a note and succeeds.
 

@@ -24,6 +24,13 @@ class HttpResponse:
     def ok(self) -> bool:
         return 200 <= self.status < 300
 
+    @property
+    def serving(self) -> bool:
+        """The site answered. A 401 login wall or a 404 at `/` is a working server; a 5xx, such
+        as Caddy's 502 for a dead socket, is not."""
+
+        return self.status < 500
+
 
 Fetch = Callable[[str], HttpResponse]
 

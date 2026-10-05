@@ -263,10 +263,14 @@ def _wait_for_route(url: str, expect: str | None, fetch: Fetch, timeout: int, sl
         try:
             response = fetch(url)
             detail = f"{response.status} {response.content_type} {url}"
-            if response.ok:
-                if expect is None or expect in response.body:
-                    return TrackStep("public route", "ok", detail)
-                detail = f"{detail}; body does not contain {expect!r}"
+            # Without --expect, any answer below 500 counts: a login wall or a 404 at `/` still
+            # serves. --expect needs a 2xx body that contains the text.
+            if expect is None and response.serving:
+                return TrackStep("public route", "ok", detail)
+            if expect is not None and response.ok and expect in response.body:
+                return TrackStep("public route", "ok", detail)
+            if expect is not None and response.serving:
+                detail = f"{detail}; no 2xx body containing {expect!r}"
         except KitshnError as error:
             detail = f"{error} {url}"
         if time.monotonic() >= deadline:

@@ -340,7 +340,7 @@ def track(
         int, Parameter("--vps-timeout", help="Seconds to wait for healthy services at the new ref.")
     ] = DEFAULT_TIMEOUTS.vps,
     route_timeout: Annotated[
-        int, Parameter("--route-timeout", help="Seconds to wait for a 2xx public response.")
+        int, Parameter("--route-timeout", help="Seconds to wait for the public URL to answer below 500.")
     ] = DEFAULT_TIMEOUTS.route,
 ) -> int:
     """Follow a pushed commit through Actions, the VPS deploy, and the public route.

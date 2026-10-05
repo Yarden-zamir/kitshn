@@ -131,7 +131,7 @@ def verify_public_route(
     """Request the deployed public URL, write the job summary, and mark the GitHub deployment.
 
     KITSHN_URL is empty when the recipe has no single public hostname; then only a note is
-    written. A non-2xx response fails the step.
+    written. A 5xx response or no answer fails the step; a 4xx such as a login wall passes.
     """
 
     url = os.environ.get("KITSHN_URL") or ""
@@ -159,11 +159,11 @@ def verify_public_route(
     _append_summary(summary_path, _summary_table(url, str(response.status), response.content_type or "-"))
     _set_deployment_status(
         url,
-        "success" if response.ok else "failure",
+        "success" if response.serving else "failure",
         f"{response.status} {response.content_type}",
         open_url,
     )
-    if not response.ok:
+    if not response.serving:
         msg = f"public route returned {response.status}: {url}"
         raise KitshnError(msg)
 
@@ -195,7 +195,7 @@ def _fetch_until_ok(url: str, fetch: Fetch, timeout: int, sleep: Callable[[float
     while True:
         try:
             response = fetch(url)
-            if response.ok or time.monotonic() >= deadline:
+            if response.serving or time.monotonic() >= deadline:
                 return response
             print(f"waiting: {url} returned {response.status}")
         except KitshnError as error:
