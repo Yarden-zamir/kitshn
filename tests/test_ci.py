@@ -292,3 +292,16 @@ def test_verify_summary_omits_the_track_command_for_a_branch_ref(tmp_path, monke
     verify_public_route()
 
     assert "kitshn track" not in summary.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("status", [401, 404])
+def test_verify_passes_a_site_that_answers_with_4xx(tmp_path, monkeypatch, status) -> None:
+    # A login wall or a missing root page is a working server; only 5xx or no answer is down.
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    monkeypatch.setenv("KITSHN_URL", "https://site.example.com")
+    monkeypatch.setenv("KITSHN_VERIFY_TIMEOUT", "0")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    verify_public_route(fetch=lambda _url: HttpResponse(status, "text/plain", ""), sleep=lambda _s: None)
+
+    assert f"| https://site.example.com | {status} |" in (tmp_path / "summary.md").read_text(encoding="utf-8")

@@ -30,7 +30,7 @@ Host deploy lock ([#11](https://github.com/Yarden-zamir/kitshn/issues/11)):
 - A lock file that the deploy user cannot open, for example one created by `sudo`, fails the deploy with the file owner in the message.
 - `--dry-run` does not take the lock.
 
-After `deploy` returns, the reusable workflow verifies the result from the GitHub runner: it requests the public URL inferred from `Caddyfile.j2` until it answers 2xx, writes the URL, status, and content type to the job summary, and attaches them to the GitHub deployment. A recipe without one concrete hostname skips the check. From the laptop, `kitshn track` performs the same verification plus a `kitshn status` check on the VPS; see [CLI](cli.md).
+After `deploy` returns, the reusable workflow verifies the result from the GitHub runner: it requests the public URL inferred from `Caddyfile.j2` until it answers with a status below 500, writes the URL, status, and content type to the job summary, and attaches them to the GitHub deployment. A recipe without one concrete hostname skips the check. From the laptop, `kitshn track` performs the same verification plus a `kitshn status` check on the VPS; see [CLI](cli.md).
 
 `deploy` reads params from `--params-file`. CI builds this file from `KITSHN_*` vars/secrets and pushes it over SSH. The VPS does not call the GitHub API.
 
