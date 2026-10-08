@@ -1,6 +1,7 @@
 import json
 import stat
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -307,3 +308,29 @@ def test_verify_passes_a_site_that_answers_with_4xx(tmp_path, monkeypatch, statu
     verify_public_route(fetch=lambda _url: HttpResponse(status, "text/plain", ""), sleep=lambda _s: None)
 
     assert f"| https://site.example.com | {status} |" in (tmp_path / "summary.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("known_hosts", ["", "1.2.3.4 ssh-ed25519 AAAAkey"])
+def test_ssh_pins_the_host_key_only_when_known_hosts_is_set(monkeypatch, known_hosts: str) -> None:
+    commands: list[list[str]] = []
+    pinned: list[str] = []
+
+    def fake_run(args, check):
+        commands.append(args)
+        hosts = next((a.split("=", 1)[1] for a in args if a.startswith("UserKnownHostsFile=")), None)
+        if hosts is not None:
+            pinned.append(Path(hosts).read_text(encoding="utf-8"))
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "Owner/my-app")
+    monkeypatch.setenv("KITSHN_VPS_HOST", "deploy@example.com")
+    monkeypatch.setenv("KITSHN_SSH_KEY", "private-key")
+    monkeypatch.setenv("KITSHN_ENVIRONMENT", "pr-1")
+    monkeypatch.setenv("KITSHN_SSH_KNOWN_HOSTS", known_hosts)
+
+    destroy_over_ssh()
+
+    expected = "StrictHostKeyChecking=yes" if known_hosts else "StrictHostKeyChecking=accept-new"
+    assert expected in commands[0]
+    assert pinned == ([known_hosts + "\n"] if known_hosts else [])

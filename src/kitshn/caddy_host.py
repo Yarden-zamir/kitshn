@@ -11,15 +11,20 @@ from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 import os
+import stat
+import sys
 import tempfile
+from typing import Literal
 
 from .caddy import (
     CADDY_BASE_CONFIG,
     CADDY_ENV_FILE,
     CADDY_OPTIONS_FILE,
     DNS_ZONE_MARKER,
+    caddy_dns_zones,
     caddy_group,
     caddy_validate_command,
+    redact_caddy_env,
 )
 from .errors import KitshnError
 from .filesystem import read_env_file
@@ -45,7 +50,7 @@ class CaddyModule:
     @classmethod
     def parse(cls, spec: str) -> CaddyModule:
         path, separator, version = spec.strip().partition("@")
-        if not separator or not path or not version.startswith("v"):
+        if not separator or not path or not version.startswith("v") or _has_whitespace(spec.strip()):
             msg = f"Caddy module must pin a version as <module path>@v<version>: {spec!r}"
             raise KitshnError(msg)
         return cls(path, version)
@@ -61,14 +66,37 @@ class CaddyHostSettings:
     acme_email: str | None = None
     # The global `dns` option, for example "cloudflare {env.CLOUDFLARE_API_TOKEN}".
     dns_provider: str | None = None
-    # Zones that the DNS provider and its token serve; only previews inside them share a wildcard.
+    # Zones that the DNS provider and its token serve; only previews below them share a wildcard.
     dns_zones: list[str] = field(default_factory=list)
     # KEY=VALUE lines that become the Caddy service environment.
     env_file: Path | None = None
 
+    def __post_init__(self) -> None:
+        # These values go into Caddy config lines; a newline would inject more config.
+        if self.acme_email is not None and (_has_whitespace(self.acme_email) or "@" not in self.acme_email):
+            msg = f"--acme-email must be one address with no spaces: {self.acme_email!r}"
+            raise KitshnError(msg)
+        if self.dns_provider is not None and (not self.dns_provider.strip() or "\n" in self.dns_provider or "\r" in self.dns_provider):
+            msg = "--dns-provider must be one non-empty line"
+            raise KitshnError(msg)
+        for zone in self.dns_zones:
+            if zone != zone.lower() or zone.endswith(".") or "." not in zone or "*" in zone or _has_whitespace(zone):
+                msg = f"--dns-zone must be a lowercase domain without a trailing dot, such as example.com: {zone!r}"
+                raise KitshnError(msg)
+        if self.dns_zones and not self.dns_provider:
+            msg = "--dns-zone needs --dns-provider"
+            raise KitshnError(msg)
+
     @property
     def empty(self) -> bool:
         return not self.modules and not self.acme_email and not self.dns_provider and self.env_file is None
+
+
+@dataclass(frozen=True, slots=True)
+class HostCheck:
+    name: str
+    state: Literal["ok", "warn", "fail"]
+    detail: str
 
 
 def configure_caddy_host(
@@ -81,12 +109,14 @@ def configure_caddy_host(
 
     A new binary or a new service environment needs a restart, because a reload keeps the
     running process. A restart drops open connections for about a second. Options alone reload.
-    Any failure restores every file this call touched. A module build runs before `lock`, so a
+    Any failure restores every file and the binary. A module build runs before `lock`, so a
     long build does not hold deploys; the changes to the live Caddy run inside it.
     """
 
     if settings.empty:
         return False
+    if settings.dns_provider and not settings.dns_zones:
+        print("warning: --dns-provider without --dns-zone adds no wildcard preview sites", file=sys.stderr)
     if runner.dry_run:
         # The checks below read real binaries and files; a dry run only names the step.
         print(f"+ configure host Caddy: {settings}")
@@ -98,57 +128,26 @@ def configure_caddy_host(
             return _apply(settings, built, runner)
 
 
-def _apply(settings: CaddyHostSettings, built: Path | None, runner: CommandRunner) -> bool:
-    snapshot = _Snapshot.take([CADDY_ENV_FILE, SYSTEMD_DROP_IN, CADDY_OPTIONS_FILE, CADDY_BASE_CONFIG])
-    binary_changed = False
-    caddy_touched = False
-    try:
-        if built is not None:
-            # Set first: a half-done install (diverted, not yet copied) must restore too.
-            binary_changed = True
-            _install(runner, built)
-        env_changed = False
-        drop_in_changed = False
-        if settings.env_file is not None:
-            env = _caddy_env(settings.env_file)
-            # Only root and the Caddy service user read the token; validation runs as that user.
-            group = caddy_group(runner)
-            mode = 0o600 if group is None else 0o640
-            env_changed = _write_if_changed(CADDY_ENV_FILE, env, group=group, mode=mode)
-            drop_in_changed = _write_if_changed(SYSTEMD_DROP_IN, _drop_in())
-        options_changed = False
-        if settings.acme_email or settings.dns_provider:
-            options = _options(settings.acme_email, settings.dns_provider, settings.dns_zones)
-            options_changed = _write_if_changed(CADDY_OPTIONS_FILE, options)
-            base = CADDY_BASE_CONFIG.read_text(encoding="utf-8") if CADDY_BASE_CONFIG.exists() else ""
-            options_changed |= _write_if_changed(CADDY_BASE_CONFIG, with_options_import(base))
-        if not (binary_changed or env_changed or drop_in_changed or options_changed):
-            return False
+def caddy_host_checks(runner: CommandRunner) -> list[HostCheck]:
+    """Doctor checks for the opt-in host setup. Empty when the host does not use it."""
 
-        validate = runner.run(caddy_validate_command(runner), capture=True, check=False)
-        if validate.returncode != 0:
-            detail = validate.stderr.strip() or validate.stdout.strip()
-            msg = f"the new Caddy host setup fails validation, restored the previous one: {detail}"
-            raise KitshnError(msg)
-
-        caddy_touched = True
-        if drop_in_changed:
-            runner.run(["systemctl", "daemon-reload"])
-        if binary_changed or env_changed or drop_in_changed:
-            runner.run(["systemctl", "restart", "caddy"])
+    checks: list[HostCheck] = []
+    if PACKAGED_BINARY.exists() and CADDY_BINARY.exists():
+        packaged = _caddy_version_or_none(runner, PACKAGED_BINARY)
+        running = _caddy_version_or_none(runner, CADDY_BINARY)
+        if packaged is not None and packaged == running:
+            checks.append(HostCheck("caddy build version", "ok", packaged))
         else:
-            runner.run(["caddy", "reload", "--config", str(CADDY_BASE_CONFIG)])
-    except Exception:
-        snapshot.restore()
-        if binary_changed and PREVIOUS_BINARY.exists():
-            runner.run(["install", "-m", "0755", str(PREVIOUS_BINARY), str(CADDY_BINARY)], check=False)
-        runner.run(["systemctl", "daemon-reload"], check=False)
-        if caddy_touched:
-            # The running Caddy took the new setup or died with it; start it on the restored one.
-            runner.run(["systemctl", "restart", "caddy"], check=False)
-        raise
-    PREVIOUS_BINARY.unlink(missing_ok=True)
-    return True
+            checks.append(
+                HostCheck(
+                    "caddy build version",
+                    "warn",
+                    f"package {packaged}, custom build {running}; rerun bootstrap with --caddy-module",
+                )
+            )
+    if caddy_dns_zones() or _options_have_dns():
+        checks.append(_env_file_check())
+    return checks
 
 
 def with_options_import(content: str) -> str:
@@ -167,6 +166,74 @@ def with_options_import(content: str) -> str:
             return "\n".join(lines) + "\n"
         break
     return "\n".join(["{", f"\t{import_line}", "}", "", *lines]) + "\n"
+
+
+def _apply(settings: CaddyHostSettings, built: Path | None, runner: CommandRunner) -> bool:
+    snapshot = _Snapshot.take([CADDY_ENV_FILE, SYSTEMD_DROP_IN, CADDY_OPTIONS_FILE, CADDY_BASE_CONFIG])
+    binary_changed = False
+    diverted_now = False
+    caddy_touched = False
+    try:
+        if built is not None:
+            # Set first: a half-done install must restore too.
+            binary_changed = True
+            diverted_now = _install(runner, built)
+        env_changed = False
+        drop_in_changed = False
+        if settings.env_file is not None:
+            env = _caddy_env(settings.env_file)
+            # Only root and the Caddy service user read the token; validation runs as that user.
+            group = caddy_group(runner)
+            mode = 0o600 if group is None else 0o640
+            env_changed = _write_if_changed(CADDY_ENV_FILE, env, group=group, mode=mode)
+            drop_in_changed = _write_if_changed(SYSTEMD_DROP_IN, _drop_in())
+        options_changed = False
+        if settings.acme_email or settings.dns_provider:
+            if settings.dns_provider and not _env_file_has_values():
+                # A `dns` option without its token fails the whole TLS app: every site goes down.
+                msg = "--dns-provider needs the token in Caddy's environment: pass --caddy-env-file"
+                raise KitshnError(msg)
+            options = _options(settings.acme_email, settings.dns_provider, settings.dns_zones)
+            options_changed = _write_if_changed(CADDY_OPTIONS_FILE, options)
+            base = CADDY_BASE_CONFIG.read_text(encoding="utf-8") if CADDY_BASE_CONFIG.exists() else ""
+            options_changed |= _write_if_changed(CADDY_BASE_CONFIG, with_options_import(base))
+        if not (binary_changed or env_changed or drop_in_changed or options_changed):
+            return False
+
+        validate = runner.run(caddy_validate_command(runner), capture=True, check=False)
+        if validate.returncode != 0:
+            detail = redact_caddy_env(validate.stderr.strip() or validate.stdout.strip())
+            msg = f"the new Caddy host setup fails validation, restored the previous one: {detail}"
+            raise KitshnError(msg)
+
+        caddy_touched = True
+        if drop_in_changed:
+            runner.run(["systemctl", "daemon-reload"])
+        if binary_changed or env_changed or drop_in_changed:
+            runner.run(["systemctl", "restart", "caddy"])
+        else:
+            runner.run(["caddy", "reload", "--config", str(CADDY_BASE_CONFIG)])
+    except Exception:
+        snapshot.restore()
+        if binary_changed:
+            _restore_binary(runner, diverted_now=diverted_now)
+        runner.run(["systemctl", "daemon-reload"], check=False)
+        if caddy_touched:
+            # The running Caddy took the new setup or died with it; start it on the restored one.
+            runner.run(["systemctl", "restart", "caddy"], check=False)
+        raise
+    PREVIOUS_BINARY.unlink(missing_ok=True)
+    return True
+
+
+def _restore_binary(runner: CommandRunner, *, diverted_now: bool) -> None:
+    if diverted_now:
+        # This run added the diversion: drop it, and dpkg moves the packaged binary back.
+        runner.run(["rm", "-f", str(CADDY_BINARY)], check=False)
+        runner.run(["dpkg-divert", "--local", "--rename", "--remove", str(CADDY_BINARY)], check=False)
+    elif PREVIOUS_BINARY.exists():
+        runner.run(["install", "-m", "0755", str(PREVIOUS_BINARY), str(CADDY_BINARY)], check=False)
+    runner.run(["rm", "-f", str(PREVIOUS_BINARY)], check=False)
 
 
 def _options(acme_email: str | None, dns_provider: str | None, dns_zones: list[str]) -> str:
@@ -189,13 +256,16 @@ def _options(acme_email: str | None, dns_provider: str | None, dns_zones: list[s
 
 
 def _drop_in() -> str:
-    # Without `--environ`: the stock unit prints the whole environment, a token too, to the journal.
+    # EnvironmentFile: systemd reads the file as root. A missing file stops the start with
+    # "Failed to load environment files" and prints no value. Without `--environ`: the stock
+    # unit prints the whole environment, a token too, to the journal.
     return "\n".join(
         [
             GENERATED_HEADER,
             "[Service]",
+            f"EnvironmentFile={CADDY_ENV_FILE}",
             "ExecStart=",
-            f"ExecStart={CADDY_BINARY} run --config {CADDY_BASE_CONFIG} --envfile {CADDY_ENV_FILE}",
+            f"ExecStart={CADDY_BINARY} run --config {CADDY_BASE_CONFIG}",
             "",
         ]
     )
@@ -207,10 +277,39 @@ def _caddy_env(source: Path) -> str:
         msg = f"the Caddy environment file has no values: {source}"
         raise KitshnError(msg)
     for key, value in values.items():
-        if not value or any(char.isspace() or char in "\"'#" for char in value):
-            msg = f"the Caddy environment value {key} is empty or has spaces, quotes, or '#'"
+        if not value or any(char.isspace() or char in "\"'#\\" for char in value):
+            msg = f"the Caddy environment value {key} is empty or has spaces, quotes, '#', or '\\'"
             raise KitshnError(msg)
     return GENERATED_HEADER + "\n" + "".join(f"{key}={values[key]}\n" for key in sorted(values))
+
+
+def _env_file_has_values() -> bool:
+    try:
+        values = read_env_file(CADDY_ENV_FILE)
+    except (KitshnError, OSError):
+        return False
+    return bool(values) and all(values.values())
+
+
+def _options_have_dns() -> bool:
+    if not CADDY_OPTIONS_FILE.exists():
+        return False
+    lines = CADDY_OPTIONS_FILE.read_text(encoding="utf-8").splitlines()
+    return any(line.strip().startswith("dns ") for line in lines)
+
+
+def _env_file_check() -> HostCheck:
+    name = "caddy dns token"
+    if not CADDY_ENV_FILE.exists():
+        return HostCheck(name, "fail", f"missing {CADDY_ENV_FILE}; the global dns option needs it")
+    info = CADDY_ENV_FILE.stat()
+    if info.st_uid != 0 or info.st_mode & stat.S_IRWXO or info.st_mode & (stat.S_IWGRP | stat.S_IXGRP):
+        return HostCheck(name, "fail", f"{CADDY_ENV_FILE} must be root-owned, mode 0640 or 0600")
+    if not _env_file_has_values():
+        return HostCheck(name, "fail", f"{CADDY_ENV_FILE} has no values or an empty value")
+    if not SYSTEMD_DROP_IN.exists():
+        return HostCheck(name, "fail", f"missing {SYSTEMD_DROP_IN}; Caddy does not load the token")
+    return HostCheck(name, "ok", str(CADDY_ENV_FILE))
 
 
 def _write_if_changed(path: Path, content: str, *, group: int | None = None, mode: int = 0o644) -> bool:
@@ -247,7 +346,11 @@ class _Snapshot:
 
 
 def _build_if_needed(modules: list[CaddyModule], runner: CommandRunner, out: Path) -> Path | None:
-    """Build the packaged Caddy version plus `modules` into `out`, unless /usr/bin/caddy is one."""
+    """Build the packaged Caddy version plus `modules` into `out`, unless /usr/bin/caddy is one.
+
+    The target is the packaged version: /usr/bin/caddy.default after the diversion, else
+    /usr/bin/caddy. After `apt-get upgrade caddy`, the next run builds the new version.
+    """
 
     if not modules:
         return None
@@ -268,18 +371,23 @@ def _build_if_needed(modules: list[CaddyModule], runner: CommandRunner, out: Pat
 
 
 def _caddy_version(runner: CommandRunner, binary: Path) -> str:
-    result = runner.run([str(binary), "version"], capture=True)
-    version = result.stdout.split(maxsplit=1)[0] if result.stdout.strip() else ""
-    if not version.startswith("v2."):
-        msg = f"cannot read the Caddy version from {binary}: {result.stdout.strip()!r}"
+    version = _caddy_version_or_none(runner, binary)
+    if version is None:
+        msg = f"cannot read the Caddy version from {binary}"
         raise KitshnError(msg)
     return version
+
+
+def _caddy_version_or_none(runner: CommandRunner, binary: Path) -> str | None:
+    result = runner.run([str(binary), "version"], capture=True, check=False)
+    version = result.stdout.split(maxsplit=1)[0] if result.stdout.strip() else ""
+    return version if result.returncode == 0 and version.startswith("v2.") else None
 
 
 def _has_build(runner: CommandRunner, binary: Path, version: str, modules: list[CaddyModule]) -> bool:
     if not binary.exists():
         return False
-    if _caddy_version(runner, binary) != version:
+    if _caddy_version_or_none(runner, binary) != version:
         return False
     info = runner.run([str(binary), "build-info"], capture=True).stdout
     deps = {
@@ -315,10 +423,13 @@ def _build(runner: CommandRunner, version: str, modules: list[CaddyModule], out:
     )
 
 
-def _install(runner: CommandRunner, built: Path) -> None:
+def _install(runner: CommandRunner, built: Path) -> bool:
+    """Install `built` as /usr/bin/caddy. True when this call added the dpkg diversion."""
+
     runner.run(["cp", "--preserve=mode", str(CADDY_BINARY), str(PREVIOUS_BINARY)])
     diversion = runner.run(["dpkg-divert", "--list", str(CADDY_BINARY)], capture=True).stdout
-    if str(PACKAGED_BINARY) not in diversion:
+    diverted_now = str(PACKAGED_BINARY) not in diversion
+    if diverted_now:
         runner.run(
             [
                 "dpkg-divert",
@@ -331,3 +442,8 @@ def _install(runner: CommandRunner, built: Path) -> None:
             ]
         )
     runner.run(["install", "-m", "0755", str(built), str(CADDY_BINARY)])
+    return diverted_now
+
+
+def _has_whitespace(value: str) -> bool:
+    return any(char.isspace() for char in value)

@@ -8,6 +8,7 @@ import kitshn.caddy
 from kitshn.caddy import (
     apply_caddyfile,
     caddy_dns_zones,
+    redact_caddy_env,
     caddy_validate_command,
     infer_public_url,
     render_caddy_manifest,
@@ -231,3 +232,28 @@ def _rendered(tmp_path: Path, environment: str, template: str) -> str:
     rendered = render_caddyfile(deployment)
     assert rendered is not None
     return rendered
+
+
+def test_manifest_skips_a_preview_base_at_the_zone_apex(tmp_path: Path) -> None:
+    roots = _deployment(tmp_path).roots
+    deployment = Deployment.create(Recipe.parse("owner/repo"), "pr-7", roots)
+    deployment.generated_caddyfile.parent.mkdir(parents=True)
+    deployment.generated_caddyfile.write_text(_rendered(tmp_path, "pr-7", '{{ host("example.com") }} {\n}\n'))
+
+    assert "*." not in render_caddy_manifest(roots, dns_zones=frozenset({"example.com"}))
+
+
+def test_infer_public_url_gives_no_url_when_host_needs_params(tmp_path: Path) -> None:
+    deployment = Deployment.create(Recipe.parse("owner/repo"), "pr-7", _deployment(tmp_path).roots)
+    template_path = tmp_path / "Caddyfile.j2"
+    template_path.write_text("{{ host(params.HOST) }} {\n}\n", encoding="utf-8")
+
+    assert infer_public_url(template_path, deployment) is None
+
+
+def test_caddy_output_hides_the_values_of_the_caddy_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_file = tmp_path / "kitshn.env"
+    env_file.write_text("CLOUDFLARE_API_TOKEN=tok-123456\n", encoding="utf-8")
+    monkeypatch.setattr(kitshn.caddy, "CADDY_ENV_FILE", env_file)
+
+    assert redact_caddy_env("API token 'tok-123456' appears invalid") == "API token '<redacted>' appears invalid"

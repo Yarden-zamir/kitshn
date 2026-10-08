@@ -1,11 +1,14 @@
 name: KitSHn Host
 
-# Rebuilds the maintainer VPS host setup from this file and the repository secrets: the Caddy
-# build with the Cloudflare DNS module, ACME options with ZeroSSL fallback, and the DNS token
-# for Caddy. See specs/caddy.md, "Wildcard preview certificates". Bootstrap skips what is
-# already in place, so a rerun changes nothing.
+# Rebuilds the maintainer VPS host setup from this file and the `host` environment secrets: the
+# Caddy build with the Cloudflare DNS module, ACME options with ZeroSSL fallback, and the DNS
+# token for Caddy. See specs/caddy.md, "Wildcard preview certificates". Bootstrap skips what is
+# already in place, so a rerun changes nothing. The weekly run rebuilds Caddy after a package
+# upgrade (`apt-get install --only-upgrade caddy`) changes the packaged version.
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1"
   push:
     branches: [main]
     paths: [.github/workflows/host.yml]
@@ -20,16 +23,19 @@ concurrency:
 jobs:
   bootstrap:
     runs-on: ubuntu-latest
+    # The secrets live in this environment, which only main can use. The repository is public.
+    environment: host
     steps:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: false
 
+      # Every KitSHn call that sees a secret runs this commit, not whatever main is at run time.
       - name: Check host credentials
         env:
           KITSHN_VPS_HOST: ${{ vars.KITSHN_VPS_HOST }}
           KITSHN_SSH_KEY: ${{ secrets.KITSHN_SSH_KEY }}
-        run: uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ci-preflight
+        run: uvx --from "git+https://github.com/Yarden-zamir/kitshn.git@${GITHUB_SHA}" kitshn ci-preflight
 
       - name: Write the Caddy environment
         env:
@@ -43,8 +49,10 @@ jobs:
         env:
           KITSHN_VPS_HOST: ${{ vars.KITSHN_VPS_HOST }}
           KITSHN_SSH_KEY: ${{ secrets.KITSHN_SSH_KEY }}
+          KITSHN_SSH_KNOWN_HOSTS: ${{ vars.KITSHN_SSH_KNOWN_HOSTS }}
         run: >-
-          uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ci-bootstrap
+          uvx --from "git+https://github.com/Yarden-zamir/kitshn.git@${GITHUB_SHA}" kitshn ci-bootstrap
+          --kitshn-ref "$GITHUB_SHA"
           --caddy-module github.com/caddy-dns/cloudflare@v0.2.4
           --acme-email dev@yarden-zamir.com
           --dns-provider 'cloudflare {env.CLOUDFLARE_API_TOKEN}'

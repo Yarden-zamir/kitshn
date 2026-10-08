@@ -11,13 +11,16 @@ import shutil
 import stat
 from typing import Literal
 
-from .caddy import caddy_validate_command
-from .caddy_host import CaddyHostSettings, configure_caddy_host
+from .caddy import caddy_validate_command, redact_caddy_env
+from .caddy_host import CaddyHostSettings, caddy_host_checks, configure_caddy_host
 from .errors import KitshnError
 from .filesystem import host_deploy_lock
 from .installer_registry import Installer, get_installer, suggested_installers
 from .models import Roots
 from .runner import CommandRunner
+
+KITSHN_GIT_SOURCE = "git+https://github.com/Yarden-zamir/kitshn.git"
+
 
 def expected_caddy_import(roots: Roots) -> str:
     return f"import {roots.deployments}/Caddyfile"
@@ -130,7 +133,10 @@ def doctor(
             )
 
     caddy_check = runner.run(caddy_validate_command(runner, caddyfile), capture=True, check=False)
-    report.add("caddy config", caddy_check.returncode == 0, _result_detail(caddy_check.stdout, caddy_check.stderr))
+    detail = redact_caddy_env(_result_detail(caddy_check.stdout, caddy_check.stderr))
+    report.add("caddy config", caddy_check.returncode == 0, detail)
+    for host_check in caddy_host_checks(runner):
+        report.checks.append(Check(host_check.name, host_check.state, host_check.detail))
     report.installers = suggested_installers(runner) if _has_missing_dependencies(report) else []
     return report
 
@@ -143,16 +149,17 @@ def bootstrap_remote(
     installer_name: str | None = None,
     caddy_host: CaddyHostSettings | None = None,
     ssh_options: list[str] | None = None,
+    kitshn_ref: str | None = None,
 ) -> None:
+    """Run the hosted `kitshn bootstrap` on `target`, at `kitshn_ref` (default: main).
+
+    The Caddy environment file travels over SSH stdin into a remote `mktemp` file, which an
+    EXIT trap removes. It never appears on a command line or in a fixed path.
+    """
+
     caddy_host = caddy_host or CaddyHostSettings()
-    ssh_options = ssh_options or []
-    bootstrap_args = [
-        "uvx",
-        "--from",
-        "git+https://github.com/Yarden-zamir/kitshn.git",
-        "kitshn",
-        "bootstrap",
-    ]
+    source = KITSHN_GIT_SOURCE if kitshn_ref is None else f"{KITSHN_GIT_SOURCE}@{kitshn_ref}"
+    bootstrap_args = ["uvx", "--from", source, "kitshn", "bootstrap"]
     if install_missing:
         bootstrap_args.append("--install-missing")
     if installer_name is not None:
@@ -166,28 +173,21 @@ def bootstrap_remote(
     for zone in caddy_host.dns_zones:
         bootstrap_args.extend(["--dns-zone", zone])
 
+    lines = ["set -e"]
+    env_text: str | None = None
     command = shlex.join(bootstrap_args)
     if caddy_host.env_file is not None:
-        # The secret travels by scp into a root-only temp file, never on a command line.
-        remote_env = f"/tmp/kitshn-caddy-{os.getpid()}.env"
-        runner.run(["scp", *ssh_options, str(caddy_host.env_file), f"{target}:{remote_env}"])
-        command = (
-            f"{command} --caddy-env-file {shlex.quote(remote_env)}; status=$?; "
-            f"rm -f {shlex.quote(remote_env)}; exit $status"
-        )
-
-    remote_command = "\n".join(
-        [
-            "set -e",
-            "if ! command -v uvx >/dev/null 2>&1; then",
-            "  curl -LsSf https://astral.sh/uv/install.sh | sh",
-            "fi",
-            "export PATH=$HOME/.local/bin:$PATH",
-            "set +e",
-            command,
-        ]
-    )
-    runner.run(["ssh", *ssh_options, target, remote_command])
+        env_text = caddy_host.env_file.read_text(encoding="utf-8")
+        lines += ['caddy_env="$(mktemp)"', "trap 'rm -f \"$caddy_env\"' EXIT", 'cat > "$caddy_env"']
+        command += ' --caddy-env-file "$caddy_env"'
+    lines += [
+        "if ! command -v uvx >/dev/null 2>&1; then",
+        "  curl -LsSf https://astral.sh/uv/install.sh | sh",
+        "fi",
+        "export PATH=$HOME/.local/bin:$PATH",
+        command,
+    ]
+    runner.run(["ssh", *(ssh_options or []), target, "\n".join(lines)], input_text=env_text)
 
 
 def _ensure_user_exists(user: str) -> None:

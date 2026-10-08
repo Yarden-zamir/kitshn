@@ -7,7 +7,7 @@ import pwd
 import stat
 from typing import Literal
 
-from .caddy import caddy_service_user, caddy_validate_command
+from .caddy import caddy_service_user, caddy_validate_command, redact_caddy_env
 from .compose import compose_command, compose_services, has_compose_file, render_compose_config
 from .models import Deployment, Recipe, Roots
 from .runner import CommandRunner
@@ -164,7 +164,7 @@ def _command_check(
     env: dict[str, str] | None = None,
 ) -> DiagnoseCheck:
     result = runner.run(args, cwd=cwd, env=env, capture=True, check=False)
-    output = result.stderr.strip() or result.stdout.strip()
+    output = redact_caddy_env(result.stderr.strip() or result.stdout.strip())
     detail = output.splitlines()
     state: Literal["ok", "fail"] = "ok" if result.returncode == 0 else "fail"
     message = detail[-1] if detail else ""

@@ -4,7 +4,7 @@ from pathlib import Path
 import os
 import pwd
 
-from jinja2 import Environment, StrictUndefined, Undefined
+from jinja2 import Environment, StrictUndefined, Undefined, UndefinedError
 
 from .errors import KitshnError
 from .filesystem import read_env_file, walk_deployments
@@ -169,8 +169,28 @@ def caddy_dns_zones(options_file: Path | None = None) -> frozenset[str]:
 
 
 def _in_zones(wildcard: str, zones: frozenset[str]) -> bool:
+    # Strictly below a zone: a base at the zone apex would put every site of the zone under
+    # one wildcard and close the connection for every unknown name in it.
     base = wildcard.removeprefix("*.")
-    return any(base == zone or base.endswith(f".{zone}") for zone in zones)
+    return any(base.endswith(f".{zone}") for zone in zones)
+
+
+def redact_caddy_env(text: str) -> str:
+    """`text` with every value of the Caddy environment file replaced, for logs and errors.
+
+    A DNS module can print its token in a provisioning error, and deploy output can be public.
+    """
+
+    try:
+        values = read_env_file(CADDY_ENV_FILE)
+    except (KitshnError, OSError):
+        return text
+    redacted: str = text
+    secrets: list[str] = sorted(values.values(), key=lambda value: len(value), reverse=True)
+    for value in secrets:
+        if len(value) >= 4:
+            redacted = redacted.replace(value, "<redacted>")
+    return redacted
 
 
 def caddy_service_user(runner: CommandRunner) -> str | None:
@@ -210,7 +230,7 @@ def validate_and_reload_caddy(runner: CommandRunner) -> None:
         check=False,
     )
     if validate.returncode != 0:
-        detail = validate.stderr.strip() or validate.stdout.strip()
+        detail = redact_caddy_env(validate.stderr.strip() or validate.stdout.strip())
         hint = _caddy_failure_hint(detail)
         suffix = f" | hint: {hint}" if hint else ""
         msg = f"caddy validation failed: {detail}{suffix}"
@@ -275,7 +295,11 @@ def infer_public_url(template_path: Path, deployment: Deployment) -> str | None:
         return None
     env = Environment(autoescape=False, undefined=Undefined)
     template = env.from_string(template_path.read_text(encoding="utf-8"))
-    rendered = template.render(_template_context(deployment, {}, set()))
+    try:
+        rendered = template.render(_template_context(deployment, {}, set()))
+    except (UndefinedError, KitshnError):
+        # The render has no params; a host() call on a params value cannot resolve here.
+        return None
     urls = {url for address in site_addresses(rendered) if (url := _concrete_url(address))}
     if len(urls) != 1:
         return None

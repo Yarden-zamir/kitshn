@@ -182,6 +182,10 @@ def bootstrap_remote(
         Parameter("--installer", help="Installer module to use with --install-missing."),
     ] = None,
     caddy_host: Annotated[CaddyHostFlags | None, Parameter(name="*")] = None,
+    kitshn_ref: Annotated[
+        str | None,
+        Parameter("--kitshn-ref", help="KitSHn commit that runs on the remote host (default: main)."),
+    ] = None,
     dry_run: Annotated[bool, Parameter("--dry-run", help="Print commands without running them.")] = False,
 ) -> None:
     """Install/verify uv on a remote host and run hosted KitSHn bootstrap."""
@@ -192,6 +196,7 @@ def bootstrap_remote(
         install_missing=install_missing,
         installer_name=str(installer) if installer else None,
         caddy_host=(caddy_host or CaddyHostFlags()).settings(),
+        kitshn_ref=kitshn_ref,
     )
     print(f"{REMOTE} bootstrapped remote host")
     print("status=bootstrapped-remote")
@@ -936,10 +941,17 @@ def ci_deploy(
 
 
 @app.command(name="ci-bootstrap", show=False)
-def ci_bootstrap(*, caddy_host: Annotated[CaddyHostFlags | None, Parameter(name="*")] = None) -> None:
+def ci_bootstrap(
+    *,
+    caddy_host: Annotated[CaddyHostFlags | None, Parameter(name="*")] = None,
+    kitshn_ref: Annotated[
+        str | None,
+        Parameter("--kitshn-ref", help="KitSHn commit that runs on the VPS (default: main)."),
+    ] = None,
+) -> None:
     """Bootstrap the VPS from GitHub Actions over SSH, with host secrets from the workflow."""
 
-    bootstrap_over_ssh((caddy_host or CaddyHostFlags()).settings())
+    bootstrap_over_ssh((caddy_host or CaddyHostFlags()).settings(), kitshn_ref=kitshn_ref)
 
 
 @app.command(name="ci-destroy", show=False)
