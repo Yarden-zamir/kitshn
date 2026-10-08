@@ -269,11 +269,8 @@ def _static_compose_yml() -> str:
 
 
 def _static_caddyfile_j2(hostname: str) -> str:
-    return f"""{{% if environment == "prod" -%}}
-{hostname}
-{{%- else -%}}
-pr.{{{{ environment.removeprefix("pr-") }}}}.{hostname}
-{{%- endif %}} {{
+    return f"""# host() keeps {hostname} for prod and gives pr-<number>.{hostname} to previews.
+{{{{ host("{hostname}") }}}} {{
     reverse_proxy unix//{{{{ paths.default_socket }}}}
 }}
 """
@@ -334,12 +331,9 @@ def _caddyfile_j2() -> str:
     return """# Define this recipe's public Caddy route here.
 # Caddyfiles support comments with #.
 #
-# Preview-safe hostname example:
-# {% if environment == "prod" -%}
-# example.com
-# {%- else -%}
-# pr.{{ environment.removeprefix("pr-") }}.example.com
-# {%- endif %} {
+# Preview-safe hostname example. host() keeps app.example.com for prod and
+# gives pr-<number>.app.example.com to previews, so prod and previews never collide:
+# {{ host("app.example.com") }} {
 #     reverse_proxy unix//{{ paths.default_socket }}
 # }
 """

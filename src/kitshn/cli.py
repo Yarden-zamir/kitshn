@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import sys
@@ -13,7 +14,9 @@ from .bootstrap import DoctorReport
 from .bootstrap import bootstrap as run_bootstrap
 from .bootstrap import bootstrap_remote as run_bootstrap_remote
 from .bootstrap import doctor as run_doctor
+from .caddy_host import CaddyHostSettings, CaddyModule
 from .ci import (
+    bootstrap_over_ssh,
     delete_github_environment,
     deploy_over_ssh,
     destroy_over_ssh,
@@ -89,6 +92,52 @@ params_app = App(name="params", help="Inspect deployment params on the VPS.")
 app.command(params_app)
 
 
+@dataclass(slots=True)
+class CaddyHostFlags:
+    """Host Caddy options for bootstrap; see specs/caddy.md, "Wildcard preview certificates"."""
+
+    caddy_module: Annotated[
+        list[str] | None,
+        Parameter(
+            "--caddy-module",
+            negative=(),
+            help="Build Caddy with this module, pinned as PATH@vVERSION. Repeatable.",
+        ),
+    ] = None
+    acme_email: Annotated[
+        str | None,
+        Parameter("--acme-email", help="ACME account email; also adds ZeroSSL as fallback issuer."),
+    ] = None
+    dns_provider: Annotated[
+        str | None,
+        Parameter(
+            "--dns-provider",
+            help="Global Caddy dns option, such as 'cloudflare {env.CLOUDFLARE_API_TOKEN}'.",
+        ),
+    ] = None
+    dns_zone: Annotated[
+        list[str] | None,
+        Parameter(
+            "--dns-zone",
+            negative=(),
+            help="Zone that --dns-provider serves, such as example.com. Repeatable.",
+        ),
+    ] = None
+    caddy_env_file: Annotated[
+        Path | None,
+        Parameter("--caddy-env-file", help="KEY=VALUE file to install as the Caddy environment."),
+    ] = None
+
+    def settings(self) -> CaddyHostSettings:
+        return CaddyHostSettings(
+            modules=[CaddyModule.parse(spec) for spec in self.caddy_module or []],
+            acme_email=self.acme_email,
+            dns_provider=self.dns_provider,
+            dns_zones=self.dns_zone or [],
+            env_file=self.caddy_env_file,
+        )
+
+
 @app.command
 def bootstrap(
     *,
@@ -101,6 +150,7 @@ def bootstrap(
         InstallerChoice | None,
         Parameter("--installer", help="Installer module to use with --install-missing."),
     ] = None,
+    caddy_host: Annotated[CaddyHostFlags | None, Parameter(name="*")] = None,
     dry_run: Annotated[bool, Parameter("--dry-run", help="Print commands without running them.")] = False,
 ) -> int:
     """Prepare the VPS and run readiness checks."""
@@ -112,6 +162,7 @@ def bootstrap(
         runner=CommandRunner(dry_run=dry_run),
         install_missing=install_missing,
         installer_name=str(installer) if installer else None,
+        caddy_host=(caddy_host or CaddyHostFlags()).settings(),
     )
     _print_doctor_report(report)
     _safe_log(InvocationLog(command="bootstrap", status="ok" if report.ok else "failed"), roots)
@@ -130,6 +181,11 @@ def bootstrap_remote(
         InstallerChoice | None,
         Parameter("--installer", help="Installer module to use with --install-missing."),
     ] = None,
+    caddy_host: Annotated[CaddyHostFlags | None, Parameter(name="*")] = None,
+    kitshn_ref: Annotated[
+        str | None,
+        Parameter("--kitshn-ref", help="KitSHn commit that runs on the remote host (default: main)."),
+    ] = None,
     dry_run: Annotated[bool, Parameter("--dry-run", help="Print commands without running them.")] = False,
 ) -> None:
     """Install/verify uv on a remote host and run hosted KitSHn bootstrap."""
@@ -139,6 +195,8 @@ def bootstrap_remote(
         CommandRunner(dry_run=dry_run),
         install_missing=install_missing,
         installer_name=str(installer) if installer else None,
+        caddy_host=(caddy_host or CaddyHostFlags()).settings(),
+        kitshn_ref=kitshn_ref,
     )
     print(f"{REMOTE} bootstrapped remote host")
     print("status=bootstrapped-remote")
@@ -880,6 +938,20 @@ def ci_deploy(
     """Deploy from GitHub Actions over SSH."""
 
     deploy_over_ssh(params_file)
+
+
+@app.command(name="ci-bootstrap", show=False)
+def ci_bootstrap(
+    *,
+    caddy_host: Annotated[CaddyHostFlags | None, Parameter(name="*")] = None,
+    kitshn_ref: Annotated[
+        str | None,
+        Parameter("--kitshn-ref", help="KitSHn commit that runs on the VPS (default: main)."),
+    ] = None,
+) -> None:
+    """Bootstrap the VPS from GitHub Actions over SSH, with host secrets from the workflow."""
+
+    bootstrap_over_ssh((caddy_host or CaddyHostFlags()).settings(), kitshn_ref=kitshn_ref)
 
 
 @app.command(name="ci-destroy", show=False)

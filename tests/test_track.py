@@ -56,7 +56,7 @@ class TrackRunner(CommandRunner):
 def _recipe_dir(tmp_path: Path) -> Path:
     (tmp_path / ".kitshn.yaml").write_text("deploy:\n  - on: push\n    branch: main\n    name: prod\n", encoding="utf-8")
     (tmp_path / "Caddyfile.j2").write_text(
-        '{% if environment == "prod" -%}\nsite.example.com\n{%- else -%}\npr.{{ environment.removeprefix("pr-") }}.site.example.com\n{%- endif %} {\n    reverse_proxy unix//{{ paths.default_socket }}\n}\n',
+        '{{ host("site.example.com") }} {\n    reverse_proxy unix//{{ paths.default_socket }}\n}\n',
         encoding="utf-8",
     )
     return tmp_path

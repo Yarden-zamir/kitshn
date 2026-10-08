@@ -20,6 +20,13 @@ selected installer before creating or verifying KitSHn resources.
 missing, prepends `$HOME/.local/bin`, then runs hosted KitSHn through `uvx`. It never requires
 or installs a persistent `kitshn` binary on the remote host.
 
+`bootstrap` and `bootstrap-remote` take the optional host Caddy flags `--caddy-module`,
+`--acme-email`, `--dns-provider`, `--dns-zone`, and `--caddy-env-file`; see
+[Caddy Ingress](caddy.md), "Wildcard preview certificates". `bootstrap-remote` sends the env
+file over SSH stdin into a remote `mktemp` file, which an `EXIT` trap removes. With
+`--kitshn-ref`, it runs that KitSHn commit on the host instead of main. `ci-bootstrap` does
+the same from GitHub Actions with `KITSHN_VPS_HOST` and `KITSHN_SSH_KEY`.
+
 ## CLI Distribution
 
 Local machines may use an installed CLI or the hosted `uvx --from git+...` form. Remote

@@ -3,7 +3,7 @@
 ## Project Shape
 - Python 3.14 `uv` project; use `uv run ...` for project commands and do not use raw `python`/`pip`.
 - CLI entrypoint is `kitshn = kitshn.cli:main`; command definitions live in `src/kitshn/cli.py`.
-- There is no Makefile, pre-commit config, or test/lint GitHub workflow. `.github/workflows/deploy.yml` is the reusable deploy workflow that recipe repos call. `.github/workflows/release.yml` tags, releases, and syncs the Homebrew tap on every push to `main` with a new `pyproject.toml` version; see `specs/release.md`.
+- There is no Makefile, pre-commit config, or test/lint GitHub workflow. `.github/workflows/deploy.yml` is the reusable deploy workflow that recipe repos call. `.github/workflows/release.yml` tags, releases, and syncs the Homebrew tap on every push to `main` with a new `pyproject.toml` version; see `specs/release.md`. `.github/workflows/host.yml` bootstraps the maintainer VPS host Caddy (DNS module build, ACME options, Cloudflare token) from the `host` environment secrets; see `specs/caddy.md`.
 
 ## Commands
 - Install/sync deps: `uv sync`.
@@ -29,6 +29,8 @@
 - Socket proxy examples must keep proxy-to-app traffic on the project-local default network; do not attach socket proxies to shared `kitshn-edge` unless the socket proxy itself intentionally serves cross-recipe traffic.
 - `kitshn.depends_on` Compose labels trigger dependent service recreation after a recipe deploy; matching is case-insensitive `owner/repo`.
 - `src/kitshn/caddy.py` renders only `Caddyfile.j2`; generated `Caddyfile` files are deployment artifacts and feed the generated manifest at `<deployments>/Caddyfile`. `infer_public_url` renders the template without params and returns a URL only for exactly one concrete host.
+- `Caddyfile.j2` gets `host(base)`: `base` for `prod`, `<environment>.<base>` otherwise. A non-prod `host()` records `# kitshn preview wildcard: *.<base>` in the generated `Caddyfile`; the manifest adds one `*.<base> { tls { dns } abort }` site per base only when `/etc/caddy/kitshn-options.caddy` sets a `dns` provider and lists a `# kitshn dns zone:` that contains the base.
+- `src/kitshn/caddy_host.py` owns the opt-in host Caddy setup of `bootstrap`: module build (xcaddy in `caddy:<version>-builder`, `dpkg-divert`), global options file, `/etc/caddy/kitshn.env` and its systemd drop-in. Tests isolate the `/etc/caddy` paths in `tests/conftest.py`.
 - `src/kitshn/remote.py` forwards a CLI invocation to the VPS (`--vps-host`) as `bash -lc` plus the hosted `uvx` CLI; `src/kitshn/try_recipe.py` and `src/kitshn/track.py` own `kitshn try` and `kitshn track`; `src/kitshn/version_check.py` owns `kitshn self-check`.
 - `tests/test_version.py` asserts that `pyproject.toml`, `src/kitshn/__init__.py`, and `uv.lock` agree; bump all three (run `uv lock`) together.
 

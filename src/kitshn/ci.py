@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 import os
@@ -17,10 +18,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from .bootstrap import bootstrap_remote
 from .caddy import infer_public_url
+from .caddy_host import CaddyHostSettings
 from .errors import KitshnError, NoMatchingDeployment
 from .httpcheck import Fetch, HttpResponse, fetch_url
 from .models import Deployment, Recipe
+from .runner import CommandRunner
 from .resolve import DeployEvent, ResolveInput, keep_output, parse_keep, resolve_deployment
 
 RESERVED_PARAM_NAMES = {"KITSHN_VPS_HOST", "KITSHN_SSH_KEY"}
@@ -318,8 +322,7 @@ def deploy_over_ssh(params_file: Path) -> None:
     run_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
     remote_params = f"/tmp/kitshn-{run_id}-{run_attempt}.env"
 
-    with _ssh_key_file(ssh_key) as key_file:
-        ssh_args = ["-i", str(key_file), "-o", "StrictHostKeyChecking=accept-new", "-o", "ServerAliveInterval=30"]
+    with _ssh_options(ssh_key) as ssh_args:
         _run(["scp", *ssh_args, str(params_file), f"{vps_host}:{remote_params}"])
         remote_command = "; ".join(
             [
@@ -345,14 +348,24 @@ def deploy_over_ssh(params_file: Path) -> None:
         _run(["ssh", *ssh_args, vps_host, remote_command])
 
 
+def bootstrap_over_ssh(caddy_host: CaddyHostSettings, *, kitshn_ref: str | None = None) -> None:
+    """Run `bootstrap-remote` against KITSHN_VPS_HOST with the workflow's SSH key."""
+
+    vps_host = _required_env("KITSHN_VPS_HOST")
+    ssh_key = _required_env("KITSHN_SSH_KEY")
+    with _ssh_options(ssh_key) as ssh_args:
+        bootstrap_remote(
+            vps_host, CommandRunner(), caddy_host=caddy_host, ssh_options=ssh_args, kitshn_ref=kitshn_ref
+        )
+
+
 def destroy_over_ssh() -> None:
     repository = _required_env("GITHUB_REPOSITORY")
     vps_host = _required_env("KITSHN_VPS_HOST")
     ssh_key = _required_env("KITSHN_SSH_KEY")
     environment = _required_env("KITSHN_ENVIRONMENT")
 
-    with _ssh_key_file(ssh_key) as key_file:
-        ssh_args = ["-i", str(key_file), "-o", "StrictHostKeyChecking=accept-new", "-o", "ServerAliveInterval=30"]
+    with _ssh_options(ssh_key) as ssh_args:
         remote_command = shlex.join(
             [*HOSTED_CLI, "destroy", repository, "--environment", environment, *teardown_flags()]
         )
@@ -411,24 +424,28 @@ def delete_github_environment() -> None:
         raise
 
 
-class _ssh_key_file:
-    def __init__(self, content: str) -> None:
-        self.content = content
-        self.path: Path | None = None
+@contextmanager
+def _ssh_options(ssh_key: str) -> Iterator[list[str]]:
+    """`ssh` and `scp` options for the workflow key, in a private temp folder.
 
-    def __enter__(self) -> Path:
-        handle = tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8")
-        with handle:
-            handle.write(self.content)
-            if not self.content.endswith("\n"):
-                handle.write("\n")
-        self.path = Path(handle.name)
-        self.path.chmod(0o600)
-        return self.path
+    With KITSHN_SSH_KNOWN_HOSTS (a known_hosts line), SSH accepts only that host key.
+    Without it, SSH trusts the key it sees first. Limit: a first connection to a spoofed host
+    is not caught; set KITSHN_SSH_KNOWN_HOSTS to close that.
+    """
 
-    def __exit__(self, *_exc: object) -> None:
-        if self.path is not None:
-            self.path.unlink(missing_ok=True)
+    known_hosts = os.environ.get("KITSHN_SSH_KNOWN_HOSTS", "").strip()
+    with tempfile.TemporaryDirectory(prefix="kitshn-ssh-") as folder:
+        key_file = Path(folder) / "key"
+        key_file.write_text(ssh_key if ssh_key.endswith("\n") else ssh_key + "\n", encoding="utf-8")
+        key_file.chmod(0o600)
+        options = ["-i", str(key_file), "-o", "ServerAliveInterval=30"]
+        if known_hosts:
+            hosts_file = Path(folder) / "known_hosts"
+            hosts_file.write_text(known_hosts + "\n", encoding="utf-8")
+            options += ["-o", f"UserKnownHostsFile={hosts_file}", "-o", "StrictHostKeyChecking=yes"]
+        else:
+            options += ["-o", "StrictHostKeyChecking=accept-new"]
+        yield options
 
 
 def _run(args: list[str]) -> None:

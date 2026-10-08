@@ -2,6 +2,7 @@ from pathlib import Path
 from collections.abc import Mapping, Sequence
 
 from kitshn.bootstrap import bootstrap, bootstrap_remote, doctor, expected_caddy_import
+from kitshn.caddy_host import CaddyHostSettings, CaddyModule
 from kitshn.models import Roots
 from kitshn.runner import CommandResult, CommandRunner
 
@@ -18,6 +19,7 @@ class FakeRunner(CommandRunner):
         self.failures = failures or set()
         self.results = results or {}
         self.commands: list[tuple[str, ...]] = []
+        self.calls: list[tuple[tuple[str, ...], str | None]] = []
 
     def exists(self, executable: str) -> bool:
         return executable in self.executables
@@ -34,6 +36,7 @@ class FakeRunner(CommandRunner):
     ) -> CommandResult:
         command = tuple(args)
         self.commands.append(command)
+        self.calls.append((command, input_text))
         if command in self.results:
             return self.results[command]
         if command in self.failures:
@@ -138,3 +141,31 @@ def _roots(tmp_path: Path) -> Roots:
         persistent=tmp_path / "persistent",
         logs=tmp_path / "logs",
     )
+
+
+def test_bootstrap_remote_sends_the_caddy_env_over_stdin_and_pins_the_ref(tmp_path: Path) -> None:
+    env_file = tmp_path / "caddy.env"
+    env_file.write_text("TOKEN=secret\n", encoding="utf-8")
+    runner = FakeRunner({"ssh"})
+    settings = CaddyHostSettings(
+        modules=[CaddyModule.parse("github.com/caddy-dns/cloudflare@v0.2.4")],
+        acme_email="dev@example.com",
+        dns_provider="cloudflare {env.TOKEN}",
+        dns_zones=["example.com"],
+        env_file=env_file,
+    )
+
+    bootstrap_remote("prod-vps", runner, caddy_host=settings, ssh_options=["-i", "key"], kitshn_ref="abc123")
+
+    [(ssh, input_text)] = runner.calls
+    assert ssh[:4] == ("ssh", "-i", "key", "prod-vps")
+    script = ssh[4]
+    assert input_text == "TOKEN=secret\n"
+    assert "secret" not in script
+    assert script.index('cat > "$caddy_env"') < script.index("curl")
+    assert "trap 'rm -f \"$caddy_env\"' EXIT" in script
+    assert "git+https://github.com/Yarden-zamir/kitshn.git@abc123 kitshn bootstrap" in script
+    assert "--caddy-module github.com/caddy-dns/cloudflare@v0.2.4" in script
+    assert "--dns-provider 'cloudflare {env.TOKEN}'" in script
+    assert "--dns-zone example.com" in script
+    assert '--caddy-env-file "$caddy_env"' in script

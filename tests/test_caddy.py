@@ -1,8 +1,20 @@
 from pathlib import Path
+import os
+import stat
 
 import pytest
 
-from kitshn.caddy import apply_caddyfile, infer_public_url, render_caddy_manifest, render_caddyfile, site_addresses
+import kitshn.caddy
+from kitshn.caddy import (
+    apply_caddyfile,
+    caddy_dns_zones,
+    redact_caddy_env,
+    caddy_validate_command,
+    infer_public_url,
+    render_caddy_manifest,
+    render_caddyfile,
+    site_addresses,
+)
 from kitshn.errors import KitshnError
 from kitshn.models import Deployment, Recipe, Roots
 from kitshn.runner import CommandResult, CommandRunner
@@ -130,8 +142,8 @@ http://internal.example.com:8080 {
 @pytest.mark.parametrize(
     ("template", "environment", "expected"),
     [
-        ('{% if environment == "prod" -%}\nsite.example.com\n{%- else -%}\npr.{{ environment.removeprefix("pr-") }}.site.example.com\n{%- endif %} {\n    reverse_proxy unix//{{ paths.default_socket }}\n}\n', "prod", "https://site.example.com"),
-        ('{% if environment == "prod" -%}\nsite.example.com\n{%- else -%}\npr.{{ environment.removeprefix("pr-") }}.site.example.com\n{%- endif %} {\n    reverse_proxy unix//{{ paths.default_socket }}\n}\n', "pr-7", "https://pr.7.site.example.com"),
+        ('{{ host("site.example.com") }} {\n    reverse_proxy unix//{{ paths.default_socket }}\n}\n', "prod", "https://site.example.com"),
+        ('{{ host("site.example.com") }} {\n    reverse_proxy unix//{{ paths.default_socket }}\n}\n', "pr-7", "https://pr-7.site.example.com"),
         ("http://plain.example.com {\n}\n", "prod", "http://plain.example.com"),
         ("http://internal.example.com:8080 {\n}\n", "prod", "http://internal.example.com:8080"),
         ("*.example.com {\n}\n", "prod", None),
@@ -147,3 +159,101 @@ def test_infer_public_url_only_returns_a_single_concrete_host(tmp_path: Path, te
 
     assert infer_public_url(template_path, deployment) == expected
     assert infer_public_url(tmp_path / "missing.j2", deployment) is None
+
+
+def test_host_names_prod_by_its_base_and_other_environments_one_label_below(tmp_path: Path) -> None:
+    prod = _rendered(tmp_path, "prod", '{{ host("app.example.com") }} {\n}\n')
+    preview = _rendered(tmp_path, "pr-7", '{{ host("app.example.com") }} {\n}\n')
+
+    assert prod == "app.example.com {\n}\n"
+    assert preview.splitlines()[-2:] == ["pr-7.app.example.com {", "}"]
+    assert site_addresses(preview) == ["pr-7.app.example.com"]
+
+
+@pytest.mark.parametrize("base", ["", "*.app.example.com", "localhost"])
+def test_host_rejects_a_base_that_is_not_a_domain_name(tmp_path: Path, base: str) -> None:
+    with pytest.raises(KitshnError, match="host"):
+        _rendered(tmp_path, "pr-7", f'{{{{ host("{base}") }}}} {{\n}}\n')
+
+
+def test_manifest_adds_one_wildcard_site_per_preview_base_when_dns_is_set_up(tmp_path: Path) -> None:
+    roots = _deployment(tmp_path).roots
+    for environment in ("prod", "pr-7", "pr-8"):
+        deployment = Deployment.create(Recipe.parse("owner/repo"), environment, roots)
+        rendered = _rendered(tmp_path, environment, '{{ host("app.example.com") }} {\n}\n')
+        deployment.generated_caddyfile.parent.mkdir(parents=True, exist_ok=True)
+        deployment.generated_caddyfile.write_text(rendered, encoding="utf-8")
+
+    manifest = render_caddy_manifest(roots, dns_zones=frozenset({"example.com"}))
+
+    assert manifest.count("*.app.example.com {") == 1
+    assert "\ttls {\n\t\tdns\n\t}\n\tabort\n" in manifest
+    assert "import owner/repo/pr-8/Caddyfile" in manifest
+    assert "*." not in render_caddy_manifest(roots, dns_zones=frozenset())
+    assert "*." not in render_caddy_manifest(roots, dns_zones=frozenset({"other.com"}))
+
+
+def test_dns_zones_come_from_the_options_file_only_with_a_dns_provider(tmp_path: Path) -> None:
+    options = tmp_path / "options.caddy"
+    assert caddy_dns_zones(options) == frozenset()
+    options.write_text("# kitshn dns zone: example.com\n", encoding="utf-8")
+    assert caddy_dns_zones(options) == frozenset()
+    options.write_text("# kitshn dns zone: example.com\ndns cloudflare {env.TOKEN}\n", encoding="utf-8")
+    assert caddy_dns_zones(options) == frozenset({"example.com"})
+
+
+def test_validation_loads_the_caddy_environment_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_file = tmp_path / "kitshn.env"
+    monkeypatch.setattr(kitshn.caddy, "CADDY_ENV_FILE", env_file)
+    runner = CommandRunner(dry_run=True)
+    assert "--envfile" not in caddy_validate_command(runner)
+
+    env_file.write_text("TOKEN=x\n", encoding="utf-8")
+
+    assert caddy_validate_command(runner)[-2:] == ["--envfile", str(env_file)]
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="only root can chown the route to root")
+def test_generated_caddyfile_is_readable_only_by_root_and_the_caddy_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(kitshn.caddy, "caddy_group", lambda _runner: os.getgid())
+    deployment = _deployment(tmp_path)
+
+    apply_caddyfile(deployment, "example.com {\n}\n", CommandRunner(dry_run=True))
+
+    assert stat.S_IMODE(deployment.generated_caddyfile.stat().st_mode) == 0o640
+
+
+def _rendered(tmp_path: Path, environment: str, template: str) -> str:
+    deployment = Deployment.create(Recipe.parse("owner/repo"), environment, _deployment(tmp_path).roots)
+    deployment.deployment_root.mkdir(parents=True, exist_ok=True)
+    (deployment.deployment_root / "Caddyfile.j2").write_text(template, encoding="utf-8")
+    rendered = render_caddyfile(deployment)
+    assert rendered is not None
+    return rendered
+
+
+def test_manifest_skips_a_preview_base_at_the_zone_apex(tmp_path: Path) -> None:
+    roots = _deployment(tmp_path).roots
+    deployment = Deployment.create(Recipe.parse("owner/repo"), "pr-7", roots)
+    deployment.generated_caddyfile.parent.mkdir(parents=True)
+    deployment.generated_caddyfile.write_text(_rendered(tmp_path, "pr-7", '{{ host("example.com") }} {\n}\n'))
+
+    assert "*." not in render_caddy_manifest(roots, dns_zones=frozenset({"example.com"}))
+
+
+def test_infer_public_url_gives_no_url_when_host_needs_params(tmp_path: Path) -> None:
+    deployment = Deployment.create(Recipe.parse("owner/repo"), "pr-7", _deployment(tmp_path).roots)
+    template_path = tmp_path / "Caddyfile.j2"
+    template_path.write_text("{{ host(params.HOST) }} {\n}\n", encoding="utf-8")
+
+    assert infer_public_url(template_path, deployment) is None
+
+
+def test_caddy_output_hides_the_values_of_the_caddy_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_file = tmp_path / "kitshn.env"
+    env_file.write_text("CLOUDFLARE_API_TOKEN=tok-123456\n", encoding="utf-8")
+    monkeypatch.setattr(kitshn.caddy, "CADDY_ENV_FILE", env_file)
+
+    assert redact_caddy_env("API token 'tok-123456' appears invalid") == "API token '<redacted>' appears invalid"
