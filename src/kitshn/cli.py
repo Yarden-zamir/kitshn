@@ -115,6 +115,14 @@ class CaddyHostFlags:
             help="Global Caddy dns option, such as 'cloudflare {env.CLOUDFLARE_API_TOKEN}'.",
         ),
     ] = None
+    dns_zone: Annotated[
+        list[str] | None,
+        Parameter(
+            "--dns-zone",
+            negative=(),
+            help="Zone that --dns-provider serves, such as example.com. Repeatable.",
+        ),
+    ] = None
     caddy_env_file: Annotated[
         Path | None,
         Parameter("--caddy-env-file", help="KEY=VALUE file to install as the Caddy environment."),
@@ -125,6 +133,7 @@ class CaddyHostFlags:
             modules=[CaddyModule.parse(spec) for spec in self.caddy_module or []],
             acme_email=self.acme_email,
             dns_provider=self.dns_provider,
+            dns_zones=self.dns_zone or [],
             env_file=self.caddy_env_file,
         )
 

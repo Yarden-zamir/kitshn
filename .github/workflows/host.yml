@@ -48,4 +48,5 @@ jobs:
           --caddy-module github.com/caddy-dns/cloudflare@v0.2.4
           --acme-email dev@yarden-zamir.com
           --dns-provider 'cloudflare {env.CLOUDFLARE_API_TOKEN}'
+          --dns-zone yarden-zamir.com
           --caddy-env-file "$RUNNER_TEMP/caddy.env"

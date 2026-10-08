@@ -163,6 +163,8 @@ def bootstrap_remote(
         bootstrap_args.extend(["--acme-email", caddy_host.acme_email])
     if caddy_host.dns_provider:
         bootstrap_args.extend(["--dns-provider", caddy_host.dns_provider])
+    for zone in caddy_host.dns_zones:
+        bootstrap_args.extend(["--dns-zone", zone])
 
     command = shlex.join(bootstrap_args)
     if caddy_host.env_file is not None:

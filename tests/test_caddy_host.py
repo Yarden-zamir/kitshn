@@ -108,6 +108,7 @@ def test_options_reload_and_env_restarts(host: Path, tmp_path: Path) -> None:
     settings = CaddyHostSettings(
         acme_email="dev@example.com",
         dns_provider="cloudflare {env.CLOUDFLARE_API_TOKEN}",
+        dns_zones=["example.com"],
         env_file=source,
     )
     runner = HostRunner()
@@ -118,6 +119,7 @@ def test_options_reload_and_env_restarts(host: Path, tmp_path: Path) -> None:
     assert "email dev@example.com" in options
     assert "dir https://acme.zerossl.com/v2/DV90" in options
     assert "dns cloudflare {env.CLOUDFLARE_API_TOKEN}" in options
+    assert kitshn.caddy.caddy_dns_zones(kitshn.caddy_host.CADDY_OPTIONS_FILE) == frozenset({"example.com"})
     assert "import" in kitshn.caddy_host.CADDY_BASE_CONFIG.read_text(encoding="utf-8").splitlines()[1]
     env_file = kitshn.caddy_host.CADDY_ENV_FILE
     assert "CLOUDFLARE_API_TOKEN=abc123" in env_file.read_text(encoding="utf-8")

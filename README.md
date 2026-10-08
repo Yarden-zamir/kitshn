@@ -221,7 +221,8 @@ one label below it, such as `pr-7.app.example.com`:
 }
 ```
 
-Preview hostnames need DNS, usually a wildcard `*.app.example.com` record pointing at the VPS.
+Preview hostnames need DNS: `app.example.com` and `*.app.example.com` records pointing at the
+VPS.
 
 Let's Encrypt issues at most 50 new certificates per registered domain each week, and each
 preview hostname needs one. When the host Caddy has a DNS provider (below), KitSHn adds one
@@ -238,6 +239,7 @@ kitshn bootstrap-remote deploy@example.com \
   --caddy-module github.com/caddy-dns/cloudflare@v0.2.4 \
   --acme-email you@example.com \
   --dns-provider 'cloudflare {env.CLOUDFLARE_API_TOKEN}' \
+  --dns-zone example.com \
   --caddy-env-file caddy.env
 ```
 

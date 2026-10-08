@@ -17,6 +17,7 @@ from .caddy import (
     CADDY_BASE_CONFIG,
     CADDY_ENV_FILE,
     CADDY_OPTIONS_FILE,
+    DNS_ZONE_MARKER,
     caddy_group,
     caddy_validate_command,
 )
@@ -60,6 +61,8 @@ class CaddyHostSettings:
     acme_email: str | None = None
     # The global `dns` option, for example "cloudflare {env.CLOUDFLARE_API_TOKEN}".
     dns_provider: str | None = None
+    # Zones that the DNS provider and its token serve; only previews inside them share a wildcard.
+    dns_zones: list[str] = field(default_factory=list)
     # KEY=VALUE lines that become the Caddy service environment.
     env_file: Path | None = None
 
@@ -115,7 +118,7 @@ def _apply(settings: CaddyHostSettings, built: Path | None, runner: CommandRunne
             drop_in_changed = _write_if_changed(SYSTEMD_DROP_IN, _drop_in())
         options_changed = False
         if settings.acme_email or settings.dns_provider:
-            options = _options(settings.acme_email, settings.dns_provider)
+            options = _options(settings.acme_email, settings.dns_provider, settings.dns_zones)
             options_changed = _write_if_changed(CADDY_OPTIONS_FILE, options)
             base = CADDY_BASE_CONFIG.read_text(encoding="utf-8") if CADDY_BASE_CONFIG.exists() else ""
             options_changed |= _write_if_changed(CADDY_BASE_CONFIG, with_options_import(base))
@@ -166,7 +169,7 @@ def with_options_import(content: str) -> str:
     return "\n".join(["{", f"\t{import_line}", "}", "", *lines]) + "\n"
 
 
-def _options(acme_email: str | None, dns_provider: str | None) -> str:
+def _options(acme_email: str | None, dns_provider: str | None, dns_zones: list[str]) -> str:
     lines = [GENERATED_HEADER]
     if acme_email:
         # Explicit issuers, so that sites with their own `tls { dns }` also fall back to ZeroSSL.
@@ -180,6 +183,7 @@ def _options(acme_email: str | None, dns_provider: str | None) -> str:
             ]
         )
     if dns_provider:
+        lines.extend(f"{DNS_ZONE_MARKER}{zone}" for zone in sorted(dns_zones))
         lines.append(f"dns {dns_provider}")
     return "\n".join(lines) + "\n"
 

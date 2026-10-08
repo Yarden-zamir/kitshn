@@ -149,6 +149,7 @@ def test_bootstrap_remote_copies_the_caddy_env_by_scp_and_removes_it(tmp_path: P
         modules=[CaddyModule.parse("github.com/caddy-dns/cloudflare@v0.2.4")],
         acme_email="dev@example.com",
         dns_provider="cloudflare {env.TOKEN}",
+        dns_zones=["example.com"],
         env_file=env_file,
     )
 
@@ -160,6 +161,7 @@ def test_bootstrap_remote_copies_the_caddy_env_by_scp_and_removes_it(tmp_path: P
     assert ssh[:4] == ("ssh", "-i", "key", "prod-vps")
     assert "--caddy-module github.com/caddy-dns/cloudflare@v0.2.4" in ssh[4]
     assert "--dns-provider 'cloudflare {env.TOKEN}'" in ssh[4]
+    assert "--dns-zone example.com" in ssh[4]
     assert f"--caddy-env-file {remote_env}" in ssh[4]
     assert f"rm -f {remote_env}" in ssh[4]
     assert "secret" not in ssh[4]

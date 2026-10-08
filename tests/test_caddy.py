@@ -7,7 +7,7 @@ import pytest
 import kitshn.caddy
 from kitshn.caddy import (
     apply_caddyfile,
-    caddy_options_have_dns,
+    caddy_dns_zones,
     caddy_validate_command,
     infer_public_url,
     render_caddy_manifest,
@@ -183,19 +183,22 @@ def test_manifest_adds_one_wildcard_site_per_preview_base_when_dns_is_set_up(tmp
         deployment.generated_caddyfile.parent.mkdir(parents=True, exist_ok=True)
         deployment.generated_caddyfile.write_text(rendered, encoding="utf-8")
 
-    manifest = render_caddy_manifest(roots, preview_wildcards=True)
+    manifest = render_caddy_manifest(roots, dns_zones=frozenset({"example.com"}))
 
     assert manifest.count("*.app.example.com {") == 1
     assert "\ttls {\n\t\tdns\n\t}\n\tabort\n" in manifest
     assert "import owner/repo/pr-8/Caddyfile" in manifest
-    assert "*." not in render_caddy_manifest(roots, preview_wildcards=False)
+    assert "*." not in render_caddy_manifest(roots, dns_zones=frozenset())
+    assert "*." not in render_caddy_manifest(roots, dns_zones=frozenset({"other.com"}))
 
 
-def test_manifest_wildcards_follow_the_global_dns_option(tmp_path: Path) -> None:
+def test_dns_zones_come_from_the_options_file_only_with_a_dns_provider(tmp_path: Path) -> None:
     options = tmp_path / "options.caddy"
-    assert caddy_options_have_dns(options) is False
-    options.write_text("email a@example.com\ndns cloudflare {env.TOKEN}\n", encoding="utf-8")
-    assert caddy_options_have_dns(options) is True
+    assert caddy_dns_zones(options) == frozenset()
+    options.write_text("# kitshn dns zone: example.com\n", encoding="utf-8")
+    assert caddy_dns_zones(options) == frozenset()
+    options.write_text("# kitshn dns zone: example.com\ndns cloudflare {env.TOKEN}\n", encoding="utf-8")
+    assert caddy_dns_zones(options) == frozenset({"example.com"})
 
 
 def test_validation_loads_the_caddy_environment_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

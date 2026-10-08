@@ -88,8 +88,12 @@ Recipe side:
   `*.<base> { tls { dns } abort }`. Caddy 2.10 and later use a managed wildcard certificate
   for every covered site and get no certificate per preview. A hostname with no preview gets
   its connection closed.
-- The manifest adds these sites only when the global options set a `dns` provider. Without
-  one, each preview gets its own certificate, as before.
+- The manifest adds a wildcard site only for a base inside a zone that the host's DNS provider
+  serves. Bootstrap records those zones (`--dns-zone`) in the options file as
+  `# kitshn dns zone: <zone>` lines, read only when the file also sets `dns`. Outside those
+  zones, each preview gets its own certificate, as before. Without this check, a base in
+  another zone would get a wildcard that cannot be issued, and Caddy would then skip the
+  per-preview certificates that the wildcard covers.
 - A wildcard site exists while at least one preview of that base exists. The first preview
   after none gets a new wildcard certificate.
 
@@ -108,6 +112,8 @@ Host side, set by `bootstrap` flags and kept by later runs that pass the same fl
   `tls { dns }`, such as the wildcard sites, fall back to ZeroSSL too.
 - `--dns-provider '<name> <args>'`: the global `dns` option, for example
   `cloudflare {env.CLOUDFLARE_API_TOKEN}`.
+- `--dns-zone <zone>`, repeatable: a zone that the provider token can edit, for example
+  `example.com`.
 - These options go to `/etc/caddy/kitshn-options.caddy`. Bootstrap adds
   `import /etc/caddy/kitshn-options.caddy` to the global options block of
   `/etc/caddy/Caddyfile`, and creates that block when it is missing.
@@ -123,6 +129,11 @@ Host side, set by `bootstrap` flags and kept by later runs that pass the same fl
   old process. New options alone reload. The build runs outside the host deploy lock; the
   install, file writes, validation, and restart run inside it.
 - Any failure restores the binary and every file, and restarts Caddy when it was touched.
+
+DNS records: each preview base needs explicit `<base>` and `*.<base>` records that point at the
+VPS. A zone-wide `*.example.com` record is not enough. The DNS challenge creates
+`_acme-challenge.<base>`, which makes `<base>` an existing name, and a wildcard record never
+answers for an existing name or for the names below it (RFC 4592).
 
 Cloudflare token: an API token with `Zone / Zone / Read` and `Zone / DNS / Edit` on the zone.
 The "Edit zone DNS" template gives only DNS edit. A client IP filter must allow the IPv4 and
