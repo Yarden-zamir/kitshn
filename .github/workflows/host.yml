@@ -1,0 +1,51 @@
+name: KitSHn Host
+
+# Rebuilds the maintainer VPS host setup from this file and the repository secrets: the Caddy
+# build with the Cloudflare DNS module, ACME options with ZeroSSL fallback, and the DNS token
+# for Caddy. See specs/caddy.md, "Wildcard preview certificates". Bootstrap skips what is
+# already in place, so a rerun changes nothing.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/host.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kitshn-host
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+
+      - name: Check host credentials
+        env:
+          KITSHN_VPS_HOST: ${{ vars.KITSHN_VPS_HOST }}
+          KITSHN_SSH_KEY: ${{ secrets.KITSHN_SSH_KEY }}
+        run: uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ci-preflight
+
+      - name: Write the Caddy environment
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_DNS_API_TOKEN }}
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "missing secret CLOUDFLARE_DNS_API_TOKEN" >&2; exit 1; }
+          umask 077
+          printf 'CLOUDFLARE_API_TOKEN=%s\n' "$CLOUDFLARE_API_TOKEN" > "$RUNNER_TEMP/caddy.env"
+
+      - name: Bootstrap the host over SSH
+        env:
+          KITSHN_VPS_HOST: ${{ vars.KITSHN_VPS_HOST }}
+          KITSHN_SSH_KEY: ${{ secrets.KITSHN_SSH_KEY }}
+        run: >-
+          uvx --from git+https://github.com/Yarden-zamir/kitshn.git kitshn ci-bootstrap
+          --caddy-module github.com/caddy-dns/cloudflare@v0.2.4
+          --acme-email dev@yarden-zamir.com
+          --dns-provider 'cloudflare {env.CLOUDFLARE_API_TOKEN}'
+          --caddy-env-file "$RUNNER_TEMP/caddy.env"

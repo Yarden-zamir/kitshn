@@ -2,6 +2,7 @@ from pathlib import Path
 from collections.abc import Mapping, Sequence
 
 from kitshn.bootstrap import bootstrap, bootstrap_remote, doctor, expected_caddy_import
+from kitshn.caddy_host import CaddyHostSettings, CaddyModule
 from kitshn.models import Roots
 from kitshn.runner import CommandResult, CommandRunner
 
@@ -138,3 +139,27 @@ def _roots(tmp_path: Path) -> Roots:
         persistent=tmp_path / "persistent",
         logs=tmp_path / "logs",
     )
+
+
+def test_bootstrap_remote_copies_the_caddy_env_by_scp_and_removes_it(tmp_path: Path) -> None:
+    env_file = tmp_path / "caddy.env"
+    env_file.write_text("TOKEN=secret\n", encoding="utf-8")
+    runner = FakeRunner({"ssh", "scp"})
+    settings = CaddyHostSettings(
+        modules=[CaddyModule.parse("github.com/caddy-dns/cloudflare@v0.2.4")],
+        acme_email="dev@example.com",
+        dns_provider="cloudflare {env.TOKEN}",
+        env_file=env_file,
+    )
+
+    bootstrap_remote("prod-vps", runner, caddy_host=settings, ssh_options=["-i", "key"])
+
+    scp, ssh = runner.commands
+    assert scp[:4] == ("scp", "-i", "key", str(env_file))
+    remote_env = scp[4].removeprefix("prod-vps:")
+    assert ssh[:4] == ("ssh", "-i", "key", "prod-vps")
+    assert "--caddy-module github.com/caddy-dns/cloudflare@v0.2.4" in ssh[4]
+    assert "--dns-provider 'cloudflare {env.TOKEN}'" in ssh[4]
+    assert f"--caddy-env-file {remote_env}" in ssh[4]
+    assert f"rm -f {remote_env}" in ssh[4]
+    assert "secret" not in ssh[4]

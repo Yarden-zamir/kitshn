@@ -12,7 +12,9 @@ import stat
 from typing import Literal
 
 from .caddy import caddy_validate_command
+from .caddy_host import CaddyHostSettings, configure_caddy_host
 from .errors import KitshnError
+from .filesystem import host_deploy_lock
 from .installer_registry import Installer, get_installer, suggested_installers
 from .models import Roots
 from .runner import CommandRunner
@@ -57,6 +59,7 @@ def bootstrap(
     installer_name: str | None = None,
     network: str = "kitshn-edge",
     caddyfile: Path = Path("/etc/caddy/Caddyfile"),
+    caddy_host: CaddyHostSettings | None = None,
 ) -> DoctorReport:
     initial_report = doctor(roots=roots, runner=runner, network=network, caddyfile=caddyfile)
     if install_missing and _has_missing_dependencies(initial_report):
@@ -80,6 +83,11 @@ def bootstrap(
     manifest.chmod(0o644)
     _ensure_docker_network(network, runner)
     _ensure_caddy_import(caddyfile, roots)
+    configure_caddy_host(
+        caddy_host or CaddyHostSettings(),
+        runner,
+        lock=lambda: host_deploy_lock(roots, "kitshn bootstrap"),
+    )
     return doctor(roots=roots, runner=runner, network=network, caddyfile=caddyfile)
 
 
@@ -133,7 +141,11 @@ def bootstrap_remote(
     *,
     install_missing: bool = False,
     installer_name: str | None = None,
+    caddy_host: CaddyHostSettings | None = None,
+    ssh_options: list[str] | None = None,
 ) -> None:
+    caddy_host = caddy_host or CaddyHostSettings()
+    ssh_options = ssh_options or []
     bootstrap_args = [
         "uvx",
         "--from",
@@ -145,6 +157,22 @@ def bootstrap_remote(
         bootstrap_args.append("--install-missing")
     if installer_name is not None:
         bootstrap_args.extend(["--installer", installer_name])
+    for module in caddy_host.modules:
+        bootstrap_args.extend(["--caddy-module", str(module)])
+    if caddy_host.acme_email:
+        bootstrap_args.extend(["--acme-email", caddy_host.acme_email])
+    if caddy_host.dns_provider:
+        bootstrap_args.extend(["--dns-provider", caddy_host.dns_provider])
+
+    command = shlex.join(bootstrap_args)
+    if caddy_host.env_file is not None:
+        # The secret travels by scp into a root-only temp file, never on a command line.
+        remote_env = f"/tmp/kitshn-caddy-{os.getpid()}.env"
+        runner.run(["scp", *ssh_options, str(caddy_host.env_file), f"{target}:{remote_env}"])
+        command = (
+            f"{command} --caddy-env-file {shlex.quote(remote_env)}; status=$?; "
+            f"rm -f {shlex.quote(remote_env)}; exit $status"
+        )
 
     remote_command = "\n".join(
         [
@@ -153,10 +181,11 @@ def bootstrap_remote(
             "  curl -LsSf https://astral.sh/uv/install.sh | sh",
             "fi",
             "export PATH=$HOME/.local/bin:$PATH",
-            shlex.join(bootstrap_args),
+            "set +e",
+            command,
         ]
     )
-    runner.run(["ssh", target, remote_command])
+    runner.run(["ssh", *ssh_options, target, remote_command])
 
 
 def _ensure_user_exists(user: str) -> None:

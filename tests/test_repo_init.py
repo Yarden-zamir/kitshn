@@ -85,9 +85,8 @@ def test_init_recipe_repo_adds_optional_docker_and_routing_files(tmp_path: Path)
     assert "#       - kitshn-edge" not in compose
     assert "services: {}" in compose
     assert "# Caddyfiles support comments with #." in caddyfile
-    assert "# Preview-safe hostname example:" in caddyfile
-    assert 'environment == "prod"' in caddyfile
-    assert 'pr.{{ environment.removeprefix("pr-") }}.example.com' in caddyfile
+    assert "# Preview-safe hostname example." in caddyfile
+    assert '# {{ host("app.example.com") }} {' in caddyfile
     assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == "Caddyfile\n"
 
 
@@ -190,7 +189,7 @@ def test_init_static_template_writes_a_complete_caddy_socket_recipe(tmp_path: Pa
     assert "${KITSHN_SOCKET_DIR}:${KITSHN_SOCKET_DIR}" in compose
     assert 'test: ["CMD", "test", "-S", "${KITSHN_DEFAULT_SOCKET}"]' in compose
     caddyfile = (tmp_path / "Caddyfile.j2").read_text(encoding="utf-8")
-    assert "site.example.com" in caddyfile and 'pr.{{ environment.removeprefix("pr-") }}.site.example.com' in caddyfile
+    assert '{{ host("site.example.com") }} {' in caddyfile
     assert (tmp_path / "Dockerfile").read_text(encoding="utf-8") == "FROM caddy:2-alpine\n\nCOPY container/Caddyfile /etc/caddy/Caddyfile\nCOPY site /srv\n"
     assert result.checklist[0] == "put the files to serve under site/"
     assert not any("example.com in Caddyfile.j2" in step for step in result.checklist)

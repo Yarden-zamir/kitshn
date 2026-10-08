@@ -82,8 +82,12 @@ host port. Caddy on the host: `reverse_proxy unix//{{ paths.default_socket }}`.
 - TCP-only image: add an `alpine/socat` sidecar forwarding `${KITSHN_DEFAULT_SOCKET}` to the
   app port. Keep it on the project-local default network; extra networks make Docker DNS
   resolve `app` to another deployment's container, producing 502s with everything "healthy".
-- PR previews need per-environment hostnames. `ambiguous site definition` means prod and the
-  preview rendered the same hostname; fix the template, do not disable previews.
+- PR previews need per-environment hostnames. Write the site address as
+  `{{ host("app.example.com") }}`: prod gets `app.example.com`, PR 7 gets
+  `pr-7.app.example.com`, and all previews share one wildcard certificate when the host has a
+  DNS provider. Do not hand-write `pr.<number>.` hostnames; no wildcard covers them.
+  `ambiguous site definition` means prod and the preview rendered the same hostname; fix the
+  template, do not disable previews.
 - `track` and the workflow infer the public URL from `Caddyfile.j2` only when it renders one
   concrete hostname for the environment. Wildcards or several hosts mean no URL check.
 

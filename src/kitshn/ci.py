@@ -17,10 +17,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from .bootstrap import bootstrap_remote
 from .caddy import infer_public_url
+from .caddy_host import CaddyHostSettings
 from .errors import KitshnError, NoMatchingDeployment
 from .httpcheck import Fetch, HttpResponse, fetch_url
 from .models import Deployment, Recipe
+from .runner import CommandRunner
 from .resolve import DeployEvent, ResolveInput, keep_output, parse_keep, resolve_deployment
 
 RESERVED_PARAM_NAMES = {"KITSHN_VPS_HOST", "KITSHN_SSH_KEY"}
@@ -343,6 +346,16 @@ def deploy_over_ssh(params_file: Path) -> None:
             ]
         )
         _run(["ssh", *ssh_args, vps_host, remote_command])
+
+
+def bootstrap_over_ssh(caddy_host: CaddyHostSettings) -> None:
+    """Run `bootstrap-remote` against KITSHN_VPS_HOST with the workflow's SSH key."""
+
+    vps_host = _required_env("KITSHN_VPS_HOST")
+    ssh_key = _required_env("KITSHN_SSH_KEY")
+    with _ssh_key_file(ssh_key) as key_file:
+        ssh_args = ["-i", str(key_file), "-o", "StrictHostKeyChecking=accept-new", "-o", "ServerAliveInterval=30"]
+        bootstrap_remote(vps_host, CommandRunner(), caddy_host=caddy_host, ssh_options=ssh_args)
 
 
 def destroy_over_ssh() -> None:

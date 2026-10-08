@@ -9,6 +9,8 @@ Bootstrap owns:
 - Caddy global config.
 - persistent Caddy `/data` and `/config`.
 - base Caddyfile importing `/deployments/Caddyfile`.
+- optional: a Caddy build with extra modules, global ACME and DNS options, and the Caddy
+  service environment. See "Wildcard preview certificates".
 
 Recipe route contract:
 
@@ -33,6 +35,10 @@ Jinja2 context includes:
 - deployment identity
 - deployment paths
 - full deployment params from `params.env`, including secrets, as `params`
+- `host(base)`: `base` for `prod`, `<environment>.<base>` for every other environment
+
+When KitSHn runs as root and the Caddy service has its own user, a generated `Caddyfile` is
+`root:<caddy group>` with mode `0640`, because it can hold `params` secrets.
 
 Socket ingress:
 
@@ -58,14 +64,75 @@ Permission model:
 Preview-safe hostname pattern:
 
 ```jinja
-{% if environment == "prod" -%}
-example.com
-{%- else -%}
-pr.{{ environment.removeprefix("pr-") }}.example.com
-{%- endif %} {
+{{ host("app.example.com") }} {
     reverse_proxy unix//{{ paths.default_socket }}
 }
 ```
+
+Prod serves `app.example.com`; the preview of PR 7 serves `pr-7.app.example.com`. A preview
+hostname is exactly one label below the base, so one wildcard certificate covers all of them.
+The older `pr.<number>.app.example.com` form is two labels below the base. No wildcard covers
+it, so each preview needs its own certificate.
+
+## Wildcard Preview Certificates
+
+Let's Encrypt issues at most 50 new certificates per registered domain in 7 days. Each preview
+hostname used to take one, so busy previews blocked new certificates for every site on the
+domain.
+
+Recipe side:
+
+- `host(base)` in a non-prod render records `*.<base>` as a comment line at the top of the
+  generated `Caddyfile`: `# kitshn preview wildcard: *.<base>`.
+- The manifest adds one site per distinct recorded wildcard, before the imports:
+  `*.<base> { tls { dns } abort }`. Caddy 2.10 and later use a managed wildcard certificate
+  for every covered site and get no certificate per preview. A hostname with no preview gets
+  its connection closed.
+- The manifest adds these sites only when the global options set a `dns` provider. Without
+  one, each preview gets its own certificate, as before.
+- A wildcard site exists while at least one preview of that base exists. The first preview
+  after none gets a new wildcard certificate.
+
+Host side, set by `bootstrap` flags and kept by later runs that pass the same flags:
+
+- `--caddy-module <path>@v<version>`, repeatable: builds the packaged Caddy version with the
+  modules in the `caddy:<version>-builder` image (xcaddy), limited to 2 CPUs. It skips the
+  build when `/usr/bin/caddy` reports that version with those module versions. The first
+  install adds a `dpkg-divert` of `/usr/bin/caddy` to `/usr/bin/caddy.default`, so a package
+  upgrade does not overwrite the build. After a package upgrade, the next bootstrap rebuilds
+  for the new packaged version. Only dpkg hosts are supported.
+- `--acme-email <email>`: global `email`, plus `cert_issuer acme` (Let's Encrypt) and
+  `cert_issuer acme { dir https://acme.zerossl.com/v2/DV90 }`. ZeroSSL is the fallback when
+  Let's Encrypt refuses, for example at the rate limit. ZeroSSL needs only the email; Caddy
+  gets the EAB credentials itself. The explicit issuers make sites with their own
+  `tls { dns }`, such as the wildcard sites, fall back to ZeroSSL too.
+- `--dns-provider '<name> <args>'`: the global `dns` option, for example
+  `cloudflare {env.CLOUDFLARE_API_TOKEN}`.
+- These options go to `/etc/caddy/kitshn-options.caddy`. Bootstrap adds
+  `import /etc/caddy/kitshn-options.caddy` to the global options block of
+  `/etc/caddy/Caddyfile`, and creates that block when it is missing.
+- `--caddy-env-file <file>`: `KEY=VALUE` lines that become `/etc/caddy/kitshn.env`, mode
+  `0640` with the Caddy group. A systemd drop-in,
+  `/etc/systemd/system/caddy.service.d/kitshn.conf`, starts Caddy with
+  `--envfile /etc/caddy/kitshn.env` and without `--environ`, which prints the environment to
+  the journal.
+- `caddy validate` everywhere (deploy, diagnose, doctor, bootstrap) adds
+  `--envfile /etc/caddy/kitshn.env` when the file exists. Validation provisions the DNS
+  module, and the module rejects an empty token.
+- A new binary, environment, or drop-in needs `systemctl restart caddy`; a reload keeps the
+  old process. New options alone reload. The build runs outside the host deploy lock; the
+  install, file writes, validation, and restart run inside it.
+- Any failure restores the binary and every file, and restarts Caddy when it was touched.
+
+Cloudflare token: an API token with `Zone / Zone / Read` and `Zone / DNS / Edit` on the zone.
+The "Edit zone DNS" template gives only DNS edit. A client IP filter must allow the IPv4 and
+the IPv6 address of the VPS.
+
+Secrets stay in GitHub. A host workflow writes the token into a `0600` file and runs
+`kitshn ci-bootstrap` with the flags above. `ci-bootstrap` reads `KITSHN_VPS_HOST` and
+`KITSHN_SSH_KEY` like `ci-deploy`, copies the file with `scp` to a temp file on the VPS,
+runs the hosted bootstrap, and removes the temp file. KitSHn's own repo has such a workflow,
+`.github/workflows/host.yml`, for the maintainer's VPS.
 
 `Caddyfile.j2` should treat `params` as sensitive. Use it only for values that must be rendered into Caddy config.
 

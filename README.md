@@ -212,19 +212,38 @@ and removes a stale socket file from a previous container on start, which is wha
 `kitshn init --docker` includes a worked example of both.
 
 For PR previews, make the hostname environment-aware, or Caddy will reject two site blocks
-claiming the same domain:
+claiming the same domain. `host()` keeps the name for `prod` and puts every other environment
+one label below it, such as `pr-7.app.example.com`:
 
 ```caddyfile
-{% if environment == "prod" -%}
-example.com
-{%- else -%}
-pr.{{ environment.removeprefix("pr-") }}.example.com
-{%- endif %} {
+{{ host("app.example.com") }} {
     reverse_proxy unix//{{ paths.default_socket }}
 }
 ```
 
-Preview hostnames need DNS, usually a wildcard `*.example.com` record pointing at the VPS.
+Preview hostnames need DNS, usually a wildcard `*.app.example.com` record pointing at the VPS.
+
+Let's Encrypt issues at most 50 new certificates per registered domain each week, and each
+preview hostname needs one. When the host Caddy has a DNS provider (below), KitSHn adds one
+`*.app.example.com` site for each `host()` base, and all previews share its certificate.
+
+### Wildcard Certificates For Previews
+
+Once per server. This builds Caddy with the DNS module, adds ZeroSSL as fallback issuer after
+Let's Encrypt, and gives Caddy the DNS API token:
+
+```bash
+printf 'CLOUDFLARE_API_TOKEN=%s\n' "$TOKEN" > caddy.env   # umask 077
+kitshn bootstrap-remote deploy@example.com \
+  --caddy-module github.com/caddy-dns/cloudflare@v0.2.4 \
+  --acme-email you@example.com \
+  --dns-provider 'cloudflare {env.CLOUDFLARE_API_TOKEN}' \
+  --caddy-env-file caddy.env
+```
+
+The Cloudflare token needs `Zone / Zone / Read` and `Zone / DNS / Edit` on the zone. To keep
+the token in GitHub instead of on a laptop, run the same flags from a workflow with
+`kitshn ci-bootstrap`; see [Caddy Ingress](specs/caddy.md).
 
 ### Secrets And Config
 
