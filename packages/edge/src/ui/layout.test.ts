@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Circle } from "../core/model.ts";
-import { type Box, cardBox, circleBox, headAngle, headBox } from "../core/place.ts";
+import { type Box, cardBox, circleBox, headShift, headBox } from "../core/place.ts";
 import {
   cardLayer,
   stackOffsets,
@@ -108,26 +108,29 @@ describe("fit and pan leave an open panel free", () => {
   });
 });
 
-describe("a circle head slides along its edge off the cards", () => {
+describe("a circle head slides along its top edge off the cards (K-506, K-536)", () => {
   const her = circle(0, 0, 220, "Her");
 
-  it("stays at the top when no card is there", () => {
-    expect(headAngle(her, [cardBox({ x: 0, y: 100 })])).toBe(0);
+  it("stays in the middle when no card is there", () => {
+    expect(headShift(her, [cardBox({ x: 0, y: 100 })])).toBe(0);
   });
 
-  it("moves to the first free spot beside a card that sits on the top of the edge", () => {
+  it("moves to the first free spot beside a card that sits on the middle of the top edge", () => {
     const card = cardBox({ x: 0, y: -220 });
-    const angle = headAngle(her, [card]);
-    expect(angle).not.toBe(0);
-    const head = headBox(her, angle);
+    const shift = headShift(her, [card]);
+    expect(shift).not.toBe(0);
+    const head = headBox(her, shift);
+    // The head stays on the top edge; it only slides sideways.
+    expect(head.bottom - head.top).toBe(36);
+    expect(head.top).toBe(-240);
     expect(head.right <= card.left || head.left >= card.right || head.bottom <= card.top).toBe(true);
   });
 
-  it("stays at the top when every spot covers a card, where it draws above them", () => {
+  it("stays in the middle when every spot covers a card, where it draws above them", () => {
     const cards = [-300, -200, -100, 0, 100, 200, 300].flatMap((x) =>
       [-240, -200, -160, -120].map((y) => cardBox({ x, y })),
     );
-    expect(headAngle(her, cards)).toBe(0);
+    expect(headShift(her, cards)).toBe(0);
   });
 });
 

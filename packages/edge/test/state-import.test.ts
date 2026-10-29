@@ -1,9 +1,9 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
-import type { Circle } from "../src/core/model.ts";
+import { type Circle, insideCircle } from "../src/core/model.ts";
 import { type StateExport, stateExport } from "../src/worker/backups.ts";
-import { MIGRATIONS } from "../src/worker/migrations.ts";
+import { MIGRATIONS, SQUARE_MIGRATION } from "../src/worker/migrations.ts";
 import { IMPORT_OBJECT } from "../src/worker/state-import.ts";
 import { send } from "./access.ts";
 
@@ -133,6 +133,38 @@ describe("state import (K-1833)", () => {
     const after = await importInto("target-b");
     expect(after.refused).toBeNull();
     expect(after.version).toBe(String(MIGRATIONS.length));
+  });
+
+  it("moves a card out of a square corner on an export from before K-536, so it keeps its circles", async () => {
+    const full = await exportOf("source-s");
+    const corner = {
+      id: "corner",
+      kind: "file",
+      name: "corner.pdf",
+      addresses: [],
+      status: "running",
+      group: null,
+      machine: null,
+    };
+    // 170 from the centre of Friends on both axes: outside the round circle of r 200, inside its square.
+    const old: StateExport = {
+      ...full,
+      schemaVersion: SQUARE_MIGRATION - 1,
+      tables: {
+        ...full.tables,
+        resources: [...full.tables["resources"]!, { id: corner.id, body: JSON.stringify(corner) }],
+        places: [...full.tables["places"]!, { id: corner.id, x: 1070, y: 1070 }],
+        meta: [{ key: "schema_version", value: String(SQUARE_MIGRATION - 1) }],
+      },
+    };
+    await upload(old);
+    const after = await importInto("target-s");
+    expect(after.refused).toBeNull();
+    const place = await runInDurableObject(env.KITSHN.getByName("target-s"), (_, durable) =>
+      durable.storage.sql.exec<{ x: number; y: number }>("SELECT x, y FROM places WHERE id = 'corner'").one(),
+    );
+    expect(insideCircle(place, circle)).toBe(false);
+    expect(after.history).toContain("Moved 1 card out of square corners, so each keeps its circles (K-536)");
   });
 
   it("refuses with a fixed code, and changes nothing", async () => {

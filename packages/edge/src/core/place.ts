@@ -1,5 +1,5 @@
 import type { Edit } from "./changes.ts";
-import { type Circle, type Point, type State, circlesHolding, insideCircle } from "./model.ts";
+import { type Circle, type Point, type State, circlesHolding, edgeDistance, insideCircle } from "./model.ts";
 
 /** A card on the map, around its place: the width and the top margin come from `.card` in styles.css. */
 export const CARD_BOX = { half: 95, above: 36, below: 50 } as const;
@@ -11,7 +11,7 @@ export interface Box {
   readonly bottom: number;
 }
 
-/** A circle head sits this far above the circle edge and is about this tall (`.circle .head`). */
+/** A circle head sits this far above the top edge of its square and is about this tall (`.circle .head`). */
 export const HEAD = { above: 20, below: 16 } as const;
 
 /**
@@ -29,10 +29,13 @@ export const cardBox = (at: Point): Box => ({
   bottom: at.y + CARD_BOX.below,
 });
 
-/** The head of a circle at `angle` (radians from the top, positive to the right), in map units. */
-export const headBox = (circle: Circle, angle: number): Box => {
-  const x = circle.x + circle.r * Math.sin(angle);
-  const y = circle.y - circle.r * Math.cos(angle);
+/**
+ * The head of a circle `shift` along its top edge (K-506, K-536): 0 is the middle, -1 the left corner and 1 the
+ * right corner, in map units.
+ */
+export const headBox = (circle: Circle, shift: number): Box => {
+  const x = circle.x + circle.r * shift;
+  const y = circle.y - circle.r;
   const half = headWidth(circle) / 2;
   return { left: x - half, top: y - HEAD.above, right: x + half, bottom: y + HEAD.below };
 };
@@ -40,18 +43,18 @@ export const headBox = (circle: Circle, angle: number): Box => {
 export const boxesOverlap = (a: Box, b: Box) =>
   a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
 
-/** The spots that a head tries along its circle edge, in this order: the top, then further to each side. */
-const HEAD_ANGLES = [0, -30, 30, -55, 55].map((degrees) => (degrees * Math.PI) / 180);
+/** The spots that a head tries along its top edge, in this order: the middle, then further to each side. */
+const HEAD_SHIFTS = [0, -0.5, 0.5, -0.9, 0.9];
 
 /**
- * Where a circle head sits (K-506): the first spot along the top of the edge whose head covers no card. When
- * every spot covers a card, the head stays at the top; heads draw above cards, so the head stays readable.
+ * Where a circle head sits (K-506): the first spot along the top edge whose head covers no card. When every
+ * spot covers a card, the head stays in the middle; heads draw above cards, so the head stays readable.
  */
-export function headAngle(circle: Circle, cards: ReadonlyArray<Box>): number {
-  return HEAD_ANGLES.find((angle) => !cards.some((card) => boxesOverlap(headBox(circle, angle), card))) ?? 0;
+export function headShift(circle: Circle, cards: ReadonlyArray<Box>): number {
+  return HEAD_SHIFTS.find((shift) => !cards.some((card) => boxesOverlap(headBox(circle, shift), card))) ?? 0;
 }
 
-/** A circle with its head at every spot that the head can slide to (`headAngle`). */
+/** A circle with its head at every spot that the head can slide to (`headShift`). */
 export const circleBox = (circle: Circle): Box =>
   union([
     {
@@ -60,7 +63,7 @@ export const circleBox = (circle: Circle): Box =>
       right: circle.x + circle.r,
       bottom: circle.y + circle.r,
     },
-    ...HEAD_ANGLES.map((angle) => headBox(circle, angle)),
+    ...HEAD_SHIFTS.map((shift) => headBox(circle, shift)),
   ]);
 
 export const union = (boxes: ReadonlyArray<Box>): Box => ({
@@ -105,8 +108,7 @@ const EDGE_MARGIN = 24;
 
 export const fits = (point: Point, circles: Iterable<Circle>, wanted: ReadonlySet<string>) => {
   for (const circle of circles) {
-    const distance = Math.hypot(point.x - circle.x, point.y - circle.y);
-    if (Math.abs(distance - circle.r) < EDGE_MARGIN) return false;
+    if (Math.abs(edgeDistance(point, circle) - circle.r) < EDGE_MARGIN) return false;
     if (insideCircle(point, circle) !== wanted.has(circle.id)) return false;
   }
   return true;
@@ -129,10 +131,13 @@ export function placeInside(
   for (const anchor of anchors) {
     for (const fraction of [0, 0.25, 0.5, 0.7, 0.85]) {
       for (let step = 0; step < 24; step++) {
+        // Spots on a smaller square inside the anchor (K-536), so the corners count too.
         const angle = (step / 24) * 2 * Math.PI;
+        const onSquare =
+          (anchor.r * fraction) / Math.max(Math.abs(Math.cos(angle)), Math.abs(Math.sin(angle)));
         candidates.push({
-          x: anchor.x + Math.cos(angle) * anchor.r * fraction,
-          y: anchor.y + Math.sin(angle) * anchor.r * fraction,
+          x: anchor.x + Math.cos(angle) * onSquare,
+          y: anchor.y + Math.sin(angle) * onSquare,
         });
       }
     }
@@ -164,43 +169,21 @@ const CARD_REACH = EDGE_MARGIN + 100;
 /** K-529: the new circle is at most this many times as wide as the widest circle on the map. */
 export const NEW_CIRCLE_CAP = 3;
 
-/** The smallest circle around the points (Welzl's algorithm, iterative; fine for the cards of one selection). */
-export function enclosingCircle(points: ReadonlyArray<Point>): { x: number; y: number; r: number } {
-  const first = points[0];
-  if (!first) throw new Error("enclosingCircle needs at least one point.");
-  const inside = (c: { x: number; y: number; r: number }, p: Point) =>
-    Math.hypot(p.x - c.x, p.y - c.y) <= c.r + 1e-7;
-  const two = (a: Point, b: Point) => ({
-    x: (a.x + b.x) / 2,
-    y: (a.y + b.y) / 2,
-    r: Math.hypot(a.x - b.x, a.y - b.y) / 2,
-  });
-  const three = (a: Point, b: Point, c: Point) => {
-    const d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
-    // Points on one line: the widest pair holds the third.
-    if (Math.abs(d) < 1e-9)
-      return [two(a, b), two(a, c), two(b, c)].reduce((wide, next) => (next.r > wide.r ? next : wide));
-    const sq = (p: Point) => p.x * p.x + p.y * p.y;
-    const x = (sq(a) * (b.y - c.y) + sq(b) * (c.y - a.y) + sq(c) * (a.y - b.y)) / d;
-    const y = (sq(a) * (c.x - b.x) + sq(b) * (a.x - c.x) + sq(c) * (b.x - a.x)) / d;
-    return { x, y, r: Math.hypot(a.x - x, a.y - y) };
+/** The smallest square around the points (K-536): the middle of their bounding box, to its wider side. */
+export function enclosingSquare(points: ReadonlyArray<Point>): { x: number; y: number; r: number } {
+  if (points.length === 0) throw new Error("enclosingSquare needs at least one point.");
+  const box = union(
+    points.map((point) => ({ left: point.x, top: point.y, right: point.x, bottom: point.y })),
+  );
+  return {
+    x: (box.left + box.right) / 2,
+    y: (box.top + box.bottom) / 2,
+    r: Math.max(widthOf(box), heightOf(box)) / 2,
   };
-  let circle = { x: first.x, y: first.y, r: 0 };
-  points.forEach((p, i) => {
-    if (inside(circle, p)) return;
-    circle = { x: p.x, y: p.y, r: 0 };
-    for (let j = 0; j < i; j++) {
-      const q = points[j] as Point;
-      if (inside(circle, q)) continue;
-      circle = two(p, q);
-      for (let k = 0; k < j; k++) {
-        const s = points[k] as Point;
-        if (!inside(circle, s)) circle = three(p, q, s);
-      }
-    }
-  });
-  return circle;
 }
+
+const widthOf = (box: Box) => box.right - box.left;
+const heightOf = (box: Box) => box.bottom - box.top;
 
 /**
  * K-529: one new circle that holds the selected cards (with their stacks, K-521), with each card still in exactly
@@ -246,7 +229,7 @@ export function circleForCards(
   type Plan = { readonly circle: Circle; readonly moves: Map<string, Point> } | { readonly refused: string };
   const plan = (moves: ReadonlyMap<string, Point>): Plan => {
     const spots = new Map([...state.places, ...moves]);
-    const around = enclosingCircle([...ids].map((id) => spots.get(id) as Point));
+    const around = enclosingSquare([...ids].map((id) => spots.get(id) as Point));
     const r = Math.ceil(around.r + CARD_REACH);
     if (circles.length > 0 && r > cap)
       return {
@@ -279,7 +262,7 @@ export function circleForCards(
   };
 
   const asIs = plan(new Map());
-  const middle = enclosingCircle([...ids].map((id) => state.places.get(id) as Point));
+  const middle = enclosingSquare([...ids].map((id) => state.places.get(id) as Point));
   const distance = (point: Point) => Math.hypot(point.x - middle.x, point.y - middle.y);
   // The units nearest to the middle choose first; each keeps clear of every other card where it sits now.
   const ordered = unitsOf(ids).sort(
@@ -317,4 +300,58 @@ export function circleForCards(
     moved: best.moves.size,
     cards: ids.size,
   };
+}
+
+/** The inside test while circles were round, before K-536; only `squareMoves` reads it. */
+const insideRound = (point: Point, circle: Circle) =>
+  Math.hypot(point.x - circle.x, point.y - circle.y) < circle.r;
+
+/**
+ * K-536: when circles became squares, a card in the corner of a square, outside the round circle, would gain that
+ * circle and its level. These moves keep every card in exactly the circles that held it while they were round:
+ * each card or stack (K-521) whose circles change goes to its nearest spot inside exactly its round circles, clear
+ * of the other cards, or, when no such spot is clear, on top of one. `stuck` names the cards with no spot at all;
+ * they stay where they are.
+ */
+export function squareMoves(state: State): {
+  readonly moves: Array<{ readonly id: string; readonly before: Point; readonly after: Point }>;
+  readonly stuck: Array<string>;
+} {
+  const circles = [...state.circles.values()];
+  const units: Array<Array<string>> = [];
+  const stacked = new Set<string>();
+  for (const stack of state.stacks.values()) {
+    const placed = stack.members.filter((id) => state.places.has(id));
+    for (const id of placed) stacked.add(id);
+    if (placed.length > 0) units.push(placed);
+  }
+  for (const id of state.places.keys()) if (!stacked.has(id)) units.push([id]);
+  const holding = (point: Point, inside: (point: Point, circle: Circle) => boolean) =>
+    new Set(circles.filter((circle) => inside(point, circle)).map((circle) => circle.id));
+  const same = (a: ReadonlySet<string>, b: ReadonlySet<string>) =>
+    a.size === b.size && [...a].every((id) => b.has(id));
+  const spots = new Map(state.places);
+  const moves: Array<{ readonly id: string; readonly before: Point; readonly after: Point }> = [];
+  const stuck: Array<string> = [];
+  for (const unit of units) {
+    const changed = unit.filter((id) => {
+      const place = state.places.get(id) as Point;
+      return !same(holding(place, insideRound), holding(place, insideCircle));
+    });
+    const first = changed[0];
+    if (first === undefined) continue;
+    const from = state.places.get(first) as Point;
+    const wanted = holding(from, insideRound);
+    const others = [...spots].filter(([id]) => !unit.includes(id)).map(([, spot]) => spot);
+    const to = placeInside(state, from, wanted, others) ?? placeInside(state, from, wanted);
+    if (!to) {
+      stuck.push(...changed);
+      continue;
+    }
+    for (const id of unit) {
+      spots.set(id, to);
+      moves.push({ id, before: state.places.get(id) as Point, after: to });
+    }
+  }
+  return { moves, stuck };
 }

@@ -14,6 +14,7 @@ import {
   type State,
   activeShares,
   circlesHolding,
+  circlesOverlap,
   isPublicCircle,
   shareKey,
   type CardKind,
@@ -259,9 +260,7 @@ export function agentRefusal(
 function publishRefusal(state: State, visitor: Visitor, now: number) {
   const everyone = [...state.circles.values()].find(isEveryoneCircle);
   const overlaps = controlCircles(state, visitor, now).some(
-    (circle) =>
-      everyone !== undefined &&
-      Math.hypot(circle.x - everyone.x, circle.y - everyone.y) < circle.r + everyone.r,
+    (circle) => everyone !== undefined && circlesOverlap(circle, everyone),
   );
   return overlaps
     ? "Publish into the overlap of an agent circle and Everyone, so the key keeps managing the card."

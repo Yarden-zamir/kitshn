@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { applyChanges, invert, resolveEdits } from "./changes.ts";
-import { type Circle, type Point, type Resource, type State, circlesHolding, insideCircle } from "./model.ts";
-import { CARD_BOX, circleForCards, enclosingCircle } from "./place.ts";
+import {
+  type Circle,
+  type Point,
+  type Resource,
+  type State,
+  circlesHolding,
+  circlesOverlap,
+  insideCircle,
+} from "./model.ts";
+import { CARD_BOX, circleForCards, enclosingSquare, squareMoves } from "./place.ts";
 
 /** K-529: "New circle for these" places one new circle around the selected cards and keeps every card's circles. */
 
@@ -89,7 +97,7 @@ function apply(state: State, selected: ReadonlyArray<string>) {
 }
 
 describe("New circle for these (K-529)", () => {
-  it("draws the smallest circle around the cards and moves nothing when no other card is inside", () => {
+  it("draws the smallest square around the cards and moves nothing when no other card is inside", () => {
     const state = world([circle("her", 0, 0, 600)], {
       a: { x: -100, y: 0 },
       b: { x: 100, y: 0 },
@@ -235,21 +243,79 @@ describe("New circle for these (K-529)", () => {
     expect([...undone.places]).toEqual([...state.places]);
   });
 
-  it("finds the smallest enclosing circle", () => {
-    expect(enclosingCircle([{ x: 0, y: 0 }])).toEqual({ x: 0, y: 0, r: 0 });
+  it("finds the smallest enclosing square", () => {
+    expect(enclosingSquare([{ x: 0, y: 0 }])).toEqual({ x: 0, y: 0, r: 0 });
+    // The wider side decides: 2 wide and 0.5 tall.
     expect(
-      enclosingCircle([
+      enclosingSquare([
         { x: -1, y: 0 },
         { x: 1, y: 0 },
         { x: 0, y: 0.5 },
       ]),
-    ).toMatchObject({ x: 0, y: 0, r: 1 });
-    const triangle = enclosingCircle([
-      { x: 0, y: 0 },
-      { x: 4, y: 0 },
-      { x: 0, y: 3 },
-    ]);
-    expect(triangle.r).toBeCloseTo(2.5);
+    ).toEqual({ x: 0, y: 0.25, r: 1 });
+    expect(
+      enclosingSquare([
+        { x: 0, y: 0 },
+        { x: 4, y: 0 },
+        { x: 0, y: 3 },
+      ]),
+    ).toEqual({ x: 2, y: 1.5, r: 2 });
+  });
+});
+
+describe("circles are squares (K-536)", () => {
+  const her = circle("her", 0, 0, 100);
+
+  it("holds a card in its corner, which a round circle left out", () => {
+    expect(insideCircle({ x: 90, y: 90 }, her)).toBe(true);
+    expect(insideCircle({ x: -99, y: 99 }, her)).toBe(true);
+    expect(insideCircle({ x: 100, y: 0 }, her)).toBe(false);
+    expect(insideCircle({ x: 0, y: -101 }, her)).toBe(false);
+  });
+
+  it("overlaps another square only when both axes overlap", () => {
+    expect(circlesOverlap(her, circle("near", 150, 150, 60))).toBe(true);
+    expect(circlesOverlap(her, circle("beside", 200, 0, 100))).toBe(false);
+    expect(circlesOverlap(her, circle("below", 0, 250, 140))).toBe(false);
+  });
+
+  it("moves a card in a corner out to keep exactly its round circles, and leaves the rest", () => {
+    const state = world([her, circle("him", 400, 0, 100)], {
+      corner: { x: 85, y: 85 },
+      middle: { x: 0, y: 0 },
+      outside: { x: 1000, y: 1000 },
+    });
+    const { moves, stuck } = squareMoves(state);
+    expect(stuck).toEqual([]);
+    expect(moves.map((move) => move.id)).toEqual(["corner"]);
+    const after = new Map(state.places).set("corner", moves[0]?.after as Point);
+    expect(circlesHolding({ ...state, places: after }, "corner")).toEqual([]);
+  });
+
+  it("keeps a card in the corner of an overlap in exactly the circles that held it", () => {
+    // "in" sits inside round her, and inside the corner of square him, where round him left it out.
+    const state = world([her, circle("him", 150, 150, 120)], { in: { x: 60, y: 60 } });
+    const before = new Set(["her"]);
+    expect(new Set(circlesHolding(state, "in").map((each) => each.id))).toEqual(new Set(["her", "him"]));
+    const { moves } = squareMoves(state);
+    const after = { ...state, places: new Map(state.places).set("in", moves[0]?.after as Point) };
+    expect(new Set(circlesHolding(after, "in").map((each) => each.id))).toEqual(before);
+  });
+
+  it("moves a stack as one unit, onto one spot", () => {
+    const state = world(
+      [her],
+      { a: { x: 88, y: -88 }, b: { x: 88, y: -88 }, alone: { x: 0, y: 0 } },
+      { s: ["a", "b"] },
+    );
+    const { moves } = squareMoves(state);
+    expect(moves.map((move) => move.id).sort()).toEqual(["a", "b"]);
+    expect(moves[0]?.after).toEqual(moves[1]?.after);
+  });
+
+  it("moves nothing on a map where every card keeps its circles", () => {
+    const state = world([her], { middle: { x: 0, y: 0 }, far: { x: 500, y: 0 } });
+    expect(squareMoves(state)).toEqual({ moves: [], stuck: [] });
   });
 });
 

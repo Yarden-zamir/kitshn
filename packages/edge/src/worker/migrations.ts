@@ -287,10 +287,16 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
       target TEXT NOT NULL, kind TEXT NOT NULL, thread TEXT, name TEXT NOT NULL, cwd TEXT, outcome TEXT NOT NULL,
       exit_code INTEGER)`,
   ],
+  // 40: circles are squares (K-536). No table changes; the Durable Object moves the cards that a square corner would
+  // give a new circle (SQUARE_MIGRATION).
+  [],
 ];
 
 /** K-819: the migration after which the Durable Object derives the repo ids of older deploy rows. */
 export const REPO_GATE_MIGRATION = 6;
+
+/** K-536: the migration after which circles are squares, so the Durable Object moves the cards in their corners. */
+export const SQUARE_MIGRATION = 40;
 
 /**
  * Runs the migrations after `from`, up to `to` (K-1833 stops at the schema of an export). Returns the new version.

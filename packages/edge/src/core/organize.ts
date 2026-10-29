@@ -105,7 +105,7 @@ function circleParts(circles: ReadonlyArray<Circle>, sizes: DrawnSizes): Array<B
   return circles.flatMap((circle) => {
     const head = headBox(circle, 0);
     const drawn = sizes.heads.get(circle.id);
-    // The wider of the drawn head and the estimate, so `headAngle` keeps each head at the top after Organize.
+    // The wider of the drawn head and the estimate, so `headShift` keeps each head in the middle of its top edge after Organize.
     const half = Math.max(headWidth(circle), drawn?.width ?? 0) / 2;
     const parts: Array<Box> = [
       {

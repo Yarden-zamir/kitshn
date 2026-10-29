@@ -128,7 +128,7 @@ const ring = (state: State, each: Circle) => (
     selected={false}
     preview={false}
     flash={false}
-    headAngle={0}
+    headShift={0}
     zoomedOut={false}
     hidden={new Set()}
     onMenu={noop}

@@ -102,7 +102,7 @@ import {
   organize,
   organizeSummary,
 } from "../core/organize.ts";
-import { placeInside } from "../core/place.ts";
+import { placeInside, squareMoves } from "../core/place.ts";
 import { type ServerReport, parseSiteInput, serversOf } from "../core/sites.ts";
 import {
   type LogAnswer,
@@ -348,7 +348,7 @@ import {
   openToken,
 } from "./github.ts";
 import { REPLACED, dropLiveSite, failQueuedDowns, removalDown, requeueDowns } from "./downs.ts";
-import { REPO_GATE_MIGRATION, migrate } from "./migrations.ts";
+import { REPO_GATE_MIGRATION, SQUARE_MIGRATION, migrate } from "./migrations.ts";
 import {
   BADGE_DEPLOY_QUERY,
   DEPLOY_MS,
@@ -886,6 +886,7 @@ export class Kitshn extends DurableObject<Env> {
         migrate((query) => ctx.storage.sql.exec(query), from);
         // The rest of migration 6 needs code: the repo id comes out of each card id.
         if (from < REPO_GATE_MIGRATION) this.backfillRepoIds();
+        if (from < SQUARE_MIGRATION) this.keepSharesAsSquares();
       });
       this.load();
       // K-1833: a bootstrap with KITSHN_IMPORT asks for one import, before the start steps, so they run on the
@@ -2205,6 +2206,7 @@ export class Kitshn extends DurableObject<Env> {
       this.ctx.storage.transactionSync(() => {
         writeImport(this.ctx.storage.sql, state, (from) => {
           if (from < REPO_GATE_MIGRATION) this.backfillRepoIds();
+          if (from < SQUARE_MIGRATION) this.keepSharesAsSquares();
           this.insertRevision(
             IMPORT_ACTOR,
             `Imported the state of ${new Date(state.exportedAt).toISOString()} (K-1833)`,
@@ -6520,6 +6522,43 @@ export class Kitshn extends DurableObject<Env> {
    * repo that finished a deploy then. A row whose card id holds no repo id keeps none; kitshn logs it, and its
    * repo waits for the owner like a new one. A crash here would stop the whole Durable Object over one old row.
    */
+  /**
+   * K-536: circles became squares, so a card in the corner of a square, outside the round circle, would gain that
+   * circle. Each such card moves to its nearest spot in exactly its old circles, in one revision of kitshn, so no
+   * share and no Access policy changes. A card with no such spot stays, and the summary names it.
+   */
+  private keepSharesAsSquares() {
+    this.load();
+    const { moves, stuck } = squareMoves(this.state);
+    if (moves.length === 0 && stuck.length === 0) return;
+    for (const move of moves)
+      this.sql(
+        "INSERT OR REPLACE INTO places (id, x, y) VALUES (?, ?, ?)",
+        move.id,
+        move.after.x,
+        move.after.y,
+      );
+    const nameOf = (id: string) => this.state.resources.get(id)?.name ?? id;
+    const count = (n: number) => `${n} ${n === 1 ? "card" : "cards"}`;
+    const summary = [
+      moves.length > 0
+        ? `Moved ${count(moves.length)} out of square corners, so each keeps its circles (K-536)`
+        : null,
+      stuck.length > 0
+        ? `${stuck.map(nameOf).join(", ")} found no spot and gained the circles of a corner`
+        : null,
+    ]
+      .filter((part) => part !== null)
+      .join(". ");
+    this.insertRevision(
+      { _tag: "kitshn", reason: "squares" },
+      summary,
+      moves.map((move): Change => ({ _tag: "place", id: move.id, before: move.before, after: move.after })),
+      null,
+    );
+    if (stuck.length > 0) console.warn(`K-536: ${stuck.length} cards kept a spot in a new square corner.`);
+  }
+
   private backfillRepoIds() {
     const rows = this.sql<DeployRow>("SELECT * FROM deploys ORDER BY expires_at");
     const { repoIds, allowed, unknown } = legacyRepos(

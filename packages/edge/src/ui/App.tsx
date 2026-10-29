@@ -41,7 +41,7 @@ import {
   cardBox,
   circleBox,
   circleForCards,
-  headAngle,
+  headShift,
   headBox,
   placeInside,
   union,
@@ -1475,7 +1475,7 @@ export function App() {
           return place ? [cardBox(place)] : [];
         }),
         ...[state.circles.get(selected.circle ?? "")].flatMap((circle) =>
-          circle ? [headBox(circle, headAngle(circle, shownCardBoxes(state, hidden)))] : [],
+          circle ? [headBox(circle, headShift(circle, shownCardBoxes(state, hidden)))] : [],
         ),
       ];
       if (boxes.length > 0) {

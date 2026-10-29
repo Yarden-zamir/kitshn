@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { applyChanges, resolveEdits, shareDiff } from "./changes.ts";
 import type { Circle, Member, Point, Resource, ResourceKind, State } from "./model.ts";
 import { type DrawnSizes, NO_SIZES, organize } from "./organize.ts";
-import { type Box, USER_STACK, boxesOverlap, cardBox, headAngle, stacksOf } from "./place.ts";
+import { type Box, USER_STACK, boxesOverlap, cardBox, headShift, stacksOf } from "./place.ts";
 
 /** K-532: Organize keeps every share, moves nothing on a second run, and leaves no overlap. */
 
@@ -134,10 +134,10 @@ describe("organize (K-532)", () => {
     expect(moved).toBeGreaterThan(0);
     expect(shareDiff(state, after)).toEqual([]);
     const boxes = drawn(after, sizes);
-    // No card covers a head: each head stays at the top of its edge.
+    // No card covers a head: each head stays in the middle of its top edge.
     for (const each of after.circles.values())
       expect(
-        headAngle(
+        headShift(
           each,
           boxes.map((unit) => unit.box),
         ),

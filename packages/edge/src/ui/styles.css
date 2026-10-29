@@ -344,10 +344,11 @@ input[type="search"]::-webkit-search-cancel-button {
   top: 0;
   transform-origin: 0 0;
 }
-/* `--c` is the circle colour: an ink outline, a solid colour ring, and a light fill that cards read on. */
+/* `--c` is the circle colour: an ink outline, a solid colour ring, and a light fill that cards read on. A circle
+   draws as a square (K-536), so its inside is the box that the owner sees. */
 .circle {
   position: absolute;
-  border-radius: 50%;
+  border-radius: var(--radius);
   border: var(--bw) solid var(--border);
   background: color-mix(in srgb, var(--c) 20%, transparent);
   box-shadow: inset 0 0 0 6px var(--c);
@@ -359,7 +360,7 @@ input[type="search"]::-webkit-search-cancel-button {
     0 0 0 4px var(--select),
     4px 4px 0 6px var(--shadow-ink);
 }
-/* A head draws above the cards, so a card never hides the circle's name and level (layout.ts headAngle). */
+/* A head draws above the cards, so a card never hides the circle's name and level (place.ts headShift). */
 .circle .head {
   position: absolute;
   /* HEAD_LAYER (layout.ts), above every card layer (K-506). */
@@ -415,8 +416,10 @@ input[type="search"]::-webkit-search-cancel-button {
   position: absolute;
   width: 20px;
   height: 20px;
-  right: 13%;
-  bottom: 13%;
+  /* On the bottom right corner, which follows the pointer in a resize (Map.tsx). */
+  right: 0;
+  bottom: 0;
+  transform: translate(50%, 50%);
   background: var(--surface);
   border: var(--bw) solid var(--border);
   border-radius: 4px;

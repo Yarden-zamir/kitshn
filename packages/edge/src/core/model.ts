@@ -314,8 +314,18 @@ export const CIRCLE_ALONE_KEY = {
 export const circleAloneKey = (platform: string) =>
   CIRCLE_ALONE_KEY[platform.startsWith("Mac") || platform.startsWith("iP") ? "mac" : "other"];
 
-export const insideCircle = (point: Point, circle: Circle) =>
-  Math.hypot(point.x - circle.x, point.y - circle.y) < circle.r;
+/**
+ * K-536: a circle draws as a square around its centre, `r` from the centre to each side, so a card is inside
+ * when it is nearer than `r` on both axes.
+ */
+export const edgeDistance = (point: Point, circle: Circle) =>
+  Math.max(Math.abs(point.x - circle.x), Math.abs(point.y - circle.y));
+
+export const insideCircle = (point: Point, circle: Circle) => edgeDistance(point, circle) < circle.r;
+
+/** Two circles overlap when their squares overlap (K-536). */
+export const circlesOverlap = (a: Circle, b: Circle) =>
+  Math.abs(a.x - b.x) < a.r + b.r && Math.abs(a.y - b.y) < a.r + b.r;
 
 /** K-204: a card is shared with every circle that it sits inside. */
 export function circlesHolding(state: State, resourceId: string): Array<Circle> {

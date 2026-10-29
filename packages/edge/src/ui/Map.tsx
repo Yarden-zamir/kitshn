@@ -7,6 +7,7 @@ import {
   type State,
   circleAloneKey,
   circlesHolding,
+  edgeDistance,
   insideCircle,
   memberLabel,
   shareKey,
@@ -22,7 +23,7 @@ import { type KindInfo, LEVEL_COLORS, LEVEL_TILTS, MEMBER_ICONS, kindInfo } from
 import { KeySticker, MachineLive, PresenceSticker, QueuedSticker } from "./Machines.tsx";
 import { type MenuTarget, untilText } from "./actions.ts";
 import type { DrawnWire } from "../core/organize.ts";
-import { USER_STACK, headAngle, stacksOf } from "../core/place.ts";
+import { USER_STACK, headShift, stacksOf } from "../core/place.ts";
 import { parseSiteInput } from "../core/sites.ts";
 import { MoreButton } from "./controls.tsx";
 import { ItemIcon } from "./ItemIcon.tsx";
@@ -248,11 +249,11 @@ export function MapView(props: Props) {
   const previewed = useRef<ReadonlySet<string>>(new Set());
 
   const shown = draft?.state ?? state;
-  // A head slides along its circle off the cards (layout.ts). It follows the stored map, not a drag in flight,
+  // A head slides along the top edge of its circle off the cards (place.ts). It follows the stored map, not a drag in flight,
   // so a head never jumps while a card passes it.
-  const headAngles = useMemo(() => {
+  const headShifts = useMemo(() => {
     const cards = shownCardBoxes(state, props.hidden);
-    return new Map([...state.circles.values()].map((circle) => [circle.id, headAngle(circle, cards)]));
+    return new Map([...state.circles.values()].map((circle) => [circle.id, headShift(circle, cards)]));
   }, [state, props.hidden]);
   const toWorld = (clientX: number, clientY: number): Point => ({
     x: (clientX - view.x) / view.s,
@@ -514,7 +515,8 @@ export function MapView(props: Props) {
       );
       return;
     }
-    const r = Math.max(60, Math.round(Math.hypot(world.x - drag.origin.x, world.y - drag.origin.y) * 1.2));
+    // K-536: the grip sits on the bottom right corner of the square, so the corner follows the pointer.
+    const r = Math.max(60, Math.round(edgeDistance(world, drag.origin)));
     preview(
       [{ _tag: "circle", id: drag.origin.id, before: drag.origin, after: { ...drag.origin, r } }],
       pointer,
@@ -746,7 +748,7 @@ export function MapView(props: Props) {
             selected={props.selection.circle === circle.id}
             preview={previewCircles.has(circle.id)}
             flash={props.flash.has(`circle:${circle.id}`)}
-            headAngle={headAngles.get(circle.id) ?? 0}
+            headShift={headShifts.get(circle.id) ?? 0}
             zoomedOut={zoomedOut}
             hidden={props.hidden}
             onMenu={(anchor) => props.onMenu({ target: { _tag: "circle", id: circle.id }, anchor })}
@@ -912,8 +914,8 @@ export function CircleView(props: {
   selected: boolean;
   preview: boolean;
   flash: boolean;
-  /** Where the head sits on the edge, in radians from the top (layout.ts). */
-  headAngle: number;
+  /** Where the head sits along the top edge: 0 is the middle, -1 and 1 the corners (place.ts). */
+  headShift: number;
   zoomedOut: boolean;
   hidden: ReadonlySet<CardKind>;
   onMenu: (anchor: Rect) => void;
@@ -950,8 +952,7 @@ export function CircleView(props: {
         class="head"
         data-head={circle.id}
         style={{
-          left: px(circle.r + circle.r * Math.sin(props.headAngle)),
-          top: px(circle.r - circle.r * Math.cos(props.headAngle) - 20),
+          left: px(circle.r + circle.r * props.headShift),
         }}
         tabIndex={0}
         role="group"
