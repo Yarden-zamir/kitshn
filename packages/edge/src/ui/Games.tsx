@@ -128,7 +128,8 @@ export function GameForm(props: {
           {able.length === 0 ? (
             <span class="help">
               No online machine holds game doors. Run <code>kitshn doors install --user &lt;user&gt;</code> on
-              one as root.
+              one as root, or <code>kitshn doors install</code> on a Windows PC in an administrator
+              PowerShell.
             </span>
           ) : (
             <div class="choices" role="radiogroup" aria-label="Machine">

@@ -118,6 +118,7 @@ it("the plan of a machine holds each door of a person, merges doors per address,
   ];
   expect(doorPlan("vps", [game, second], doors, 1000, "example.com", new Set())).toEqual({
     ports: [{ port: 25565, proto: "tcp" }],
+    openPorts: [],
     relays: [],
     doors: [
       { address: "198.51.100.2", ports: [{ port: 25565, proto: "tcp" }], endsAt: 5000 },
@@ -145,11 +146,13 @@ it("takes the ports of an open-to-all game out of the gated set, and keeps a por
   ];
   expect(doorPlan("vps", [game, second], doors, 1000, "example.com", new Set(["c2"]))).toEqual({
     ports: [{ port: 25565, proto: "tcp" }],
+    openPorts: [{ port: 7777, proto: "tcp" }],
     relays: [],
     doors: [{ address: "203.0.113.9", ports: [{ port: 25565, proto: "tcp" }], endsAt: 9000 }],
   });
   expect(doorPlan("vps", [game], doors, 1000, "example.com", new Set(["c1"]))).toEqual({
     ports: [],
+    openPorts: [{ port: 25565, proto: "tcp" }],
     relays: [],
     doors: [],
   });

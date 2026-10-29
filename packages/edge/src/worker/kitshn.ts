@@ -12318,17 +12318,17 @@ export class Kitshn extends DurableObject<Env> {
     this.openGamesSent = open;
     const actor: Actor = { _tag: "kitshn", reason: "Everyone share of a game (K-2004)" };
     for (const machine of new Set(this.gameRows().map(gameOf).map(doorMachine))) {
-      // After a restart the last change is not known, so a machine gets a plan only when its gated ports differ from
-      // its last plan that did not fail.
-      if (restarted && JSON.stringify(this.doorPlanOf(machine, now).ports) === this.lastDoorPorts(machine))
-        continue;
+      // After a restart the last change is not known, so a machine gets a plan only when its gated or open ports
+      // differ from its last plan that did not fail.
+      const { ports, openPorts } = this.doorPlanOf(machine, now);
+      if (restarted && JSON.stringify([ports, openPorts]) === this.lastDoorPorts(machine)) continue;
       this.queueDoors(machine, actor, now);
     }
   }
 
   private lastDoorPorts(machineId: string) {
     const [last] = this.sql<{ ports: string | null }>(
-      `SELECT json_extract(command, '$.plan.ports') AS ports FROM jobs
+      `SELECT json_array(json_extract(command, '$.plan.ports'), json_extract(command, '$.plan.openPorts')) AS ports FROM jobs
        WHERE machine_id = ? AND state != 'failed' AND json_extract(command, '$.kind') = 'doors' ORDER BY id DESC LIMIT 1`,
       machineId,
     );

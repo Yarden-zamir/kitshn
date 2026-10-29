@@ -233,6 +233,8 @@ export function openDoors(
 /** K-2005: what the daemon of a machine puts into its firewall: the game ports, and each open door with its end. */
 export interface DoorPlan {
   readonly ports: ReadonlyArray<GamePort>;
+  /** K-2004, K-2009: the ports of games open to all. Nothing gates them; a Windows PC still forwards them on its router. */
+  readonly openPorts: ReadonlyArray<GamePort>;
   /** K-2008: the games that this machine relays: it listens on `port` and carries it to `hostname`. */
   readonly relays: ReadonlyArray<{ readonly hostname: string; readonly port: number }>;
   readonly doors: ReadonlyArray<{
@@ -276,8 +278,17 @@ export function doorPlan(
     entry.ports.push(port);
     byAddress.set(key, entry);
   }
+  const byPort = (a: GamePort, b: GamePort) => a.port - b.port || a.proto.localeCompare(b.proto);
+  const openPorts = new Map(
+    mine
+      .filter((game) => openToAll.has(game.card))
+      .flatMap((game) => game.ports)
+      .filter((port) => !ports.has(portKey(port)))
+      .map((port) => [portKey(port), port]),
+  );
   return {
-    ports: [...ports.values()].sort((a, b) => a.port - b.port || a.proto.localeCompare(b.proto)),
+    ports: [...ports.values()].sort(byPort),
+    openPorts: [...openPorts.values()].sort(byPort),
     relays: mine.flatMap((game) =>
       game.relay === machine && game.ports[0]
         ? [{ hostname: relayHost(game.name, zone), port: game.ports[0].port }]

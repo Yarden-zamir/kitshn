@@ -7,6 +7,7 @@ it("gives the root helper one line per port and per open door and port, without 
       { port: 25565, proto: "tcp" as const },
       { port: 19132, proto: "udp" as const },
     ],
+    openPorts: [],
     relays: [],
     doors: [
       { address: "203.0.113.9", ports: [{ port: 25565, proto: "tcp" as const }], endsAt: 61_000 },
@@ -37,7 +38,7 @@ it("lets the daemon user run only `apply` of the helper as root (K-2002)", () =>
 });
 
 it("reads a kept plan only in this daemon's shape, so an old one never stops the start (K-2005)", () => {
-  const plan = { ports: [{ port: 25565, proto: "tcp" }], doors: [], relays: [] };
+  const plan = { ports: [{ port: 25565, proto: "tcp" }], openPorts: [], doors: [], relays: [] };
   expect(planOf(plan)).toEqual(plan);
   expect(planOf({ ports: [{ port: 25565, proto: "tcp" }], doors: [] })).toEqual(plan);
   expect(planOf({ ports: "25565/tcp", doors: [] })).toBeNull();

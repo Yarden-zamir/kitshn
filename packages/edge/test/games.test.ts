@@ -311,7 +311,11 @@ it("opens the ports of a game in Everyone to all and gates them again after the 
     });
 
   expect((await place({ x: everyone.x, y: everyone.y })).status).toBe(200);
-  expect((await doorJobs(stub)).at(-1)?.plan).toMatchObject({ ports: [], doors: [] });
+  expect((await doorJobs(stub)).at(-1)?.plan).toMatchObject({
+    ports: [],
+    openPorts: [{ port: 25565, proto: "tcp" }],
+    doors: [],
+  });
   // After a restart, a commit sends no plan that equals the last one.
   await evictDurableObject(stub);
   const before = (await doorJobs(stub)).length;

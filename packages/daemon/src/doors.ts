@@ -331,8 +331,9 @@ const isGamePort = (value: unknown): value is GamePort =>
  */
 export function planOf(value: unknown): DoorPlan | null {
   if (typeof value !== "object" || value === null) return null;
-  const { ports, doors, relays } = value as Record<string, unknown>;
+  const { ports, openPorts = [], doors, relays } = value as Record<string, unknown>;
   if (!Array.isArray(ports) || !ports.every(isGamePort) || !Array.isArray(doors)) return null;
+  if (!Array.isArray(openPorts) || !openPorts.every(isGamePort)) return null;
   const doorsOk = doors.every(
     (door: unknown) =>
       typeof door === "object" &&
@@ -353,7 +354,7 @@ export function planOf(value: unknown): DoorPlan | null {
           Number.isInteger((relay as { port?: unknown }).port),
       ));
   if (!doorsOk || !relaysOk) return null;
-  return { ports, doors, relays: relays ?? [] } as DoorPlan;
+  return { ports, openPorts, doors, relays: relays ?? [] } as DoorPlan;
 }
 
 /**

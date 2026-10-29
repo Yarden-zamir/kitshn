@@ -141,12 +141,16 @@ import {
   publicAddresses,
 } from "./doors.ts";
 import {
-  type UpnpState,
+  blockedPorts,
+  forwardPorts,
+  helperProblem,
+  natProblem,
   netstatListening,
+  readBlockRules,
+  readHelperStatus,
   runWindowsHelper,
   syncUpnp,
   windowsDoorsCommand,
-  windowsDoorsProblem,
   writeWindowsPlan,
 } from "./windoors.ts";
 import { AGENT_USAGE, type AgentTransport, runAgentCommand, timeBody } from "kitshn/agent";
@@ -1699,7 +1703,12 @@ function runJob(
   if (command.kind === "doors") {
     if (doorState.problem !== null)
       return Promise.resolve({ ok: false, exitCode: 1, output: `no doors here: ${doorState.problem}` });
-    const outcome = applyDoorsHere(command.plan);
+    if (platform === "win32")
+      return applyWindowsPlan(command.plan).then((outcome) => {
+        checkListening();
+        return { ...outcome, exitCode: outcome.ok ? 0 : 1 };
+      });
+    const outcome = applyDoors(command.plan, doorsFile(), Date.now());
     if (outcome.ok) syncRelays(command.plan);
     checkListening();
     return Promise.resolve({ ...outcome, exitCode: outcome.ok ? 0 : 1 });
@@ -1828,42 +1837,74 @@ function startDoors() {
   }, 60_000);
 }
 
-/** K-2009: the router's UPnP state and the public address that the internet sees, on Windows. */
-const windowsDoors: { upnp: UpnpState; seen: string | null } = {
-  upnp: { problem: "not checked yet" },
+/** K-2009: the public address that the internet sees, and whether the router can carry doors, on Windows. */
+const windowsDoors: { seen: string | null; natOk: boolean; queue: Promise<unknown> } = {
   seen: null,
+  natOk: false,
+  queue: Promise.resolve(),
 };
 
-/**
- * K-2009: each minute on Windows: the router forwards of the kept plan, the public address, and whether doors work.
- * The helper re-reads the plan file itself; the daemon writes it again, so a deleted file comes back.
- */
-async function checkWindowsDoors(start: boolean) {
-  const before = doorState.problem;
-  const plan = keptPlan(doorsFile());
-  windowsDoors.upnp = syncUpnp(plan?.ports ?? []);
-  windowsDoors.seen = await fetch("https://ipv4.icanhazip.com", { signal: AbortSignal.timeout(5000) })
-    .then((answer) => (answer.ok ? answer.text() : ""))
-    .then((text) => text.trim() || null)
-    .catch(() => windowsDoors.seen);
-  doorState.problem = windowsDoorsProblem(windowsDoors.upnp, windowsDoors.seen);
-  if (doorState.problem === null && plan) writeWindowsPlan(plan, Date.now());
-  if (start || doorState.problem !== before) report();
+/** K-2009: one Windows door step at a time, so two UPnP runs never change the router's forwards together. */
+function windowsStep<T>(step: () => Promise<T>): Promise<T> {
+  const next = windowsDoors.queue.then(step);
+  windowsDoors.queue = next.catch(() => undefined);
+  return next;
 }
 
-/** K-2005, K-2009: one plan into this machine's firewall, and kept for a restart. */
-function applyDoorsHere(plan: DoorPlan): { ok: boolean; output: string } {
-  if (platform !== "win32") return applyDoors(plan, doorsFile(), Date.now());
-  try {
-    writeWindowsPlan(plan, Date.now());
-  } catch (error) {
-    return { ok: false, output: `the plan file could not be written: ${String(error)}` };
+/**
+ * K-2009: makes the router forward the ports of `plan` that may be open: none while the helper has a problem or the
+ * router cannot carry doors, else each gated port whose block rules are on, and the ports open to all. Returns
+ * why doors do not work here, or null.
+ */
+async function syncWindowsForwards(plan: DoorPlan | null): Promise<string | null> {
+  const helper = helperProblem(readHelperStatus(), Math.floor(Date.now() / 1000));
+  const rules = helper === null ? await readBlockRules() : [];
+  const ruleProblem = Array.isArray(rules) ? null : rules.problem;
+  const wanted =
+    plan && helper === null && Array.isArray(rules) ? forwardPorts(plan, blockedPorts(rules)) : [];
+  let upnp = await syncUpnp(windowsDoors.natOk ? wanted : []);
+  const nat = "problem" in upnp ? upnp.problem : natProblem(upnp.external, windowsDoors.seen);
+  // The first time that the router can carry doors, the forwards follow at once instead of in a minute.
+  if (nat === null && !windowsDoors.natOk && wanted.length > 0) {
+    windowsDoors.natOk = true;
+    upnp = await syncUpnp(wanted);
   }
-  windowsDoors.upnp = syncUpnp(plan.ports);
-  if ("problem" in windowsDoors.upnp) return { ok: false, output: windowsDoors.upnp.problem };
-  writeFileSync(`${doorsFile()}.new`, JSON.stringify(plan), { mode: 0o600 });
-  renameSync(`${doorsFile()}.new`, doorsFile());
-  return { ok: true, output: `doors: ${plan.ports.map(portKey).join(" ") || "no game ports"}` };
+  windowsDoors.natOk = nat === null;
+  return helper ?? ruleProblem ?? ("problem" in upnp ? upnp.problem : nat);
+}
+
+/**
+ * K-2009: each minute on Windows: the plan file again (so a deleted file comes back), the router forwards, the
+ * public address, and whether doors work.
+ */
+function checkWindowsDoors(start: boolean) {
+  return windowsStep(async () => {
+    const before = doorState.problem;
+    const plan = keptPlan(doorsFile());
+    if (plan) writeWindowsPlan(plan, Date.now());
+    windowsDoors.seen = await fetch("https://ipv4.icanhazip.com", { signal: AbortSignal.timeout(5000) })
+      .then((answer) => (answer.ok ? answer.text() : ""))
+      .then((text) => text.trim() || null)
+      .catch(() => windowsDoors.seen);
+    doorState.problem = await syncWindowsForwards(plan);
+    if (start || doorState.problem !== before) report();
+  }).catch((error: unknown) => log(`the door check failed: ${String(error)}`));
+}
+
+/**
+ * K-2009: one plan on Windows. The forwards of ports that leave the plan go first, before the helper removes
+ * their rules; a new gated port gets its forward once the helper made its rules, at the check a few seconds later.
+ */
+function applyWindowsPlan(plan: DoorPlan): Promise<{ ok: boolean; output: string }> {
+  return windowsStep(async () => {
+    writeFileSync(`${doorsFile()}.new`, JSON.stringify(plan), { mode: 0o600 });
+    renameSync(`${doorsFile()}.new`, doorsFile());
+    const problem = await syncWindowsForwards(plan);
+    writeWindowsPlan(plan, Date.now());
+    setTimeout(() => void checkWindowsDoors(false), 5_000);
+    if (problem !== null) return { ok: false, output: problem };
+    return { ok: true, output: `doors: ${plan.ports.map(portKey).join(" ") || "no game ports"}` };
+  }).catch((error: unknown) => ({ ok: false, output: `the door plan failed: ${String(error)}` }));
 }
 
 /** K-2005: the plan that this daemon wrote last goes into the table again before kitshn sends a new one. */
@@ -1874,7 +1915,7 @@ function applyKeptPlan(quiet = false) {
       log("the kept door plan is not readable; waiting for kitshn's plan");
     return;
   }
-  const outcome = applyDoorsHere(plan);
+  const outcome = applyDoors(plan, doorsFile(), Date.now());
   if (!outcome.ok) log(`the kept door plan failed: ${outcome.output}`);
   else if (!quiet) log(`kept ${outcome.output}`);
   if (outcome.ok) syncRelays(plan);
@@ -3103,7 +3144,7 @@ switch (command) {
     console.log(args.includes("--json") ? versionJson(VERSION) : VERSION);
     break;
   case "doors":
-    if (platform === "win32") windowsDoorsCommand(args[0], ownSid());
+    if (platform === "win32") await windowsDoorsCommand(args[0], ownSid());
     else doorsCommand(args[0], flag("--user"));
     break;
   case "doors-helper":
