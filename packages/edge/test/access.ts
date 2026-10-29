@@ -1,7 +1,7 @@
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { SignJWT, exportJWK, generateKeyPair } from "jose";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import worker from "../src/worker/index.ts";
 
 const TEAM = "https://team.example.com";
@@ -41,7 +41,27 @@ export function stubAccessCerts() {
 export async function send(path: string, init: RequestInit<IncomingRequestCfProperties> = {}) {
   const request = new Request<unknown, IncomingRequestCfProperties>(`https://kit.example.com${path}`, init);
   const ctx = createExecutionContext();
-  const response = await worker.fetch(request, env, ctx);
-  await waitOnExecutionContext(ctx);
-  return response;
+  const call = { path, step: "the Worker's answer", at: Date.now() };
+  unfinished.add(call);
+  try {
+    const response = await worker.fetch(request, env, ctx);
+    call.step = "its waitUntil work";
+    await waitOnExecutionContext(ctx);
+    return response;
+  } finally {
+    unfinished.delete(call);
+  }
 }
+
+/**
+ * The calls of `send` that did not end. A test that times out leaves its call here, and the hook below names it and
+ * the step that waits, so a stall says where it is instead of only "timed out".
+ */
+const unfinished = new Set<{ path: string; step: string; at: number }>();
+afterEach(() => {
+  for (const call of unfinished)
+    console.error(
+      `send(${call.path}) did not end: it waits for ${call.step} since ${Date.now() - call.at} ms.`,
+    );
+  unfinished.clear();
+});
