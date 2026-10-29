@@ -15,6 +15,8 @@ const PIPE_FIRST_LINE_MS = 30_000;
 /**
  * K-621: a client checks that the pipe's server runs as its own account before it sends anything, so a program of
  * another account that took the name first gets no request. Only on Windows; tests run this code on a Unix socket.
+ * Known limit: the check and the connect are two connections, so a name taken in between is not seen; revisit with
+ * one connection for both when a Windows machine has more accounts.
  */
 function pipeRefusal(path: string): Promise<LocalOutcome> | null {
   if (process.platform !== "win32") return null;

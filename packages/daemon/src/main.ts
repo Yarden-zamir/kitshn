@@ -18,7 +18,7 @@ import {
   type ServerToDaemon,
   type AskOutcome,
 } from "@kitshn/edge/machine";
-import type { DoorPlan } from "@kitshn/edge/game";
+import { type DoorPlan, portKey } from "@kitshn/edge/game";
 import type { BackupReport } from "@kitshn/edge/backups";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -140,6 +140,15 @@ import {
   listening,
   publicAddresses,
 } from "./doors.ts";
+import {
+  type UpnpState,
+  netstatListening,
+  runWindowsHelper,
+  syncUpnp,
+  windowsDoorsCommand,
+  windowsDoorsProblem,
+  writeWindowsPlan,
+} from "./windoors.ts";
 import { AGENT_USAGE, type AgentTransport, runAgentCommand, timeBody } from "kitshn/agent";
 import { CliError } from "kitshn/cli-error";
 import { checkSkill, installGlobalSkill, installRepoSkill, refreshGlobalSkill } from "./skill.ts";
@@ -1690,7 +1699,7 @@ function runJob(
   if (command.kind === "doors") {
     if (doorState.problem !== null)
       return Promise.resolve({ ok: false, exitCode: 1, output: `no doors here: ${doorState.problem}` });
-    const outcome = applyDoors(command.plan, doorsFile(), Date.now());
+    const outcome = applyDoorsHere(command.plan);
     if (outcome.ok) syncRelays(command.plan);
     checkListening();
     return Promise.resolve({ ...outcome, exitCode: outcome.ok ? 0 : 1 });
@@ -1720,7 +1729,7 @@ function report() {
       // K-624: Windows has no Docker setup in v1, so the map refuses Compose, logs and backups there with a reason.
       capabilities:
         platform === "win32"
-          ? ["update", "update-gz", "provider", "access"]
+          ? ["update", "update-gz", "provider", "access", ...(doorState.problem === null ? ["doors"] : [])]
           : [
               "update",
               "update-gz",
@@ -1746,7 +1755,11 @@ function report() {
       tunnel: tunnelState,
       // K-1751: the map shows the attesters of each machine.
       attesters: attestersOf(readMachineFile()).attesters.map(({ prefix, address }) => ({ prefix, address })),
-      publicAddresses: publicAddresses(),
+      // K-2009: a Windows PC behind its router reports the router's outside address, once doors work there.
+      publicAddresses:
+        platform === "win32"
+          ? { v4: doorState.problem === null ? windowsDoors.seen : null, v6: null }
+          : publicAddresses(),
       ...(doorState.problem === null ? {} : { doorsProblem: doorState.problem }),
       listening: [...doorState.listening],
     },
@@ -1778,9 +1791,13 @@ function checkListening() {
     wanted.size === 0
       ? new Set<string>()
       : new Set(
-          [...listening(spawnSync("ss", ["-H", "-ltnu"], { encoding: "utf8" }).stdout ?? "")].filter((key) =>
-            wanted.has(key),
-          ),
+          [
+            ...(platform === "win32"
+              ? netstatListening(
+                  spawnSync("netstat", ["-an"], { encoding: "utf8", windowsHide: true }).stdout ?? "",
+                )
+              : listening(spawnSync("ss", ["-H", "-ltnu"], { encoding: "utf8" }).stdout ?? "")),
+          ].filter((key) => wanted.has(key)),
         );
   if ([...found].sort().join() === [...doorState.listening].sort().join()) return;
   doorState.listening = found;
@@ -1789,9 +1806,14 @@ function checkListening() {
 
 /** K-2005: after a restart or a reboot the table is empty or old; the kept plan goes in again before kitshn sends one. */
 function startDoors() {
-  doorState.problem = doorsProblem(platform);
   checkListening();
   setInterval(checkListening, 30_000);
+  if (platform === "win32") {
+    void checkWindowsDoors(true);
+    setInterval(() => void checkWindowsDoors(false), 60_000);
+    return;
+  }
+  doorState.problem = doorsProblem(platform);
   if (platform !== "linux") return;
   if (doorState.problem === null) applyKeptPlan();
   // K-2005: each minute, a start problem is checked again (the network was not up yet, or sudo failed once), and
@@ -1806,6 +1828,44 @@ function startDoors() {
   }, 60_000);
 }
 
+/** K-2009: the router's UPnP state and the public address that the internet sees, on Windows. */
+const windowsDoors: { upnp: UpnpState; seen: string | null } = {
+  upnp: { problem: "not checked yet" },
+  seen: null,
+};
+
+/**
+ * K-2009: each minute on Windows: the router forwards of the kept plan, the public address, and whether doors work.
+ * The helper re-reads the plan file itself; the daemon writes it again, so a deleted file comes back.
+ */
+async function checkWindowsDoors(start: boolean) {
+  const before = doorState.problem;
+  const plan = keptPlan(doorsFile());
+  windowsDoors.upnp = syncUpnp(plan?.ports ?? []);
+  windowsDoors.seen = await fetch("https://ipv4.icanhazip.com", { signal: AbortSignal.timeout(5000) })
+    .then((answer) => (answer.ok ? answer.text() : ""))
+    .then((text) => text.trim() || null)
+    .catch(() => windowsDoors.seen);
+  doorState.problem = windowsDoorsProblem(windowsDoors.upnp, windowsDoors.seen);
+  if (doorState.problem === null && plan) writeWindowsPlan(plan, Date.now());
+  if (start || doorState.problem !== before) report();
+}
+
+/** K-2005, K-2009: one plan into this machine's firewall, and kept for a restart. */
+function applyDoorsHere(plan: DoorPlan): { ok: boolean; output: string } {
+  if (platform !== "win32") return applyDoors(plan, doorsFile(), Date.now());
+  try {
+    writeWindowsPlan(plan, Date.now());
+  } catch (error) {
+    return { ok: false, output: `the plan file could not be written: ${String(error)}` };
+  }
+  windowsDoors.upnp = syncUpnp(plan.ports);
+  if ("problem" in windowsDoors.upnp) return { ok: false, output: windowsDoors.upnp.problem };
+  writeFileSync(`${doorsFile()}.new`, JSON.stringify(plan), { mode: 0o600 });
+  renameSync(`${doorsFile()}.new`, doorsFile());
+  return { ok: true, output: `doors: ${plan.ports.map(portKey).join(" ") || "no game ports"}` };
+}
+
 /** K-2005: the plan that this daemon wrote last goes into the table again before kitshn sends a new one. */
 function applyKeptPlan(quiet = false) {
   const plan = keptPlan(doorsFile());
@@ -1814,7 +1874,7 @@ function applyKeptPlan(quiet = false) {
       log("the kept door plan is not readable; waiting for kitshn's plan");
     return;
   }
-  const outcome = applyDoors(plan, doorsFile(), Date.now());
+  const outcome = applyDoorsHere(plan);
   if (!outcome.ok) log(`the kept door plan failed: ${outcome.output}`);
   else if (!quiet) log(`kept ${outcome.output}`);
   if (outcome.ok) syncRelays(plan);
@@ -3043,7 +3103,13 @@ switch (command) {
     console.log(args.includes("--json") ? versionJson(VERSION) : VERSION);
     break;
   case "doors":
-    doorsCommand(args[0], flag("--user"));
+    if (platform === "win32") windowsDoorsCommand(args[0], ownSid());
+    else doorsCommand(args[0], flag("--user"));
+    break;
+  case "doors-helper":
+    // K-2009: only the SYSTEM task runs this, from its own copy of kitshn.
+    if (platform !== "win32") fail("doors-helper runs only on Windows, as SYSTEM");
+    runWindowsHelper(log);
     break;
   case "skill":
     skillCommand(args[0], args.includes("--repo"));
@@ -3089,6 +3155,7 @@ kitshn gh <args>                        gh with a kitshn token for this repo (K-
 kitshn expose <port|socket> --name <n>  share a local server at <n>.<zone> (K-1104); --dev sets Host localhost;
                                         also localhost:5173 or http://127.0.0.1:5173/ (K-1131); --time 1h ends it (K-212)
 kitshn doors install --user <u>         as root: the helper that gates game ports, for the daemon user (K-2005)
+                                        on Windows: kitshn doors install, in an administrator PowerShell (K-2009)
 kitshn doors uninstall                  as root: remove it and its firewall table
 kitshn unexpose <name>                  stop sharing it
 kitshn servers [--json]                 the servers that listen on this machine, with their page title (K-619)
