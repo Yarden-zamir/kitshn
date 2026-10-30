@@ -543,6 +543,16 @@ export function MachinePanel(props: {
           ))
         : null}
       {view.online
+        ? (view.status?.execPaths ?? [])
+            .filter((entry) => entry.via === "bridge")
+            .map((entry) => (
+              <p key={`exec-${entry.provider}`} class="muted">
+                Exec as {entry.user} needs the {entry.provider} provider running: no sudo rule. Fix as root:{" "}
+                <code>kitshn exec install --user {entry.user} --daemon-user &lt;daemon user&gt;</code>
+              </p>
+            ))
+        : null}
+      {view.online
         ? (view.status?.providerProblems ?? []).map((entry) => (
             <p key={`problem-${entry.provider}-${entry.reason}`} class="muted">
               Provider {entry.provider} dropped {entry.reason}

@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 
-const version = process.env["GITHUB_SHA"]?.slice(0, 12) ?? "dev";
+const version = (process.env["KITSHN_SHA"] ?? process.env["GITHUB_SHA"])?.slice(0, 12) ?? "dev";
 // K-618: the skill of this release goes into the binary, so `kitshn skill install` writes the matching text.
 const skill = readFileSync(new URL("../../kitshn/skill/SKILL.md", import.meta.url), "utf8");
 const targets = [

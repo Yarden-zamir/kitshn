@@ -1,4 +1,4 @@
-import type { Command, Machine, MachineKey } from "../core/machine.ts";
+import type { Command, Machine, MachineKey, MachineStatus } from "../core/machine.ts";
 import type { JobView } from "../core/protocol.ts";
 import { type ProviderRefusal, PROVIDER_LIMITS, isProviderName } from "@kitshn/local";
 
@@ -212,4 +212,21 @@ export function providerRefusals(raw: unknown): ReadonlyArray<ProviderRefusal> {
     )
     .slice(0, PROVIDER_LIMITS.providers)
     .map(({ provider, reason, at }) => ({ provider, reason: reason.slice(0, 500), at }));
+}
+
+/** K-722: the exec paths of a daemon status, checked; a bad item is left out. */
+export function execPathsOf(raw: unknown): NonNullable<MachineStatus["execPaths"]> {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(
+      (item): item is { provider: string; user: string; via: "sudo" | "bridge" } =>
+        typeof item === "object" &&
+        item !== null &&
+        typeof item.provider === "string" &&
+        isProviderName(item.provider) &&
+        typeof item.user === "string" &&
+        (item.via === "sudo" || item.via === "bridge"),
+    )
+    .slice(0, PROVIDER_LIMITS.providers)
+    .map(({ provider, user, via }) => ({ provider, user: user.slice(0, 32), via }));
 }

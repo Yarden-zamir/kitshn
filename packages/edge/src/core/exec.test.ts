@@ -112,7 +112,7 @@ describe("exec on another machine (K-722)", () => {
   });
 });
 
-describe("the t3.agents migration (K-722, migration 43)", () => {
+describe("the t3.agents migration (K-722, migration 42)", () => {
   it("shares the T3 app card wherever the T3 agents card was, keeps its other shares, and turns on runs commands for an exec share", () => {
     const before = world(mac(), ["vps/t3/agents"]);
     const result = migrateAgentShares(before);

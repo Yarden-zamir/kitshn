@@ -27,6 +27,7 @@ function setup(more: Partial<HubOptions> = {}) {
     graceMs: 45_000,
     saved: { syncedAt: null, paused: false, execMachines: [] },
     save: () => {},
+    execSudo: () => null,
     now: () => now,
     ...more,
   });
@@ -146,6 +147,15 @@ describe("the provider hub", () => {
       execId: "e1",
       frame: { type: "exit", reason: "the provider t3 on this machine went offline" },
     });
+
+    expect(other.hub.execPaths()).toEqual([{ provider: "t3", uid: 1002, via: "bridge" }]);
+    // With the sudo rule of `kitshn exec install`, the daemon runs it itself and the bridge gets nothing.
+    const sudo = setup({ execSudo: () => "t3" });
+    sudo.connect(1, "t3", 1002);
+    sudo.hub.execRun("t3", { ...run, execId: "e9" });
+    expect(sudo.events(1)).toEqual([]);
+    expect(sudo.hub.execPaths()).toEqual([{ provider: "t3", uid: 1002, via: "sudo" }]);
+    sudo.hub.kitshnLost();
 
     // A machine with provider users never runs a command as the daemon user for a caller without a provider.
     other.hub.execRun(null, { ...run, execId: "e2" });

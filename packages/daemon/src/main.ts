@@ -43,6 +43,7 @@ import { HELPER_IMAGE, backup, finishRestores, restore, unpauseMarked } from "./
 import { keyPlan } from "./keys.ts";
 import { dropAttested, labelPrefixes } from "./attest.ts";
 import { IDENTITY_HEADERS } from "./check.ts";
+import { execCommand, execSudoReady } from "./execSudo.ts";
 import { GRACE_MS, PING_MS as PROVIDER_PING_MS, ProviderHub, kitshnStateOf } from "./hub.ts";
 import {
   PUSH_MARK_KEY,
@@ -1910,6 +1911,10 @@ function report() {
       refusedProviders: registry().refused(),
       offlineProviders: registry().offline(),
       // K-704: the items that the last register or upsert of each provider dropped, for the machine card.
+      // K-722: how exec of other machines becomes each provider's exec user here; `bridge` shows on the card.
+      execPaths: hub()
+        .execPaths()
+        .map(({ provider, uid, via }) => ({ provider, user: userNameOf(uid) ?? String(uid), via })),
       providerProblems: registry()
         .states()
         .flatMap((state) =>
@@ -3077,8 +3082,21 @@ const hub = (): ProviderHub =>
     pingMs: timingOf("KITSHN_PING_MS", PROVIDER_PING_MS),
     graceMs: timingOf("KITSHN_GRACE_MS", GRACE_MS),
     saved: kitshnStateOf(registry().pushedValue(KITSHN_STATE_KEY)),
+    execSudo: execSudoFor,
     save: (state) => void registry().setPushed(KITSHN_STATE_KEY, state),
   }));
+
+/** K-722: the sudo check of each exec user, kept 10 minutes when it works and 1 minute when it does not. */
+const sudoChecks = new Map<number, { readonly name: string | null; readonly at: number }>();
+function execSudoFor(uid: number): string | null {
+  const now = Date.now();
+  const kept = sudoChecks.get(uid);
+  if (kept && now - kept.at < (kept.name === null ? 60_000 : 600_000)) return kept.name;
+  const user = platform === "linux" ? userNameOf(uid) : null;
+  const name = user !== null && execSudoReady(user) ? user : null;
+  sudoChecks.set(uid, { name, at: now });
+  return name;
+}
 
 type Push = Extract<ServerToDaemon, { type: "grants" | "desired" | "settings" | "reach" | "access" }>;
 
@@ -3516,6 +3534,9 @@ switch (command) {
     break;
   case "doors":
     doorsCommand(args[0], flag("--user"));
+    break;
+  case "exec":
+    execCommand(args[0], flag("--user"), flag("--daemon-user"));
     break;
   case "skill":
     skillCommand(args[0], args.includes("--repo"));
