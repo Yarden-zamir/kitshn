@@ -259,7 +259,10 @@ describe("the providers of a machine (K-704, K-705)", () => {
   it("drops only the items of the file that do not decode, and names each (K-006)", () => {
     // The file of a Windows daemon from before the Windows rule: its owner -1 drops, and the good provider loads.
     const windows = parseSaved({
-      providers: [{ name: "t3", kinds: [...kinds], commands: [], resources: [thread("a")] }, { name: "site" }],
+      providers: [
+        { name: "t3", kinds: [...kinds], commands: [], resources: [thread("a")] },
+        { name: "site" },
+      ],
       pushed: { "grants:t3": {} },
       owners: { t3: -1, grok: 1001 },
       execUsers: { t3: "t3" },

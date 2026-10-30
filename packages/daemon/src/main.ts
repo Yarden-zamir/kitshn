@@ -2875,6 +2875,8 @@ async function runCommand() {
   process.on("exit", local.stop);
   // K-704: the daemon pings each provider connection and drops a quiet one.
   process.on("exit", hub().start());
+  // K-722: a stop or an update of the daemon ends its runs; on Linux systemd ends them with the cgroup anyway.
+  process.on("exit", () => hub().endLocalRuns("the daemon stopped"));
   // K-1609: the link proxy of the providers, in the same private folder; it admits the daemon user and local users.
   // K-1609, K-621: a start without the link proxy still serves the rest; the answer to register then names none.
   const linkOptions = {

@@ -289,6 +289,8 @@ export const Request = Schema.Union([
     timeoutSeconds: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 3600 }))),
     stdin: Schema.optionalKey(Schema.Boolean),
     attest: Schema.optionalKey(Attest),
+    /** K-722: the provider on the target whose user runs it, when this machine controls cards of several there. */
+    targetProvider: Schema.optionalKey(ProviderName),
   }),
   /** K-722: a chunk for the stdin of a run that the caller started with `stdin: true`. */
   Schema.Struct({ id: Id, type: Schema.Literal("exec-input"), execId: ExecId, data: Chunk }),

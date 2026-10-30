@@ -108,6 +108,9 @@ describe("the link proxy (K-1609)", () => {
       // An Access session never crosses the proxy, in either direction.
       expect(seen[0]?.get("cookie")).toBe("lang=he");
       expect(answer.headers.getSetCookie()).toEqual(["theme=dark; Path=/"]);
+      // A call without the header still goes to History, under its method and path without the query.
+      await (await fetch("http://link/t3/b/api/thing?token=x", { unix: path } as RequestInit)).text();
+      expect(calls.at(-1)).toEqual({ provider: "t3", machineId: "b", name: "GET:/api/thing", status: 200 });
       const refused = await fetch("http://link/t3/other/api", { unix: path } as RequestInit);
       expect(refused.status).toBe(403);
 

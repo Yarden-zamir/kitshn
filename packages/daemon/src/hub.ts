@@ -318,6 +318,7 @@ export class ProviderHub {
           stdin: request.stdin ?? false,
         },
         target: request.target,
+        ...(request.targetProvider === undefined ? {} : { targetProvider: request.targetProvider }),
         attested,
       });
       if (!sent) {
@@ -502,6 +503,14 @@ export class ProviderHub {
       throw new Error(`no run ${request.execId} was given to this connection (K-722).`);
     if (request.frame.type === "exit") this.incoming.delete(request.execId);
     this.toSource(request.execId, request.frame);
+  }
+
+  /**
+   * K-722: the daemon stops: each run on this machine ends now, its whole group with it. On macOS each run is a session
+   * of its own, which launchd does not stop with the daemon; the kill is synchronous, so it works in an exit handler.
+   */
+  endLocalRuns(why: string) {
+    for (const run of this.incoming.values()) if (run.kind === "local") run.handle.kill(why);
   }
 
   /** K-722: the connection to kitshn closed: every run ends, on this side with "the relay was lost". */
