@@ -11,7 +11,7 @@ const portCard: PortCard = {
   relay: null,
 };
 
-describe("doorAddress (K-2004)", () => {
+describe("doorAddress (K-2005)", () => {
   it.each([
     ["203.0.113.9", "203.0.113.9"],
     ["2001:DB8:1:2:aaaa::1", "2001:db8:1:2::/64"],
@@ -33,7 +33,7 @@ describe("doorAddress (K-2004)", () => {
   });
 });
 
-describe("portCardError (K-2001, K-2008)", () => {
+describe("portCardError (K-2001, K-2009)", () => {
   const ok = { name: "mc", ports: portCard.ports, doorMs: HOUR_MS, srv: null, relay: null };
   it.each([
     [{}, null],
@@ -62,7 +62,7 @@ it.each([
   expect(busyPort([{ port: 25565, proto: "tcp" }], [{ title: null, ...server }])?.port ?? null).toBe(busy);
 });
 
-describe("openDoors (K-2004)", () => {
+describe("openDoors (K-2005)", () => {
   const door = (address: string, openedAt: number, person = "a@x") => ({
     card: "c1",
     person,
@@ -107,7 +107,7 @@ describe("openDoors (K-2004)", () => {
   });
 });
 
-it("the plan of a machine holds each door of a person, merges doors per address, keeps the later end, and follows a relay (K-2005, K-2008)", () => {
+it("the plan of a machine holds each door of a person, merges doors per address, keeps the later end, and follows a relay (K-2006, K-2009)", () => {
   const second: PortCard = { ...portCard, card: "c2", ports: [{ port: 7777, proto: "tcp" }], relay: "relay" };
   const doors = [
     { card: "c1", person: "a@x", address: "203.0.113.9", openedAt: 0, endsAt: 5000 },
@@ -130,7 +130,7 @@ it("the plan of a machine holds each door of a person, merges doors per address,
   });
 });
 
-it("takes the ports of an open-to-all port card out of the gated set, and keeps a port that a gated port card names (K-2004)", () => {
+it("takes the ports of an open-to-all port card out of the gated set, and keeps a port that a gated port card names (K-2005)", () => {
   const second: PortCard = {
     ...portCard,
     card: "c2",

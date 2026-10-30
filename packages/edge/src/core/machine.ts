@@ -76,13 +76,13 @@ export interface MachineStatus {
   readonly keptBytes?: number;
   /** K-1751: the attesters of `machine.json`; their prefixes are the labels that rights may check (K-1754). */
   readonly attesters?: ReadonlyArray<{ readonly prefix: string; readonly address: string }>;
-  /** K-2002: the public addresses on the machine's interfaces, for the records of its port cards. */
+  /** K-2003: the public addresses on the machine's interfaces, for the records of its port cards. */
   readonly publicAddresses?: { readonly v4: string | null; readonly v6: string | null };
-  /** K-2002: why the machine cannot gate gated ports; absent when it reports the capability `doors`. */
+  /** K-2003: why the machine cannot gate gated ports; absent when it reports the capability `doors`. */
   readonly doorsProblem?: string;
   /** K-2003: the host firewall rules that stop a new connection to the ports, named for the owner. */
   readonly hostFirewall?: string;
-  /** K-2006: the gated ports (`25565/tcp`) of the last door plan that something listens on. */
+  /** K-2007: the gated ports (`25565/tcp`) of the last door plan that something listens on. */
   readonly listening?: ReadonlyArray<string>;
   /** K-704: the providers whose last registration the daemon refused; only from a signed connection. */
   readonly refusedProviders?: ReadonlyArray<ProviderRefusal>;
@@ -187,7 +187,7 @@ export type Command =
       readonly row?: string;
     }
   /** K-1820: back up as the run `before` first, then write the run `run` back. Only kitshn makes this job. */
-  /** K-2005: the gated ports of this machine and their open doors; the whole list each time. Only kitshn makes it. */
+  /** K-2006: the gated ports of this machine and their open doors; the whole list each time. Only kitshn makes it. */
   | { readonly kind: "doors"; readonly plan: DoorPlan }
   | {
       readonly kind: "backup-restore";

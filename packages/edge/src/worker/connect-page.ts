@@ -1,4 +1,4 @@
-// K-2003: the connect page of a port card, `pages.<zone>/connect/<name>`. The Worker serves it after the share check.
+// K-2004: the connect page of a port card, `pages.<zone>/connect/<name>`. The Worker serves it after the share check.
 import type { Door } from "../core/port.ts";
 import { escapeHtml } from "../core/html.ts";
 
@@ -10,10 +10,10 @@ export interface ConnectView {
     readonly doorHours: number;
     readonly reachable: boolean;
     readonly machineOnline: boolean;
-    /** K-2004: a relayed card listens on IPv4 only, so its doors need an IPv4 address. */
+    /** K-2005: a relayed card listens on IPv4 only, so its doors need an IPv4 address. */
     readonly needsIpv4: boolean;
   };
-  /** K-2004: the card has an active share in Everyone, so its ports are open to every address and it has no doors. */
+  /** K-2005: the card has an active share in Everyone, so its ports are open to every address and it has no doors. */
   readonly openToAll: boolean;
   readonly doors: ReadonlyArray<Door>;
   readonly seen: string | null;
@@ -21,7 +21,7 @@ export interface ConnectView {
 }
 
 /**
- * K-2003: the browser asks each of these for its public address; all answer cross-origin (checked 2026-10-29). Two
+ * K-2004: the browser asks each of these for its public address; all answer cross-origin (checked 2026-10-29). Two
  * IPv4 services on different networks, because a home network can leave through another address per destination.
  */
 export const ADDRESS_PROBES = [
@@ -114,7 +114,7 @@ for (const door of data.doors) $("doors").append(item(door.address + ", until " 
 if (data.doors.length === 0) $("doors").append(item("None"));
 $("end").hidden = data.doors.length === 0;
 $("end").onclick = () => send({ action: "close" });
-// K-2004: all lookups at once, 8 s each; the open button waits for them, and "Try again" asks the missing ones again.
+// K-2005: all lookups at once, 8 s each; the open button waits for them, and "Try again" asks the missing ones again.
 async function check() {
   $("open-button").disabled = true;
   $("probe-note").replaceChildren("Checking your addresses…");

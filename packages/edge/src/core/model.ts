@@ -200,7 +200,7 @@ export interface Resource {
   readonly githubWay?: GitHubWay;
   /** K-704: present on the card of a provider resource. */
   readonly provider?: ProviderCard;
-  /** K-2008: the machine that relays a port card behind NAT; its relay host is the second address. */
+  /** K-2009: the machine that relays a port card behind NAT; its relay host is the second address. */
   readonly relay?: string;
 }
 

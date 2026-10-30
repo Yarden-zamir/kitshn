@@ -16,20 +16,20 @@ export interface PortCard {
   readonly ports: ReadonlyArray<ServicePort>;
   /** How long a door stays open. */
   readonly doorMs: number;
-  /** K-2007: the SRV service (`minecraft` makes `_minecraft._tcp.<name>`), so a player types no port; null for none. */
+  /** K-2008: the SRV service (`minecraft` makes `_minecraft._tcp.<name>`), so a player types no port; null for none. */
   readonly srv: string | null;
-  /** K-2008: the machine with a public address that carries the TCP ports of a machine behind NAT; null for none. */
+  /** K-2009: the machine with a public address that carries the TCP ports of a machine behind NAT; null for none. */
   readonly relay: string | null;
 }
 
-/** K-2008: the hostname that the relay machine reaches the port card through, on the tunnel of the port card's machine. */
+/** K-2009: the hostname that the relay machine reaches the port card through, on the tunnel of the port card's machine. */
 export const relayHost = (name: string, zone: string) => `${name}-relay.${zone}`;
 
-/** K-2008: the machine whose firewall holds the doors of a port card: its relay, or its own machine. */
+/** K-2009: the machine whose firewall holds the doors of a port card: its relay, or its own machine. */
 export const doorMachine = (portCard: Pick<PortCard, "machine" | "relay">) =>
   portCard.relay ?? portCard.machine;
 
-/** K-2004: one open address of one person on one port card. */
+/** K-2005: one open address of one person on one port card. */
 export interface Door {
   readonly card: string;
   readonly person: string;
@@ -52,7 +52,7 @@ export const RESERVED_PORTS: ReadonlyArray<ServicePort & { readonly by: string }
 
 /**
  * K-2001: a port card name is one DNS label, 1 to 63 characters, so `mc` works. `connect` stays free for the connect path of
- * K-2003, and an id-shaped name for the ids of K-1003.
+ * K-2004, and an id-shaped name for the ids of K-1003.
  */
 export function portNameError(name: string): string | null {
   if (name.length < 1 || name.length > 63) return "A port card name has 1 to 63 characters.";
@@ -99,7 +99,7 @@ export function portCardError(input: {
   return null;
 }
 
-/** K-2003: what a player types to connect: the host alone with an SRV record, else the host and the first port. */
+/** K-2004: what a player types to connect: the host alone with an SRV record, else the host and the first port. */
 export const connectAddress = (portCard: Pick<PortCard, "srv" | "ports">, host: string) =>
   portCard.srv !== null ? host : `${host}:${portCard.ports[0]?.port ?? ""}`;
 
@@ -150,7 +150,7 @@ function ipv6Groups(text: string): Array<number> | null {
 }
 
 /**
- * K-2004: the address that a door opens for a seen address, or why kitshn refuses it. IPv4 opens one address;
+ * K-2005: the address that a door opens for a seen address, or why kitshn refuses it. IPv4 opens one address;
  * IPv6 opens its `/64`, because one home gets a `/64` and its devices change their address inside it. A private,
  * shared, loopback or link-local address is refused: no player on the internet comes from there.
  */
@@ -186,16 +186,16 @@ export function doorAddress(seen: string): { address: string; family: 4 | 6 } | 
 export const doorFamily = (address: string): 4 | 6 => (address.includes(":") ? 6 : 4);
 
 /**
- * K-2004: the doors that a person keeps per card and family. A home network can leave through more than one public
+ * K-2005: the doors that a person keeps per card and family. A home network can leave through more than one public
  * IPv4 address, chosen per destination, so one door per family is not enough.
  */
 export const DOOR_LIMITS: Readonly<Record<4 | 6, number>> = { 4: 4, 6: 2 };
 
 /**
- * K-2004: the doors after a person opens `addresses` on a card. A new address adds a door, and an address that is
+ * K-2005: the doors after a person opens `addresses` on a card. A new address adds a door, and an address that is
  * open already gets a new end. Past the limit of its family, the oldest door of that family closes. `addresses` come
  * first in the order that they win, so the address that kitshn sees goes first. A share that ends closes the door
- * through K-2005, so the door time does not look at the card's end.
+ * through K-2006, so the door time does not look at the card's end.
  */
 export function openDoors(
   current: ReadonlyArray<Door>,
@@ -230,10 +230,10 @@ export function openDoors(
   };
 }
 
-/** K-2005: what the daemon of a machine puts into its firewall: the gated ports, and each open door with its end. */
+/** K-2006: what the daemon of a machine puts into its firewall: the gated ports, and each open door with its end. */
 export interface DoorPlan {
   readonly ports: ReadonlyArray<ServicePort>;
-  /** K-2008: the port cards that this machine relays: it listens on `port` and carries it to `hostname`. */
+  /** K-2009: the port cards that this machine relays: it listens on `port` and carries it to `hostname`. */
   readonly relays: ReadonlyArray<{ readonly hostname: string; readonly port: number }>;
   readonly doors: ReadonlyArray<{
     readonly address: string;
@@ -243,7 +243,7 @@ export interface DoorPlan {
 }
 
 /**
- * K-2005: the plan of one machine. The ports of a port card in `openToAll` (K-2004) leave the gated set, so every address
+ * K-2006: the plan of one machine. The ports of a port card in `openToAll` (K-2005) leave the gated set, so every address
  * reaches them; a port that a gated port card also names stays gated, so the plan still fails closed.
  */
 export function doorPlan(

@@ -89,7 +89,7 @@ const doorJobs = (stub: DurableObjectStub) =>
       .map((row) => ({ state: row.state, plan: (JSON.parse(row.command) as { plan: DoorPlan }).plan })),
   );
 
-it("opens a door per address for a person of the card, and closes them when the person leaves (K-2004, K-2005)", async () => {
+it("opens a door per address for a person of the card, and closes them when the person leaves (K-2005, K-2006)", async () => {
   stubAccessCerts();
   const stub = await setup();
   // A door belongs to a person, so no login means the login step.
@@ -149,7 +149,7 @@ it("opens a door per address for a person of the card, and closes them when the 
   expect(left).toEqual([]);
 });
 
-it("keeps a door when its circle checks the address, and refuses a second open within 10 s (K-2004, K-2005)", async () => {
+it("keeps a door when its circle checks the address, and refuses a second open within 10 s (K-2005, K-2006)", async () => {
   stubAccessCerts();
   const stub = await setup();
   const office: Circle = {
@@ -192,7 +192,7 @@ it("keeps a door when its circle checks the address, and refuses a second open w
   expect(again.error).toMatch(/Wait a moment/);
 });
 
-it("counts End now as a door change, so open and close in a loop wait 10 s (K-2004)", async () => {
+it("counts End now as a door change, so open and close in a loop wait 10 s (K-2005)", async () => {
   stubAccessCerts();
   const stub = await setup();
   const friend = visitor("friend@example.com", "203.0.113.9");
@@ -202,7 +202,7 @@ it("counts End now as a door change, so open and close in a loop wait 10 s (K-20
   expect(closed.doors.map((door) => door.address)).toEqual(["203.0.113.9"]);
 });
 
-it("removes the port cards, doors and wanted records of a removed machine (K-2001, K-2007)", async () => {
+it("removes the port cards, doors and wanted records of a removed machine (K-2001, K-2008)", async () => {
   stubAccessCerts();
   const stub = await setup();
   await portCard(stub, { name: "mc", action: "open", visitor: visitor("friend@example.com", "203.0.113.9") });
@@ -230,7 +230,7 @@ it("removes the port cards, doors and wanted records of a removed machine (K-200
   expect(left).toEqual({ status: 200, portCards: 0, doors: 0, card: false });
 });
 
-it("makes the A and SRV records of a port card in one run (K-2007)", async () => {
+it("makes the A and SRV records of a port card in one run (K-2008)", async () => {
   const stub = await setup();
   const result = await runInDurableObject(stub, async (instance) => {
     const kitshn = instance as unknown as {
@@ -260,7 +260,7 @@ it("makes the A and SRV records of a port card in one run (K-2007)", async () =>
   });
 });
 
-it("opens nothing for a relayed port card when no IPv4 address answered, because the relay listens on IPv4 only (K-2004)", async () => {
+it("opens nothing for a relayed port card when no IPv4 address answered, because the relay listens on IPv4 only (K-2005)", async () => {
   stubAccessCerts();
   const stub = await setup();
   await runInDurableObject(stub, (_, state) => {
@@ -276,7 +276,7 @@ it("opens nothing for a relayed port card when no IPv4 address answered, because
   expect(opened.doors).toEqual([]);
 });
 
-it("closes every door of the person on the card with End now (K-2004)", async () => {
+it("closes every door of the person on the card with End now (K-2005)", async () => {
   stubAccessCerts();
   const stub = await setup();
   // The rows go in directly, so End now is the first door change and the 10 s wait does not apply.
@@ -307,7 +307,7 @@ it("closes every door of the person on the card with End now (K-2004)", async ()
   expect(left.map((row) => row.person)).toEqual(["other@example.com"]);
 });
 
-it("opens the ports of a port card in Everyone to all and gates them again after the unshare (K-2004, K-2005)", async () => {
+it("opens the ports of a port card in Everyone to all and gates them again after the unshare (K-2005, K-2006)", async () => {
   stubAccessCerts();
   const stub = await setup();
   const owner = {

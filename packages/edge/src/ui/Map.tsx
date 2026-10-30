@@ -1187,7 +1187,7 @@ export function CardView(props: {
         {resource.kind === "port" && openToAll(state, resource, Date.now()) ? (
           <span
             class="sticker info"
-            data-tip="Open to all: a share in Everyone opens the gated ports to every address, with no door and no login (K-2004)."
+            data-tip="Open to all: a share in Everyone opens the gated ports to every address, with no door and no login (K-2005)."
           >
             open to all
           </span>

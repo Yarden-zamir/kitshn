@@ -16,7 +16,7 @@ export const DECLARED_ADDRESS_PATH = "/usr/local/lib/kitshn/public-address";
 /** K-2003: the INPUT rules that the helper saves with each apply. */
 export const INPUT_RULES_PATH = "/var/lib/kitshn/input-rules";
 
-/** K-2005: loads the last gated ports with no door before the network and Docker start, so a reboot opens nothing. */
+/** K-2006: loads the last gated ports with no door before the network and Docker start, so a reboot opens nothing. */
 export const BOOT_UNIT = `[Unit]
 Description=kitshn doors: gated ports start closed (K-2005)
 DefaultDependencies=no
@@ -35,11 +35,11 @@ WantedBy=multi-user.target
 `;
 
 /**
- * K-2005: the root helper. It reads `port`, `open4` and `open6` lines, checks each field, and replaces the table
+ * K-2006: the root helper. It reads `port`, `open4` and `open6` lines, checks each field, and replaces the table
  * `inet kitshn_doors` in one nft transaction. `off` removes the table. It touches no other table.
  */
 export const HELPER = `#!/bin/sh
-# kitshn doors (K-2005): the one root step of kitshn port cards. Installed by \`kitshn doors install\`.
+# kitshn doors (K-2006): the one root step of kitshn port cards. Installed by \`kitshn doors install\`.
 # Usage: doors apply < lines | doors boot | doors off. It changes only the nftables table inet ${TABLE}.
 # \`boot\` runs before the network at each start: it loads the last gated ports with no door, so they start closed.
 set -eu
@@ -171,7 +171,7 @@ fi
 /** The daemon only applies plans; `off` and `boot` run as root through the install command and the boot unit. */
 export const sudoersLine = (user: string) => `${user} ALL=(root) NOPASSWD: ${HELPER_PATH} apply\n`;
 
-/** K-2005: the helper's input for a plan. A door that has ended is left out; the kernel ends the rest. */
+/** K-2006: the helper's input for a plan. A door that has ended is left out; the kernel ends the rest. */
 export function helperInput(plan: DoorPlan, now: number): string {
   const lines = plan.ports.map(({ proto, port }) => `port ${proto} ${port}`);
   for (const door of plan.doors) {
@@ -185,7 +185,7 @@ export function helperInput(plan: DoorPlan, now: number): string {
 }
 
 /**
- * K-2008: one `cloudflared access tcp` per port card that this machine relays. It listens on the gated port, so the door
+ * K-2009: one `cloudflared access tcp` per port card that this machine relays. It listens on the gated port, so the door
  * table gates it like a local port; the service token goes in the environment, never into the process arguments.
  */
 export class Relays {
@@ -197,7 +197,7 @@ export class Relays {
     private readonly restartMs = 5000,
   ) {}
 
-  /** K-2008: the relays end with the daemon; a service manager that kills only the daemon leaves no listener. */
+  /** K-2009: the relays end with the daemon; a service manager that kills only the daemon leaves no listener. */
   stopAll() {
     this.wanted = new Set();
     for (const child of this.running.values()) child.kill();
@@ -245,7 +245,7 @@ export class Relays {
   }
 }
 
-/** K-2002: the public addresses on this machine's interfaces. A machine behind NAT has none. */
+/** K-2003: the public addresses on this machine's interfaces. A machine behind NAT has none. */
 export function publicAddresses(
   interfaces: ReturnType<typeof networkInterfaces> = networkInterfaces(),
   declared: string | null = declaredAddress(),
@@ -371,7 +371,7 @@ export const hostFirewallText = (rules: ReadonlyArray<string>) =>
     ? null
     : `the host firewall rejects new connections: allow the port ports (${rules.join("; ")})`;
 
-/** K-2006: which gated ports listen now, from `ss -H -ltnu` (the local address is the fifth field). */
+/** K-2007: which gated ports listen now, from `ss -H -ltnu` (the local address is the fifth field). */
 export function listening(ssOutput: string): ReadonlySet<string> {
   const found = new Set<string>();
   for (const line of ssOutput.split("\n")) {
@@ -386,7 +386,7 @@ export function listening(ssOutput: string): ReadonlySet<string> {
 }
 
 /**
- * K-2002: the full path of a system tool, so a root shell whose PATH has no /usr/sbin (`su` without `-`) finds it.
+ * K-2003: the full path of a system tool, so a root shell whose PATH has no /usr/sbin (`su` without `-`) finds it.
  * Falls back to the bare name, which the PATH resolves.
  */
 export function systemTool(
@@ -404,7 +404,7 @@ export function toolProblem(name: string, run: SpawnSyncReturns<string>, failed 
   return `${name} ${failed}: ${output || run.error?.message || `exit ${run.status ?? run.signal}`}`;
 }
 
-/** Why this machine cannot gate gated ports, or null when it can (K-2002). */
+/** Why this machine cannot gate gated ports, or null when it can (K-2003). */
 export function doorsProblem(platform: NodeJS.Platform): string | null {
   if (platform !== "linux") return "port cards need a Linux machine with nftables";
   if (!existsSync(HELPER_PATH))
@@ -421,7 +421,7 @@ export function doorsProblem(platform: NodeJS.Platform): string | null {
   return null;
 }
 
-/** K-2005: writes the plan into the firewall through the helper, and keeps it, so a restart writes it again. */
+/** K-2006: writes the plan into the firewall through the helper, and keeps it, so a restart writes it again. */
 export function applyDoors(plan: DoorPlan, keptFile: string, now: number): { ok: boolean; output: string } {
   const run = spawnSync(systemTool("sudo"), ["-n", HELPER_PATH, "apply"], {
     input: helperInput(plan, now),
@@ -440,7 +440,7 @@ export function applyDoors(plan: DoorPlan, keptFile: string, now: number): { ok:
   };
 }
 
-/** K-2005: the plan that this daemon wrote last, or null. A reboot empties the table; the daemon writes it again. */
+/** K-2006: the plan that this daemon wrote last, or null. A reboot empties the table; the daemon writes it again. */
 export function keptPlan(keptFile: string): DoorPlan | null {
   let text: string;
   try {
@@ -462,7 +462,7 @@ const isServicePort = (value: unknown): value is ServicePort =>
   ((value as ServicePort).proto === "tcp" || (value as ServicePort).proto === "udp");
 
 /**
- * K-2005: a door plan from JSON, or null when its shape is not this daemon's, such as a plan that an older daemon
+ * K-2006: a door plan from JSON, or null when its shape is not this daemon's, such as a plan that an older daemon
  * kept. The daemon then waits for kitshn's plan instead of stopping.
  */
 export function planOf(value: unknown): DoorPlan | null {

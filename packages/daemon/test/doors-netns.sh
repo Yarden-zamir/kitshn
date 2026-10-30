@@ -1,5 +1,5 @@
 #!/bin/sh
-# K-2005: the door helper with real traffic, in network namespaces, never in the host's own table. Run as root:
+# K-2006: the door helper with real traffic, in network namespaces, never in the host's own table. Run as root:
 #   sh packages/daemon/test/doors-netns.sh <helper file>
 # kc is a player (10.9.0.2, fd09::2), kh the machine with the gated ports, kd a container behind Docker-style DNAT.
 set -eu

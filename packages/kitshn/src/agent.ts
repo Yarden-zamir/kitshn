@@ -238,9 +238,9 @@ kitshn publish --previous <card> [--json]    go back to the previous version of 
                                              stop keeps it until someone moves it, now ends it at once`,
   port: `kitshn port add --machine <machine> --name <name> --port 25565/tcp [--port <port/proto>] [--door 12h] [--srv minecraft] [--relay <machine>] [--json]
                                              a port card: its ports open per person from its connect page (K-2001)
-kitshn port doors <card> [--json]            the open doors, records and listening ports of a port card (K-2006)
-kitshn port close <card> <address> [--json]  close one door of a port card (K-2006)
-kitshn port remove <card> [--json]           remove a port card, its doors and its records (K-2006)`,
+kitshn port doors <card> [--json]            the open doors, records and listening ports of a port card (K-2007)
+kitshn port close <card> <address> [--json]  close one door of a port card (K-2007)
+kitshn port remove <card> [--json]           remove a port card, its doors and its records (K-2007)`,
 };
 
 /** The help lines of all agent commands. */
@@ -588,7 +588,7 @@ async function redirect(t: AgentTransport, card: string, address: string, remove
   );
 }
 
-/** K-2001, K-2006: `kitshn port add|doors|close`. An agent never opens a door; a person does on the connect page. */
+/** K-2001, K-2007: `kitshn port add|doors|close`. An agent never opens a door; a person does on the connect page. */
 async function portCard(transport: () => AgentTransport, args: ReadonlyArray<string>) {
   const valued = new Set(["--machine", "--name", "--port", "--door", "--srv", "--relay", "--server"]);
   const values = (name: string) =>

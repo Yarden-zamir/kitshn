@@ -63,7 +63,7 @@ export function addressNameError(name: string): string | null {
   );
   if (!allowed || name.startsWith("-") || name.endsWith("-"))
     return "An address name has only a to z, 0 to 9 and inner hyphens.";
-  // An id-shaped name would hide the item with that id; `login` is the login path of K-1004, and `connect` the connect path of K-2003.
+  // An id-shaped name would hide the item with that id; `login` is the login path of K-1004, and `connect` the connect path of K-2004.
   if (name === "login" || name === "connect" || isLibraryId(name))
     return `kitshn keeps the name "${name}" for itself.`;
   return null;
@@ -252,7 +252,7 @@ function passkeyNeeded(circle: Circle, visitor: ContentVisitor, state: State): b
  *
  * The admin (K-104) opens every item, also a private one in the tray (K-1002).
  */
-/** K-2004: a card with an active share in an "any" circle with everyone lets in a visitor with no login. */
+/** K-2005: a card with an active share in an "any" circle with everyone lets in a visitor with no login. */
 export const openToAll = (state: State, resource: Resource, now: number) =>
   activeShares(state, resource, now).some(
     (share) => isPublicCircle(share.circle) && share.circle.match === "any",
