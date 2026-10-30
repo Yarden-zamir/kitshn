@@ -110,7 +110,7 @@ interface LinkOptions {
   readonly log: (text: string) => void;
   /** `http` only in tests. */
   readonly scheme?: "https" | "http";
-  /** K-1610: one forwarded call that names its tool, with its answer status (0 when the link failed). */
+  /** K-1610: each forwarded call, with its tool name or `METHOD:/path`, and its answer status (0 when the link failed). */
   readonly audit?: (call: {
     readonly provider: string;
     readonly machineId: string;
@@ -151,11 +151,14 @@ export function serveLinks(path: string, options: LinkOptions): Promise<{ readon
     const token = options.token();
     if (!token) return refuse(response, 503, "the daemon has no machine token.");
     const method = request.method ?? "GET";
-    const [, provider = "", machineId = ""] = new URL(request.url ?? "/", "http://link").pathname.split("/");
-    const name = auditName(request.headers[AUDIT_HEADER]);
-    const audit = (status: number) => {
-      if (name !== null) options.audit?.({ provider, machineId, name, status });
-    };
+    const url = new URL(request.url ?? "/", "http://link");
+    const [, provider = "", machineId = "", ...rest] = url.pathname.split("/");
+    // A call without a valid tool name still goes to History, under its method and path, so leaving out the header
+    // never hides a call. The query stays out: it can carry arguments.
+    const name =
+      auditName(request.headers[AUDIT_HEADER]) ??
+      `${method}:/${rest.join("/")}`.replaceAll(" ", "").slice(0, 100);
+    const audit = (status: number) => options.audit?.({ provider, machineId, name, status });
     try {
       const answer = await fetch(found.target, {
         method,

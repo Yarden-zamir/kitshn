@@ -47,6 +47,8 @@ export interface ExecHandle {
   readonly input: (data: Uint8Array) => void;
   readonly closeStdin: () => void;
   readonly kill: (reason: string) => void;
+  /** Resolves when the main process exited; the run may still drain or wait for credit then. */
+  readonly exited: Promise<void>;
 }
 
 interface Account {
@@ -97,7 +99,13 @@ export function startExec(spec: ExecSpec, sink: ExecSink): ExecHandle {
     clearTimeout(timer);
     sink.exit({ ...value, durationMs: Date.now() - started });
   };
-  const nothing: ExecHandle = { credit: () => {}, input: () => {}, closeStdin: () => {}, kill: () => {} };
+  const nothing: ExecHandle = {
+    credit: () => {},
+    input: () => {},
+    closeStdin: () => {},
+    kill: () => {},
+    exited: Promise.resolve(),
+  };
   const account = spec.uid === undefined ? null : accountOf(spec.uid);
   if (spec.uid !== undefined && !account) {
     queueMicrotask(() =>
@@ -162,8 +170,11 @@ export function startExec(spec: ExecSpec, sink: ExecSink): ExecHandle {
   const flush = () => {
     while (queue.length > 0 && credit > 0) {
       const { stream, part } = queue.shift()!;
-      credit -= part.length;
-      sink.output(stream, part);
+      // Never more than the credit: the rest of a part waits at the head of the queue.
+      if (part.length > credit) queue.unshift({ stream, part: part.subarray(credit) });
+      const sent = part.subarray(0, credit);
+      credit -= sent.length;
+      sink.output(stream, sent);
     }
     // After the exit the pipes hold at most their buffers, so the rest is read into the queue.
     for (const each of streams)
@@ -190,7 +201,9 @@ export function startExec(spec: ExecSpec, sink: ExecSink): ExecHandle {
   );
   // The run ends with its main process: the rest of its group goes, and the pipes drain for a short time. `close`
   // alone could wait forever for a process that left the group and holds a pipe.
+  const exitedOnce = Promise.withResolvers<void>();
   child.on("exit", (code, signal) => {
+    exitedOnce.resolve();
     killGroup("SIGKILL");
     exited =
       reason !== null
@@ -201,8 +214,18 @@ export function startExec(spec: ExecSpec, sink: ExecSink): ExecHandle {
     }, DRAIN_MS).unref();
     flush();
   });
+  /** After the exit: the output that waits is dropped, and the run ends now with the exit status and `why`. */
+  const endAfterExit = (why: string) => {
+    if (exited === null) return;
+    exited = { ...exited, reason: why };
+    queue.length = 0;
+    for (const each of streams) each.destroy();
+    open = 0;
+    maybeEnd();
+  };
   const kill = (why: string) => {
-    if (ended || reason !== null || exited !== null) return;
+    if (ended || reason !== null) return;
+    if (exited !== null) return endAfterExit(why);
     reason = why;
     if (!spec.sudoUser) return killGroup("SIGKILL");
     // sudo passes TERM on to the helper, which kills its group; sudo itself cannot pass on a KILL.
@@ -210,12 +233,10 @@ export function startExec(spec: ExecSpec, sink: ExecSink): ExecHandle {
     setTimeout(() => child.kill("SIGKILL"), 5_000).unref();
   };
   // A run that exited but whose caller takes no more output ends at its timeout too, with what it sent.
-  const timer = setTimeout(() => {
-    if (exited === null) return kill(`timed out after ${Math.round(spec.timeoutMs / 1000)} s`);
-    queue.length = 0;
-    open = 0;
-    maybeEnd();
-  }, spec.timeoutMs);
+  const timer = setTimeout(
+    () => kill(`timed out after ${Math.round(spec.timeoutMs / 1000)} s`),
+    spec.timeoutMs,
+  );
   return {
     credit: (bytes) => {
       credit += bytes;
@@ -235,6 +256,7 @@ export function startExec(spec: ExecSpec, sink: ExecSink): ExecHandle {
     },
     closeStdin: () => child.stdin.end(),
     kill,
+    exited: exitedOnce.promise,
   };
 }
 

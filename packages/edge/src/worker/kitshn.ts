@@ -11883,7 +11883,11 @@ export class Kitshn extends DurableObject<Env> {
     if (!this.state.machines.has(target)) return end(`refused: kitshn has no machine ${target}.`);
     if (this.openSocket(target) === null) return end("the target is offline");
     const now = Date.now();
-    const via = execProviderOn(this.state, machine.id, target, now);
+    const wanted =
+      typeof message.targetProvider === "string" && message.targetProvider.length <= 32
+        ? message.targetProvider
+        : null;
+    const via = execProviderOn(this.state, machine.id, target, now, wanted);
     if ("refused" in via)
       return end(
         via.refused === "no card"
@@ -11923,7 +11927,14 @@ export class Kitshn extends DurableObject<Env> {
       return end(`refused: ${outcome.reason}`);
     }
     if (outcome.outcome === "waiting") {
-      this.sql("UPDATE exec_runs SET proposal_id = ? WHERE exec_id = ?", outcome.proposalId, execId);
+      const kept = this.sql(
+        "UPDATE exec_runs SET proposal_id = ? WHERE exec_id = ? RETURNING exec_id",
+        outcome.proposalId,
+        execId,
+      );
+      // The caller dropped while kitshn made the proposal: the row is gone, so the proposal closes now.
+      if (kept.length === 0)
+        return this.closeExecProposal(outcome.proposalId, "the caller of this run is gone");
       return send(socket, {
         type: "execState",
         execId,

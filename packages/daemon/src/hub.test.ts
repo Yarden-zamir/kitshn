@@ -213,4 +213,21 @@ describe("the provider hub", () => {
       expect.objectContaining({ execId: start.execId, reason: "the relay was lost" }),
     ]);
   });
+
+  it("ends every local run when the daemon stops, so no run outlives it (K-722)", async () => {
+    const ended = Promise.withResolvers<DaemonMessage>();
+    const own = setup({
+      toKitshn: (message) => {
+        if (message.type === "execFrame" && message.frame.type === "exit") ended.resolve(message);
+        return true;
+      },
+    });
+    own.connect(1);
+    own.hub.execRun("t3", { execId: "e-stop", command: "sleep 30", timeoutSeconds: 60, stdin: false });
+    own.hub.endLocalRuns("the daemon stopped");
+    expect(await ended.promise).toMatchObject({
+      execId: "e-stop",
+      frame: { type: "exit", signal: "SIGKILL", reason: "the daemon stopped" },
+    });
+  });
 });

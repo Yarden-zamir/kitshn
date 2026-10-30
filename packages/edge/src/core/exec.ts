@@ -33,15 +33,17 @@ export function mayExecOn(state: State, sourceId: string, targetId: string, now:
 
 /**
  * K-722: the provider on B whose exec user runs a command of A. kitshn picks it from the cards that A controls, so A
- * never chooses the user on B: the provider of the provider cards on B that A controls, or none (B's own rule, the
- * daemon user only on a machine without provider users) when A controls only B's machine card. Cards of two
- * providers are ambiguous, so the run is refused.
+ * never chooses a user on B beyond what it controls: the provider of the provider cards on B that A controls, or none
+ * (B's own rule, the daemon user only on a machine without provider users) when A controls only B's machine card.
+ * When A controls cards of several providers, A names one (`wanted`), and kitshn takes it only when A controls a card
+ * of it.
  */
 export function execProviderOn(
   state: State,
   sourceId: string,
   targetId: string,
   now: number,
+  wanted: string | null = null,
 ): { readonly provider: string | null } | { readonly refused: string } {
   const source = state.machines.get(sourceId);
   if (!source || !mayExecOn(state, sourceId, targetId, now)) return { refused: "no card" };
@@ -51,9 +53,13 @@ export function execProviderOn(
       card.machine === targetId && card.provider && managed.has(card.id) ? [card.provider.name] : [],
     ),
   );
+  if (wanted !== null)
+    return providers.has(wanted)
+      ? { provider: wanted }
+      : { refused: `${source.name} controls no card of the provider ${wanted} on that machine.` };
   if (providers.size > 1)
     return {
-      refused: `${source.name} controls cards of ${[...providers].sort().join(" and ")} on that machine, so the user that runs the command is not clear; share the card of one provider.`,
+      refused: `${source.name} controls cards of ${[...providers].sort().join(" and ")} on that machine; name one with targetProvider.`,
     };
   return { provider: [...providers][0] ?? null };
 }

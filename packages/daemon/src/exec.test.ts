@@ -104,6 +104,19 @@ describe("an exec run (K-722)", () => {
     expect(Math.max(...slow.out.map((frame) => frame.bytes))).toBeLessThanOrEqual(FRAME_BYTES);
   });
 
+  it("sends no byte beyond the credit, and ends at once on a kill after the exit while output waits for credit", async () => {
+    const big = OUTPUT_WINDOW + 30_000;
+    const waiting = run(`head -c ${big} /dev/zero`, { grant: false, timeoutMs: 600_000 });
+    await waiting.atLeast(OUTPUT_WINDOW);
+    expect(waiting.received()).toBe(OUTPUT_WINDOW);
+    waiting.handle.credit(1);
+    expect(waiting.received()).toBe(OUTPUT_WINDOW + 1);
+    // The process exited; its last 30,000 bytes wait for credit that never comes.
+    await waiting.handle.exited;
+    waiting.handle.kill("killed by the caller");
+    expect(await waiting.ended).toMatchObject({ exitCode: 0, reason: "killed by the caller" });
+  });
+
   it("writes stdin under credit, gives the credit back, and ends stdin on close", async () => {
     const cat = run("cat", { stdin: true });
     cat.handle.input(Buffer.from("hello"));

@@ -319,6 +319,8 @@ export type DaemonMessage =
       readonly execId: string;
       readonly target: string;
       readonly provider: string | null;
+      /** K-722: the provider on the target that A names, when A controls cards of several there. */
+      readonly targetProvider?: string;
       readonly run: ExecRun;
       readonly attested: Readonly<Record<string, string>>;
     }

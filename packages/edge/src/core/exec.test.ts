@@ -119,6 +119,28 @@ describe("what a run on another machine records and who runs it (K-722, K-1610)"
     expect(commandName("TOKEN=x")).toBe("(empty)");
   });
 
+  it("takes a provider that the caller names only among the providers whose cards it controls", () => {
+    const grok = { ...card("vps/grok/app", "t3.app", "vps"), id: "vps/grok/app" };
+    const both = world(mac({ mode: "automatic" }), ["vps/t3/app", "vps/grok/app"]);
+    const withGrok: State = {
+      ...both,
+      resources: new Map([
+        ...both.resources,
+        [grok.id, { ...grok, provider: { ...grok.provider!, name: "grok" } }],
+      ]),
+      places: new Map([...both.places, [grok.id, { x: 0, y: 0 }]]),
+    };
+    expect(execProviderOn(withGrok, "mac", "vps", 0)).toMatchObject({
+      refused: expect.stringMatching(/name one/),
+    });
+    expect(execProviderOn(withGrok, "mac", "vps", 0, "grok")).toEqual({ provider: "grok" });
+    expect(
+      execProviderOn(world(mac({ mode: "automatic" }), ["vps/t3/app"]), "mac", "vps", 0, "grok"),
+    ).toMatchObject({
+      refused: expect.stringMatching(/no card of the provider grok/),
+    });
+  });
+
   it("picks the provider of the card that the caller controls, never one that the caller names", () => {
     expect(execProviderOn(world(mac({ mode: "automatic" }), ["vps/t3/app"]), "mac", "vps", 0)).toEqual({
       provider: "t3",
