@@ -100,7 +100,7 @@ describe("daemon service (K-601)", () => {
       USERNAME: "ya",
     });
     expect(task).toContain("--config &quot;C:\\k\\cloudflared.yml&quot;");
-    expect(task).toContain("--metrics 127.0.0.1:0");
+    expect(task).toContain("tunnel --metrics 127.0.0.1:20290 run");
     expect(task).toContain("--token-file &quot;C:\\k\\tunnel-token&quot;");
     expect(tunnelCommands("win32", "C:\\t.xml", -1).start[0]?.argv).toContain("\\kitshn\\tunnel");
   });

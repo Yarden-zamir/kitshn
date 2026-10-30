@@ -107,6 +107,18 @@ import {
   runStep,
   writeMarker,
 } from "./update.ts";
+import {
+  MEASURE_EVERY_MS,
+  PIN_GRACE_MS,
+  TUNNEL_METRICS,
+  locationsText,
+  measureRegions,
+  nextPin,
+  pinArgs,
+  readPin,
+  serverLocations,
+  writePin,
+} from "./pin.ts";
 import { ownSid } from "./winpipe.ts";
 import {
   type PathFacts,
@@ -869,7 +881,7 @@ async function ensureTunnel(config: JoinSecrets) {
     );
   const unitChanged = writeChanged(
     paths.tunnelService,
-    serviceBytes(tunnelServiceFile(platform, binary, tokenFile)),
+    serviceBytes(tunnelServiceFile(platform, binary, tokenFile, process.env, pinArgs(readPin(pinFile())))),
     0o644,
   );
   const steps = fresh || tokenChanged || unitChanged ? tunnel.restart : tunnel.start;
@@ -1870,6 +1882,54 @@ function runJob(
 }
 
 let tunnelState: "starting" | "running" | "stopped" = "stopped";
+/** K-632: the data centers of the tunnel's connections, from its metrics. */
+let tunnelLocations: string | null = null;
+const pinFile = () => join(paths.data, "tunnel-pin.json");
+
+/** K-632: the data centers from the tunnel's own metrics port; empty while it has no connection. */
+async function readLocations(): Promise<ReadonlyMap<string, number>> {
+  const text = await fetch(`http://${TUNNEL_METRICS}/metrics`, { signal: AbortSignal.timeout(2000) })
+    .then((answer) => (answer.ok ? answer.text() : ""))
+    .catch(() => "");
+  return serverLocations(text);
+}
+
+/**
+ * K-632: at start and every 6 hours, measure the two edge regions and pin the near one. A pinned tunnel with no
+ * connection after 60 seconds loses the pin, and the next pin waits 24 hours.
+ */
+async function measurePin(config: JoinSecrets) {
+  const before = readPin(pinFile());
+  const next = nextPin(before, await measureRegions(), Date.now());
+  writePin(pinFile(), next);
+  if (JSON.stringify(pinArgs(next)) === JSON.stringify(pinArgs(before))) return;
+  log(next.pin ? `tunnel: pinned to ${next.pin.region} (${next.pin.edges.join(", ")})` : "tunnel: no pin");
+  await ensureTunnel(config);
+  if (next.pin === null) return;
+  setTimeout(() => {
+    void readLocations().then(async (locations) => {
+      if (locations.size > 0) return;
+      log(
+        "tunnel: the pinned tunnel has no connection after 60 seconds; it runs without the pin for 24 hours",
+      );
+      writePin(pinFile(), { pin: null, faster: null, failedAt: Date.now() });
+      await ensureTunnel(config);
+    });
+  }, PIN_GRACE_MS).unref();
+}
+
+/** K-632: the data centers go out in the status when they change. */
+function watchLocations() {
+  const check = async () => {
+    const text = locationsText(await readLocations(), readPin(pinFile()).pin !== null);
+    if (text === tunnelLocations) return;
+    tunnelLocations = text;
+    report();
+  };
+  void check();
+  setInterval(() => void check(), 30_000);
+}
+
 let socket: WebSocket | null = null;
 
 function report() {
@@ -1909,6 +1969,7 @@ function report() {
       arch: arch(),
       hostname: hostname(),
       tunnel: tunnelState,
+      ...(tunnelLocations === null ? {} : { tunnelLocations }),
       publicAddresses: publicAddresses(),
       ...(doorState.problem === null ? {} : { doorsProblem: doorState.problem }),
       listening: [...doorState.listening],
@@ -2935,6 +2996,13 @@ async function runCommand() {
   if (process.env["KITSHN_TUNNEL"] !== "off") {
     await ensureTunnel(config);
     watchTunnel();
+    watchLocations();
+    const pinning = () =>
+      void measurePin(config).catch((error: unknown) =>
+        log(`tunnel: the edge measure failed: ${String(error)}`),
+      );
+    pinning();
+    setInterval(pinning, MEASURE_EVERY_MS);
   }
   // K-821: the machine card shows what the kept builds take on disk.
   void countKept();
