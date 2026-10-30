@@ -110,6 +110,8 @@ describe("an exec run (K-722)", () => {
     await waiting.atLeast(OUTPUT_WINDOW);
     expect(waiting.received()).toBe(OUTPUT_WINDOW);
     waiting.handle.credit(1);
+    // The byte goes when the pipe has it; then no byte beyond the credit follows.
+    await waiting.atLeast(OUTPUT_WINDOW + 1);
     expect(waiting.received()).toBe(OUTPUT_WINDOW + 1);
     // The process exited; its last 30,000 bytes wait for credit that never comes.
     await waiting.handle.exited;
