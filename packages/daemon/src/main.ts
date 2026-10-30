@@ -116,13 +116,18 @@ import {
 } from "./update.ts";
 import {
   MEASURE_EVERY_MS,
-  PIN_GRACE_MS,
-  afterConnectionCheck,
+  type ReadyWatch,
+  READY_CHECK_MS,
+  afterMeasure,
+  afterReadyCheck,
   bindMetricsPort,
   chooseMetricsPort,
+  clearTunnelRemoved,
+  markTunnelRemoved,
+  readyFrom,
+  unlessTunnelRemoved,
   locationsText,
   measureRegions,
-  nextPin,
   pinArgs,
   readPin,
   serverLocations,
@@ -320,6 +325,7 @@ async function joinCommand(code: string | undefined, server: string | undefined)
   if (existsSync(paths.config)) chmodSync(paths.config, 0o600);
   writeFileSync(paths.config, `${JSON.stringify(secrets, null, 2)}\n`, { mode: 0o600 });
   renameSync(codeKeyFile, keyFile);
+  clearTunnelRemoved(paths.data);
   console.log(`Joined as machine ${secrets.machineId} with the key ${await fingerprintOf(key.x)}.`);
 }
 
@@ -925,9 +931,13 @@ function writeChanged(file: string, text: string | Buffer, mode: number): boolea
 
 /**
  * K-603: installs the tunnel as its own user service and starts it. It restarts the tunnel only when cloudflared,
- * its token or its service file changed, so a daemon restart or update never stops the tunnel.
+ * its token or its service file changed, so a daemon restart or update never stops the tunnel. A `background` call comes
+ * from a timer, so a failed step must not end the daemon. A removed machine gets no service back (K-615).
  */
-async function ensureTunnel(config: JoinSecrets) {
+const ensureTunnel = (config: JoinSecrets, background = false) =>
+  unlessTunnelRemoved(paths.data, () => installTunnel(config, background));
+
+async function installTunnel(config: JoinSecrets, background: boolean) {
   const { file: binary, fresh } = await ensureCloudflared();
   const tokenFile = join(paths.data, "tunnel-token");
   const tokenChanged = writeChanged(tokenFile, config.tunnelToken, 0o600);
@@ -951,7 +961,7 @@ async function ensureTunnel(config: JoinSecrets) {
     0o644,
   );
   const steps = fresh || tokenChanged || unitChanged ? tunnel.restart : tunnel.start;
-  for (const step of steps) run(step.argv, step.mayFail);
+  for (const step of steps) run(step.argv, step.mayFail || background);
 }
 
 /**
@@ -1952,12 +1962,13 @@ let tunnelState: "starting" | "running" | "stopped" = "stopped";
 let tunnelLocations: string | null = null;
 const pinFile = () => join(paths.data, "tunnel-pin.json");
 const metricsPortFile = () => join(paths.data, "tunnel-metrics-port");
-/** K-632: when the watch last saw a connection, or when the tunnel last got new arguments. */
-let lastConnected = Date.now();
+/** K-632: cloudflared's own word on its connection; null until it answers. */
+let tunnelReady: boolean | null = null;
+let readyWatch: ReadyWatch = { notReadySince: null, checkedAt: Date.now() };
 
-const readMetrics = (port: number) =>
-  fetch(`http://127.0.0.1:${port}/metrics`, { signal: AbortSignal.timeout(2000) })
-    .then((answer) => (answer.ok ? answer.text() : null))
+const readTunnelPath = (port: number, path: "ready" | "metrics") =>
+  fetch(`http://127.0.0.1:${port}/${path}`, { signal: AbortSignal.timeout(2000) })
+    .then((answer) => answer.text())
     .catch(() => null);
 
 const keptMetricsPort = () => {
@@ -1969,8 +1980,8 @@ const keptMetricsPort = () => {
 async function tunnelMetricsPort() {
   const port = await chooseMetricsPort(
     keptMetricsPort(),
+    readTunnelState() === "running",
     async (kept) => (await bindMetricsPort(kept)) !== null,
-    async (kept) => (await readMetrics(kept))?.includes("cloudflared_tunnel") === true,
     async () => {
       const free = await bindMetricsPort(0);
       if (free === null) throw new Error("no free port for the metrics of the tunnel");
@@ -1983,47 +1994,52 @@ async function tunnelMetricsPort() {
 
 /** K-632: at start and every 6 hours, measure the two edge regions and pin the near one. */
 async function measurePin(config: JoinSecrets) {
-  const before = readPin(pinFile());
-  const next = nextPin(before, await measureRegions(), Date.now());
+  const started = readPin(pinFile());
+  const measurement = await measureRegions();
+  const current = readPin(pinFile());
+  const next = afterMeasure(started, current, measurement);
   writePin(pinFile(), next);
-  if (JSON.stringify(pinArgs(next)) === JSON.stringify(pinArgs(before))) return;
+  if (JSON.stringify(pinArgs(next)) === JSON.stringify(pinArgs(current))) return;
   log(next.pin ? `tunnel: pinned to ${next.pin.region} (${next.pin.edges.join(", ")})` : "tunnel: no pin");
-  lastConnected = Date.now();
-  await ensureTunnel(config);
+  readyWatch = { notReadySince: null, checkedAt: Date.now() };
+  await ensureTunnel(config, true);
 }
 
 /**
- * K-632: every 30 seconds, the data centers go out in the status when they change, a pinned tunnel with no connection
- * for 60 seconds loses the pin, and metrics that do not answer for 60 seconds get a new look at the port.
+ * K-632: every 30 seconds: a tunnel that cannot start on its metrics port gets a new one, a pinned tunnel that stays not
+ * ready loses the pin, and the status follows. A read with no answer changes nothing.
  */
-function watchLocations(config: JoinSecrets) {
-  let lastMetrics = Date.now();
+function watchReady(config: JoinSecrets) {
   const check = async () => {
     const port = keptMetricsPort();
-    const metrics = port === null ? null : await readMetrics(port);
-    const now = Date.now();
-    if (metrics !== null) lastMetrics = now;
-    else if (now - lastMetrics >= PIN_GRACE_MS) {
-      lastMetrics = now;
-      await ensureTunnel(config);
-    }
-    const locations = serverLocations(metrics ?? "");
+    if (port === null) return;
+    if (tunnelState !== "running" && (await bindMetricsPort(port)) === null) await ensureTunnel(config, true);
+    const ready = readyFrom(await readTunnelPath(port, "ready"));
     const before = readPin(pinFile());
-    const after = afterConnectionCheck(before, locations.size > 0, lastConnected, now);
-    lastConnected = after.lastConnected;
+    const after = afterReadyCheck(before, ready, readyWatch, Date.now());
+    readyWatch = after.watch;
     if (after.state !== before) {
-      log("tunnel: the pinned tunnel has no connection for 60 seconds; it runs without the pin for 24 hours");
+      log(
+        "tunnel: the pinned tunnel has no connection for 60 seconds; it runs without the pin until the next measure",
+      );
       writePin(pinFile(), after.state);
-      await ensureTunnel(config);
+      await ensureTunnel(config, true);
     }
-    const text = locationsText(locations, after.state.pin !== null);
-    if (text === tunnelLocations) return;
+    if (ready === null) return;
+    const metrics = ready ? await readTunnelPath(port, "metrics") : null;
+    const text = !ready
+      ? null
+      : metrics === null
+        ? tunnelLocations
+        : locationsText(serverLocations(metrics), after.state);
+    if (text === tunnelLocations && ready === tunnelReady) return;
     tunnelLocations = text;
+    tunnelReady = ready;
     report();
   };
   const logFailure = (error: unknown) => log(`tunnel check failed: ${String(error)}`);
   void check().catch(logFailure);
-  setInterval(() => void check().catch(logFailure), 30_000);
+  setInterval(() => void check().catch(logFailure), READY_CHECK_MS);
 }
 
 let socket: WebSocket | null = null;
@@ -2063,6 +2079,8 @@ function report() {
       hostname: hostname(),
       tunnel: tunnelState,
       ...(tunnelLocations === null ? {} : { tunnelLocations }),
+      ...(tunnelReady === null ? {} : { tunnelReady }),
+      ...(doorState.relays.length === 0 ? {} : { relays: doorState.relays }),
       // K-1751: the map shows the attesters of each machine.
       attesters: attestersOf(readMachineFile()).attesters.map(({ prefix, address }) => ({ prefix, address })),
       publicAddresses: publicAddresses(),
@@ -2077,10 +2095,16 @@ function report() {
 }
 
 /** K-2003, K-2007: whether this machine can gate ports, and which gated ports listen. */
-const doorState: { problem: string | null; listening: ReadonlySet<string>; firewall: string | null } = {
+const doorState: {
+  problem: string | null;
+  listening: ReadonlySet<string>;
+  firewall: string | null;
+  relays: ReadonlyArray<string>;
+} = {
   problem: "not checked yet",
   listening: new Set(),
   firewall: null,
+  relays: [],
 };
 const doorsFile = () => join(paths.data, "doors.json");
 const relays = new Relays(log);
@@ -2105,8 +2129,11 @@ function checkListening() {
             ...listening(spawnSync(systemTool("ss"), ["-H", "-ltnu"], { encoding: "utf8" }).stdout ?? ""),
           ].filter((key) => wanted.has(key)),
         );
-  if ([...found].sort().join() === [...doorState.listening].sort().join()) return;
+  const serving = relays.serving(Date.now());
+  const same = (a: Iterable<string>, b: Iterable<string>) => [...a].sort().join() === [...b].sort().join();
+  if (same(found, doorState.listening) && same(serving, doorState.relays)) return;
   doorState.listening = found;
+  doorState.relays = serving;
   report();
 }
 
@@ -2161,11 +2188,14 @@ function applyKeptPlan(quiet = false) {
 }
 
 /** K-605: the tunnel state comes from its service manager; a change goes out in the status. */
+function readTunnelState() {
+  const [program = "", ...rest] = tunnel.state;
+  return tunnelStateOf(platform, spawnSync(program, rest, { encoding: "utf8" }).stdout ?? "");
+}
+
 function watchTunnel() {
   const check = () => {
-    const [program = "", ...rest] = tunnel.state;
-    const result = spawnSync(program, rest, { encoding: "utf8" });
-    const state = tunnelStateOf(platform, result.stdout ?? "");
+    const state = readTunnelState();
     if (state === tunnelState) return;
     tunnelState = state;
     report();
@@ -2826,6 +2856,7 @@ function connect(config: JoinSecrets) {
         log(
           "the owner removed this machine; removing the tunnel service. Run kitshn service uninstall to stop the daemon.",
         );
+        markTunnelRemoved(paths.data);
         removeTunnel();
       }
       if (current === ws) current = null;
@@ -3131,7 +3162,7 @@ async function runCommand() {
   );
   await ensureTunnel(config);
   watchTunnel();
-  watchLocations(config);
+  watchReady(config);
   const pinning = () =>
     void measurePin(config).catch((error: unknown) =>
       log(`tunnel: the edge measure failed: ${String(error)}`),

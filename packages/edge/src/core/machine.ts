@@ -70,6 +70,10 @@ export interface MachineStatus {
   readonly tunnel: "starting" | "running" | "stopped";
   /** K-632: the data centers of the tunnel's connections, for example `hfa02 ×4 (pinned)`. */
   readonly tunnelLocations?: string;
+  /** K-632: cloudflared's `/ready`; absent until it answered. */
+  readonly tunnelReady?: boolean;
+  /** K-2009: the relays that hold their port, as `<hostname> <port>`. */
+  readonly relays?: ReadonlyArray<string>;
   /** Job kinds that this daemon knows beyond shell, diagnostics and restart. Old daemons send none. */
   readonly capabilities?: ReadonlyArray<string>;
   /** K-821: the bytes of the images that the daemon keeps for rollbacks, at most; shared layers count once per image. */

@@ -79,6 +79,10 @@ export function servicePorts(
 const HOURS = [1, 12, 24, 72, 168] as const;
 const hoursLabel = (hours: number) => (hours < 24 ? `${hours} h` : `${hours / 24} d`);
 
+/** K-2002: the route is fixed when the card is made. */
+const ROUTE_FIXED =
+  "You cannot change the route later: remove and add the card again, which loses its shares.";
+
 /** K-534: the "Ports" step of the site wizard; it posts `POST /api/ports`. */
 export function PortForm(props: {
   zone: string;
@@ -196,6 +200,7 @@ export function PortForm(props: {
               onSelect={() => setWantRelay(true)}
             />
           </div>
+          <p class="help">{ROUTE_FIXED}</p>
           {route === "relay" ? (
             <div class="choices" role="radiogroup" aria-label="Relay machine">
               {relays.map((view) => (
@@ -364,6 +369,7 @@ export function PortDoors(props: { resource: Resource; onRemove: () => void }) {
         Route
       </div>
       <p class="help">{portCard.route}</p>
+      <p class="help">{ROUTE_FIXED}</p>
       {portCard.problems.map((problem) => (
         <p key={problem} class="error">
           {problem}
@@ -438,7 +444,7 @@ export function PortDoors(props: { resource: Resource; onRemove: () => void }) {
         <button
           type="button"
           class="btn danger"
-          data-tip={`Remove ${props.resource.name}: its doors close for everyone and its records go. kitshn asks first.`}
+          data-tip={`Remove ${props.resource.name}: its doors close for everyone, and its records and shares go. kitshn asks first.`}
           onClick={props.onRemove}
         >
           Remove ports…

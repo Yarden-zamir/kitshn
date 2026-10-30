@@ -1,11 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import {
   type Measurement,
   NO_PIN,
   PIN_GRACE_MS,
-  PIN_RETRY_MS,
-  afterConnectionCheck,
+  type ReadyWatch,
+  afterMeasure,
+  afterReadyCheck,
   chooseMetricsPort,
+  clearTunnelRemoved,
+  markTunnelRemoved,
+  readyFrom,
+  unlessTunnelRemoved,
   locationsText,
   nextPin,
   pinArgs,
@@ -21,11 +29,13 @@ const measured = (region1: number | null, region2: number | null): Measurement =
   },
 });
 
+const pinned = () => nextPin(nextPin(NO_PIN, measured(10, 60)), measured(10, 60));
+
 describe("the tunnel's edge pin (K-632)", () => {
   it("pins a region that is 20 ms faster twice in a row, and drops the pin when no region is", () => {
-    const once = nextPin(NO_PIN, measured(12, 60), 0);
+    const once = nextPin(NO_PIN, measured(12, 60));
     expect(once.pin).toBeNull();
-    const twice = nextPin(once, measured(10, 55), 1);
+    const twice = nextPin(once, measured(10, 55));
     expect(twice.pin).toEqual({
       region: "region1.v2.argotunnel.com",
       edges: ["198.41.192.7", "198.41.192.27"],
@@ -38,13 +48,11 @@ describe("the tunnel's edge pin (K-632)", () => {
       "--protocol",
       "http2",
     ]);
-    // 15 ms is no reason to pin, and a region with no answer never wins.
-    expect(nextPin(twice, measured(40, 55), 2).pin).toBeNull();
-    expect(nextPin(nextPin(NO_PIN, measured(null, 60), 0), measured(null, 60), 1).pin).toBeNull();
+    // A region with no answer never wins.
+    expect(nextPin(nextPin(NO_PIN, measured(null, 60)), measured(null, 60)).pin).toBeNull();
   });
 
   it("keeps the edges of a region that stays the pin, because DNS rotates its addresses", () => {
-    const pinned = nextPin(nextPin(NO_PIN, measured(10, 60), 0), measured(10, 60), 1);
     const rotated: Measurement = {
       ...measured(10, 60),
       addresses: {
@@ -52,42 +60,106 @@ describe("the tunnel's edge pin (K-632)", () => {
         "region2.v2.argotunnel.com": [],
       },
     };
-    expect(pinArgs(nextPin(pinned, rotated, 2))).toEqual(pinArgs(pinned));
+    expect(pinArgs(nextPin(pinned(), rotated))).toEqual(pinArgs(pinned()));
   });
 
   it("keeps the pin and the count through a measure with no answer", () => {
-    const pinned = nextPin(nextPin(NO_PIN, measured(10, 60), 0), measured(10, 60), 1);
-    expect(nextPin(pinned, measured(null, null), 2)).toBe(pinned);
-    expect(nextPin(pinned, measured(null, 60), 2)).toBe(pinned);
+    const state = pinned();
+    expect(nextPin(state, measured(null, null))).toBe(state);
+    expect(nextPin(state, measured(null, 60))).toBe(state);
   });
 
-  it("drops a kept pin after 60 seconds without a connection, whenever the connection went", () => {
-    const pinned = nextPin(nextPin(NO_PIN, measured(10, 60), 0), measured(10, 60), 1);
-    expect(afterConnectionCheck(pinned, true, 0, 500)).toEqual({ state: pinned, lastConnected: 500 });
-    expect(afterConnectionCheck(pinned, false, 500, 500 + PIN_GRACE_MS - 1).state).toBe(pinned);
-    const dropped = afterConnectionCheck(pinned, false, 500, 500 + PIN_GRACE_MS).state;
-    expect(dropped).toEqual({ pin: null, faster: null, failedAt: 500 + PIN_GRACE_MS });
-    expect(afterConnectionCheck(NO_PIN, false, 0, PIN_GRACE_MS * 2).state).toBe(NO_PIN);
+  it("removes a pin only after two measures with no faster region", () => {
+    const once = nextPin(pinned(), measured(40, 55));
+    expect(once.pin).not.toBeNull();
+    expect(nextPin(once, measured(10, 60)).pin).not.toBeNull();
+    expect(nextPin(once, measured(40, 55)).pin).toBeNull();
   });
 
-  it("keeps the metrics port while it is free or the tunnel's, and moves off a port of another program", async () => {
-    const choose = (kept: number | null, free: boolean, tunnel: boolean) =>
+  it("moves a pin only after two measures with the other region faster", () => {
+    const once = nextPin(pinned(), measured(60, 10));
+    expect(once.pin?.region).toBe("region1.v2.argotunnel.com");
+    expect(nextPin(once, measured(60, 10)).pin?.region).toBe("region2.v2.argotunnel.com");
+  });
+
+  it("reads connected from /ready, and anything else as no answer", () => {
+    expect(readyFrom('{"status":200,"readyConnections":1,"connectorId":"a"}')).toBe(true);
+    expect(readyFrom('{"status":503,"readyConnections":0,"connectorId":"a"}')).toBe(false);
+    expect(readyFrom(null)).toBeNull();
+    expect(readyFrom("<html>another program</html>")).toBeNull();
+    expect(readyFrom('{"ok":true}')).toBeNull();
+  });
+
+  it("drops a pin only after an unbroken 60 seconds of not ready, whenever the connection went", () => {
+    const state = pinned();
+    const step = (watch: ReadyWatch, ready: boolean | null, now: number) =>
+      afterReadyCheck(state, ready, watch, now);
+    const start: ReadyWatch = { notReadySince: null, checkedAt: 0 };
+    const first = step(start, false, 30_000);
+    expect(first.state).toBe(state);
+    expect(step(first.watch, false, 30_000 + PIN_GRACE_MS - 1).state).toBe(state);
+    expect(step(first.watch, false, 30_000 + PIN_GRACE_MS).state).toEqual({
+      ...state,
+      pin: null,
+      dropped: true,
+    });
+    // A ready tunnel and a read with no answer both start the count again.
+    for (const ready of [true, null]) {
+      const again = step(first.watch, ready, 60_000);
+      expect(again.state).toBe(state);
+      expect(step(again.watch, false, 90_000).state).toBe(state);
+    }
+  });
+
+  it("drops nothing on the first check after a clock jump, such as a wake from sleep", () => {
+    const state = pinned();
+    const asleep: ReadyWatch = { notReadySince: 0, checkedAt: 30_000 };
+    const woken = afterReadyCheck(state, false, asleep, 8 * 60 * 60_000);
+    expect(woken.state).toBe(state);
+    expect(woken.watch.notReadySince).toBeNull();
+  });
+
+  it("keeps a dropped pin off until the next measure, says why, and clears the reason then", () => {
+    const dropped = { ...pinned(), pin: null, dropped: true };
+    expect(locationsText(new Map([["fra08", 4]]), dropped)).toContain("pin dropped");
+    const next = nextPin(dropped, measured(10, 60));
+    expect(next.pin).not.toBeNull();
+    expect(next.dropped).toBe(false);
+  });
+
+  it("lets a drop win over a measure that was running", () => {
+    const started = pinned();
+    const current = { ...started, pin: null, dropped: true };
+    expect(afterMeasure(started, current, measured(10, 60))).toBe(current);
+    expect(afterMeasure(started, started, measured(40, 55)).faster).toBeNull();
+  });
+
+  it("moves the metrics port only when the tunnel does not run and the port is busy", async () => {
+    const choose = (kept: number | null, running: boolean, free: boolean) =>
       chooseMetricsPort(
         kept,
+        running,
         async () => free,
-        async () => tunnel,
         async () => 50000,
       );
     expect(await choose(40000, true, false)).toBe(40000);
     expect(await choose(40000, false, true)).toBe(40000);
     expect(await choose(40000, false, false)).toBe(50000);
-    expect(await choose(null, false, false)).toBe(50000);
+    expect(await choose(null, true, false)).toBe(50000);
   });
 
-  it("waits 24 hours after a failed pin before it pins again", () => {
-    const failed = { pin: null, faster: "region1.v2.argotunnel.com" as const, failedAt: 1000 };
-    expect(nextPin(failed, measured(10, 60), 1000 + PIN_RETRY_MS - 1).pin).toBeNull();
-    expect(nextPin(failed, measured(10, 60), 1000 + PIN_RETRY_MS).pin).not.toBeNull();
+  it("never brings back the tunnel of a removed machine, until a new join", async () => {
+    const data = mkdtempSync(join(tmpdir(), "kitshn-removed-"));
+    using _cleanup = { [Symbol.dispose]: () => rmSync(data, { recursive: true }) };
+    const work = vi.fn(async () => {});
+    await unlessTunnelRemoved(data, work);
+    expect(work).toHaveBeenCalledTimes(1);
+    markTunnelRemoved(data);
+    await unlessTunnelRemoved(data, work);
+    expect(work).toHaveBeenCalledTimes(1);
+    clearTunnelRemoved(data);
+    await unlessTunnelRemoved(data, work);
+    expect(work).toHaveBeenCalledTimes(2);
   });
 
   it("reads the current data center of each connection from the metrics", () => {
@@ -95,12 +167,9 @@ describe("the tunnel's edge pin (K-632)", () => {
       'cloudflared_tunnel_server_locations{connection_id="0",edge_location="hfa02"} 1',
       'cloudflared_tunnel_server_locations{connection_id="1",edge_location="fra08"} 0',
       'cloudflared_tunnel_server_locations{connection_id="1",edge_location="hfa02"} 1',
-      "cloudflared_tunnel_ha_connections 2",
     ].join("\n");
-    expect(locationsText(serverLocations(metrics), true)).toBe("hfa02 ×2 (pinned)");
-    expect(locationsText(serverLocations(""), false)).toBeNull();
-    // The location gauge stays after a disconnect.
-    expect(serverLocations(metrics.replace("ha_connections 2", "ha_connections 0")).size).toBe(0);
+    expect(locationsText(serverLocations(metrics), pinned())).toBe("hfa02 ×2 (pinned)");
+    expect(locationsText(serverLocations(""), NO_PIN)).toBeNull();
   });
 
   it("puts the metrics port and the pin into the tunnel service of each platform", () => {
