@@ -19,8 +19,8 @@ import { callApi, useStore } from "./store.ts";
 export type PortView = PortCard & {
   readonly connect: string;
   readonly address: string;
-  readonly listening: ReadonlyArray<string>;
-  readonly problem: string | null;
+  /** K-2007: null on a relayed card, whose relay listener says nothing about the service. */
+  readonly listening: ReadonlyArray<string> | null;
   /** K-2010: the route as the players' packets take it, the problems of its machines, and shares it cannot check. */
   readonly route: string;
   readonly problems: ReadonlyArray<string>;
@@ -71,7 +71,7 @@ export function servicePorts(
   const busy = busyPort(ports, servers);
   if (busy)
     return {
-      problem: `${busy.port}/tcp on this machine is ${busy.title ? `"${busy.title}"` : (busy.process ?? "another service")}, which is not the service, so a port card cannot close it.`,
+      problem: `${busy.port}/tcp on a machine of this route is ${busy.title ? `"${busy.title}"` : (busy.process ?? "another service")}, which is not the service, so a port card cannot close it.`,
     };
   return { ports };
 }
@@ -95,7 +95,7 @@ export function PortForm(props: {
   const relays = doors.filter((view) => view.machine.id !== machine?.machine.id);
   const [wantRelay, setWantRelay] = useState(false);
   const route: "direct" | "relay" | null =
-    direct && !wantRelay ? "direct" : relays.length > 0 ? "relay" : null;
+    direct && (!wantRelay || relays.length === 0) ? "direct" : relays.length > 0 ? "relay" : null;
   const [pickedRelay, setPickedRelay] = useState("");
   const relay =
     route === "relay" ? (relays.find((view) => view.machine.id === pickedRelay) ?? relays[0] ?? null) : null;
@@ -106,9 +106,11 @@ export function PortForm(props: {
   const [srv, setSrv] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const checked = servicePorts({ ports, name, hours, srv, relay: route === "relay" }, machine?.servers ?? []);
+  // K-2001: the same machines as the server checks, so the wizard says what the server would refuse.
+  const routeServers = [...(machine?.servers ?? []), ...(relay?.servers ?? [])];
+  const checked = servicePorts({ ports, name, hours, srv, relay: route === "relay" }, routeServers);
   // The ports alone, while the owner types them, so a missing name does not show as a port problem.
-  const portsAlone = servicePorts({ ports, name: "port", hours, srv: "" }, machine?.servers ?? []);
+  const portsAlone = servicePorts({ ports, name: "port", hours, srv: "" }, routeServers);
   // The running servers that a port card may take: another service of the machine is not the service of the card (K-2001).
   const offered = (machine?.servers ?? []).filter(
     (server) => busyPort([{ port: server.port, proto: "tcp" }], [server]) === null,
@@ -130,7 +132,7 @@ export function PortForm(props: {
     });
     setBusy(false);
     if ("error" in result) return setError(result.error);
-    props.onDone(`${name} plays at ${result.address}. Players open their door at ${result.connect}.`);
+    props.onDone(`${name} is at ${result.address}. People open their door at ${result.connect}.`);
     props.onClose();
   };
   return (
@@ -268,7 +270,7 @@ export function PortForm(props: {
             onInput={(event) => setName(event.currentTarget.value.toLowerCase())}
           />
           <p class="help">
-            Plays at <code>{(name || "name") + "." + props.zone}</code>
+            Address <code>{(name || "name") + "." + props.zone}</code>
           </p>
         </div>
       </div>
@@ -324,7 +326,7 @@ export function PortForm(props: {
   );
 }
 
-/** K-534: the open doors of a port card in its panel, each with Close; the owner's view of K-2004. */
+/** K-534: the open doors of a port card in its panel, each with Close; the owner's view of K-2007. */
 export function PortDoors(props: { resource: Resource; onRemove: () => void }) {
   const [portCard, setPortCard] = useState<PortView | null | "error">(null);
   const [error, setError] = useState<string | null>(null);
@@ -377,8 +379,10 @@ export function PortDoors(props: { resource: Resource; onRemove: () => void }) {
         cannot see it.
       </p>
       <p class="help">
-        Connect page <code>{portCard.connect}</code> · listening{" "}
-        {portCard.listening.length > 0 ? portCard.listening.join(", ") : "nothing"}
+        Connect page <code>{portCard.connect}</code>
+        {portCard.listening === null
+          ? null
+          : ` · listening ${portCard.listening.length > 0 ? portCard.listening.join(", ") : "nothing"}`}
       </p>
       <div class="label" data-tip="Doors: the addresses that may reach the gated ports now (K-2005).">
         Doors

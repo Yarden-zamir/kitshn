@@ -96,8 +96,7 @@ export default {
             relay: "vps",
             connect: `https://pages.${zone}/connect/minecraft`,
             address: `minecraft.${zone}`,
-            listening: ["25565/tcp"],
-            problem: null,
+            listening: null,
             route: "Players → VPS → Cloudflare hfa02 ×4 (pinned) → Mac",
             problems: [],
             unchecked: [

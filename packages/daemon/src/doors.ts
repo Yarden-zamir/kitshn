@@ -2,6 +2,7 @@
 // nftables table; the daemon sends it the gated ports and the open doors as plain lines.
 import { type ChildProcess, type SpawnSyncReturns, spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { networkInterfaces } from "node:os";
 import { dirname } from "node:path";
 import { type DoorPlan, type ServicePort, doorAddress, portKey } from "@kitshn/edge/port";
@@ -18,7 +19,7 @@ export const INPUT_RULES_PATH = "/var/lib/kitshn/input-rules";
 
 /** K-2006: loads the last gated ports with no door before the network and Docker start, so a reboot opens nothing. */
 export const BOOT_UNIT = `[Unit]
-Description=kitshn doors: gated ports start closed (K-2005)
+Description=kitshn doors: gated ports start closed (K-2006)
 DefaultDependencies=no
 # After nftables.service, whose \`flush ruleset\` would delete the table again.
 After=local-fs.target nftables.service
@@ -266,18 +267,20 @@ export function publicAddresses(
       else v6 ??= entry.address;
     }
   }
-  // K-2003: a declared address counts only while the internet sees the machine there.
-  if (v4 === null && declared !== null && declared === seen) v4 = declared;
+  // K-2003: a declared address counts until the internet sees the machine at another address; no answer says nothing.
+  if (v4 === null && declared !== null && (seen === null || declared === seen)) v4 = declared;
   return { v4, v6 };
 }
 
-/** K-2003: the address that `ipv4.icanhazip.com` gave last, refreshed by the daemon every minute. */
+/** K-2003: the address that `ipv4.icanhazip.com` gave last, refreshed by the daemon every minute; null before an answer. */
 let seenV4: string | null = null;
 export async function refreshSeenV4() {
-  seenV4 = await fetch("https://ipv4.icanhazip.com", { signal: AbortSignal.timeout(5000) })
+  const text = await fetch("https://ipv4.icanhazip.com", { signal: AbortSignal.timeout(5000) })
     .then((answer) => (answer.ok ? answer.text() : ""))
-    .then((text) => text.trim() || null)
-    .catch(() => seenV4);
+    .catch(() => "");
+  // A 5xx, a timeout or an error page is no answer, so the last address stays.
+  const answer = text.trim();
+  if (isIP(answer) === 4) seenV4 = answer;
 }
 
 /** K-2003: the declared public address, or null. */
@@ -293,9 +296,7 @@ export function declaredAddress(file = DECLARED_ADDRESS_PATH): string | null {
 
 /** K-2003: why a declared address does not count, or null. */
 export function declaredProblem(declared: string | null, seen: string | null): string | null {
-  if (declared === null) return null;
-  if (seen === null)
-    return `kitshn cannot check the declared address ${declared}: ipv4.icanhazip.com did not answer`;
+  if (declared === null || seen === null) return null;
   return seen === declared
     ? null
     : `the declared address ${declared} is not the address of the machine (the internet sees ${seen})`;
@@ -329,13 +330,17 @@ export function hostFirewallRules(saved: string, ports: ReadonlyArray<ServicePor
       if (state !== undefined && !state.split(",").includes("NEW")) continue;
       const protocol = value("-p");
       if (protocol !== undefined && protocol !== proto) continue;
-      const dport = value("--dport") ?? value("--dports");
+      const dportFlag = words.includes("--dport") ? "--dport" : "--dports";
+      const dport = value(dportFlag);
+      // `! --dport 22` matches every port except 22.
+      const negated = words[words.indexOf(dportFlag) - 1] === "!";
       if (
         dport !== undefined &&
-        !dport.split(",").some((part) => {
-          const [low = "", high = low] = part.split(":");
-          return Number(low) <= port && port <= Number(high);
-        })
+        negated ===
+          dport.split(",").some((part) => {
+            const [low = "", high = low] = part.split(":");
+            return Number(low) <= port && port <= Number(high);
+          })
       )
         continue;
       const target = value("-j");
@@ -355,12 +360,27 @@ export function hostFirewallRules(saved: string, ports: ReadonlyArray<ServicePor
     if (!decided && (policy === "DROP" || policy === "REJECT")) found.add(`-P INPUT ${policy}`);
   }
   // nftables: a native input chain (not iptables' own, not kitshn's) that drops by default.
+  // Its policy counts only for a port that no rule of the chain names.
   let table = "";
+  let chain: { readonly line: string; readonly rules: Array<string> } | null = null;
+  const names = (rule: string, { port, proto }: ServicePort) =>
+    rule.includes(`${proto} dport`) &&
+    rule.split(/[\s{},]+/).some((word) => {
+      const [low = "", high = low] = word.split("-");
+      return /^\d/.test(word) && Number(low) <= port && port <= Number(high);
+    });
   for (const line of nft.split("\n").map((text) => text.trim())) {
     if (line.startsWith("table ")) table = line.replace(/\s*\{$/, "");
     if (table.endsWith(TABLE) || /^table ip6? filter$/.test(table)) continue;
-    if (/hook input/.test(line) && /policy drop/.test(line) && ports.length > 0)
-      found.add(`${table}: ${line}`);
+    if (/hook input/.test(line) && /policy drop/.test(line)) chain = { line, rules: [] };
+    else if (chain !== null && line === "}") {
+      const { line: head, rules: chainRules } = chain;
+      // A jump to another chain: kitshn cannot tell, as with iptables.
+      const unread = chainRules.some((rule) => /\b(jump|goto)\b/.test(rule));
+      if (!unread && ports.some((port) => !chainRules.some((rule) => names(rule, port))))
+        found.add(`${table}: ${head}`);
+      chain = null;
+    } else chain?.rules.push(line);
   }
   return [...found];
 }
@@ -369,7 +389,18 @@ export function hostFirewallRules(saved: string, ports: ReadonlyArray<ServicePor
 export const hostFirewallText = (rules: ReadonlyArray<string>) =>
   rules.length === 0
     ? null
-    : `the host firewall rejects new connections: allow the port ports (${rules.join("; ")})`;
+    : `the host firewall may reject new connections: allow the ports (${rules.join("; ")})`;
+
+/**
+ * K-2003: the host firewall line of the status. An old helper saves no rules, so the check says that it did not run. A
+ * new helper saves them at its next apply, within a minute.
+ */
+export const hostFirewallStatus = (saved: string | null, ports: ReadonlyArray<ServicePort>) =>
+  ports.length === 0
+    ? null
+    : saved === null
+      ? "the host firewall was not checked: run `kitshn doors install` as root"
+      : hostFirewallText(hostFirewallRules(saved, ports));
 
 /** K-2007: which gated ports listen now, from `ss -H -ltnu` (the local address is the fifth field). */
 export function listening(ssOutput: string): ReadonlySet<string> {
@@ -404,7 +435,7 @@ export function toolProblem(name: string, run: SpawnSyncReturns<string>, failed 
   return `${name} ${failed}: ${output || run.error?.message || `exit ${run.status ?? run.signal}`}`;
 }
 
-/** Why this machine cannot gate gated ports, or null when it can (K-2003). */
+/** Why this machine cannot gate ports, or null when it can (K-2003). */
 export function doorsProblem(platform: NodeJS.Platform): string | null {
   if (platform !== "linux") return "port cards need a Linux machine with nftables";
   if (!existsSync(HELPER_PATH))

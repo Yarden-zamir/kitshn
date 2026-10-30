@@ -1,6 +1,5 @@
 import { homedir } from "node:os";
 import { join, win32 } from "node:path";
-import { TUNNEL_METRICS } from "./pin.ts";
 
 export type Platform = "linux" | "darwin" | "win32";
 
@@ -324,10 +323,9 @@ export function tunnelServiceFile(
   cloudflared: string,
   tokenFile: string,
   env: Record<string, string | undefined> = process.env,
-  pin: ReadonlyArray<string> = [],
-): string {
   // K-632: the tunnel's own metrics port, where the daemon reads its data centers, and the edge pin when there is one.
-  const tunnelArgs = ["--metrics", TUNNEL_METRICS, ...pin];
+  tunnelArgs: ReadonlyArray<string> = [],
+): string {
   // K-622: its own empty config next to the token, so the tunnel never shares a `.cloudflared` config with another
   // cloudflared on the PC.
   if (platform === "win32")

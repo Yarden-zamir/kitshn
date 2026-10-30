@@ -116,7 +116,7 @@ export function portRecords(rows: ReadonlyArray<PortRow>, zone: string): Array<P
   });
 }
 
-/** K-2008: the Cloudflare body of a record. PortCard traffic is not HTTP, so no record is proxied. */
+/** K-2008: the Cloudflare body of a record. Port traffic is not HTTP, so no record is proxied. */
 export function recordBody(record: PortRecord) {
   const comment = `kitshn port card ${record.card} (K-2008)`;
   if (record.type !== "SRV")

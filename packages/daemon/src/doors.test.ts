@@ -1,13 +1,15 @@
 import { spawnSync } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   declaredProblem,
   helperInput,
   hostFirewallRules,
+  hostFirewallStatus,
   hostFirewallText,
   listening,
   planOf,
   publicAddresses,
+  refreshSeenV4,
   sudoersLine,
   systemTool,
   toolProblem,
@@ -93,7 +95,11 @@ describe("the host firewall check and the declared address (K-2003)", () => {
       "-A INPUT -p tcp -m tcp --dport 25560:25570 -j ACCEPT\n-A INPUT -j REJECT",
     );
     expect(hostFirewallRules(allowed, minecraft)).toEqual([]);
-    expect(hostFirewallText(hostFirewallRules(oracle, minecraft))).toContain("allow the port ports");
+    expect(hostFirewallText(hostFirewallRules(oracle, minecraft))).toContain("allow the ports");
+    // `! --dport 22` drops every port except 22.
+    const allBut = "-A INPUT -p tcp ! --dport 22 -j DROP\n---- nft";
+    expect(hostFirewallRules(allBut, minecraft)).toHaveLength(1);
+    expect(hostFirewallRules(allBut, [{ port: 22, proto: "tcp" }])).toEqual([]);
   });
 
   it("names a drop policy, and stays quiet behind a jump that it cannot read or with no firewall", () => {
@@ -102,18 +108,55 @@ describe("the host firewall check and the declared address (K-2003)", () => {
     expect(hostFirewallRules("-P INPUT ACCEPT\n---- nft", minecraft)).toEqual([]);
     expect(
       hostFirewallRules(
-        "---- nft\ntable inet filter {\n chain input {\n  type filter hook input priority filter; policy drop;",
+        "---- nft\ntable inet filter {\n chain input {\n  type filter hook input priority filter; policy drop;\n }\n}",
         minecraft,
       ),
     ).toHaveLength(1);
+    // A rule of the chain that names the port lets it pass, also in a set or a range.
+    for (const rule of [
+      "tcp dport 25565 accept",
+      "tcp dport { 22, 25565 } accept",
+      "tcp dport 25000-26000 accept",
+    ])
+      expect(
+        hostFirewallRules(
+          `---- nft\ntable inet filter {\n chain input {\n  type filter hook input priority filter; policy drop;\n  ${rule}\n }\n}`,
+          minecraft,
+        ),
+        rule,
+      ).toEqual([]);
   });
 
-  it("counts a declared address only while the internet sees the machine there", () => {
+  it("says that the check did not run when an old helper saved no rules", () => {
+    expect(hostFirewallStatus(null, minecraft)).toContain("run `kitshn doors install`");
+    expect(hostFirewallStatus(null, [])).toBeNull();
+    expect(hostFirewallStatus("-P INPUT ACCEPT\n---- nft", minecraft)).toBeNull();
+  });
+
+  it("drops a declared address only after a definite other answer, never for no answer", async () => {
     const none = {};
-    expect(publicAddresses(none, "203.0.113.9", "203.0.113.9").v4).toBe("203.0.113.9");
-    expect(publicAddresses(none, "203.0.113.9", "198.51.100.1").v4).toBeNull();
+    const answers = (status: number, text: string) =>
+      vi.stubGlobal("fetch", async () => new Response(text, { status }));
+    using _restore = { [Symbol.dispose]: () => vi.unstubAllGlobals() };
+    // Before the first answer the address counts.
+    expect(publicAddresses(none, "203.0.113.9", null).v4).toBe("203.0.113.9");
+    answers(200, "203.0.113.9\n");
+    await refreshSeenV4();
+    expect(publicAddresses(none, "203.0.113.9").v4).toBe("203.0.113.9");
+    answers(503, "");
+    await refreshSeenV4();
+    expect(publicAddresses(none, "203.0.113.9").v4).toBe("203.0.113.9");
+    answers(200, "<html>a proxy page</html>");
+    await refreshSeenV4();
+    expect(publicAddresses(none, "203.0.113.9").v4).toBe("203.0.113.9");
+    answers(200, "198.51.100.1\n");
+    await refreshSeenV4();
+    expect(publicAddresses(none, "203.0.113.9").v4).toBeNull();
+    answers(503, "");
+    await refreshSeenV4();
+    expect(publicAddresses(none, "203.0.113.9").v4).toBeNull();
     expect(declaredProblem("203.0.113.9", "198.51.100.1")).toContain("is not the address of the machine");
-    expect(declaredProblem("203.0.113.9", null)).toContain("did not answer");
+    expect(declaredProblem("203.0.113.9", null)).toBeNull();
     expect(declaredProblem(null, "198.51.100.1")).toBeNull();
   });
 });

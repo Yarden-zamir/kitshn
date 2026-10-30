@@ -1,15 +1,13 @@
 // K-632: the tunnel's edge pin. cloudflared connects to two edge regions, and from some ISPs region 2 lands far
 // away; every visitor of a card then takes that detour. The daemon measures both regions and pins the near one.
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
-import { connect } from "node:net";
+import { connect, createServer } from "node:net";
 import { resolve4 } from "node:dns/promises";
 
 export const REGIONS = ["region1.v2.argotunnel.com", "region2.v2.argotunnel.com"] as const;
 export const EDGE_PORT = 7844;
-/** The tunnel's own metrics port, so the daemon reads its data centers (and no other cloudflared's). */
-export const TUNNEL_METRICS = "127.0.0.1:20290";
 export const MEASURE_EVERY_MS = 6 * 60 * 60_000;
-/** A pinned tunnel with no connection this long after its start loses the pin. */
+/** A pinned tunnel with no connection for this long loses the pin. */
 export const PIN_GRACE_MS = 60_000;
 /** After a failed pin, the daemon tries a pin again only after this time. */
 export const PIN_RETRY_MS = 24 * 60 * 60_000;
@@ -46,7 +44,11 @@ export function fasterRegion(measurement: Measurement): (typeof REGIONS)[number]
  * region removes it; a pin that failed waits 24 hours.
  */
 export function nextPin(state: PinState, measurement: Measurement, now: number): PinState {
+  // A measure with no answer says nothing about the regions, so it changes nothing.
+  if (REGIONS.some((region) => measurement.ms[region] === null)) return state;
   const faster = fasterRegion(measurement);
+  // DNS rotates the addresses of a region, so the same region keeps its edges and the tunnel keeps running.
+  if (faster !== null && state.pin?.region === faster) return { ...state, faster };
   if (faster === null) return { ...state, pin: null, faster: null };
   const waiting = state.failedAt !== null && now - state.failedAt < PIN_RETRY_MS;
   if (faster !== state.faster || waiting) return { ...state, faster, pin: waiting ? null : state.pin };
@@ -62,10 +64,28 @@ export const pinArgs = (state: PinState): Array<string> =>
     ? []
     : [...state.pin.edges.flatMap((edge) => ["--edge", `${edge}:${EDGE_PORT}`]), "--protocol", "http2"];
 
-/** The current data center of each tunnel connection, from cloudflared's metrics: `hfa02 ×4`. */
+/** K-632: drops the pin after PIN_GRACE_MS without a connection, also for a kept pin and a connection that went. */
+export function afterConnectionCheck(
+  state: PinState,
+  connected: boolean,
+  lastConnected: number,
+  now: number,
+): { readonly state: PinState; readonly lastConnected: number } {
+  if (connected) return { state, lastConnected: now };
+  return state.pin !== null && now - lastConnected >= PIN_GRACE_MS
+    ? { state: { pin: null, faster: null, failedAt: now }, lastConnected: now }
+    : { state, lastConnected };
+}
+
+/**
+ * The current data center of each tunnel connection, from cloudflared's metrics: `hfa02 ×4`. Empty with no connection:
+ * the location gauge keeps its last value after a disconnect, so `ha_connections` decides.
+ */
 export function serverLocations(metrics: string): Map<string, number> {
   const counts = new Map<string, number>();
-  for (const line of metrics.split("\n")) {
+  const lines = metrics.split("\n");
+  if (!lines.some((line) => /^cloudflared_tunnel_ha_connections [1-9]/.test(line))) return counts;
+  for (const line of lines) {
     if (!line.startsWith("cloudflared_tunnel_server_locations{")) continue;
     const location = /edge_location="([a-z0-9]+)"/.exec(line)?.[1];
     if (location && line.trim().endsWith(" 1")) counts.set(location, (counts.get(location) ?? 0) + 1);
@@ -120,6 +140,32 @@ export async function measureRegions(): Promise<Measurement> {
     addresses: { [REGIONS[0]]: first?.[2] ?? [], [REGIONS[1]]: second?.[2] ?? [] },
   };
 }
+
+/**
+ * K-632: the metrics port of the tunnel. The kept port stays while it is free or the tunnel holds it, so the service file
+ * stays the same; a port that another program took gets a new one, because cloudflared exits on a busy `--metrics` port.
+ * Known limit: another cloudflared on the kept port looks like ours. Revisit when two kitshn users share a machine.
+ */
+export async function chooseMetricsPort(
+  kept: number | null,
+  isFree: (port: number) => Promise<boolean>,
+  isTunnel: (port: number) => Promise<boolean>,
+  freePort: () => Promise<number>,
+): Promise<number> {
+  if (kept !== null && ((await isFree(kept)) || (await isTunnel(kept)))) return kept;
+  return freePort();
+}
+
+/** Listens on `port` (0 picks a free one) and gives the port back, or null when it is busy. */
+export const bindMetricsPort = (port: number) =>
+  new Promise<number | null>((done) => {
+    const server = createServer();
+    server.once("error", () => done(null));
+    server.listen(port, "127.0.0.1", () => {
+      const address = server.address();
+      server.close(() => done(typeof address === "object" && address !== null ? address.port : null));
+    });
+  });
 
 export function readPin(file: string): PinState {
   try {
