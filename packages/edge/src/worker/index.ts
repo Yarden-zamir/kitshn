@@ -215,13 +215,13 @@ async function content(request: Request, env: Env, kind: "page" | "file"): Promi
   return new Response(object?.body ?? null, { headers });
 }
 
-/** What the Durable Object decides for one request of a connect page (K-2003). */
+/** What the Durable Object decides for one request of a connect page (K-2004). */
 type ConnectAnswer = { readonly stale: boolean } & (
   | ({ readonly decision: "allow" } & ConnectView)
   | { readonly decision: "login" | "passkey" | "deny" | "missing" }
 );
 
-/** K-2003: the connect page of a port card. GET shows it; a POST from the page opens or closes a door. */
+/** K-2004: the connect page of a port card. GET shows it; a POST from the page opens or closes a door. */
 async function connect(request: Request, env: Env, logins: ContentLogins, url: URL): Promise<Response> {
   const name = url.pathname.slice("/connect/".length);
   if (portNameError(name) !== null) return text("kitshn has no port card here.", 404);

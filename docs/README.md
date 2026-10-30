@@ -29,7 +29,7 @@ Internal notes hold the decisions, the constraints across components, and the tr
 | K-17xx | [Machine identity and agent rights](internals/agent-rights.md) |
 | K-18xx | [Logs, backups and the state export](internals/logs-and-backups.md) |
 | K-19xx | [Notifications](internals/notifications.md) |
-| K-20xx | [Game servers](internals/game-servers.md) |
+| K-20xx | [Ports](internals/ports.md) |
 
 Maintainer procedures:
 

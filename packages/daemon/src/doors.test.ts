@@ -13,7 +13,7 @@ import {
   toolProblem,
 } from "./doors.ts";
 
-it("gives the root helper one line per port and per open door and port, without ended doors (K-2005)", () => {
+it("gives the root helper one line per port and per open door and port, without ended doors (K-2006)", () => {
   const plan = {
     ports: [
       { port: 25565, proto: "tcp" as const },
@@ -35,7 +35,7 @@ it("gives the root helper one line per port and per open door and port, without 
   ]);
 });
 
-it("reads the listening ports from ss, for IPv4 and IPv6 sockets (K-2006)", () => {
+it("reads the listening ports from ss, for IPv4 and IPv6 sockets (K-2007)", () => {
   const output = [
     "tcp   LISTEN 0      4096   0.0.0.0:25565   0.0.0.0:*",
     "udp   UNCONN 0      0      [::]:19132      [::]:*",
@@ -44,11 +44,11 @@ it("reads the listening ports from ss, for IPv4 and IPv6 sockets (K-2006)", () =
   expect([...listening(output)].sort()).toEqual(["19132/udp", "2019/tcp", "25565/tcp"]);
 });
 
-it("lets the daemon user run only `apply` of the helper as root (K-2002)", () => {
+it("lets the daemon user run only `apply` of the helper as root (K-2003)", () => {
   expect(sudoersLine("kitshn")).toBe("kitshn ALL=(root) NOPASSWD: /usr/local/lib/kitshn/doors apply\n");
 });
 
-it("reads a kept plan only in this daemon's shape, so an old one never stops the start (K-2005)", () => {
+it("reads a kept plan only in this daemon's shape, so an old one never stops the start (K-2006)", () => {
   const plan = { ports: [{ port: 25565, proto: "tcp" }], doors: [], relays: [] };
   expect(planOf(plan)).toEqual(plan);
   expect(planOf({ ports: [{ port: 25565, proto: "tcp" }], doors: [] })).toEqual(plan);
@@ -57,7 +57,7 @@ it("reads a kept plan only in this daemon's shape, so an old one never stops the
   expect(planOf(null)).toBeNull();
 });
 
-it("finds a system tool outside the PATH, and names a missing tool instead of an empty output (K-2002)", () => {
+it("finds a system tool outside the PATH, and names a missing tool instead of an empty output (K-2003)", () => {
   expect(systemTool("visudo", (path) => path === "/usr/sbin/visudo")).toBe("/usr/sbin/visudo");
   expect(systemTool("visudo", () => false)).toBe("visudo");
   const missing = spawnSync("kitshn-no-such-tool", ["-cf", "x"], { encoding: "utf8" });

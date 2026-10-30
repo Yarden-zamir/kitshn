@@ -883,9 +883,9 @@ export class Kitshn extends DurableObject<Env> {
   private checkingRepos = false;
   /** K-606: presence is stored on change; status and the latest sample live on the socket. */
   private presence = new Map<string, { online: boolean; lastSeen: number; os: MachineOs | null }>();
-  /** K-2004: the last open or close of a door, by card and person. */
+  /** K-2005: the last open or close of a door, by card and person. */
   private doorTurns = new Map<string, number>();
-  /** K-2004: the open-to-all port cards of the last door plans; null after a restart, so the next check sends all. */
+  /** K-2005: the open-to-all port cards of the last door plans; null after a restart, so the next check sends all. */
   private openPortsSent: string | null = null;
   /**
    * K-1113: the hash of each stored card icon, the bytes stay in SQLite until a map asks. K-1114: when each icon
@@ -3724,6 +3724,7 @@ export class Kitshn extends DurableObject<Env> {
     const desired = this.desired(Date.now());
     const loginError = this.meta("login_error");
     return {
+      accessApps: [...this.access].filter(([key, row]) => key.startsWith("app:") && Boolean(row.cfId)).length,
       circles: [...this.state.circles.values()],
       // K-304: a provider card of an offline machine is offline, whatever its provider reported last.
       resources: [...this.state.resources.values()].map((card) =>
@@ -4768,7 +4769,7 @@ export class Kitshn extends DurableObject<Env> {
     if (path === "/api/devices" && request.method === "GET") return this.listDevices();
     if (path === "/api/usage" && request.method === "GET") return await this.readUsage();
     if (path === "/api/library" && request.method === "GET") return Response.json(this.libraryItems());
-    // Section 20: port cards and their doors (K-2001, K-2006).
+    // Section 20: port cards and their doors (K-2001, K-2007).
     if (path === "/api/ports" && request.method === "GET")
       return Response.json(this.portRows().map((row) => this.portView(row, Date.now())));
     if (path === "/api/ports" && request.method === "POST")
@@ -5234,10 +5235,10 @@ export class Kitshn extends DurableObject<Env> {
       // K-627: a daemon that connects, or that runs another release now, can start or end an update.
       if (attachment.status === null || attachment.status.version !== status.version) this.autoUpdate();
       this.updatePortAddresses(machine.id, status.publicAddresses);
-      // K-2005: a daemon that connects gets its door plan, also an empty one: the last card may have gone while it was
+      // K-2006: a daemon that connects gets its door plan, also an empty one: the last card may have gone while it was
       // offline for longer than a plan job waits, and only an empty plan removes its table and its boot ports.
       if (attachment.status === null && status.capabilities?.includes("doors"))
-        this.queueDoors(machine.id, { _tag: "kitshn", reason: "door plan on connect (K-2005)" }, Date.now());
+        this.queueDoors(machine.id, { _tag: "kitshn", reason: "door plan on connect (K-2006)" }, Date.now());
       this.setMachineOs(machine.id, machineOs(status.os));
       // An update job waits for the status; it can go now.
       if (this.deliverJobs() > 0) this.broadcast();
@@ -6944,7 +6945,7 @@ export class Kitshn extends DurableObject<Env> {
 
   /** Live sites whose address is checked and whose Access application exists in Cloudflare. */
   /**
-   * K-2008: the relay host of each port card behind NAT, as a live site of the port card's machine. So it gets its tunnel
+   * K-2009: the relay host of each port card behind NAT, as a live site of the port card's machine. So it gets its tunnel
    * ingress, its proxied record and its Access check from the site path; `tcp://` makes cloudflared carry raw TCP.
    */
   private relaySites(): Array<LiveSite> {
@@ -10458,7 +10459,7 @@ export class Kitshn extends DurableObject<Env> {
     // K-1116: an agent key publishes a page or a file, the same upload as a drop on the map.
     if (path === "/agent/library" && request.method === "POST")
       return this.agentPublish(agent, request, now, approved);
-    // K-2006: an agent adds a port card on a machine that it controls and closes its doors; it never opens one.
+    // K-2007: an agent adds a port card on a machine that it controls and closes its doors; it never opens one.
     if (path === "/agent/ports" && request.method === "POST") {
       const body: unknown = await request.json().catch(() => null);
       const machineId = isRecord(body) && typeof body["machine"] === "string" ? body["machine"] : "";
@@ -10473,7 +10474,7 @@ export class Kitshn extends DurableObject<Env> {
         );
       if (!managed.has(machineId) || (relay !== "" && !managed.has(relay)))
         return Response.json(
-          { error: "An agent adds a port card only on machines that it controls (K-2006)." },
+          { error: "An agent adds a port card only on machines that it controls (K-2007)." },
           { status: 403 },
         );
       return this.createPortCard(agent.actor, body);
@@ -10511,7 +10512,7 @@ export class Kitshn extends DurableObject<Env> {
         );
       return this.rollbackResponse(agent, card, back.deployId);
     }
-    // K-2006: an agent removes a port card on a machine that it controls, with "adds apps", as it adds one.
+    // K-2007: an agent removes a port card on a machine that it controls, with "adds apps", as it adds one.
     if (
       path.startsWith("/agent/cards/") &&
       request.method === "DELETE" &&
@@ -10534,7 +10535,7 @@ export class Kitshn extends DurableObject<Env> {
         );
       if (!managed.has(row.machine_id) || (row.relay_id !== null && !managed.has(row.relay_id)))
         return Response.json(
-          { error: "An agent removes a port card only on machines that it controls (K-2006)." },
+          { error: "An agent removes a port card only on machines that it controls (K-2007)." },
           { status: 403 },
         );
       return this.deletePortCard(agent.actor, card);
@@ -10544,7 +10545,7 @@ export class Kitshn extends DurableObject<Env> {
       const [row] = this.portRows("card_id = ?", card);
       if (!row || !managed.has(doorMachine(portOf(row))))
         return Response.json(
-          { error: "An agent sees the doors only of port cards on machines that it controls (K-2006)." },
+          { error: "An agent sees the doors only of port cards on machines that it controls (K-2007)." },
           { status: 403 },
         );
       if (request.method === "GET" && !address) return Response.json(this.portView(row, now));
@@ -13986,7 +13987,7 @@ export class Kitshn extends DurableObject<Env> {
     ).map(doorOf);
   }
 
-  /** K-2002: why a machine cannot hold doors now, or null. */
+  /** K-2003: why a machine cannot hold doors now, or null. */
   private doorsProblem(machineId: string): string | null {
     const machine = this.state.machines.get(machineId);
     if (!machine) return `No machine "${machineId}" exists.`;
@@ -13997,7 +13998,7 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-2005: the full door plan of one machine as a job. The plan replaces the whole table, so a newer job makes the
+   * K-2006: the full door plan of one machine as a job. The plan replaces the whole table, so a newer job makes the
    * queued ones useless; they fail with a note.
    */
   private queueDoors(machineId: string, actor: Actor, now: number) {
@@ -14126,7 +14127,7 @@ export class Kitshn extends DurableObject<Env> {
     return Response.json({ deleted: id });
   }
 
-  /** K-2004: closes doors in one transaction, each with a History line, then sends the new plans. */
+  /** K-2005: closes doors in one transaction, each with a History line, then sends the new plans. */
   private closeDoors(actor: Actor, doors: ReadonlyArray<Door>, why: string, now: number) {
     if (doors.length === 0) return;
     const machines = new Set<string>();
@@ -14162,7 +14163,7 @@ export class Kitshn extends DurableObject<Env> {
     );
   }
 
-  /** K-2004: the port cards with an active share in Everyone, whose ports are open to every address. */
+  /** K-2005: the port cards with an active share in Everyone, whose ports are open to every address. */
   private openPortCards(now: number) {
     return new Set(
       this.portRows()
@@ -14174,13 +14175,13 @@ export class Kitshn extends DurableObject<Env> {
     );
   }
 
-  /** K-2005: a share in Everyone that starts or ends sends new plans, so the ports open or close for all. */
+  /** K-2006: a share in Everyone that starts or ends sends new plans, so the ports open or close for all. */
   private syncOpenPorts(now: number) {
     const open = [...this.openPortCards(now)].sort().join(" ");
     if (open === this.openPortsSent) return;
     const restarted = this.openPortsSent === null;
     this.openPortsSent = open;
-    const actor: Actor = { _tag: "kitshn", reason: "Everyone share of a port card (K-2004)" };
+    const actor: Actor = { _tag: "kitshn", reason: "Everyone share of a port card (K-2005)" };
     for (const machine of new Set(this.portRows().map(portOf).map(doorMachine))) {
       // After a restart the last change is not known, so a machine gets a plan only when its gated ports differ from
       // its last plan that did not fail.
@@ -14199,7 +14200,7 @@ export class Kitshn extends DurableObject<Env> {
     return last?.ports ?? null;
   }
 
-  /** K-2005: a door whose person lost the card's share closes at once; a door of a removed card goes too. */
+  /** K-2006: a door whose person lost the card's share closes at once; a door of a removed card goes too. */
   private closeLostDoors(now: number) {
     // The check uses the address that opened the door, so a circle with an address condition keeps it open.
     const lost = this.sql<DoorRow>("SELECT * FROM doors WHERE ends_at > ?", now)
@@ -14211,12 +14212,12 @@ export class Kitshn extends DurableObject<Env> {
       })
       .map(doorOf);
     if (lost.length === 0) return false;
-    this.closeDoors({ _tag: "kitshn", reason: "share lost (K-2005)" }, lost, "the share ended", now);
+    this.closeDoors({ _tag: "kitshn", reason: "share lost (K-2006)" }, lost, "the share ended", now);
     this.load();
     return true;
   }
 
-  /** K-2003: the connect page asks here; `open` and `close` change the doors of the visitor alone. */
+  /** K-2004: the connect page asks here; `open` and `close` change the doors of the visitor alone. */
   private connectDecision(input: ConnectRequest) {
     const now = Date.now();
     const visitor = this.freshVisitor(input.visitor);
@@ -14237,7 +14238,7 @@ export class Kitshn extends DurableObject<Env> {
       machineOnline: status ? this.machineView(status).online : false,
       needsIpv4: portCard.relay !== null,
     };
-    // K-2004: a port card in Everyone has no doors, so its page needs no login.
+    // K-2005: a port card in Everyone has no doors, so its page needs no login.
     if (openToAll(this.state, resource, now))
       return Response.json({
         decision: "allow",
@@ -14253,7 +14254,7 @@ export class Kitshn extends DurableObject<Env> {
     const person = visitor.email;
     const actor: Actor = { _tag: "person", email: person };
     let error: string | null = null;
-    // K-2004: one open or close per person and card in 10 s, so a loop cannot fill History or the machine's jobs.
+    // K-2005: one open or close per person and card in 10 s, so a loop cannot fill History or the machine's jobs.
     // In memory, as the limits of K-1908: a restart of the Durable Object only resets the wait.
     const turn = `${portCard.card} ${person}`;
     const waiting =
@@ -14265,7 +14266,7 @@ export class Kitshn extends DurableObject<Env> {
         for (const [key, at] of this.doorTurns) if (at <= now - 10_000) this.doorTurns.delete(key);
     };
     if (input.action === "open" && !waiting) {
-      // K-2004: the address that kitshn sees is always a door; the browser adds the other addresses that it found,
+      // K-2005: the address that kitshn sees is always a door; the browser adds the other addresses that it found,
       // within the limits of openDoors. Each browser address passes the share check, so an address condition of a
       // circle still holds; a refused one is left out.
       const seen = doorAddress(visitor.ip ?? "");
@@ -14278,7 +14279,7 @@ export class Kitshn extends DurableObject<Env> {
       const addresses = "error" in seen ? [] : [...new Set([seen.address, ...found])];
       error =
         ("error" in seen ? `kitshn sees your address as ${visitor.ip ?? "none"}: ${seen.error}` : null) ??
-        // K-2004: a relay listens on IPv4 only, so an IPv6-only open would open nothing that works.
+        // K-2005: a relay listens on IPv4 only, so an IPv6-only open would open nothing that works.
         (portCard.relay !== null && !addresses.some((address) => doorFamily(address) === 4)
           ? "This server needs IPv4, and no IPv4 address answered."
           : null) ??
@@ -14327,7 +14328,7 @@ export class Kitshn extends DurableObject<Env> {
       }
     }
     if (input.action === "close" && !waiting) {
-      // K-2004: End now closes every door of this person on the card.
+      // K-2005: End now closes every door of this person on the card.
       const doors = this.openDoors(now, portCard.card).filter((item) => item.person === person);
       if (doors.length > 0) {
         this.closeDoors(actor, doors, "End now", now);
@@ -14347,7 +14348,7 @@ export class Kitshn extends DurableObject<Env> {
     });
   }
 
-  /** K-2006: a port card as the owner and agents see it: its doors, records and what listens. */
+  /** K-2007: a port card as the owner and agents see it: its doors, records and what listens. */
   private portView(row: PortRow, now: number) {
     const portCard = portOf(row);
     const machine = this.state.machines.get(doorMachine(portCard));
@@ -14401,7 +14402,7 @@ export class Kitshn extends DurableObject<Env> {
     };
   }
 
-  /** K-2006: the owner and agents close any door of a card. */
+  /** K-2007: the owner and agents close any door of a card. */
   private closeDoorBy(actor: Actor, card: string, address: string) {
     const now = Date.now();
     const doors = this.openDoors(now, card).filter((door) => door.address === address);
@@ -14413,7 +14414,7 @@ export class Kitshn extends DurableObject<Env> {
     return Response.json({ closed: doors.length });
   }
 
-  /** K-2002: a new public address of a machine moves the records of its port cards. */
+  /** K-2003: a new public address of a machine moves the records of its port cards. */
   private updatePortAddresses(machineId: string, found: MachineStatus["publicAddresses"]) {
     if (!found) return;
     const moved = this.sql(
@@ -14428,7 +14429,7 @@ export class Kitshn extends DurableObject<Env> {
     if (moved.length > 0) void this.scheduleAlarm();
   }
 
-  /** K-2007: true when a port card record waits for the alarm. */
+  /** K-2008: true when a port card record waits for the alarm. */
   private portDnsWork(now: number) {
     const want = new Map(
       portRecords(this.portRows(), this.env.KITSHN_ZONE).map((r) => [`${r.type} ${r.name}`, r]),
@@ -14445,7 +14446,7 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-2007: makes, moves and removes the A, AAAA and SRV records of port cards; returns the Cloudflare calls. A new
+   * K-2008: makes, moves and removes the A, AAAA and SRV records of port cards; returns the Cloudflare calls. A new
    * record first checks that no record of that type and name exists, so kitshn never adds to one it did not make.
    */
   private async syncPortDns(api: Api, budget: number) {
@@ -16312,12 +16313,12 @@ const send = (socket: WebSocket, message: ServerMessage | ServerToDaemon) => {
   socket.send(JSON.stringify(message));
 };
 
-/** K-2003: a request of the connect page. */
+/** K-2004: a request of the connect page. */
 interface ConnectRequest {
   readonly name: string;
   readonly visitor: ContentVisitor;
   readonly action: "view" | "open" | "close";
-  /** `open`: the addresses that the browser found (K-2004). */
+  /** `open`: the addresses that the browser found (K-2005). */
   readonly addresses?: ReadonlyArray<unknown>;
 }
 

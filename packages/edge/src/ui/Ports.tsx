@@ -16,7 +16,7 @@ import { Radio } from "./controls.tsx";
 import { callApi, useStore } from "./store.ts";
 import { untilText } from "./actions.ts";
 
-/** K-534: a port card as `GET /api/ports` gives it (K-2001 to K-2008). */
+/** K-534: a port card as `GET /api/ports` gives it (K-2001 to K-2009). */
 export type PortView = PortCard & {
   readonly connect: string;
   readonly address: string;
@@ -31,7 +31,7 @@ export type PortView = PortCard & {
 
 export const isPortCard = (resource: Resource) => resource.kind === "port";
 
-/** K-534: the machines that can hold port cards: online, with the daemon capability `doors` (K-2002). */
+/** K-534: the machines that can hold port cards: online, with the daemon capability `doors` (K-2003). */
 export const doorMachines = (machines: ReadonlyArray<MachineView>) =>
   machines.filter((view) => view.online && (view.status?.capabilities ?? []).includes("doors"));
 
@@ -325,14 +325,14 @@ export function PortForm(props: {
   );
 }
 
-/** K-534: the open doors of a port card in its panel, each with Close; the owner's view of K-2003. */
+/** K-534: the open doors of a port card in its panel, each with Close; the owner's view of K-2004. */
 export function PortDoors(props: { resource: Resource; onRemove: () => void }) {
   const [portCard, setPortCard] = useState<PortView | null | "error">(null);
   const [error, setError] = useState<string | null>(null);
   /** The door whose Close waits for "Yes", and whether its call runs. */
   const [asking, setAsking] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
-  // K-2004: each door that opens or closes is a revision, so a new revision reads the doors again.
+  // K-2005: each door that opens or closes is a revision, so a new revision reads the doors again.
   const revision = useStore().snapshot?.revision ?? 0;
   const load = async () => {
     const result = await callApi<ReadonlyArray<PortView>>("GET", "/api/ports");
@@ -359,7 +359,7 @@ export function PortDoors(props: { resource: Resource; onRemove: () => void }) {
   const doors = portCard.doors.filter((door) => door.endsAt > now);
   return (
     <div>
-      <div class="label" data-tip="Doors: the addresses that may reach the gated ports now (K-2003).">
+      <div class="label" data-tip="Doors: the addresses that may reach the gated ports now (K-2004).">
         Doors
       </div>
       <p class="help" data-tip="Route: how the players' packets reach the service (K-2010).">

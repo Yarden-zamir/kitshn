@@ -1999,7 +1999,7 @@ function report() {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
 }
 
-/** K-2002, K-2006: whether this machine can gate ports, and which gated ports listen. */
+/** K-2003, K-2007: whether this machine can gate ports, and which gated ports listen. */
 const doorState: { problem: string | null; listening: ReadonlySet<string>; firewall: string | null } = {
   problem: "not checked yet",
   listening: new Set(),
@@ -2009,14 +2009,14 @@ const doorsFile = () => join(paths.data, "doors.json");
 const relays = new Relays(log);
 process.on("exit", () => relays.stopAll());
 
-/** K-2008: the relays of a plan, after its doors are in the table. */
+/** K-2009: the relays of a plan, after its doors are in the table. */
 function syncRelays(plan: DoorPlan) {
   void ensureCloudflared()
     .then(({ file }) => relays.sync(plan.relays, file, readConfig()))
     .catch((error: unknown) => log(`the relays could not start: ${String(error)}`));
 }
 
-/** K-2006: the gated ports of the kept plan that something listens on; a change goes out in the status. */
+/** K-2007: the gated ports of the kept plan that something listens on; a change goes out in the status. */
 function checkListening() {
   const plan = keptPlan(doorsFile());
   const wanted = new Set((plan?.ports ?? []).map(({ port, proto }) => `${port}/${proto}`));
@@ -2033,7 +2033,7 @@ function checkListening() {
   report();
 }
 
-/** K-2005: after a restart or a reboot the table is empty or old; the kept plan goes in again before kitshn sends one. */
+/** K-2006: after a restart or a reboot the table is empty or old; the kept plan goes in again before kitshn sends one. */
 function startDoors() {
   doorState.problem = doorsProblem(platform);
   checkListening();
@@ -2068,7 +2068,7 @@ const readText = (file: string) => {
   }
 };
 
-/** K-2005: the plan that this daemon wrote last goes into the table again before kitshn sends a new one. */
+/** K-2006: the plan that this daemon wrote last goes into the table again before kitshn sends a new one. */
 function applyKeptPlan(quiet = false) {
   const plan = keptPlan(doorsFile());
   if (plan === null) {

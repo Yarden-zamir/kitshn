@@ -20,7 +20,7 @@ export interface DoorRow extends Record<string, SqlStorageValue> {
   address: string;
   opened_at: number;
   ends_at: number;
-  /** K-2005: the address that opened the door, for the share check of `closeLostDoors`. */
+  /** K-2006: the address that opened the door, for the share check of `closeLostDoors`. */
   seen_ip: string | null;
 }
 
@@ -55,7 +55,7 @@ export const doorOf = (row: DoorRow): Door => ({
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
-/** K-2002, K-2006: the port card fields of a daemon status, checked; a bad field is left out. */
+/** K-2003, K-2007: the port card fields of a daemon status, checked; a bad field is left out. */
 export function portStatus(
   raw: Record<string, unknown>,
 ): Pick<MachineStatus, "publicAddresses" | "doorsProblem" | "listening" | "hostFirewall"> {
@@ -83,7 +83,7 @@ export function portStatus(
   };
 }
 
-/** K-2007: one DNS record of a port card. `content` of an SRV record is `priority weight port target`. */
+/** K-2008: one DNS record of a port card. `content` of an SRV record is `priority weight port target`. */
 export interface PortRecord {
   readonly type: "A" | "AAAA" | "SRV";
   readonly name: string;
@@ -91,7 +91,7 @@ export interface PortRecord {
   readonly content: string;
 }
 
-/** K-2007: the records that the port cards want: A and AAAA to the door machine, and SRV to the first TCP port. */
+/** K-2008: the records that the port cards want: A and AAAA to the door machine, and SRV to the first TCP port. */
 export function portRecords(rows: ReadonlyArray<PortRow>, zone: string): Array<PortRecord> {
   return rows.flatMap((row): Array<PortRecord> => {
     const host = `${row.name}.${zone}`;
@@ -116,9 +116,9 @@ export function portRecords(rows: ReadonlyArray<PortRow>, zone: string): Array<P
   });
 }
 
-/** K-2007: the Cloudflare body of a record. PortCard traffic is not HTTP, so no record is proxied. */
+/** K-2008: the Cloudflare body of a record. PortCard traffic is not HTTP, so no record is proxied. */
 export function recordBody(record: PortRecord) {
-  const comment = `kitshn port card ${record.card} (K-2007)`;
+  const comment = `kitshn port card ${record.card} (K-2008)`;
   if (record.type !== "SRV")
     return {
       type: record.type,
@@ -138,6 +138,6 @@ export function recordBody(record: PortRecord) {
   };
 }
 
-/** K-2002: the port card rows whose door machine is `machineId`, so a new public address moves their records. */
+/** K-2003: the port card rows whose door machine is `machineId`, so a new public address moves their records. */
 export const portsOn = (rows: ReadonlyArray<PortRow>, machineId: string) =>
   rows.filter((row) => doorMachine(portOf(row)) === machineId);

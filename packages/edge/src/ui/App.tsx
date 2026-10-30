@@ -1905,6 +1905,7 @@ export function App() {
           ) : shownPanel === "machines" ? (
             <MachinesView
               machines={store.snapshot.machines}
+              accessApps={store.snapshot.accessApps}
               onAdd={() => setAddingMachine(true)}
               onToast={(text, error) => showToast({ text, error, undo: null })}
             />
