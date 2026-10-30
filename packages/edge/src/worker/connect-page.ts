@@ -1,9 +1,9 @@
-// K-2003: the join page of a game card, `pages.<zone>/join/<name>`. The Worker serves it after the share check.
-import type { Door } from "../core/game.ts";
+// K-2003: the connect page of a port card, `pages.<zone>/connect/<name>`. The Worker serves it after the share check.
+import type { Door } from "../core/port.ts";
 import { escapeHtml } from "../core/html.ts";
 
-export interface JoinView {
-  readonly game: {
+export interface ConnectView {
+  readonly portCard: {
     readonly name: string;
     readonly address: string;
     readonly ports: ReadonlyArray<string>;
@@ -30,7 +30,7 @@ export const ADDRESS_PROBES = [
   "https://ipv6.icanhazip.com",
 ] as const;
 
-export function joinHeaders(nonce: string) {
+export function connectHeaders(nonce: string) {
   return {
     "content-type": "text/html; charset=utf-8",
     "cache-control": "private, no-store",
@@ -48,13 +48,13 @@ export function joinHeaders(nonce: string) {
   };
 }
 
-export function joinPage(view: JoinView, email: string, nonce: string): string {
-  const { game } = view;
+export function connectPage(view: ConnectView, email: string, nonce: string): string {
+  const { portCard } = view;
   // `<` cannot end the script element from inside the JSON.
   const data = JSON.stringify({ ...view, probes: ADDRESS_PROBES }).replaceAll("<", "\\u003c");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Join ${escapeHtml(game.name)}</title>
+<title>Join ${escapeHtml(portCard.name)}</title>
 <style>
 :root { color-scheme: light dark; --ink: #111; --paper: #fffdf6; --accent: #7c3aed; }
 @media (prefers-color-scheme: dark) { :root { --ink: #f5f3ea; --paper: #17161c; } }
@@ -71,20 +71,20 @@ code { font-size: 18px; font-weight: 700; }
 li { margin: 6px 0; }
 </style></head>
 <body><main>
-<h1>${escapeHtml(game.name)}</h1>
+<h1>${escapeHtml(portCard.name)}</h1>
 ${
   view.openToAll
-    ? `<section><div>Open to everyone: join</div><p><code>${escapeHtml(game.address)}</code></p>
-<div class="note">Ports: ${escapeHtml(game.ports.join(", "))}${game.reachable ? "" : ". The game has no public address yet, so it is not reachable."}</div></section>
-<p class="note">Anyone who knows the address can reach the game. Keep the game's own whitelist on if you want to choose the players.</p>
+    ? `<section><div>Open to everyone: join</div><p><code>${escapeHtml(portCard.address)}</code></p>
+<div class="note">Ports: ${escapeHtml(portCard.ports.join(", "))}${portCard.reachable ? "" : ". The port card has no public address yet, so it is not reachable."}</div></section>
+<p class="note">Anyone who knows the address can reach the portCard. Keep the portCard's own whitelist on if you want to choose the players.</p>
 </main></body></html>`
     : `<p class="note">Logged in as ${escapeHtml(email)}</p>
-<section id="join"><div>Join with</div><p><code id="address"></code> <button class="quiet" id="copy">Copy</button></p>
+<section id="connect"><div>Connect to</div><p><code id="address"></code> <button class="quiet" id="copy">Copy</button></p>
 <div class="note" id="ports"></div></section>
 <section id="open"><div><strong>Open the door for your addresses</strong></div><ul id="addresses"><li>Looking for your addresses…</li></ul>
 <p class="note" id="probe-note"></p><button id="open-button" disabled>Open</button> <span class="error" id="error"></span></section>
 <section id="doors-section"><div><strong>Your open doors</strong></div><ul id="doors"></ul><button class="quiet" id="end" hidden>End now</button></section>
-<p class="note">While a door is open, everyone who shares your internet address can reach the game. Keep the game's own whitelist on.</p>
+<p class="note">While a door is open, everyone who shares your internet address can reach the portCard. Keep the portCard's own whitelist on.</p>
 </main>
 <script type="application/json" id="data">${data}</script>
 <script nonce="${nonce}">
@@ -105,10 +105,10 @@ async function send(body) {
   if (!answer.ok || result.error) { $("error").textContent = result.error || "kitshn refused."; return; }
   location.reload();
 }
-$("address").textContent = data.game.address;
-$("ports").textContent = "Ports: " + data.game.ports.join(", ") + (data.game.reachable ? "" : ". The game has no public address yet, so it is not reachable.");
-$("copy").onclick = () => navigator.clipboard.writeText(data.game.address);
-$("open-button").textContent = "Open for " + data.game.doorHours + " h";
+$("address").textContent = data.portCard.address;
+$("ports").textContent = "Ports: " + data.portCard.ports.join(", ") + (data.portCard.reachable ? "" : ". The port card has no public address yet, so it is not reachable.");
+$("copy").onclick = () => navigator.clipboard.writeText(data.portCard.address);
+$("open-button").textContent = "Open for " + data.portCard.doorHours + " h";
 if (data.error) $("error").textContent = data.error;
 for (const door of data.doors) $("doors").append(item(door.address + ", until " + new Date(door.endsAt).toLocaleString()));
 if (data.doors.length === 0) $("doors").append(item("None"));
@@ -124,7 +124,7 @@ async function check() {
   const missing = ["v4", "v6"].filter((name) => !addresses.some((address) => family(address) === name)).map((name) => (name === "v4" ? "IPv4" : "IPv6"));
   const again = document.createElement("button");
   again.className = "quiet"; again.textContent = "Try again"; again.onclick = () => void check();
-  const noIpv4 = data.game.needsIpv4 && missing.includes("IPv4");
+  const noIpv4 = data.portCard.needsIpv4 && missing.includes("IPv4");
   if (noIpv4) $("probe-note").replaceChildren("This server needs IPv4, and no IPv4 address answered. ", again);
   else if (missing.length > 0) $("probe-note").replaceChildren("No " + missing.join(" or ") + " address answered, so kitshn opens only the address" + (addresses.length > 1 ? "es" : "") + " above. ", again);
   else $("probe-note").replaceChildren();

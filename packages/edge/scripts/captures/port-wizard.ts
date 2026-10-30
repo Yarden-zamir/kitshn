@@ -1,7 +1,7 @@
-// K-534: the Game step of the site wizard with a reason of K-2001, the door list of a game card with its Close
-// confirm, and the Remove game confirm. The demo has no
-// daemon and no game, so the scenario marks the first machine online with the capability `doors`, adds a game card
-// to the snapshots and answers `GET /api/games` itself.
+// K-534: the PortCard step of the site wizard with a reason of K-2001, the door list of a port card with its Close
+// confirm, and the Remove ports confirm. The demo has no
+// daemon and no port card, so the scenario marks the first machine online with the capability `doors`, adds a port card
+// to the snapshots and answers `GET /api/ports` itself.
 import { DESKTOP, type Scenario } from "../capture-views.ts";
 
 const servers = [
@@ -53,7 +53,7 @@ export default {
             ...snapshot.resources,
             {
               id: "mc",
-              kind: "game",
+              kind: "port",
               name: "minecraft",
               addresses: [`minecraft.${zone}`],
               status: "running",
@@ -68,7 +68,7 @@ export default {
         socket.send(JSON.stringify(data));
       });
     });
-    await page.route(/\/api\/games$/, (route) =>
+    await page.route(/\/api\/portCards$/, (route) =>
       route.fulfill({
         json: [
           {
@@ -109,13 +109,13 @@ export default {
 
     await page.getByRole("button", { name: "Add" }).click();
     await page.getByRole("menuitem", { name: "Add a site" }).click();
-    await page.getByRole("button", { name: "Game", exact: true }).click();
+    await page.getByRole("button", { name: "Ports", exact: true }).click();
     await page.getByLabel("Ports").fill("25565, 41641/udp");
     await page.getByLabel("Name").fill("minecraft");
     await page.getByLabel("SRV service").fill("minecraft");
     await page.getByText(/41641\/udp belongs to Tailscale/).waitFor();
     await page.mouse.move(5, 500);
-    await shot("game-step");
+    await shot("port-step");
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
 
     await page.getByRole("button", { name: "Fit", exact: true }).click();
@@ -128,8 +128,8 @@ export default {
     await page.waitForTimeout(300);
     await shot("door-list");
     await page.getByRole("button", { name: "No", exact: true }).click();
-    await page.getByRole("button", { name: "Remove game…", exact: true }).click();
-    await page.getByText(/^Remove the game minecraft\?/).waitFor();
+    await page.getByRole("button", { name: "Remove ports…", exact: true }).click();
+    await page.getByText(/^Remove the port card minecraft\?/).waitFor();
     await page.mouse.move(5, 500);
     await shot("remove-confirm");
   },

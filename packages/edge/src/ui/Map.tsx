@@ -1234,10 +1234,10 @@ export function CardView(props: {
             PR #{props.pullRequest}
           </span>
         ) : null}
-        {resource.kind === "game" && openToAll(state, resource, Date.now()) ? (
+        {resource.kind === "port" && openToAll(state, resource, Date.now()) ? (
           <span
             class="sticker info"
-            data-tip="Open to all: a share in Everyone opens the game ports to every address, with no door and no login (K-2004)."
+            data-tip="Open to all: a share in Everyone opens the gated ports to every address, with no door and no login (K-2004)."
           >
             open to all
           </span>
