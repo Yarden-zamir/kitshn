@@ -29,6 +29,8 @@ export const ASK_ACTIONS = [
   "history",
   "backup",
   "restore",
+  /** K-722: only an exec start of a daemon makes one; an ask of it is refused. */
+  "exec",
 ] as const;
 export type AskAction = (typeof ASK_ACTIONS)[number];
 
@@ -60,6 +62,7 @@ export const ASK_RIGHT: Record<AskAction, MachineRight | "none" | "member" | "ap
   history: "none",
   backup: "deploys",
   restore: "restores",
+  exec: "runsCommands",
 };
 
 /** K-1750: at most 10 labels, each key with a prefix, of `a-z`, `0-9`, `.` and `-`, at most 64 characters. */
@@ -133,6 +136,7 @@ export function askRequest(
     case "history":
     case "backup":
     case "restore":
+    case "exec":
       return `kitshn runs ${action} itself, not through an agent path.`;
   }
 }
@@ -146,6 +150,8 @@ export function shownAsk(action: ProposalAction, target: string, body: unknown):
   switch (action) {
     case "job":
       return `run on ${target}: ${JSON.stringify(object["command"] ?? null)}`;
+    case "exec":
+      return `run on ${target} as ${String(object["provider"] ?? "the daemon user")}: ${JSON.stringify(object["command"] ?? null)}`;
     case "deploy":
       return `deploy ${target} (${object["mode"] === "build" ? "build" : "redeploy"})`;
     case "apply":
@@ -315,17 +321,17 @@ export function selfApprovers(circles: ReadonlyMap<string, Circle>, circle: Circ
 }
 
 /**
- * K-1754: why the attested labels of an ask fail the conditions of its right, or null. A condition counts only on a
- * prefix that an attester of the machine reports, because only then the daemon dropped the caller's own labels of it.
+ * K-1754: why the attested labels of an ask fail the conditions of its right, or null. A condition counts only on the
+ * prefix of a provider of the machine, because only then the daemon dropped the caller's own labels of it.
  */
 export function conditionProblem(
   conditions: ReadonlyArray<RightCondition> | undefined,
   labels: Readonly<Record<string, string>>,
-  attesterPrefixes: ReadonlyArray<string>,
+  labelPrefixes: ReadonlyArray<string>,
 ): string | null {
   for (const condition of conditions ?? []) {
-    if (!attesterPrefixes.some((prefix) => condition.key.startsWith(prefix)))
-      return `The condition on ${condition.key} has no attester on this machine (K-1754).`;
+    if (!labelPrefixes.some((prefix) => condition.key.startsWith(prefix)))
+      return `The condition on ${condition.key} has no provider on this machine that sets it (K-1754).`;
     const value = labels[condition.key];
     if (value === undefined || !condition.values.includes(value))
       return `The right needs ${condition.key} to be ${condition.values.join(" or ")}, and the ask has ${value === undefined ? "no such verified label" : value} (K-1754).`;

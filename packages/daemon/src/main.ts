@@ -30,7 +30,9 @@ import {
   type AskAction,
   HEALTH_INTERVAL_MS,
   type HealthReport,
+  type IdRequest,
   MAX_FORWARD_BYTES,
+  PROVIDER_PROTOCOL,
   type Request,
   WINDOW_ACTIONS,
 } from "@kitshn/local";
@@ -39,19 +41,9 @@ import { composeFiles, composeRisks, envFileRisks, rawRisks, realpathOnDisk, sou
 import { type Notify, accessEnv, withAppEnv } from "./appEnv.ts";
 import { HELPER_IMAGE, backup, finishRestores, restore, unpauseMarked } from "./backup.ts";
 import { keyPlan } from "./keys.ts";
-import {
-  AttestationError,
-  T3_TOKEN_ENV,
-  unregisteredT3,
-  attest,
-  attestationRefusal,
-  attesterPrefixes,
-  attestersOf,
-  dropAttested,
-  withAttester,
-  withAttesterUid,
-  attesterPrefixProblem,
-} from "./attest.ts";
+import { dropAttested, labelPrefixes } from "./attest.ts";
+import { IDENTITY_HEADERS } from "./check.ts";
+import { GRACE_MS, PING_MS as PROVIDER_PING_MS, ProviderHub, kitshnStateOf } from "./hub.ts";
 import {
   PUSH_MARK_KEY,
   answersMarkedPush,
@@ -67,6 +59,7 @@ import {
   type LocalOutcome,
   askLocal,
   bridgeLocal,
+  dropConnection,
   listenLocal,
   sharedFolderProblem,
 } from "./local.ts";
@@ -146,10 +139,9 @@ import { keepBuild, keptId, keptTag, rollbackOverride, serviceImages, staleTags 
 import { TokenCache } from "./tokens.ts";
 import { Providers, parseSaved } from "./providers.ts";
 import { desiredProblem } from "@kitshn/local";
-import { linkPeerAdmitted, linkSocketProblem, serveLinks } from "./link.ts";
+import { linkPeerAdmitted, serveLinks } from "./link.ts";
 import { lastHour, lastSamples } from "./samples.ts";
 import { pushKey } from "@kitshn/local";
-import { listenerUid, portOf } from "./listener.ts";
 import { MAX_FORWARDS, forwardTarget, passedHeaders, readBounded } from "./forward.ts";
 import {
   Relays,
@@ -483,21 +475,8 @@ async function providerCommand(argv: ReadonlyArray<string>) {
   fail(notRunning());
 }
 
-/**
- * K-1609, K-621: `kitshn link-check <socket>` exits 0 when this account's daemon serves the link socket, so a provider
- * that cannot read a pipe's server account itself checks it before its first call.
- */
-function linkCheckCommand(path: string | undefined) {
-  if (!path) fail("usage: kitshn link-check <socket or pipe>");
-  // K-701: the daemon user as the commands find it for the main socket, also when a local user asks.
-  if (typeof daemonUid === "string") fail(daemonUid);
-  const problem = linkSocketProblem(platform, path!, daemonUid as number);
-  if (problem) fail(problem);
-  console.log(`${path} is served by the kitshn daemon.`);
-}
-
 /** K-702: one request to the running daemon; null when it does not run. An error answer ends the command. */
-async function ask(request: Request): Promise<Exclude<Answer, { type: "error" }> | null> {
+async function ask(request: IdRequest): Promise<Exclude<Answer, { type: "error" }> | null> {
   // A rotation waits for kitshn to store the new key (K-1705).
   if (typeof daemonUid === "string") fail(daemonUid);
   const peer = { platform, daemonUid: daemonUid as number };
@@ -509,27 +488,8 @@ async function ask(request: Request): Promise<Exclude<Answer, { type: "error" }>
   return outcome.answer;
 }
 
-/**
- * K-1752: the values of the token variables that this machine's attesters read, from the environment of this
- * command; the daemon names the variables, so a command never needs to read `machine.json`.
- */
-async function attestationsFromEnv(): Promise<Record<string, string>> {
-  if (typeof daemonUid === "string") return {};
-  const outcome = await askLocal(socketPath, { id: "1", type: "status" }, 5_000, {
-    platform,
-    daemonUid: daemonUid as number,
-  }).catch(() => null);
-  const names =
-    outcome?.kind === "answer" && outcome.answer.type === "status"
-      ? (outcome.answer.status.attesterEnv ?? [])
-      : [];
-  // K-1752: the T3 credential goes also when `status` fails or names no `t3.` attester, so kitshn can refuse it.
-  return Object.fromEntries(
-    [...new Set([...names, T3_TOKEN_ENV])].flatMap((name) =>
-      process.env[name] ? [[name, process.env[name] as string]] : [],
-    ),
-  );
-}
+/** K-1752: `KITSHN_ATTEST` of this command; the daemon asks the provider that it names to vouch for it. */
+const attestFromEnv = () => (process.env["KITSHN_ATTEST"] ? { attest: process.env["KITSHN_ATTEST"] } : {});
 
 /**
  * K-1714: the agent commands (publish, address, logs, repo, redirect) reach `/agent` through the daemon, which adds
@@ -540,7 +500,7 @@ function daemonTransport(): AgentTransport {
   if (typeof daemonUid === "string") throw new CliError(daemonUid);
   const peer = { platform, daemonUid: daemonUid as number };
   const ask = async (
-    request: Request,
+    request: IdRequest,
     follow?: (answer: Answer) => boolean,
     onLine?: (answer: Answer) => void,
   ) => {
@@ -567,7 +527,7 @@ function daemonTransport(): AgentTransport {
         action: "state",
         target: "",
         ...(all ? { body: { all: true } } : {}),
-        attestations: await attestationsFromEnv(),
+        ...attestFromEnv(),
       });
       if (answer.type === "ask" && answer.outcome === "done") return parseState(answer.result);
       throw new CliError(
@@ -585,7 +545,7 @@ function daemonTransport(): AgentTransport {
         path,
         ...(init.headers ? { headers: { ...init.headers } } : {}),
         ...(body === undefined ? {} : { body }),
-        attestations: await attestationsFromEnv(),
+        ...attestFromEnv(),
       };
       const answer = await forwardAndWait(ask, request, (line) => console.error(line), Date.now);
       return new Response(Buffer.from(answer.body, "base64"), {
@@ -607,7 +567,7 @@ async function askToken(repo: string, permission: "read" | "write" | "auto"): Pr
       action: "github-token",
       target: repo,
       body: { permission },
-      attestations: await attestationsFromEnv(),
+      ...attestFromEnv(),
     },
     90_000,
     { platform, daemonUid: daemonUid as number },
@@ -753,7 +713,7 @@ async function agentCommand(argv: ReadonlyArray<string>) {
     ...(body === undefined ? {} : { body }),
     ...(reason === undefined ? {} : { reason }),
     ...(Object.keys(labels).length === 0 ? {} : { labels }),
-    attestations: await attestationsFromEnv(),
+    ...attestFromEnv(),
   };
   const outcome = await askLocal(
     socketPath,
@@ -790,34 +750,6 @@ async function agentCommand(argv: ReadonlyArray<string>) {
 }
 
 /**
- * K-1751: `kitshn attester set --prefix <p.> --url <loopback url> --token-env <NAME>` registers an attester through the
- * daemon, as the daemon user or root. The T3 server runs it on start with its own port.
- */
-async function attesterCommand(argv: ReadonlyArray<string>) {
-  const [action, ...rest] = argv;
-  const value = (name: string) => {
-    const index = rest.indexOf(name);
-    return index >= 0 ? (rest[index + 1] ?? "") : "";
-  };
-  const prefix = value("--prefix");
-  const url = value("--url");
-  const tokenEnv = value("--token-env");
-  if (action !== "set" || !prefix || !url || !tokenEnv)
-    fail("usage: kitshn attester set --prefix <prefix.> --url <loopback url> --token-env <variable>");
-  if (typeof daemonUid === "string") fail(daemonUid);
-  const outcome = await askLocal(
-    socketPath,
-    { id: "1", type: "attester-set", prefix, url, tokenEnv },
-    10_000,
-    { platform, daemonUid: daemonUid as number },
-  ).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
-  if (outcome.kind === "not-running") fail(notRunning());
-  const answer = outcome.answer;
-  if (answer.type === "error") fail(answer.error);
-  console.log(JSON.stringify(answer.type === "attester-set" ? answer.attesters : null));
-}
-
-/**
  * K-701: `kitshn local-users list | add <user> [--provider] | remove <user>` asks the daemon, which edits its own
  * `machine.json`, so the command works the same for root and the daemon user and never writes the caller's own file.
  */
@@ -847,15 +779,24 @@ async function localUsersCommand(argv: ReadonlyArray<string>) {
   console.log(`Local users: ${rows.length > 0 ? rows.join(", ") : "none"}, and the daemon user ${own}.`);
   if (action === "add")
     console.log(
-      `The user ${who} now reaches the daemon with kitshn${provider ? ", and may run its own provider and attester" : ""}.`,
+      `The user ${who} now reaches the daemon with kitshn${provider ? ", and may run its own provider" : ""}.`,
     );
 }
 
 /**
- * K-704: `kitshn providers rebind <name> --to-user <user>` moves a provider name, and the attester of its prefix, to a
- * provider user, as root or the daemon user. The cards stay.
+ * K-704: `kitshn providers rebind <name> --to-user <user>` moves a provider name to a provider user, as root or the
+ * daemon user. The cards stay. K-722: `kitshn providers exec-user <name> <user>` sets who runs exec for it.
  */
 async function providersCommand(argv: ReadonlyArray<string>) {
+  if (argv[0] === "exec-user") {
+    const [, name, user] = argv;
+    if (!name || !user || argv.length !== 3) fail("usage: kitshn providers exec-user <name> <user>");
+    const uid = uidOf(user!);
+    const answer = await ask({ id: "1", type: "provider-exec-user", provider: name!, uid });
+    if (answer === null) fail(notRunning());
+    console.log(`Commands of other machines for ${name} now run as ${user} (user id ${uid}).`);
+    return;
+  }
   const at = argv.indexOf("--to-user");
   const name = argv[1];
   const user = at >= 0 ? argv[at + 1] : undefined;
@@ -1953,6 +1894,8 @@ function report() {
               "access",
               // K-630: this daemon checks its providers and links, and answers `checkHealth`.
               "health",
+              // K-721: this daemon speaks provider protocol 2 and applies the pause and exec rights pushes.
+              "protocol-2",
               ...(doorState.problem === null ? ["doors"] : []),
             ],
       ...(keptBytes === undefined ? {} : { keptBytes }),
@@ -1961,13 +1904,21 @@ function report() {
       arch: arch(),
       hostname: hostname(),
       tunnel: tunnelState,
-      // K-1751: the map shows the attesters of each machine.
-      attesters: attestersOf(readMachineFile()).attesters.map(({ prefix, address }) => ({ prefix, address })),
       publicAddresses: publicAddresses(),
       ...(doorState.problem === null ? {} : { doorsProblem: doorState.problem }),
       listening: [...doorState.listening],
       refusedProviders: registry().refused(),
       offlineProviders: registry().offline(),
+      // K-704: the items that the last register or upsert of each provider dropped, for the machine card.
+      providerProblems: registry()
+        .states()
+        .flatMap((state) =>
+          state.problems.slice(0, 10).map((problem) => ({
+            provider: state.name,
+            reason: `${problem.path}: ${problem.reason}`,
+            at: Date.now(),
+          })),
+        ),
     },
   };
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
@@ -2148,7 +2099,8 @@ async function askAgain(
   emit: (event: Answer) => void,
 ) {
   if (event.type !== "ask-result" || event.outcome !== "approved") return emit(event);
-  const again = await askKitshn(request, () => {}).catch((error: unknown) => ({
+  // A window action queues no job, so its connection gets no `job-result`.
+  const again = await askKitshn(request, () => {}, -1).catch((error: unknown) => ({
     type: "ask" as const,
     outcome: "refused" as const,
     reason: String(error),
@@ -2167,8 +2119,8 @@ async function askAgain(
 }
 
 /**
- * K-704, K-1751: root or the daemon user moves a provider name to a provider user, with the attester of its prefix.
- * The cards stay the same cards; the new user registers the name next.
+ * K-704: root or the daemon user moves a provider name to a provider user. The cards stay the same cards; the new
+ * user registers the name next.
  */
 function rebindProvider(request: Extract<Request, { type: "provider-rebind" }>): Answer {
   const machine = readMachineFile();
@@ -2190,12 +2142,6 @@ function rebindProvider(request: Extract<Request, { type: "provider-rebind" }>):
         output: `The provider ${request.provider} moved to the user id ${request.uid}; start it as that user and run the command again.`,
       });
     }
-  const next = withAttesterUid(machine as Record<string, unknown>, `${request.provider}.`, request.uid);
-  if (next !== machine) {
-    const temporary = `${paths.config}.${process.pid}.tmp`;
-    writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
-    renameSync(temporary, paths.config);
-  }
   log(`provider ${request.provider} now belongs to the user id ${request.uid}`);
   sendProviders();
   report();
@@ -2225,77 +2171,15 @@ function editLocalUsers(request: Extract<Request, { type: "local-users" }>): Ans
   return { id: request.id, type: "local-users", daemonUid: ownUid(), users };
 }
 
-/** K-1751: writes one attester into `machine.json`, replacing an older entry of the same prefix. */
-function setAttester(request: Extract<Request, { type: "attester-set" }>, caller: Caller): Answer {
-  // K-1751: the registering user must hold the port now; the entry keeps that uid, and each check compares it again.
-  let port = 0;
-  try {
-    port = portOf(request.url);
-  } catch {
-    throw new Error(`kitshn refuses this attester: ${request.url} is not an address (K-1751).`);
-  }
-  if (listenerUid(platform, port) !== caller.uid)
-    throw new Error(
-      `kitshn refuses this attester: port ${port} is not held by user id ${caller.uid} (K-1751).`,
-    );
-  // K-701: a provider user registers only the prefix of a provider name that belongs to it.
-  const prefixProblem = attesterPrefixProblem(
-    request.prefix,
-    request.tokenEnv,
-    caller.uid,
-    ownUid(),
-    registry().ownedBy(caller.uid),
-  );
-  if (prefixProblem) throw new Error(`kitshn refuses this attester: ${prefixProblem} (K-1751).`);
-  const machine = readMachineFile();
-  // A file that the daemon cannot read is never rewritten, so its tokens stay.
-  if (typeof machine !== "object" || machine === null || Array.isArray(machine))
-    throw new Error(`the daemon cannot read ${paths.config}, so it changes no attester.`);
-  const next = withAttester(machine as Record<string, unknown>, {
-    prefix: request.prefix,
-    address: request.url,
-    tokenEnv: request.tokenEnv,
-    uid: caller.uid,
-  });
-  if (typeof next === "string") throw new Error(`kitshn refuses this attester: ${next} (K-1751).`);
-  const temporary = `${paths.config}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
-  renameSync(temporary, paths.config);
-  log(`attester ${request.prefix} set to ${request.url}`);
-  // K-1751: the map shows the new attester without a daemon restart.
-  report();
-  return {
-    id: request.id,
-    type: "attester-set",
-    attesters: attestersOf(next).attesters.map(({ prefix, address, tokenEnv }) => ({
-      prefix,
-      address,
-      tokenEnv,
-    })),
-  };
-}
+/** K-1752: a call whose agent its provider did not vouch for; it never goes as the bare machine. */
+class AttestationError extends Error {}
 
-/** K-1752, K-1753: the labels that the attesters of this machine vouch for, each asked with its own token only. */
-async function attestedFor(attestations: Readonly<Record<string, string>> | undefined) {
-  const { attesters } = attestersOf(readMachineFile());
-  const unregistered = unregisteredT3(attestations, attesters);
-  if (unregistered) throw new AttestationError(unregistered);
-  const attested: Record<string, string> = {};
-  for (const attester of attesters) {
-    const token = attestations?.[attester.tokenEnv];
-    if (!token) continue;
-    // K-1751: a stale port that another user took never gets the caller's token.
-    if (attester.uid !== undefined && listenerUid(platform, portOf(attester.address)) !== attester.uid)
-      throw new AttestationError(
-        `could not check the ${attester.prefix === "t3." ? "T3" : attester.prefix.slice(0, -1)} thread: its port is not held by the user that registered it; restart that service.`,
-      );
-    const result = await attest(attester, token);
-    // K-1752: a call with a token never falls back to the bare machine.
-    const refusal = attestationRefusal(attester, result);
-    if (refusal) throw new AttestationError(refusal);
-    if (result.outcome === "labels") Object.assign(attested, result.labels);
-  }
-  return attested;
+/** K-1752, K-1753: the labels that the provider named in `KITSHN_ATTEST` vouches for; none without it. */
+async function attestedFor(value: string | undefined): Promise<Record<string, string>> {
+  if (!value) return {};
+  const outcome = await hub().attest(value);
+  if ("refused" in outcome) throw new AttestationError(outcome.refused);
+  return outcome.labels;
 }
 
 /**
@@ -2327,7 +2211,7 @@ async function forwardOnce(request: Extract<Request, { type: "forward" }>): Prom
     throw new Error(
       `the body is larger than ${MAX_FORWARD_BYTES} bytes, the limit of a forwarded call (K-1714).`,
     );
-  const labels = JSON.stringify(await attestedFor(request.attestations));
+  const labels = JSON.stringify(await attestedFor(request.attest));
   const at = Date.now();
   const nonce = crypto.randomUUID();
   const labelsHash = createHash("sha256").update(labels).digest("hex");
@@ -2370,6 +2254,7 @@ async function forwardOnce(request: Extract<Request, { type: "forward" }>): Prom
 async function askKitshn(
   request: Extract<Request, { type: "ask" }>,
   emit: (event: Answer) => void,
+  connection: number,
 ): Promise<Answer> {
   const ws = socket;
   if (ws === null || challenge === null)
@@ -2377,25 +2262,37 @@ async function askKitshn(
       "the daemon has no signed connection to kitshn, so it cannot ask (K-1710). See kitshn status.",
     );
   const requestId = crypto.randomUUID();
-  const { id, type: _type, labels, attestations, ...rest } = request;
-  // K-1752, K-1753: only an attester sets the labels of its prefix; the caller's token goes to that attester only.
-  const { attesters } = attestersOf(readMachineFile());
+  const { id, type: _type, labels, attest, ...rest } = request;
+  // K-1752, K-1753: only a provider sets the labels of its prefix; the caller's token goes to that provider only.
   let attested: Record<string, string>;
   try {
-    attested = await attestedFor(attestations);
+    attested = await attestedFor(attest);
   } catch (error) {
-    // K-1752: a thread that no attester vouched for is a refusal of this ask, which git-credential stops on.
+    // K-1752: an agent that its provider did not vouch for is a refusal of this ask, which git-credential stops on.
     if (error instanceof AttestationError)
       return { id, type: "ask", outcome: "refused", reason: error.message };
     throw error;
   }
   const ask = {
     ...rest,
-    ...(labels ? { labels: dropAttested(labels, attesterPrefixes(attesters)) } : {}),
+    ...(labels
+      ? {
+          labels: dropAttested(
+            labels,
+            labelPrefixes(
+              registry()
+                .reports()
+                .map((item) => item.name),
+            ),
+          ),
+        }
+      : {}),
     ...(Object.keys(attested).length > 0 ? { attested } : {}),
   };
   // K-1762: a kept token goes only to the same repo and the same attested thread; an ask without one always asks kitshn.
-  const thread = request.action === "github-token" ? attested["t3.thread.id"] : undefined;
+  const provider = attest?.slice(0, attest.indexOf(":"));
+  const threadId = provider ? attested[`${provider}.thread.id`] : undefined;
+  const thread = request.action === "github-token" && threadId ? `${provider}.${threadId}` : undefined;
   const body = request.body;
   const wanted =
     typeof body === "object" && body !== null ? (body as Record<string, unknown>)["permission"] : "auto";
@@ -2412,10 +2309,21 @@ async function askKitshn(
     });
     ws.send(JSON.stringify({ type: "ask", requestId, ask } satisfies DaemonMessage));
   });
+  // K-1612: the connection that queued a job gets its `job-result`.
+  const queued = (result: unknown) => {
+    const jobId = (result as { id?: unknown } | null)?.id;
+    if (request.action === "job" && typeof jobId === "number") hub().jobQueued(jobId, connection);
+  };
+  if (outcome.outcome === "done") queued(outcome.result);
   if (outcome.outcome === "waiting")
     proposalWaiters.set(outcome.proposalId, [
       ...(proposalWaiters.get(outcome.proposalId) ?? []),
-      WINDOW_ACTIONS.has(request.action) ? (event) => void askAgain(request, event, emit) : emit,
+      WINDOW_ACTIONS.has(request.action)
+        ? (event) => void askAgain(request, event, emit)
+        : (event) => {
+            if (event.type === "ask-result" && event.outcome === "approved") queued(event.result);
+            emit(event);
+          },
     ]);
   if (thread && outcome.outcome === "done" && typeof outcome.result === "object" && outcome.result !== null) {
     const { token, expiresAt, permission } = outcome.result as Record<string, unknown>;
@@ -2519,6 +2427,7 @@ function connect(config: JoinSecrets) {
       delay = 1000;
       stopped = false;
       updateAccepted();
+      hub().fromKitshnState();
       flushResults();
       report();
       sendProviders();
@@ -2540,6 +2449,8 @@ function connect(config: JoinSecrets) {
         return;
       }
       const message = JSON.parse(text) as ServerToDaemon;
+      // K-721: each message of the signed connection is an answer of kitshn.
+      if (socket === ws) hub().fromKitshnState();
       if (message.type === "challenge") {
         void answerChallenge(ws, config, message)
           .then((result) => {
@@ -2565,33 +2476,23 @@ function connect(config: JoinSecrets) {
         message.type === "access"
       ) {
         // K-1608: the daemon saves each push, gives it to the provider, and tells kitshn that it applied it.
-        const key =
-          message.type === "grants"
-            ? pushKey.grants(message.provider)
-            : message.type === "settings"
-              ? pushKey.settings(message.provider)
-              : message.type === "reach"
-                ? pushKey.reach(message.provider)
-                : message.type === "access"
-                  ? pushKey.access(message.provider)
-                  : pushKey.desired(message.provider, message.kind);
-        const { hash: _hash, ...event } = message;
-        const value =
-          message.type === "grants"
-            ? message.tables
-            : message.type === "settings"
-              ? message.values
-              : message.type === "reach"
-                ? message.cards
-                : message.type === "access"
-                  ? message.access
-                  : message.state;
-        if (registry().setPushed(key, value)) {
-          const connection = registry().connectionOf(message.provider);
-          const emit = connection === null ? undefined : providerEmitters.get(connection);
-          emit?.(event);
-        }
-        sendOn(ws, { type: "applied", key, hash: message.hash });
+        applyPush(message);
+        sendOn(ws, { type: "applied", key: pushKeyOf(message), hash: message.hash });
+      } else if (message.type === "paused") {
+        hub().fromKitshnState({ paused: message.paused });
+        sendOn(ws, { type: "applied", key: pushKey.paused(), hash: message.hash });
+      } else if (message.type === "execRights") {
+        hub().fromKitshnState({ execMachines: [...message.machines].sort() });
+        sendOn(ws, { type: "applied", key: pushKey.execRights(), hash: message.hash });
+      } else if (message.type === "execState") {
+        hub().execState(message.execId, message.state, message.proposalId);
+      } else if (message.type === "execRun") {
+        hub().execRun(message.provider, message.run);
+      } else if (message.type === "execFrame") {
+        hub().execFrame(message.execId, message.frame);
+      } else if (message.type === "jobEnded") {
+        const { type: _type, ...ended } = message;
+        hub().jobEnded({ type: "job-result", ...ended });
       } else if (message.type === "name") {
         // K-704: the answer to register names the machine, also before the next connection.
         registry().setPushed(MACHINE_NAME_KEY, message.name);
@@ -2641,6 +2542,7 @@ function connect(config: JoinSecrets) {
         askWaiters.delete(requestId);
       } else if (message.type === "askResult") {
         const { type: _type, ...result } = message;
+        hub().proposalEnded(result.proposalId, result.outcome, result.reason);
         for (const emit of proposalWaiters.get(result.proposalId) ?? [])
           emit({ type: "ask-result", ...result });
         proposalWaiters.delete(result.proposalId);
@@ -2670,7 +2572,11 @@ function connect(config: JoinSecrets) {
       if (socket === ws) updateDropped();
       // K-1805: kitshn forgets the tails of a closed connection.
       if (socket === ws) stopTails();
-      if (socket === ws) socket = null;
+      if (socket === ws) {
+        socket = null;
+        // K-722: the runs of both sides end with the relay.
+        hub().kitshnLost();
+      }
       // K-709: a request in flight gets no answer from a closed connection.
       for (const [requestId, settle] of answerWaiters) {
         settle(`the connection to kitshn closed (${event.code}) before its answer.`);
@@ -2948,6 +2854,7 @@ async function runCommand() {
     providerUsers: () => providerUsersOf(readMachineFile()),
     handle: answerLocal,
     log,
+    seen: (connection: number) => hub().seen(connection),
     closed: providerClosed,
     // K-704: a broken register marks the provider refused only when its own user sent it.
     refused: (provider: string, reason: string, uid: number) => {
@@ -2958,6 +2865,8 @@ async function runCommand() {
   };
   const local = await listenLocal(paths.socket, { ...socketOptions, access: "private" });
   process.on("exit", local.stop);
+  // K-704: the daemon pings each provider connection and drops a quiet one.
+  process.on("exit", hub().start());
   // K-1609: the link proxy of the providers, in the same private folder; it admits the daemon user and local users.
   // K-1609, K-621: a start without the link proxy still serves the rest; the answer to register then names none.
   const linkOptions = {
@@ -3008,8 +2917,11 @@ async function runCommand() {
       : "",
     RECENT_SAMPLES,
   );
-  await ensureTunnel(config);
-  watchTunnel();
+  // The contract tests run a real daemon with no tunnel, so they never touch the user's services.
+  if (process.env["KITSHN_TUNNEL"] !== "off") {
+    await ensureTunnel(config);
+    watchTunnel();
+  }
   // K-821: the machine card shows what the kept builds take on disk.
   void countKept();
   connect(config);
@@ -3140,12 +3052,82 @@ function loadProviders(): Providers {
     report,
   );
 }
-/** K-703: the event channel of each local connection that registered a provider. */
-const providerEmitters = new Map<number, (event: Answer) => void>();
-/** K-707: the provider commands that wait for their `command-result`, by job id. */
+/** K-721: where the daemon keeps what kitshn last said, so a restart without kitshn keeps it. */
+const KITSHN_STATE_KEY = "kitshn:state";
+/** K-704: a test sets a short ping timing; a real daemon uses the defaults. */
+const timingOf = (name: string, fallback: number) => {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+};
+let providerHub: ProviderHub | null = null;
+/** K-704, K-721, K-722: the live side of the provider connections. */
+const hub = (): ProviderHub =>
+  (providerHub ??= new ProviderHub({
+    registry,
+    toKitshn: (message) => {
+      const ws = socket;
+      if (ws === null || challenge === null || ws.readyState !== WebSocket.OPEN) return false;
+      ws.send(JSON.stringify(message));
+      return true;
+    },
+    drop: dropConnection,
+    log,
+    ownUid: ownUid(),
+    platform,
+    pingMs: timingOf("KITSHN_PING_MS", PROVIDER_PING_MS),
+    graceMs: timingOf("KITSHN_GRACE_MS", GRACE_MS),
+    saved: kitshnStateOf(registry().pushedValue(KITSHN_STATE_KEY)),
+    save: (state) => void registry().setPushed(KITSHN_STATE_KEY, state),
+  }));
+
+type Push = Extract<ServerToDaemon, { type: "grants" | "desired" | "settings" | "reach" | "access" }>;
+
+/** K-1608: where the daemon saves a push of kitshn. */
+const pushKeyOf = (message: Push) =>
+  message.type === "desired"
+    ? pushKey.desired(message.provider, message.kind)
+    : pushKey[message.type](message.provider);
+
+/** K-1608, K-721: saves a push of kitshn, and gives its provider the event of what changed. */
+function applyPush(message: Push) {
+  const { provider } = message;
+  const servedBefore = JSON.stringify(registry().accessOf(provider)?.served ?? []);
+  const value =
+    message.type === "grants"
+      ? message.tables
+      : message.type === "settings"
+        ? message.values
+        : message.type === "reach"
+          ? message.cards
+          : message.type === "access"
+            ? message.access
+            : { state: message.state, rev: message.rev };
+  if (!registry().setPushed(pushKeyOf(message), value)) return;
+  if (message.type === "grants") return hub().grantsChanged(provider);
+  if (message.type === "settings")
+    return void hub().emitTo(provider, { type: "settings", values: message.values });
+  if (message.type === "reach") return void hub().emitTo(provider, { type: "reach", cards: message.cards });
+  if (message.type === "desired")
+    return void hub().emitTo(provider, {
+      type: "desired",
+      kind: message.kind,
+      state: message.state,
+      rev: message.rev,
+    });
+  // New audiences change which tokens `check` takes, so the provider checks its sessions again.
+  hub().grantsChanged(provider);
+  if (JSON.stringify(message.access.served) !== servedBefore)
+    hub().emitTo(provider, { type: "served", hosts: [...message.access.served] });
+}
+
+/** K-707: the provider commands that wait for their `command-result`, by job id, with the event that they sent. */
 const commandWaiters = new Map<
   number,
-  { readonly provider: string; readonly settle: (outcome: JobOutcome) => void }
+  {
+    readonly provider: string;
+    readonly event: Extract<Answer, { type: "command" }>;
+    readonly settle: (outcome: JobOutcome) => void;
+  }
 >();
 const COMMAND_TIMEOUT_MS = 5 * 60_000;
 
@@ -3163,13 +3145,11 @@ function sendProviders() {
 }
 
 function providerClosed(connection: number) {
-  providerEmitters.delete(connection);
-  const names = registry()
-    .reports()
-    .filter((report) => registry().connectionOf(report.name) === connection);
-  if (!registry().disconnect(connection)) return;
+  hub().closed(connection);
+  const names = registry().disconnect(connection);
+  if (names.length === 0) return;
   for (const [commandId, waiter] of commandWaiters)
-    if (names.some((report) => report.name === waiter.provider)) {
+    if (names.includes(waiter.provider)) {
       commandWaiters.delete(commandId);
       waiter.settle({
         ok: false,
@@ -3202,14 +3182,20 @@ async function runProviderCommand(
   jobId: number,
 ): Promise<JobOutcome> {
   if (registry().connectionOf(command.provider) === null) await registered(command.provider);
-  const connection = registry().connectionOf(command.provider);
-  const emit = connection === null ? undefined : providerEmitters.get(connection);
-  if (!emit)
+  if (registry().connectionOf(command.provider) === null)
     return Promise.resolve({
       ok: false,
       exitCode: null,
       output: `The provider ${command.provider} did not connect within 60 seconds.`,
     });
+  const event = {
+    type: "command" as const,
+    commandId: jobId,
+    command: command.command,
+    resource: command.resource,
+    row: command.row ?? null,
+    deadline: Date.now() + COMMAND_TIMEOUT_MS,
+  };
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       commandWaiters.delete(jobId);
@@ -3221,26 +3207,64 @@ async function runProviderCommand(
     }, COMMAND_TIMEOUT_MS);
     commandWaiters.set(jobId, {
       provider: command.provider,
+      event,
       settle: (outcome) => {
         clearTimeout(timer);
         resolve(outcome);
       },
     });
-    emit({
-      type: "command",
-      provider: command.provider,
-      commandId: jobId,
-      command: command.command,
-      resource: command.resource,
-      ...(command.row === undefined ? {} : { row: command.row }),
-    });
+    hub().emitTo(command.provider, event);
   });
 }
 
 /** K-701, K-702: the requests of the local socket. */
-async function answerLocal(request: Request, caller: Caller, emit: (event: Answer) => void): Promise<Answer> {
+async function answerLocal(
+  request: Request,
+  caller: Caller,
+  emit: (event: Answer) => void,
+): Promise<Answer | null> {
+  // K-704, K-722: the frames without an id get no answer.
+  if (request.type === "pong") return null;
+  if (request.type === "exec-credit") {
+    hub().execControl(request.execId, caller.connection, { type: "credit", bytes: request.bytes });
+    return null;
+  }
+  if (request.type === "exec-frame") {
+    hub().bridgeFrame(request, caller.connection);
+    return null;
+  }
   const { id } = request;
-  if (request.type === "ask") return askKitshn(request, emit);
+  if (request.type === "ask") return askKitshn(request, emit, caller.connection);
+  if (request.type === "check") return hub().check(request, caller.connection);
+  if (request.type === "attest-result") {
+    hub().attested(request, caller.connection);
+    return { id, type: "attest-result" };
+  }
+  if (request.type === "exec") {
+    const { attest, ...run } = request;
+    let attested: Record<string, string>;
+    try {
+      attested = await attestedFor(attest);
+    } catch (error) {
+      if (error instanceof AttestationError) throw new Error(`kitshn refused the run: ${error.message}`);
+      throw error;
+    }
+    return hub().exec(run, { connection: caller.connection, emit }, attested);
+  }
+  if (request.type === "exec-input") {
+    hub().execControl(request.execId, caller.connection, { type: "input", data: request.data });
+    return { id, type: "exec-input" };
+  }
+  if (request.type === "exec-close") {
+    hub().execControl(request.execId, caller.connection, { type: "close", what: request.what });
+    return { id, type: "exec-close" };
+  }
+  if (request.type === "provider-exec-user") {
+    const problem = registry().setExecUser(request.provider, request.uid);
+    if (problem) throw new Error(problem);
+    log(`provider ${request.provider} runs commands of other machines as the user id ${request.uid}`);
+    return { id, type: "provider-exec-user" };
+  }
   if (request.type === "status") {
     if (!joined) throw new Error("the daemon has not read machine.json yet.");
     const key = readKey(keyFile);
@@ -3253,7 +3277,7 @@ async function answerLocal(request: Request, caller: Caller, emit: (event: Answe
         fingerprint: key ? await fingerprintOf(key.x) : null,
         connection: socket === null ? "disconnected" : challenge === null ? "token-only" : "connected",
         tunnel: tunnelState,
-        attesterEnv: attestersOf(readMachineFile()).attesters.map((attester) => attester.tokenEnv),
+        providers: registry().states(),
         server: joined.server,
         refusedProviders: registry().refused(),
         offlineProviders: registry().offline(),
@@ -3299,16 +3323,6 @@ async function answerLocal(request: Request, caller: Caller, emit: (event: Answe
     if (error !== null) throw new Error(error);
     return { id, type: "job-cancel" };
   }
-  if (request.type === "audit") {
-    // K-1610: only the provider's own connection, and only over a signed connection; kitshn names the source.
-    if (registry().connectionOf(request.provider) !== caller.connection)
-      throw new Error(`register ${request.provider} on this connection first (K-704).`);
-    const ws = socket;
-    if (ws === null || challenge === null)
-      throw new Error("the daemon has no signed connection to kitshn, so kitshn cannot record the call now.");
-    sendOn(ws, { type: "audit", audit: request.audit });
-    return { id, type: "audit" };
-  }
   if (request.type === "desired-set") {
     // K-709: only the connection that registered the provider, and only over a signed connection to kitshn.
     if (registry().connectionOf(request.provider) !== caller.connection)
@@ -3350,37 +3364,55 @@ async function answerLocal(request: Request, caller: Caller, emit: (event: Answe
   }
   if (request.type === "register" || request.type === "upsert" || request.type === "remove") {
     if (!joined) throw new Error("the daemon has not read machine.json yet.");
-    const handMade = readSites() ?? [];
-    const outcome = registry().apply(
-      request,
-      caller.connection,
-      new Set(handMade.map((site) => site.name)),
-      caller.uid,
-      caller.uid === ownUid() || caller.uid === 0,
-    );
+    const providerCaller = {
+      connection: caller.connection,
+      uid: caller.uid,
+      privileged: caller.uid === ownUid() || caller.uid === 0,
+      takenSites: new Set((readSites() ?? []).map((site) => site.name)),
+      machineName: (registry().pushedValue(MACHINE_NAME_KEY) as string | null) ?? hostname(),
+    };
+    const outcome =
+      request.type === "register"
+        ? registry().register(request, providerCaller)
+        : registry().change(request, providerCaller);
     if (!outcome.ok) throw new Error(outcome.error);
     if (outcome.changed) {
       sendProviders();
       void checkSites().catch((error: unknown) => log(`site check failed: ${String(error)}`));
     }
-    if (request.type !== "register") return { id, type: request.type };
-    providerEmitters.set(caller.connection, emit);
+    if (request.type === "remove") return { id, type: "remove" };
+    if (request.type === "upsert")
+      return { id, type: "upsert", ...(outcome.problems.length > 0 ? { problems: outcome.problems } : {}) };
+    hub().registered(caller.connection, emit, request.trustAudiences ?? []);
+    // K-704: the same instance took over; the old connection closes, and its waiting commands move here.
+    if (outcome.replaced !== null) dropConnection(outcome.replaced);
+    for (const waiter of commandWaiters.values())
+      if (waiter.provider === request.provider) emit(waiter.event);
     for (const wake of registerWaiters.get(request.provider) ?? []) wake();
     registerWaiters.delete(request.provider);
     log(`provider ${request.provider} registered with ${request.resources.length} resources`);
+    const { pingMs, graceMs } = hub().timing();
     return {
       id,
       type: "register",
-      machineId: joined.machineId,
-      ...registry().savedFor(request.provider),
+      protocol: PROVIDER_PROTOCOL,
+      machine: {
+        id: joined.machineId,
+        name: registry().pushedValue(MACHINE_NAME_KEY) as string | null,
+      },
+      capabilities: ["check", "exec", "attest", "ping"],
+      identityHeaders: [...IDENTITY_HEADERS],
+      problems: outcome.problems,
+      saved: registry().savedFor(request.provider),
       // K-1609, K-701: the daemon user gets the private socket, any other caller the shared one; without a shared
-      // socket the private one, which only a listed root can open, so `link-check` refuses the others with a reason.
+      // socket the private one, which only a listed root can open.
       linkSocket:
         caller.uid !== ownUid() && sharedLinkServed ? sharedLinkSocket : linkServed ? linkSocket : null,
-      machineName: registry().pushedValue(MACHINE_NAME_KEY) as string | null,
+      syncedAt: hub().state().syncedAt,
+      pingMs,
+      graceMs,
     };
   }
-  if (request.type === "attester-set") return setAttester(request, caller);
   if (request.type === "forget-token") {
     keptTokens.drop(request.repo);
     return { id, type: "forget-token" };
@@ -3460,17 +3492,11 @@ switch (command) {
   case "agent":
     await agentCommand(args);
     break;
-  case "attester":
-    await attesterCommand(args);
-    break;
   case "provider":
     await providerCommand(args);
     break;
   case "providers":
     await providersCommand(args);
-    break;
-  case "link-check":
-    linkCheckCommand(args[0]);
     break;
   case "publish":
   case "unpublish":

@@ -336,15 +336,6 @@ function MachineKeyRow(props: { view: MachineView; onToast: (text: string, error
           Failed check {ago(keyFailure.at)} ago: {keyFailure.reason}
         </p>
       ) : null}
-      {props.view.status?.attesters?.length ? (
-        <p
-          class="muted"
-          data-tip="Attesters: local services that vouch for the thread of an ask; only their labels count for rights (K-1751)."
-        >
-          Attesters:{" "}
-          {props.view.status.attesters.map((attester) => `${attester.prefix} ${attester.address}`).join(", ")}
-        </p>
-      ) : null}
       {rekey ? (
         <>
           <p>
@@ -548,6 +539,13 @@ export function MachinePanel(props: {
         ? (view.status?.offlineProviders ?? []).map((entry) => (
             <p key={`offline-${entry.provider}`} class="muted">
               Provider {entry.provider} offline since {clock(entry.at)} ({ago(entry.at)}): {entry.reason}
+            </p>
+          ))
+        : null}
+      {view.online
+        ? (view.status?.providerProblems ?? []).map((entry) => (
+            <p key={`problem-${entry.provider}-${entry.reason}`} class="muted">
+              Provider {entry.provider} dropped {entry.reason}
             </p>
           ))
         : null}

@@ -1,19 +1,35 @@
 {
   "name": "@kitshn/local",
+  "version": "0.0.0",
   "private": true,
   "type": "module",
   "description": "The messages of the kitshn daemon's local socket (K-702).",
+  "license": "MIT",
   "exports": {
     ".": "./src/index.ts"
   },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist/*.js",
+    "dist/*.d.ts"
+  ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "rm -rf dist && bun build src/index.ts --target=node --outdir dist --external effect && tsc -p tsconfig.build.json && node scripts/declarations.ts"
   },
-  "dependencies": {
-    "effect": "4.0.6"
+  "peerDependencies": {
+    "effect": "^4.0.5"
   },
   "devDependencies": {
+    "effect": "4.0.6",
     "typescript": "7.0.2",
     "vitest": "5.0.5"
   }

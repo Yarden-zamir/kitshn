@@ -405,15 +405,15 @@ it("finds the ask events of one label, and keeps a caller's t3. label out (K-175
   );
   expect(found).toHaveLength(1);
   expect(found[0]?.labels).toEqual({ "my.task": "42" });
-  // K-1752: the verified mark is fixed at ask time; a later change of the attesters does not change it.
+  // K-1752: the verified mark is fixed at ask time; a later change of the providers does not change it.
   const sent: Array<ServerToDaemon> = [];
   const verified = await runInDurableObject(stub, async (instance) => {
     const kitshn = instance as unknown as Instance & {
-      attesterPrefixesOf(id: string): Array<string>;
+      labelPrefixesOf(id: string): Array<string>;
       askEventsWithLabel(k: string, v: string, m: string | null): Array<{ verified: Array<string> }>;
     };
-    const reported = kitshn.attesterPrefixesOf.bind(kitshn);
-    kitshn.attesterPrefixesOf = () => ["acme."];
+    const reported = kitshn.labelPrefixesOf.bind(kitshn);
+    kitshn.labelPrefixesOf = () => ["acme."];
     await kitshn.webSocketMessage(
       daemonSocket(sent),
       JSON.stringify({
@@ -422,7 +422,7 @@ it("finds the ask events of one label, and keeps a caller's t3. label out (K-175
         ask: { action: "allow", target: "124", attested: { "acme.task": "7" } },
       }),
     );
-    kitshn.attesterPrefixesOf = reported;
+    kitshn.labelPrefixesOf = reported;
     return kitshn.askEventsWithLabel("acme.task", "7", null)[0]?.verified;
   });
   expect(verified).toEqual(["acme.task"]);

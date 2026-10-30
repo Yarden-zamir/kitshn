@@ -129,8 +129,8 @@ export function AskEvents(props: { readonly events: ReadonlyArray<AskEventView> 
                   class="muted"
                   data-tip={
                     event.verified.includes(key)
-                      ? "Verified: an attester of the machine set this label (K-1752)."
-                      : "Claimed: the agent wrote this label; no attester checked it (K-1750)."
+                      ? "Verified: a provider of the machine vouched for this label (K-1752)."
+                      : "Claimed: the agent wrote this label; no provider checked it (K-1750)."
                   }
                 >
                   {" "}
@@ -220,8 +220,8 @@ export function AskRow(props: {
             class="muted"
             data-tip={
               props.proposal.verified.includes(key)
-                ? "Verified: an attester of the machine set this label (K-1752)."
-                : "Claimed: the agent wrote this label; no attester checked it (K-1750)."
+                ? "Verified: a provider of the machine vouched for this label (K-1752)."
+                : "Claimed: the agent wrote this label; no provider checked it (K-1750)."
             }
           >
             {" "}

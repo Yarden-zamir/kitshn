@@ -176,6 +176,34 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
 
+  packages/contract:
+    dependencies:
+      ws:
+        specifier: 8.22.0
+        version: 8.22.0
+    devDependencies:
+      '@kitshn/daemon':
+        specifier: workspace:*
+        version: link:../daemon
+      '@kitshn/edge':
+        specifier: workspace:*
+        version: link:../edge
+      '@kitshn/local':
+        specifier: workspace:*
+        version: link:../local
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      '@types/ws':
+        specifier: 8.18.2
+        version: 8.18.2
+      jose:
+        specifier: 6.2.14
+        version: 6.2.14
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+
   packages/daemon:
     dependencies:
       '@kitshn/edge':
@@ -187,6 +215,9 @@ importers:
       effect:
         specifier: 4.0.6
         version: 4.0.6
+      jose:
+        specifier: 6.2.14
+        version: 6.2.14
       kitshn:
         specifier: workspace:*
         version: link:../kitshn
@@ -210,8 +241,8 @@ importers:
         specifier: 4.0.6
         version: 4.0.6
       jose:
-        specifier: 6.2.13
-        version: 6.2.13
+        specifier: 6.2.14
+        version: 6.2.14
       kitshn:
         specifier: workspace:*
         version: link:../kitshn
@@ -275,11 +306,10 @@ importers:
         version: 5.0.5(@types/node@24.19.2)(happy-dom@21.0.4)(vite@8.3.5(@types/node@24.19.2)(esbuild@0.28.2))
 
   packages/local:
-    dependencies:
+    devDependencies:
       effect:
         specifier: 4.0.6
         version: 4.0.6
-    devDependencies:
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -1410,8 +1440,8 @@ packages:
     resolution: {integrity: sha512-F/1DnUGPopORZi0ni+CvrCgHQ5FyEAHRLSApuYWMmrbSwoN2Mn/7k+Gl38gJnR7yyDZk6WLXwiGod1JOWNDKGw==}
     hasBin: true
 
-  jose@6.2.13:
-    resolution: {integrity: sha512-7TIg10ZE1x82YediN+lcrPNvGMKge9yFHQD+Qho/b8y2adfugU3AsvvHfxV0fzyFllT6l9xCjf4RWY9g/Z9PJQ==}
+  jose@6.2.14:
+    resolution: {integrity: sha512-3JasLuki1NRLQvY4wCoC37KZk4qxoBx2k2aFqLxT84IezqW0bkJKnNtxnZj/Fu1xsQivoc/lytxaRHJoGLjJ1A==}
 
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
@@ -2695,7 +2725,7 @@ snapshots:
 
   he@1.2.0: {}
 
-  jose@6.2.13: {}
+  jose@6.2.14: {}
 
   js-tokens@4.0.0: {}
 

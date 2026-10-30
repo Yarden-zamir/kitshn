@@ -57,15 +57,12 @@ kitshn service uninstall                stop and remove the user service`,
   health:
     "kitshn health [--now] [--json]          the last check of the providers and links of this machine (K-630)",
   "local-users": `kitshn local-users list|add|remove <u>  who else may use the local socket, as the daemon user (K-701);
-                                        add <u> --provider also lets it run a provider and its attester`,
+                                        add <u> --provider also lets it run a provider`,
   providers: `kitshn providers rebind <name> --to-user <u>
-                                        move a provider and its attester to a provider user (K-704)`,
-  attester: `kitshn attester set --prefix <p.> --url <loopback url> --token-env <NAME>
-                                        register an attester of thread labels, as the daemon user or root (K-1751)`,
+                                        move a provider to a provider user (K-704)
+kitshn providers exec-user <name> <u>   the user that runs commands of other machines for that provider (K-722)`,
   provider: `kitshn provider                         join stdin and stdout to the local socket, for a provider (K-704)
 kitshn provider forget <name>           drop a provider that does not run, as the daemon user or root (K-704)`,
-  "link-check":
-    "kitshn link-check <socket or pipe>      exit 0 when this account's daemon serves that link proxy (K-1609)",
   agent: `kitshn agent <action> [target]          ask kitshn as this machine (K-1710): --reason, --label k=v, --body json;
                                         kitshn agent --help lists the actions`,
   "setup-git": "kitshn setup-git                        git asks kitshn first for github.com tokens (K-1763)",
@@ -81,6 +78,9 @@ kitshn provider forget <name>           drop a provider that does not run, as th
     "kitshn servers [--json]                 the servers that listen on this machine, and what kitshn exposes (K-619)",
   doors: `kitshn doors install --user <u>         as root: the helper that gates game ports, for the daemon user (K-2005)
 kitshn doors uninstall                  as root: remove it and its firewall table`,
+  exec: `kitshn exec install --user <u> --daemon-user <d>
+                                        as root: the daemon user runs exec of other machines as <u> (K-722)
+kitshn exec uninstall --user <u>        as root: remove that rule; exec as <u> then needs its provider's bridge`,
   skill: `kitshn skill install [--repo]           the skill for coding agents, global or in this repo (K-618)
 kitshn skill check                      exit 1 when a copy of the skill is from another release`,
   version: `kitshn version [--json]                 the version; --json: {"product":"kitshn","generation":2,"version"}`,
@@ -105,9 +105,7 @@ export function helpText(command: string | null, version: string): string {
     "health",
     "local-users",
     "providers",
-    "attester",
     "provider",
-    "link-check",
     "agent",
   ];
   const rest = (Object.keys(MACHINE_HELP) as Array<MachineCommand>).filter((name) => !order.includes(name));

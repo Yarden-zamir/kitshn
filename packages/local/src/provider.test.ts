@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { type ProviderReport, desiredProblem, readAnswer, readRequest, reportProblem } from "./index.ts";
+import { Schema } from "effect";
+import {
+  GrantTables,
+  type ProviderProblem,
+  type ProviderReport,
+  decodeClients,
+  decodeResources,
+  screenResources,
+  desiredProblem,
+  readAnswer,
+  readRequest,
+  reportProblem,
+} from "./index.ts";
 
 const t3 = (resources: ProviderReport["resources"], extra: Partial<ProviderReport> = {}): ProviderReport => ({
   name: "t3",
@@ -158,37 +170,27 @@ describe("provider reports (K-704, K-705)", () => {
     expect(readRequest(line("site"))).toMatchObject({ ok: false, answer: { id: "1", type: "error" } });
   });
 
-  it("takes client apps with an open link of https or an app scheme, and a register without them (K-720)", () => {
-    const line = (clients?: unknown) =>
-      JSON.stringify({
-        id: "1",
-        type: "register",
-        provider: "t3",
-        kinds: [],
-        commands: [],
-        resources: [],
-        ...(clients === undefined ? {} : { clients }),
-      });
-    const client = (open: string) => [{ id: "t3code-fork", name: "T3 Code (fork)", open, install: [] }];
-    expect(readRequest(line())).toMatchObject({ ok: true });
-    expect(readRequest(line(client("t3code-preview://connections/new?inviteUrl={inviteUrl}")))).toMatchObject(
-      {
-        ok: true,
-        request: { clients: [{ id: "t3code-fork" }] },
-      },
-    );
-    expect(readRequest(line(client("T3code+x.y://new?u={inviteUrl}")))).toMatchObject({ ok: true });
-    const install = (url: string) => [
-      { id: "t3code", name: "T3 Code", open: "t3code://x?u={inviteUrl}", install: [{ label: "Get", url }] },
-    ];
-    expect(readRequest(line(install("https://play.google.com/store")))).toMatchObject({ ok: true });
+  it("keeps client apps with an open link of an app scheme, and drops each other one with a problem (K-720)", () => {
+    const keep = (clients: Array<unknown>) => {
+      const problems: Array<ProviderProblem> = [];
+      return { kept: decodeClients(clients, problems).map((client) => client.id), problems };
+    };
+    const client = (open: string, id = "t3code-fork") => ({ id, name: "T3 Code (fork)", open, install: [] });
+    expect(keep([client("t3code-preview://connections/new?inviteUrl={inviteUrl}")]).kept).toEqual([
+      "t3code-fork",
+    ]);
+    expect(keep([client("T3code+x.y://new?u={inviteUrl}")]).kept).toEqual(["t3code-fork"]);
+    const install = (url: string) => ({
+      id: "t3code",
+      name: "T3 Code",
+      open: "t3code://x?u={inviteUrl}",
+      install: [{ label: "Get", url }],
+    });
+    expect(keep([install("https://play.google.com/store")]).kept).toEqual(["t3code"]);
     for (const url of ["http://play.google.com/", "https://evil/?u={inviteUrl}", "market://details"])
-      expect(readRequest(line(install(url))), url).toMatchObject({ ok: false });
-    const many = Array.from({ length: 5 }, (_, index) => ({
-      ...client("t3code://x?u={inviteUrl}")[0],
-      id: `c${index}`,
-    }));
-    expect(readRequest(line(many))).toMatchObject({ ok: false });
+      expect(keep([install(url)]), url).toMatchObject({ kept: [], problems: [{ path: "clients[0]" }] });
+    const many = Array.from({ length: 5 }, (_, index) => client("t3code://x?u={inviteUrl}", `c${index}`));
+    expect(keep(many)).toMatchObject({ kept: ["c0", "c1", "c2", "c3"], problems: [{ path: "clients[4]" }] });
     for (const open of [
       "javascript:alert(1)//{inviteUrl}",
       "https://example.com/add?u={inviteUrl}",
@@ -205,7 +207,7 @@ describe("provider reports (K-704, K-705)", () => {
       "{inviteUrl}",
       "t3code:// bad host/{inviteUrl}",
     ])
-      expect(readRequest(line(client(open))), open).toMatchObject({ ok: false });
+      expect(keep([client(open)]).kept, open).toEqual([]);
   });
 
   it("keeps a grant table whole when a rule has a type that this reader does not know (K-706)", () => {
@@ -220,9 +222,8 @@ describe("provider reports (K-704, K-705)", () => {
       level: "send",
       endsAt: null,
     };
-    const answer = readAnswer(JSON.stringify({ type: "grants", provider: "t3", tables: { a: [grant] } }));
-    expect(answer).toMatchObject({
-      tables: { a: [{ circle: { rules: [{ email: "a@b.c" }, { unknown: "future" }] } }] },
+    expect(Schema.decodeUnknownSync(GrantTables)({ a: [grant] })).toMatchObject({
+      a: [{ circle: { rules: [{ email: "a@b.c" }, { unknown: "future" }] } }],
     });
   });
 
@@ -231,5 +232,79 @@ describe("provider reports (K-704, K-705)", () => {
     expect(desiredProblem(kinds, "t3.settings", { theme: "dark" })).toBeNull();
     expect(desiredProblem(kinds, "t3.app", {})).toMatch(/no desired state/);
     expect(desiredProblem(kinds, "t3.settings", "x".repeat(70_000))).toMatch(/at most/);
+  });
+
+  it("drops only the bad row, fact or resource of a register, and names each by its path (protocol 2)", () => {
+    const row = (id: string) => ({ id, cells: { name: "x" } });
+    const raw = [
+      {
+        id: "app",
+        kind: "t3.app",
+        name: "T3",
+        status: "running",
+        facts: [
+          { label: "ok", value: "1" },
+          { label: "", value: "1" },
+        ],
+        lists: [
+          {
+            id: "tasks",
+            title: "Tasks",
+            columns: [{ id: "name", title: "Name" }],
+            rows: [row("a".repeat(150)), row("b".repeat(250))],
+          },
+        ],
+      },
+      { id: "bad id!", kind: "t3.app", name: "x", status: "running" },
+    ];
+    const { resources, problems } = decodeResources(raw);
+    expect(resources.map((item) => [item.id, item.facts?.length, item.lists?.[0]?.rows.length])).toEqual([
+      ["app", 1, 1],
+    ]);
+    expect(problems.map((problem) => problem.path)).toEqual([
+      "resources[0].facts[1]",
+      "resources[0].lists[0].rows[1]",
+      "resources[1]",
+    ]);
+    expect(problems.every((problem) => problem.reason.endsWith("dropped"))).toBe(true);
+  });
+
+  it("screens a resource with an unknown kind or parent, and a row with an unknown command, out of a report (protocol 2)", () => {
+    const report = t3([
+      {
+        id: "app",
+        kind: "t3.app",
+        name: "T3",
+        status: "running",
+        lists: [
+          {
+            id: "l",
+            title: "L",
+            columns: [{ id: "c", title: "C" }],
+            rows: [{ id: "r", cells: { c: "x" }, commands: ["nope"] }],
+          },
+        ],
+      },
+      { id: "x", kind: "t3.unknown", name: "x", status: "running" },
+      { id: "child", kind: "t3.thread", name: "child", status: "running", parent: "x" },
+    ]);
+    const screened = screenResources(report, [], new Set(), new Set());
+    expect(screened.report.resources.map((item) => [item.id, item.lists?.[0]?.rows.length])).toEqual([
+      ["app", 0],
+    ]);
+    expect(screened.problems.map((problem) => problem.reason)).toEqual([
+      expect.stringContaining("command nope"),
+      expect.stringContaining("kind t3.unknown is unknown"),
+      expect.stringContaining("parent x is unknown"),
+    ]);
+    // kitshn checks a daemon's report with the same rules, so a screened report passes.
+    expect(reportProblem(screened.report, [], new Set(), new Set())).toBeNull();
+  });
+
+  it("skips an event of a type that it does not know, and throws for a known type that does not match (protocol 2)", () => {
+    expect(readAnswer(JSON.stringify({ type: "something-new", x: 1 }))).toBeNull();
+    expect(readAnswer(JSON.stringify({ type: "ping", at: 1 }))).toEqual({ type: "ping", at: 1 });
+    expect(() => readAnswer(JSON.stringify({ type: "ping" }))).toThrow();
+    expect(readRequest(JSON.stringify({ type: "pong" }))).toMatchObject({ ok: true });
   });
 });

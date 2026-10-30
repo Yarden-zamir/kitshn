@@ -182,9 +182,12 @@ describe("local socket (K-701, K-702)", () => {
       id: "9",
       type: "register",
       provider: "t3",
-      kinds: [],
+      protocol: 2,
+      instance: "env-1",
+      // A broken shape refuses the line; a bad resource alone is dropped later (C-3).
+      kinds: "none",
       commands: [],
-      resources: [{ id: "x".repeat(65), kind: "t3.thread", name: "a", status: "running" }],
+      resources: [],
     };
     const answers = await raw(
       local.path,
@@ -199,7 +202,7 @@ describe("local socket (K-701, K-702)", () => {
         { id: "8", type: "error", error: "no rotate-key here" },
       ]),
     );
-    expect(local.refusals).toEqual([{ provider: "t3", reason: expect.stringMatching(/at most 64/) }]);
+    expect(local.refusals).toEqual([{ provider: "t3", reason: expect.stringMatching(/kinds/) }]);
   });
 
   it("refuses to start next to a daemon that listens, and ends a connection with a line that is too long", async () => {
@@ -279,7 +282,11 @@ it("answers over the Windows pipe code, and a second daemon cannot take the name
     platform: "win32" as const,
     access: "private" as const,
     decide: () => ({ accept: true as const }),
-    handle: async (request: { id: string }) => ({ id: request.id, type: "error" as const, error: "pong" }),
+    handle: async (request: { type: string }) => ({
+      id: "id" in request ? String(request.id) : null,
+      type: "error" as const,
+      error: "pong",
+    }),
     log: () => {},
   };
   const server = await listenLocal(path, options);
