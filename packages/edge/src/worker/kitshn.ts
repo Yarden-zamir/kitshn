@@ -95,6 +95,7 @@ import {
   circlesHolding,
   fnv,
   levelName,
+  activeShares,
 } from "../core/model.ts";
 import {
   type Command,
@@ -14351,8 +14352,39 @@ export class Kitshn extends DurableObject<Env> {
     const portCard = portOf(row);
     const machine = this.state.machines.get(doorMachine(portCard));
     const listening = new Set(machine ? (this.machineView(machine).status?.listening ?? []) : []);
+    const named = (id: string) => this.state.machines.get(id)?.name ?? id;
+    const portMachine = this.state.machines.get(portCard.machine);
+    const portStatus = portMachine ? this.machineView(portMachine).status : null;
+    const doorStatus = machine ? this.machineView(machine).status : null;
+    // K-2010: the route of the card, as the players' packets take it.
+    const route =
+      portCard.relay === null
+        ? `Players → ${named(portCard.machine)}`
+        : `Players → ${named(portCard.relay)} → Cloudflare ${portStatus?.tunnelLocations ?? "(no data center reported)"} → ${named(portCard.machine)}`;
+    const problems = [
+      this.doorsProblem(doorMachine(portCard)),
+      doorStatus?.hostFirewall ? `${named(doorMachine(portCard))}: ${doorStatus.hostFirewall}` : null,
+      portCard.relay !== null && portStatus && portStatus.tunnel !== "running"
+        ? `${named(portCard.machine)}: its tunnel has no connection`
+        : null,
+    ].filter((problem) => problem !== null);
+    // K-2010: a share whose members a door cannot let in: doors open for people and addresses, not devices or machines.
+    const resource = this.state.resources.get(portCard.card);
+    const unchecked = resource
+      ? activeShares(this.state, resource, now)
+          .filter(({ circle }) =>
+            circle.members.some((member) => member._tag === "device" || member._tag === "machine"),
+          )
+          .map(
+            ({ circle }) =>
+              `${circle.name}: its devices and machines do not get in on this route, because a door opens for a person`,
+          )
+      : [];
     return {
       ...portCard,
+      route,
+      problems,
+      unchecked,
       connect: `https://pages.${this.env.KITSHN_ZONE}/connect/${portCard.name}`,
       address: connectAddress(portCard, `${portCard.name}.${this.env.KITSHN_ZONE}`),
       listening: portCard.ports.map(portKey).filter((port) => listening.has(port)),

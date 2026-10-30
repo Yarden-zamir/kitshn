@@ -22,6 +22,10 @@ export type PortView = PortCard & {
   readonly address: string;
   readonly listening: ReadonlyArray<string>;
   readonly problem: string | null;
+  /** K-2010: the route as the players' packets take it, the problems of its machines, and shares it cannot check. */
+  readonly route: string;
+  readonly problems: ReadonlyArray<string>;
+  readonly unchecked: ReadonlyArray<string>;
   readonly doors: ReadonlyArray<Door>;
 };
 
@@ -37,7 +41,13 @@ export const doorMachines = (machines: ReadonlyArray<MachineView>) =>
  * The server checks all of it again, also the ports of a kitshn site of the machine.
  */
 export function servicePorts(
-  input: { readonly ports: string; readonly name: string; readonly hours: number; readonly srv: string },
+  input: {
+    readonly ports: string;
+    readonly name: string;
+    readonly hours: number;
+    readonly srv: string;
+    readonly relay?: boolean;
+  },
   servers: ReadonlyArray<ServerReport>,
 ): { readonly ports: ReadonlyArray<ServicePort> } | { readonly problem: string } {
   const parts = input.ports
@@ -55,7 +65,8 @@ export function servicePorts(
     ports,
     doorMs: input.hours * HOUR_MS,
     srv: input.srv.trim() || null,
-    relay: null,
+    // The rule of a relay (one TCP port) only, so any machine id stands for it.
+    relay: input.relay ? "relay" : null,
   });
   if (error) return { problem: error };
   const busy = busyPort(ports, servers);
@@ -76,27 +87,37 @@ export function PortForm(props: {
   onClose: () => void;
   onDone: (text: string) => void;
 }) {
-  const able = doorMachines(props.machines);
+  // K-2002: any online machine runs the service; direct needs its doors, a relay needs the relay machine's doors.
+  const online = props.machines.filter((view) => view.online);
+  const doors = doorMachines(props.machines);
   const [picked, setPicked] = useState("");
-  const machine = able.find((view) => view.machine.id === picked) ?? able[0] ?? null;
+  const machine = online.find((view) => view.machine.id === picked) ?? doors[0] ?? online[0] ?? null;
+  const direct = machine !== null && doors.includes(machine);
+  const relays = doors.filter((view) => view.machine.id !== machine?.machine.id);
+  const [wantRelay, setWantRelay] = useState(false);
+  const route: "direct" | "relay" | null =
+    direct && !wantRelay ? "direct" : relays.length > 0 ? "relay" : null;
+  const [pickedRelay, setPickedRelay] = useState("");
+  const relay =
+    route === "relay" ? (relays.find((view) => view.machine.id === pickedRelay) ?? relays[0] ?? null) : null;
+  const able = machine !== null && route !== null;
   const [ports, setPorts] = useState("");
   const [name, setName] = useState("");
   const [hours, setHours] = useState<number>(12);
   const [srv, setSrv] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const checked = servicePorts({ ports, name, hours, srv }, machine?.servers ?? []);
+  const checked = servicePorts({ ports, name, hours, srv, relay: route === "relay" }, machine?.servers ?? []);
   // The ports alone, while the owner types them, so a missing name does not show as a port problem.
   const portsAlone = servicePorts({ ports, name: "port", hours, srv: "" }, machine?.servers ?? []);
-  const without = props.machines.filter((view) => view.online && !able.includes(view));
   // The running servers that a port card may take: another service of the machine is not the service of the card (K-2001).
   const offered = (machine?.servers ?? []).filter(
     (server) => busyPort([{ port: server.port, proto: "tcp" }], [server]) === null,
   );
   const add = async () => {
-    if (!machine)
+    if (!machine || route === null)
       return setError(
-        "No online machine can hold a port card: install its doors first (kitshn doors install).",
+        "No machine holds doors: a direct card needs them on its machine, a relayed one on the relay machine (kitshn doors install).",
       );
     if ("problem" in checked) return setError(checked.problem);
     setBusy(true);
@@ -106,6 +127,7 @@ export function PortForm(props: {
       ports: checked.ports.map(portKey),
       doorHours: hours,
       ...(srv.trim() ? { srv: srv.trim() } : {}),
+      ...(relay ? { relay: relay.machine.id } : {}),
     });
     setBusy(false);
     if ("error" in result) return setError(result.error);
@@ -124,35 +146,77 @@ export function PortForm(props: {
         circles opens them for their own address on the connect page.
       </p>
       <div class="field-row">
-        <span class="label" data-tip="Machine: an online machine whose daemon holds doors.">
+        <span class="label" data-tip="Machine: the online machine where the service listens.">
           Machine
         </span>
         <div>
-          {able.length === 0 ? (
-            <span class="help">
-              No online machine holds doors. Run <code>kitshn doors install --user &lt;user&gt;</code> on one
-              as root.
-            </span>
+          {online.length === 0 ? (
+            <span class="help">No machine is online.</span>
           ) : (
             <div class="choices" role="radiogroup" aria-label="Machine">
-              {able.map((view) => (
+              {online.map((view) => (
                 <Radio
                   key={view.machine.id}
                   name="port-machine"
                   checked={view.machine.id === machine?.machine.id}
                   label={view.machine.name}
-                  tip={`Run the port card on ${view.machine.name}.`}
+                  tip={`The service listens on ${view.machine.name}.`}
                   onSelect={() => setPicked(view.machine.id)}
                 />
               ))}
             </div>
           )}
-          {without.length > 0 ? (
+        </div>
+      </div>
+      <div class="field-row">
+        <span class="label" data-tip="Route: how players reach the ports (K-2002).">
+          Route
+        </span>
+        <div>
+          <div class="choices" role="radiogroup" aria-label="Route">
+            <Radio
+              name="port-route"
+              checked={route === "direct"}
+              disabled={!direct}
+              label="Direct"
+              tip={
+                direct
+                  ? `Players connect to ${machine?.machine.name ?? "the machine"} itself.`
+                  : `${machine?.machine.name ?? "This machine"} cannot hold doors: ${machine?.status?.doorsProblem ?? "no doors yet"}.`
+              }
+              onSelect={() => setWantRelay(false)}
+            />
+            <Radio
+              name="port-route"
+              checked={route === "relay"}
+              disabled={relays.length === 0}
+              label="Relay"
+              tip="Players connect to a relay machine, which reaches this machine through its tunnel. One TCP port."
+              onSelect={() => setWantRelay(true)}
+            />
+          </div>
+          {route === "relay" ? (
+            <div class="choices" role="radiogroup" aria-label="Relay machine">
+              {relays.map((view) => (
+                <Radio
+                  key={view.machine.id}
+                  name="port-relay"
+                  checked={view.machine.id === relay?.machine.id}
+                  label={view.machine.name}
+                  tip={`Relay through ${view.machine.name}. Pick one near the players and near ${machine?.status?.tunnelLocations ?? "the tunnel's data centers"}.`}
+                  onSelect={() => setPickedRelay(view.machine.id)}
+                />
+              ))}
+            </div>
+          ) : null}
+          {route === null ? (
             <p class="help">
-              {without
-                .map((view) => `${view.machine.name}: ${view.status?.doorsProblem ?? "no doors yet"}`)
-                .join(" · ")}
+              No machine holds doors. Run <code>kitshn doors install --user &lt;user&gt;</code> as root on a
+              Linux machine with a public address.
             </p>
+          ) : null}
+          {machine?.status?.tunnelLocations && route === "relay" ? (
+            <p class="help">Its tunnel lands in {machine.status.tunnelLocations}.</p>
           ) : null}
         </div>
       </div>
@@ -243,7 +307,7 @@ export function PortForm(props: {
       <div class="row">
         <button
           class="btn primary"
-          disabled={busy || able.length === 0}
+          disabled={busy || !able}
           data-tip="Make the port card. It waits in the tray; players of its circles open doors on the connect page."
         >
           Add the port card
@@ -298,7 +362,23 @@ export function PortDoors(props: { resource: Resource; onRemove: () => void }) {
       <div class="label" data-tip="Doors: the addresses that may reach the gated ports now (K-2003).">
         Doors
       </div>
-      {portCard.problem ? <p class="error">{portCard.problem}</p> : null}
+      <p class="help" data-tip="Route: how the players' packets reach the service (K-2010).">
+        {portCard.route}
+      </p>
+      {portCard.problems.map((problem) => (
+        <p key={problem} class="error">
+          {problem}
+        </p>
+      ))}
+      {portCard.unchecked.map((note) => (
+        <p key={note} class="help">
+          {note}
+        </p>
+      ))}
+      <p class="help">
+        A cloud firewall (an Oracle security list, an AWS security group) must allow the ports too; kitshn
+        cannot see it.
+      </p>
       <p class="help">
         Connect page <code>{portCard.connect}</code> · listening{" "}
         {portCard.listening.length > 0 ? portCard.listening.join(", ") : "nothing"}
