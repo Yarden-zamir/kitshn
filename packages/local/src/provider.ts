@@ -162,16 +162,18 @@ export const ProviderList = Schema.Struct({
   columns: Schema.Array(
     Schema.Struct({ id: SettingId, title: Schema.String.check(Schema.isMaxLength(40)) }),
   ).check(Schema.isMinLength(1), Schema.isMaxLength(PROVIDER_LIMITS.columns)),
-  rows: Schema.Array(
-    Schema.Struct({
-      id: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64)),
-      cells: Schema.Record(Schema.String, Text),
-      commands: Schema.optionalKey(
-        Schema.Array(Schema.String.check(Schema.isMaxLength(40))).check(Schema.isMaxLength(8)),
-      ),
-    }),
-  ).check(Schema.isMaxLength(PROVIDER_LIMITS.rows)),
+  rows: Schema.Array(Schema.suspend(() => ProviderRow)).check(Schema.isMaxLength(PROVIDER_LIMITS.rows)),
 });
+
+/** K-1625: one row of a list. Its id may be as long as a cell, so a provider never hashes one (protocol 2). */
+export const ProviderRow = Schema.Struct({
+  id: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200)),
+  cells: Schema.Record(Schema.String, Text),
+  commands: Schema.optionalKey(
+    Schema.Array(Schema.String.check(Schema.isMaxLength(40))).check(Schema.isMaxLength(8)),
+  ),
+});
+export type ProviderRow = typeof ProviderRow.Type;
 export type ProviderList = typeof ProviderList.Type;
 
 // The daemon, the Worker and Node all have the WHATWG `URL`; this package compiles without DOM or Node types.
@@ -245,6 +247,48 @@ export const ProviderClient = Schema.Struct({
 });
 export type ProviderClient = typeof ProviderClient.Type;
 
+const isDnsLabel = (name: string) =>
+  name.length >= 1 &&
+  name.length <= 63 &&
+  only(`${LOWER}${DIGITS}-`)(name) &&
+  !name.startsWith("-") &&
+  !name.endsWith("-");
+
+/** A DNS label from any text: lowercase, each run of other characters one `-`, at most `max` characters. */
+const slug = (text: string, max: number) =>
+  text
+    .toLowerCase()
+    .split("")
+    .map((char) => (only(`${LOWER}${DIGITS}`)(char) ? char : "-"))
+    .join("")
+    .split("-")
+    .filter((part) => part !== "")
+    .join("-")
+    .slice(0, max);
+
+/** A label without the dashes at its end, which a cut can leave. */
+const trimDashes = (label: string) => {
+  let end = label.length;
+  while (end > 0 && label[end - 1] === "-") end--;
+  return label.slice(0, end);
+};
+
+/**
+ * K-705: the name of a new site of a provider: `<provider>-<machine>`, or `<provider>-<resource id>-<machine>` when
+ * that one is taken. A site keeps the name that it had before; this names only a site without one.
+ */
+export function siteName(
+  provider: string,
+  machineName: string,
+  resourceId: string,
+  taken: ReadonlySet<string>,
+): string {
+  const machine = trimDashes(slug(machineName, 40)) || "machine";
+  const first = trimDashes(`${provider}-${machine}`.slice(0, 63));
+  if (!taken.has(first)) return first;
+  return trimDashes(`${provider}-${trimDashes(slug(resourceId, 20)) || "site"}-${machine}`.slice(0, 63));
+}
+
 /** K-304: what a provider reports; kitshn sets "offline" itself while the provider is not connected. */
 export const PROVIDER_STATUSES = ["running", "stopped", "deploying", "failed", "unknown"] as const;
 
@@ -258,15 +302,17 @@ export const ProviderResource = Schema.Struct({
   name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(80)),
   status: Schema.Literals(PROVIDER_STATUSES),
   parent: Schema.optionalKey(LocalId),
+  /**
+   * K-705: a provider sends only `port`; the daemon names the site (`siteName`) and keeps that name, so the name in a
+   * report to kitshn is always set. A name that a provider sends is ignored.
+   */
   site: Schema.optionalKey(
     Schema.Struct({
-      name: Schema.String.check(
-        Schema.isMinLength(1),
-        Schema.isMaxLength(63),
-        Schema.makeFilter(
-          (name: string) =>
-            (only(`${LOWER}${DIGITS}-`)(name) && !name.startsWith("-") && !name.endsWith("-")) ||
-            "a DNS label of a-z, 0-9 and -",
+      name: Schema.optionalKey(
+        Schema.String.check(
+          Schema.isMinLength(1),
+          Schema.isMaxLength(63),
+          Schema.makeFilter((name: string) => isDnsLabel(name) || "a DNS label of a-z, 0-9 and -"),
         ),
       ),
       port: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 })),
@@ -353,18 +399,121 @@ export type Grant = typeof Grant.Type;
 export const GrantTables = Schema.Record(Schema.String, Schema.Array(Grant));
 export type GrantTables = typeof GrantTables.Type;
 
+/** Protocol 2: one item that the daemon dropped or clipped, by its path in the request, and why. */
+export interface ProviderProblem {
+  readonly path: string;
+  readonly reason: string;
+}
+export const ProviderProblem = Schema.Struct({ path: Schema.String, reason: Schema.String });
+
+const decodeRow = Schema.decodeUnknownSync(ProviderRow);
+const decodeFact = Schema.decodeUnknownSync(ProviderFact);
+const decodeSticker = Schema.decodeUnknownSync(ProviderSticker);
+const decodeResource = Schema.decodeUnknownSync(ProviderResource);
+const decodeClient = Schema.decodeUnknownSync(ProviderClient);
+const reasonOf = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 300);
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** Keeps the items of `raw` that `decode` takes, and names each other one at `path[i]`. */
+function keepDecoded<T>(
+  raw: unknown,
+  path: string,
+  what: string,
+  decode: (value: unknown) => T,
+  problems: Array<ProviderProblem>,
+  limit: number,
+): Array<T> {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    problems.push({ path, reason: `not a list; ${what}s dropped` });
+    return [];
+  }
+  const kept: Array<T> = [];
+  raw.forEach((item, index) => {
+    if (index >= limit) {
+      problems.push({ path: `${path}[${index}]`, reason: `more than ${limit} ${what}s; ${what} dropped` });
+      return;
+    }
+    try {
+      kept.push(decode(item));
+    } catch (error) {
+      problems.push({ path: `${path}[${index}]`, reason: `${reasonOf(error)}; ${what} dropped` });
+    }
+  });
+  return kept;
+}
+
 /**
- * K-704, K-705: why a provider's set of resources is not valid, or null. Each kind id starts with the provider name,
- * each command names known kinds, each resource has a known kind with levels and a known parent, and the cards and
- * the site names of all providers of the machine stay within the limits.
+ * Protocol 2: the resources of a `register` or `upsert` that decode, item by item. A bad list row, fact or sticker
+ * goes alone; a resource that still does not decode goes whole. Each dropped item is a problem with its path.
  */
-export function reportProblem(
-  report: ProviderReport,
-  others: ReadonlyArray<ProviderReport>,
-  takenSites: ReadonlySet<string>,
-  /** The site names of kitshn itself, such as `pages` (K-817). */
-  reserved: ReadonlySet<string>,
-): string | null {
+export function decodeResources(
+  raw: ReadonlyArray<unknown>,
+  path = "resources",
+): { readonly resources: Array<ProviderResource>; readonly problems: Array<ProviderProblem> } {
+  const problems: Array<ProviderProblem> = [];
+  const resources: Array<ProviderResource> = [];
+  raw.forEach((item, index) => {
+    const at = `${path}[${index}]`;
+    if (!isRecord(item)) {
+      problems.push({ path: at, reason: "not an object; resource dropped" });
+      return;
+    }
+    const clean: Record<string, unknown> = { ...item };
+    if ("facts" in item)
+      clean["facts"] = keepDecoded(
+        item["facts"],
+        `${at}.facts`,
+        "fact",
+        decodeFact,
+        problems,
+        PROVIDER_LIMITS.facts,
+      );
+    if ("stickers" in item)
+      clean["stickers"] = keepDecoded(
+        item["stickers"],
+        `${at}.stickers`,
+        "sticker",
+        decodeSticker,
+        problems,
+        PROVIDER_LIMITS.stickers,
+      );
+    if (Array.isArray(item["lists"]))
+      clean["lists"] = item["lists"].slice(0, PROVIDER_LIMITS.lists).map((list, listIndex) =>
+        isRecord(list)
+          ? {
+              ...list,
+              rows: keepDecoded(
+                list["rows"],
+                `${at}.lists[${listIndex}].rows`,
+                "row",
+                decodeRow,
+                problems,
+                PROVIDER_LIMITS.rows,
+              ),
+            }
+          : list,
+      );
+    try {
+      resources.push(decodeResource(clean));
+    } catch (error) {
+      problems.push({ path: at, reason: `${reasonOf(error)}; resource dropped` });
+    }
+  });
+  return { resources, problems };
+}
+
+/** Protocol 2, K-720: the client apps that decode; each other one is a problem. */
+export const decodeClients = (raw: ReadonlyArray<unknown>, problems: Array<ProviderProblem>) =>
+  keepDecoded(raw, "clients", "client", decodeClient, problems, PROVIDER_LIMITS.clients);
+
+/**
+ * K-704: why the shape of a provider is broken, so the whole `register` is refused, or null. Each kind id starts with
+ * the provider name, kind and command ids are unique, each command names known kinds, resource ids are unique, and
+ * the machine stays within the limits of providers and cards.
+ */
+export function shapeProblem(report: ProviderReport, others: ReadonlyArray<ProviderReport>): string | null {
   const kinds = new Map(report.kinds.map((kind) => [kind.id, kind]));
   if (kinds.size !== report.kinds.length) return "two kinds have the same id.";
   for (const id of kinds.keys())
@@ -381,44 +530,120 @@ export function reportProblem(
       if (!kinds.has(kind)) return `the command ${command.id} names the unknown kind ${kind}.`;
   const ids = new Set(report.resources.map((resource) => resource.id));
   if (ids.size !== report.resources.length) return "two resources have the same id.";
-  const sites = new Set<string>();
-  for (const resource of report.resources) {
-    const kind = kinds.get(resource.kind);
-    if (!kind) return `the resource ${resource.id} has the unknown kind ${resource.kind}.`;
-    if (Object.keys(kind.levels).length === 0)
-      return `the kind ${kind.id} has no levels, so it has no cards (K-709).`;
-    for (const list of resource.lists ?? []) {
-      const columns = new Set(list.columns.map((column) => column.id));
-      for (const row of list.rows) {
-        for (const command of row.commands ?? [])
-          if (!commands.get(command)?.kinds.includes(resource.kind))
-            return `the list ${list.id} of ${resource.id} names the command ${command}, which its kind does not have.`;
-        for (const key of Object.keys(row.cells))
-          if (!columns.has(key))
-            return `the row ${row.id} of the list ${list.id} has a cell ${key} that is no column.`;
-      }
-    }
-    if (bytesOf(resource) > PROVIDER_LIMITS.resourceBytes)
-      return `the resource ${resource.id} holds more than ${PROVIDER_LIMITS.resourceBytes} bytes.`;
-    if (resource.parent !== undefined && (resource.parent === resource.id || !ids.has(resource.parent)))
-      return `the resource ${resource.id} names the unknown parent ${resource.parent}.`;
-    if (resource.site) {
-      const name = resource.site.name;
-      if (reserved.has(name)) return `the site name ${name} is a name of kitshn itself.`;
-      if (sites.has(name) || takenSites.has(name)) return `the site name ${name} is in use on this machine.`;
-      sites.add(name);
-    }
-  }
-  for (const other of others)
-    for (const resource of other.resources)
-      if (resource.site && sites.has(resource.site.name))
-        return `the site name ${resource.site.name} belongs to the provider ${other.name}.`;
   const total = others.reduce((sum, other) => sum + other.resources.length, report.resources.length);
   if (total > PROVIDER_LIMITS.resources)
     return `the providers of this machine would have ${total} resources, more than ${PROVIDER_LIMITS.resources}.`;
   if (!others.some((other) => other.name === report.name) && others.length >= PROVIDER_LIMITS.providers)
     return `this machine has ${PROVIDER_LIMITS.providers} providers already.`;
   return null;
+}
+
+/**
+ * Protocol 2: the report without the resources and rows that break a rule of their own, each named as a problem: a
+ * resource with an unknown kind, a kind without levels, an unknown parent, too many bytes, or a site name that kitshn
+ * or another card holds; a row that names a command its kind does not have, or a cell of no column.
+ */
+export function screenResources(
+  report: ProviderReport,
+  others: ReadonlyArray<ProviderReport>,
+  takenSites: ReadonlySet<string>,
+  /** The site names of kitshn itself, such as `pages` (K-817). */
+  reserved: ReadonlySet<string>,
+  /** The index of each resource in the request, for the path of a problem. */
+  pathOf: (id: string) => string = (id) => `resources[id=${id}]`,
+): { readonly report: ProviderReport; readonly problems: Array<ProviderProblem> } {
+  const problems: Array<ProviderProblem> = [];
+  const kinds = new Map(report.kinds.map((kind) => [kind.id, kind]));
+  const commands = new Map(report.commands.map((command) => [command.id, command]));
+  const otherSites = new Map(
+    others.flatMap((other) =>
+      other.resources.flatMap((resource) =>
+        resource.site ? [[resource.site.name, other.name] as const] : [],
+      ),
+    ),
+  );
+  const sites = new Set<string>();
+  const drop = (resource: ProviderResource, reason: string) => {
+    problems.push({ path: pathOf(resource.id), reason: `${reason}; resource dropped` });
+    return [];
+  };
+  const firstPass = report.resources.flatMap((resource): Array<ProviderResource> => {
+    const kind = kinds.get(resource.kind);
+    if (!kind) return drop(resource, `the kind ${resource.kind} is unknown`);
+    if (Object.keys(kind.levels).length === 0)
+      return drop(resource, `the kind ${kind.id} has no levels, so it has no cards (K-709)`);
+    if (bytesOf(resource) > PROVIDER_LIMITS.resourceBytes)
+      return drop(resource, `it holds more than ${PROVIDER_LIMITS.resourceBytes} bytes`);
+    if (resource.site) {
+      const name = resource.site.name;
+      // The daemon names each site before it screens, so a site without a name is never kept (K-705).
+      if (name === undefined) return drop(resource, "its site has no name");
+      if (reserved.has(name)) return drop(resource, `the site name ${name} is a name of kitshn itself`);
+      if (sites.has(name) || takenSites.has(name))
+        return drop(resource, `the site name ${name} is in use on this machine`);
+      const owner = otherSites.get(name);
+      if (owner) return drop(resource, `the site name ${name} belongs to the provider ${owner}`);
+      sites.add(name);
+    }
+    const lists = (resource.lists ?? []).map((list, listIndex) => {
+      const columns = new Set(list.columns.map((column) => column.id));
+      return {
+        ...list,
+        rows: list.rows.filter((row, rowIndex) => {
+          const command = (row.commands ?? []).find((id) => !commands.get(id)?.kinds.includes(resource.kind));
+          const cell = Object.keys(row.cells).find((key) => !columns.has(key));
+          const reason =
+            command !== undefined
+              ? `it names the command ${command}, which the kind ${resource.kind} does not have`
+              : cell !== undefined
+                ? `its cell ${cell} is no column`
+                : null;
+          if (reason)
+            problems.push({
+              path: `${pathOf(resource.id)}.lists[${listIndex}].rows[${rowIndex}]`,
+              reason: `${reason}; row dropped`,
+            });
+          return reason === null;
+        }),
+      };
+    });
+    return [resource.lists ? { ...resource, lists } : resource];
+  });
+  // A parent that went with a dropped resource takes its children along.
+  let kept = firstPass;
+  for (;;) {
+    const ids = new Set(kept.map((resource) => resource.id));
+    const next = kept.filter((resource) => {
+      if (resource.parent === undefined || (resource.parent !== resource.id && ids.has(resource.parent)))
+        return true;
+      problems.push({
+        path: pathOf(resource.id),
+        reason: `the parent ${resource.parent} is unknown; resource dropped`,
+      });
+      return false;
+    });
+    if (next.length === kept.length) break;
+    kept = next;
+  }
+  return { report: { ...report, resources: kept }, problems };
+}
+
+/**
+ * K-704, K-705: why a provider's set of resources is not valid, or null: the shape of `shapeProblem`, and no resource
+ * or row that `screenResources` would drop. kitshn checks each report from a daemon with it; a daemon of protocol 2
+ * screens first, so its reports pass.
+ */
+export function reportProblem(
+  report: ProviderReport,
+  others: ReadonlyArray<ProviderReport>,
+  takenSites: ReadonlySet<string>,
+  /** The site names of kitshn itself, such as `pages` (K-817). */
+  reserved: ReadonlySet<string>,
+): string | null {
+  const shape = shapeProblem(report, others);
+  if (shape) return shape;
+  const [first] = screenResources(report, others, takenSites, reserved).problems;
+  return first ? `${first.path}: ${first.reason}` : null;
 }
 
 /** K-709: the parts of a desired state that one machine gets: the shared part and its own; null where none is set. */
@@ -436,6 +661,10 @@ export const pushKey = {
   desired: (provider: string, kind: string) => `desired:${provider}:${kind}`,
   reach: (provider: string) => `reach:${provider}`,
   access: (provider: string) => `access:${provider}`,
+  /** K-721: whether kitshn is paused, for every provider of the machine. */
+  paused: () => "kitshn:paused",
+  /** K-722: the machines whose "runs commands" covers this machine at automatic. */
+  execRights: () => "kitshn:execRights",
 } as const;
 
 /** The UTF-8 length of a value's JSON; this package runs without DOM types, so it counts by hand. */
@@ -493,29 +722,3 @@ export const ProviderAccess = Schema.Struct({
   served: Schema.Array(Schema.String),
 });
 export type ProviderAccess = typeof ProviderAccess.Type;
-
-/**
- * K-1610: what the source machine reports of one call on another machine; never its arguments or its output. Known
- * limit: only the source reports, so a source that misbehaves can skip its own reports. Revisit with reports of the
- * target when the audit must hold against a dishonest source.
- */
-export const AUDIT_OUTCOMES = ["succeeded", "refused", "failed"] as const;
-export const LinkAudit = Schema.Struct({
-  kind: Schema.Literals(["exec", "tool"]),
-  /** The machine id of the target. */
-  target: Schema.String.check(Schema.isMaxLength(64)),
-  thread: Schema.NullOr(Schema.String.check(Schema.isMaxLength(200))),
-  /** The command name of a `machine_exec` run, or the name of the tool: one word, never the arguments. */
-  name: Schema.String.check(
-    Schema.isMinLength(1),
-    Schema.isMaxLength(100),
-    Schema.makeFilter(
-      (name: string) => ![...name].some((char) => char.trim() === "") || "one word, with no arguments",
-    ),
-  ),
-  cwd: Schema.NullOr(Schema.String.check(Schema.isMaxLength(500))),
-  outcome: Schema.Literals(AUDIT_OUTCOMES),
-  exitCode: Schema.NullOr(Schema.Int),
-  at: Schema.Number,
-});
-export type LinkAudit = typeof LinkAudit.Type;

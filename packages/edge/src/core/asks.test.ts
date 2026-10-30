@@ -138,11 +138,13 @@ describe("self-approval (K-1727)", () => {
 describe("conditions on attested labels (K-1754)", () => {
   const conditions = [{ key: "t3.project.name", values: ["kitshn", "riffle"] }];
 
-  it("holds only for a verified label with one of its values, on a prefix that an attester reports", () => {
+  it("holds only for a verified label with one of its values, on the prefix of a provider of the machine", () => {
     expect(conditionProblem(conditions, { "t3.project.name": "kitshn" }, ["t3."])).toBeNull();
     expect(conditionProblem(conditions, { "t3.project.name": "other" }, ["t3."])).toMatch(/kitshn or riffle/);
     expect(conditionProblem(conditions, {}, ["t3."])).toMatch(/no such verified label/);
-    expect(conditionProblem(conditions, { "t3.project.name": "kitshn" }, [])).toMatch(/no attester/);
+    expect(conditionProblem(conditions, { "t3.project.name": "kitshn" }, [])).toMatch(
+      /no provider on this machine/,
+    );
   });
 
   it("reads and writes the editor text", () => {

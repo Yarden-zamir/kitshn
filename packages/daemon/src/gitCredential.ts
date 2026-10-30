@@ -52,7 +52,7 @@ export const credentialAnswer = (token: string, expiresAt: string) =>
 
 /**
  * K-1763, K-1752: what `kitshn git-credential get` prints for kitshn's answer. A token answers git. A refusal or a
- * waiting ask of a kitshn owner, also a thread that the attester could not check, prints `quit=1`, so git never falls
+ * waiting ask of a kitshn owner, also a thread that its provider could not check, prints `quit=1`, so git never falls
  * back to the machine's own login. A daemon that cannot help (no daemon, no connection, another owner) prints nothing,
  * so git tries its next helper. On a marked push it clears the user name first, because gh refuses a request for
  * another user.

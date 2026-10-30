@@ -1,9 +1,19 @@
 // K-701, K-702: the daemon's local Unix socket (a named pipe on Windows, K-621), and the client that the `kitshn`
 // commands use.
-import { type Answer, type Request, MAX_LINE_LENGTH, line, readAnswer, readRequest } from "@kitshn/local";
+import {
+  type Answer,
+  type ExecFrame,
+  type IdRequest,
+  type Request,
+  MAX_LINE_LENGTH,
+  line,
+  readAnswer,
+  readRequest,
+} from "@kitshn/local";
 import { type Stats, chmodSync, existsSync, lstatSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { connect, createServer } from "node:net";
 import { dirname } from "node:path";
+import { type ExecHandle, applyFrame, startExec } from "./exec.ts";
 import { type PeerDecision, peerUid, requestAllowed, requestSenders } from "./peer.ts";
 import { type Platform, ownUid } from "./service.ts";
 import { pipeServerProblem } from "./winpipe.ts";
@@ -13,6 +23,13 @@ import { pipeServerProblem } from "./winpipe.ts";
  * handler, which takes the providers of that key offline, so a key must name one connection of the whole daemon.
  */
 let lastConnection = 0;
+/** K-704: closes each open connection by its key, for the liveness check of the providers. */
+const closers = new Map<number, () => void>();
+
+/** K-704: closes one connection; its `closed` handler runs as for any close. */
+export function dropConnection(key: number): void {
+  closers.get(key)?.();
+}
 
 /** K-621: at most this many pipe connections at once, and a connection sends its first line within this time. */
 const PIPE_CONNECTIONS = 64;
@@ -86,8 +103,17 @@ export interface LocalOptions {
   readonly decide: (peer: number) => PeerDecision;
   /** K-701: the local users that may also run a provider; read at each request. */
   readonly providerUsers?: () => ReadonlyArray<number>;
-  /** Answers with the id of the request. `emit` sends a later event on the same connection (K-703, K-1722). */
-  readonly handle: (request: Request, caller: Caller, emit: (event: Answer) => void) => Promise<Answer>;
+  /**
+   * Answers with the id of the request; null for a request without an id (`pong`, `exec-credit`, `exec-frame`).
+   * `emit` sends a later event on the same connection (K-703, K-1722).
+   */
+  readonly handle: (
+    request: Request,
+    caller: Caller,
+    emit: (event: Answer) => void,
+  ) => Promise<Answer | null>;
+  /** K-704: a connection sent a line; any line counts as alive. */
+  readonly seen?: (connection: number) => void;
   readonly log: (text: string) => void;
   /** K-704: a connection closed; its providers go offline. */
   readonly closed?: (connection: number) => void;
@@ -185,16 +211,20 @@ export async function listenLocal(
         if (peer === null) return refuse("the peer user id cannot be read (K-006)");
         const decision = options.decide(peer);
         if (!decision.accept) return refuse(decision.reason);
+        const key = ++lastConnection;
+        closers.set(key, () => socket.end());
         socket.data = {
           uid: peer,
-          key: ++lastConnection,
+          key,
           writer: new SocketWriter(socket),
           decoder: new TextDecoder(),
           buffer: "",
         };
       },
       close(socket) {
-        if (socket.data) options.closed?.(socket.data.key);
+        if (!socket.data) return;
+        closers.delete(socket.data.key);
+        options.closed?.(socket.data.key);
       },
       drain(socket) {
         socket.data?.writer.drain();
@@ -207,6 +237,7 @@ export async function listenLocal(
           const text = connection.buffer.slice(0, end);
           connection.buffer = connection.buffer.slice(end + 1);
           if (text.length > maxLine) return tooLong(socket);
+          options.seen?.(connection.key);
           void answer(socket, connection, text);
         }
         if (connection.buffer.length > maxLine) tooLong(socket);
@@ -253,21 +284,22 @@ async function answerLine(
   if (!requestAllowed(request.type, uid, ownUid(), options.providerUsers?.() ?? [])) {
     options.log(`local socket: refused ${request.type} from user id ${uid}`);
     return send({
-      id: request.id,
+      id: "id" in request ? request.id : null,
       type: "error",
       error: `${request.type} is not allowed for the user id ${uid}; only ${requestSenders(request.type)} may send it (K-701).`,
     });
   }
-  options.log(`local socket: ${request.type} from user id ${uid}`);
-  send(
-    await Promise.resolve()
-      .then(() => options.handle(request, { uid, connection }, send))
-      .catch((error: unknown): Answer => ({
-        id: request.id,
-        type: "error",
-        error: error instanceof Error ? error.message : String(error),
-      })),
-  );
+  const id = "id" in request ? request.id : null;
+  // The frequent frames of a provider would fill the log.
+  if (id !== null) options.log(`local socket: ${request.type} from user id ${uid}`);
+  const answer = await Promise.resolve()
+    .then(() => options.handle(request, { uid, connection }, send))
+    .catch((error: unknown): Answer => ({
+      id,
+      type: "error",
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  if (answer) send(answer);
 }
 
 /** Splits chunks into lines; a line, or a rest, longer than the limit calls `tooLong` and stops. */
@@ -296,18 +328,23 @@ function lineReader(onLine: (text: string) => void, tooLong: () => void) {
 async function listenPipe(path: string, options: LocalOptions): Promise<{ readonly stop: () => void }> {
   const server = createServer((socket) => {
     const key = ++lastConnection;
+    closers.set(key, () => socket.end());
     const send = (answer: Answer) => void socket.write(line(answer));
     // A connection that never sends a line holds a pipe instance for nothing, for example a read-only one.
     const quiet = setTimeout(() => socket.destroy(), PIPE_FIRST_LINE_MS);
     socket.once("data", () => clearTimeout(quiet));
     socket.on("close", () => {
       clearTimeout(quiet);
+      closers.delete(key);
       options.closed?.(key);
     });
     socket.on(
       "data",
       lineReader(
-        (text) => void answerLine(options, send, { uid: ownUid(), connection: key }, text),
+        (text) => {
+          options.seen?.(key);
+          void answerLine(options, send, { uid: ownUid(), connection: key }, text);
+        },
         () => {
           send({ id: null, type: "error", error: `A line is longer than ${MAX_LINE_LENGTH} characters.` });
           socket.end();
@@ -341,7 +378,7 @@ export type LocalOutcome =
  */
 export function askLocal(
   path: string,
-  request: Request,
+  request: IdRequest,
   timeoutMs: number,
   peer: { readonly platform: Platform; readonly daemonUid: number },
   /** K-1722: true keeps the connection for a later line, with no time limit; `onLine` sees each line before. */
@@ -392,6 +429,8 @@ export function askLocal(
             buffer = buffer.slice(end + 1);
             try {
               const answer = readAnswer(text);
+              // A newer daemon may send an event that this release does not know (K-702).
+              if (answer === null) continue;
               if ("id" in answer && answer.id !== request.id && answer.id !== null)
                 throw new Error(`the daemon answered the id ${answer.id}, not ${request.id}.`);
               onLine(answer);
@@ -425,53 +464,70 @@ export function askLocal(
   });
 }
 
-/** K-704: the bridge asks the daemon for its status this often, and ends when an answer misses a whole round. */
-const BRIDGE_HEARTBEAT_MS = 30_000;
-/** K-704: the id of the bridge's own heartbeat; its answers never reach the provider. */
-const HEARTBEAT_ID = "kitshn-provider-heartbeat";
 const NEWLINE = 10;
 
 /**
- * K-704: how a bridge ended: the provider ended its input, or the daemon side closed, failed or stopped answering, so
- * the provider must start the bridge again.
+ * K-704: how a bridge ended: the provider ended its input, or the daemon side closed or failed, so the provider must
+ * start the bridge again.
  */
 export type BridgeEnd = "closed" | { readonly lost: string };
 
+/** K-722: the run that a daemon line gives this bridge, or null for a line of the provider. */
+function bridgeEvent(text: string): Extract<Answer, { type: "exec-run" | "exec-control" }> | null {
+  // Most lines are the provider's; only these two need a decode.
+  if (!text.includes('"exec-run"') && !text.includes('"exec-control"')) return null;
+  try {
+    const answer = readAnswer(text);
+    return answer?.type === "exec-run" || answer?.type === "exec-control" ? answer : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * K-704: one bridge between a provider and the daemon: whole lines both ways, a heartbeat between the provider's
- * lines, and the answers to the heartbeat kept from the provider.
+ * K-704: one bridge between a provider and the daemon: whole lines both ways, with no liveness of its own (the daemon
+ * pings the provider). K-722: the bridge runs the exec runs that the daemon gives it as its own user, the provider
+ * user, so the provider never sees them.
  */
-function bridgeSession(
-  write: (bytes: Uint8Array) => void,
-  output: (bytes: Uint8Array) => void,
-  lost: (reason: string) => void,
-) {
+function bridgeSession(write: (bytes: Uint8Array) => void, output: (bytes: Uint8Array) => void) {
   let pending = new Uint8Array(0);
-  let midLine = false;
-  let waiting = false;
-  const heartbeat = new TextEncoder().encode(`${JSON.stringify({ id: HEARTBEAT_ID, type: "status" })}\n`);
   const decoder = new TextDecoder();
-  const isHeartbeat = (line: Uint8Array) => {
-    const text = decoder.decode(line);
-    if (!text.includes(HEARTBEAT_ID)) return false;
-    try {
-      return (JSON.parse(text) as { id?: unknown }).id === HEARTBEAT_ID;
-    } catch {
-      return false;
+  const encoder = new TextEncoder();
+  const runs = new Map<string, ExecHandle>();
+  const frame = (execId: string, value: ExecFrame) =>
+    write(encoder.encode(line({ type: "exec-frame", execId, frame: value })));
+  const onEvent = (event: Extract<Answer, { type: "exec-run" | "exec-control" }>) => {
+    if (event.type === "exec-run") {
+      const { execId } = event.run;
+      runs.set(
+        execId,
+        startExec(
+          {
+            command: event.run.command,
+            ...(event.run.cwd === undefined ? {} : { cwd: event.run.cwd }),
+            timeoutMs: event.run.timeoutSeconds * 1000,
+            stdin: event.run.stdin,
+            platform: process.platform,
+          },
+          {
+            output: (stream, data) =>
+              frame(execId, { type: "output", stream, data: Buffer.from(data).toString("base64") }),
+            stdinCredit: (bytes) => frame(execId, { type: "stdin-credit", bytes }),
+            exit: (end) => {
+              runs.delete(execId);
+              frame(execId, { type: "exit", ...end });
+            },
+          },
+        ),
+      );
+      return;
     }
+    const run = runs.get(event.execId);
+    if (run) applyFrame(run, event.frame);
   };
-  const timer = setInterval(() => {
-    if (waiting) return lost("the daemon stopped answering its heartbeat");
-    // A heartbeat never goes into the middle of a provider's line; it waits for the next round.
-    if (midLine) return;
-    waiting = true;
-    write(heartbeat);
-  }, BRIDGE_HEARTBEAT_MS);
   return {
     fromProvider(chunk: Uint8Array) {
-      if (chunk.length === 0) return;
-      write(chunk);
-      midLine = chunk[chunk.length - 1] !== NEWLINE;
+      if (chunk.length > 0) write(chunk);
     },
     fromDaemon(chunk: Uint8Array) {
       const joined = new Uint8Array(pending.length + chunk.length);
@@ -480,21 +536,25 @@ function bridgeSession(
       let start = 0;
       for (let index = 0; index < joined.length; index++) {
         if (joined[index] !== NEWLINE) continue;
-        const line = joined.subarray(start, index + 1);
-        if (isHeartbeat(line)) waiting = false;
-        else output(line);
+        const bytes = joined.subarray(start, index + 1);
+        const event = bridgeEvent(decoder.decode(bytes));
+        if (event) onEvent(event);
+        else output(bytes);
         start = index + 1;
       }
       pending = joined.slice(start);
     },
-    stop: () => clearInterval(timer),
+    /** A bridge that ends kills its runs; the daemon ends them with "the relay was lost". */
+    stop: () => {
+      for (const run of runs.values()) run.kill("the bridge ended");
+    },
   };
 }
 
 /**
  * K-704: `kitshn provider` joins stdin and stdout to one connection, line by line, so a provider needs no socket code.
  * It checks the peer as `askLocal` does before it sends anything. It ends when the provider ends its input, and as
- * lost when the daemon side closes, fails or stops answering.
+ * lost when the daemon side closes or fails.
  */
 export function bridgeLocal(
   path: string,
@@ -531,14 +591,7 @@ export function bridgeLocal(
           const own = new SocketWriter(socket);
           writer = own;
           raw = socket;
-          const current = bridgeSession(
-            (bytes) => own.write(bytes),
-            output,
-            (reason) => {
-              finish({ lost: reason });
-              socket.end();
-            },
-          );
+          const current = bridgeSession((bytes) => own.write(bytes), output);
           session = current;
           void (async () => {
             for await (const chunk of input) current.fromProvider(chunk);
@@ -568,7 +621,7 @@ export function bridgeLocal(
 /** K-621, K-702: `askLocal` over the daemon's named pipe on Windows. */
 function askPipe(
   path: string,
-  request: Request,
+  request: IdRequest,
   timeoutMs: number,
   follow: (answer: Answer) => boolean,
   onLine: (answer: Answer) => void,
@@ -596,6 +649,7 @@ function askPipe(
           if (done) return;
           try {
             const answer = readAnswer(text);
+            if (answer === null) return;
             if ("id" in answer && answer.id !== request.id && answer.id !== null)
               throw new Error(`the daemon answered the id ${answer.id}, not ${request.id}.`);
             onLine(answer);
@@ -647,14 +701,7 @@ function bridgePipe(
         socket.end();
       })().catch(reject);
     });
-    const session = bridgeSession(
-      (bytes) => socket.write(bytes),
-      output,
-      (reason) => {
-        finish({ lost: reason });
-        socket.destroy();
-      },
-    );
+    const session = bridgeSession((bytes) => socket.write(bytes), output);
     socket.on("data", (chunk: Buffer) => session.fromDaemon(new Uint8Array(chunk)));
     socket.on("close", () => finish(ended ? "closed" : { lost: "the daemon closed the connection" }));
     socket.on("error", (error: NodeJS.ErrnoException) => {

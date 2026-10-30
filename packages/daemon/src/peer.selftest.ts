@@ -16,7 +16,7 @@ const server = await listenLocal(path, {
     seen = peer;
     return peerDecision(peer, own, []);
   },
-  handle: (request) => Promise.resolve({ id: request.id, type: "reconnect" }),
+  handle: () => Promise.resolve({ id: "selftest", type: "reconnect" }),
   log: console.log,
   access: "private",
 });

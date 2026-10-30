@@ -307,11 +307,14 @@ import { badgeState } from "../core/badge.ts";
 import { listedApps } from "../core/listing.ts";
 import { commandsFor, machineBusy, providerCards, providerPushes, reachOf } from "../core/providers.ts";
 import { healthCell, healthNotices } from "../core/health.ts";
+import { commandName, execMachinesOf, execOutcome, mayExecOn, migrateAgentShares } from "../core/exec.ts";
 import {
   HealthReport as HealthReportSchema,
   type HealthReport,
-  type LinkAudit,
-  LinkAudit as LinkAuditSchema,
+  ExecFrame as ExecFrameSchema,
+  ExecRun as ExecRunSchema,
+  type ExecFrame,
+  type ExecRun,
   type ProviderClient,
   type ProviderCommand,
   desiredProblem,
@@ -404,7 +407,7 @@ import {
   openToken,
 } from "./github.ts";
 import { REPLACED, dropLiveSite, failQueuedDowns, removalDown, requeueDowns } from "./downs.ts";
-import { REPO_GATE_MIGRATION, migrate } from "./migrations.ts";
+import { AGENTS_MIGRATION, REPO_GATE_MIGRATION, migrate } from "./migrations.ts";
 import {
   BADGE_DEPLOY_QUERY,
   DEPLOY_MS,
@@ -516,11 +519,24 @@ const attachmentOf = (socket: WebSocket) => socket.deserializeAttachment() as At
 const saveMachine = (socket: WebSocket, attachment: Extract<Attachment, { kind: "machine" }>) =>
   socket.serializeAttachment(fitAttachment(attachment));
 
-const decodeLinkAudit = Schema.decodeUnknownSync(LinkAuditSchema);
 const decodeHealth = Schema.decodeUnknownSync(HealthReportSchema);
-/** K-1610: how often the maps hear of new link events, and how many reports of one machine kitshn takes a minute. */
+const decodeExecFrame = Schema.decodeUnknownSync(ExecFrameSchema);
+const decodeExecRun = Schema.decodeUnknownSync(ExecRunSchema);
+/** K-1610: how often the maps hear of new link events. */
 const LINK_BROADCAST_MS = 10_000;
-const LINK_AUDITS_PER_MINUTE = 120;
+
+/** K-722: one run that kitshn relays; a row of `exec_runs`, so an evicted Durable Object finds it again. */
+type ExecRow = {
+  readonly exec_id: string;
+  readonly source: string;
+  readonly target: string;
+  readonly provider: string | null;
+  readonly command: string;
+  readonly cwd: string | null;
+  readonly thread: string | null;
+  readonly proposal_id: string | null;
+  readonly state: "waiting" | "running";
+};
 
 /** K-704: what kitshn keeps of one provider's registration; its cards are rows of `resources`. */
 interface ProviderRegistration {
@@ -887,8 +903,6 @@ export class Kitshn extends DurableObject<Env> {
   private liveSites = new Map<string, LiveSite>();
   /** K-1610: when an audit last told the maps of new link events. */
   private linkBroadcastAt = 0;
-  /** K-1610: the audit reports of each machine in the current minute. */
-  private linkRates = new Map<string, { minute: number; count: number; dropped: number }>();
   /** K-704: the kinds and commands of each machine's providers, by machine id. */
   private providerRegs = new Map<string, Array<ProviderRegistration>>();
   /** K-1608: the hash of each push of each machine with providers, by machine id and push key. */
@@ -897,6 +911,8 @@ export class Kitshn extends DurableObject<Env> {
   private sentGrants = new Map<string, string>();
   /** K-709: the parts of each desired state, by kind and by machine id ("" for the shared part). */
   private desiredState = new Map<string, Map<string, unknown>>();
+  /** K-709: the rev of the last set of each desired state, from `desired_revs`. */
+  private desiredRevs = new Map<string, string>();
   /** K-717: card setting values, by card id. */
   private cardSettings = new Map<string, Record<string, string>>();
   /** K-1608: the hash of the last push that each machine applied, by `<machine id>/<push key>`. */
@@ -1274,6 +1290,7 @@ export class Kitshn extends DurableObject<Env> {
         migrate((query) => ctx.storage.sql.exec(query), from);
         // The rest of migration 6 needs code: the repo id comes out of each card id.
         if (from < REPO_GATE_MIGRATION) this.backfillRepoIds();
+        if (from < AGENTS_MIGRATION) this.migrateAgents();
       });
       this.load();
       // K-1833: a bootstrap with KITSHN_IMPORT asks for one import, before the start steps, so they run on the
@@ -1357,6 +1374,12 @@ export class Kitshn extends DurableObject<Env> {
         row.machine_id,
         JSON.parse(row.body) as unknown,
       );
+    this.desiredRevs = new Map(
+      this.sql<{ kind: string; rev: string }>("SELECT kind, rev FROM desired_revs").map((row) => [
+        row.kind,
+        row.rev,
+      ]),
+    );
     this.cardSettings = new Map();
     for (const row of this.sql<{ card_id: string; key: string; value: string }>(
       "SELECT card_id, key, value FROM card_settings",
@@ -2624,6 +2647,7 @@ export class Kitshn extends DurableObject<Env> {
       this.ctx.storage.transactionSync(() => {
         writeImport(this.ctx.storage.sql, state, (from) => {
           if (from < REPO_GATE_MIGRATION) this.backfillRepoIds();
+          if (from < AGENTS_MIGRATION) this.migrateAgents();
           this.insertRevision(
             IMPORT_ACTOR,
             `Imported the state of ${new Date(state.exportedAt).toISOString()} (K-1833)`,
@@ -3925,11 +3949,25 @@ export class Kitshn extends DurableObject<Env> {
             : null;
         },
         audiencesOf: (cardId) => this.audiencesOf(cardId),
+        revOf: (kind) => this.desiredRevs.get(kind) ?? null,
       },
-    ).map((push) => {
-      const text = JSON.stringify(push);
-      return { key: push.key, hash: `${fnv(text)}${fnv(text, 0x050c5d1f)}`, push };
-    });
+    )
+      .concat(
+        (this.providerRegs.get(machineId) ?? []).length === 0
+          ? []
+          : [
+              { key: pushKey.paused(), type: "paused", paused: this.state.paused !== null },
+              {
+                key: pushKey.execRights(),
+                type: "execRights",
+                machines: execMachinesOf(this.state, machineId, now),
+              },
+            ],
+      )
+      .map((push) => {
+        const text = JSON.stringify(push);
+        return { key: push.key, hash: `${fnv(text)}${fnv(text, 0x050c5d1f)}`, push };
+      });
   }
 
   /** K-603: the AUD tags of kitshn's Access applications of a card that exist in Cloudflare. */
@@ -4044,9 +4082,13 @@ export class Kitshn extends DurableObject<Env> {
     if (status !== null && !status.capabilities?.includes("applied")) return null;
     // A daemon from before K-1623 never applies the access push, so its count leaves that push out.
     const access = status === null || status.capabilities?.includes("access") === true;
+    // K-721: only a daemon of provider protocol 2 applies the pushes of the pause and the exec rights.
+    const v2 = status === null || status.capabilities?.includes("protocol-2") === true;
     return [...pushes].filter(
       ([key, hash]) =>
-        (access || !key.startsWith("access:")) && this.applied.get(`${machine.id}/${key}`) !== hash,
+        (access || !key.startsWith("access:")) &&
+        (v2 || !key.startsWith("kitshn:")) &&
+        this.applied.get(`${machine.id}/${key}`) !== hash,
     ).length;
   }
 
@@ -4071,26 +4113,44 @@ export class Kitshn extends DurableObject<Env> {
       this.providerRegs.get(machine.id)?.find((item) => item.name === message.provider)?.kinds ?? [];
     return (
       desiredProblem(kinds, message.kind, message.value) ??
-      this.writeDesired(message.kind, message.part === "shared" ? "" : machine.id, message.value, {
-        _tag: "machine",
-        machineId: machine.id,
-        name: machine.name,
-      })
+      this.writeDesired(
+        message.kind,
+        message.part === "shared" ? "" : machine.id,
+        message.value,
+        { _tag: "machine", machineId: machine.id, name: machine.name },
+        typeof message.rev === "string" ? message.rev.slice(0, 64) : null,
+      )
     );
   }
 
   /** K-709: stores one part of a desired state, or says why not. A part of null clears it. */
-  private writeDesired(kind: string, machineId: string, value: unknown, actor: Actor): string | null {
+  private writeDesired(
+    kind: string,
+    machineId: string,
+    value: unknown,
+    actor: Actor,
+    rev: string | null = null,
+  ): string | null {
     const text = JSON.stringify(value ?? null);
     const kinds = [...this.providerRegs.values()].flatMap((regs) => regs.flatMap((reg) => reg.kinds));
     const problem = desiredProblem(kinds, kind, value);
     if (problem) return problem;
-    if (deepEqual(this.desiredState.get(kind)?.get(machineId) ?? null, value ?? null)) return null;
+    const same = deepEqual(this.desiredState.get(kind)?.get(machineId) ?? null, value ?? null);
+    // K-709: a set with a rev stores the rev also when the value stays, so its provider sees that it arrived.
+    if (same && (rev === null || this.desiredRevs.get(kind) === rev)) return null;
+    if (same) {
+      this.sql("INSERT OR REPLACE INTO desired_revs (kind, rev) VALUES (?, ?)", kind, rev);
+      this.desiredRevs.set(kind, rev!);
+      this.pushGrants();
+      return null;
+    }
     const where =
       machineId === ""
         ? "the shared part"
         : `the part of ${this.state.machines.get(machineId)?.name ?? machineId}`;
     this.ctx.storage.transactionSync(() => {
+      if (rev === null) this.sql("DELETE FROM desired_revs WHERE kind = ?", kind);
+      else this.sql("INSERT OR REPLACE INTO desired_revs (kind, rev) VALUES (?, ?)", kind, rev);
       if (value === null || value === undefined)
         this.sql("DELETE FROM desired_state WHERE kind = ? AND machine_id = ?", kind, machineId);
       else
@@ -4851,12 +4911,15 @@ export class Kitshn extends DurableObject<Env> {
     );
     const others = this.checkedSockets(attachment.machineId).filter((other) => other !== socket);
     if (others.length > 0) return;
+    // K-722: a run ends with the connection of either machine.
+    this.endExecRuns(attachment.machineId);
     // A job that the machine had when its connection ended has no result coming.
     requeueDowns(this.query, attachment.machineId);
-    this.sql(
-      `UPDATE jobs SET state = 'failed', output = '${OFFLINE_OUTPUT}' WHERE machine_id = ? AND state = 'sent'`,
+    const failed = this.sql<{ id: number }>(
+      `UPDATE jobs SET state = 'failed', output = '${OFFLINE_OUTPUT}' WHERE machine_id = ? AND state = 'sent' RETURNING id`,
       attachment.machineId,
     );
+    this.jobsEnded(failed.map((row) => row.id));
     this.setPresence(attachment.machineId, false);
   }
 
@@ -5132,20 +5195,6 @@ export class Kitshn extends DurableObject<Env> {
         message.status.keptBytes >= 0
           ? { keptBytes: message.status.keptBytes }
           : {}),
-        // K-1751: the attesters that the daemon reports; their prefixes are the only labels that rights check.
-        ...(Array.isArray(message.status.attesters)
-          ? {
-              attesters: message.status.attesters
-                .filter(
-                  (item): item is { prefix: string; address: string } =>
-                    isRecord(item) &&
-                    typeof item["prefix"] === "string" &&
-                    typeof item["address"] === "string",
-                )
-                .slice(0, 10)
-                .map((item) => ({ prefix: item.prefix.slice(0, 32), address: item.address.slice(0, 200) })),
-            }
-          : {}),
         ...gameStatus(message.status),
         // K-1708: a connection on the token alone opens no notification.
         ...(attachment.check === "signed"
@@ -5153,6 +5202,7 @@ export class Kitshn extends DurableObject<Env> {
               refusedProviders: providerRefusals(message.status.refusedProviders),
               // The same shape as a refusal: the provider, since when, and why.
               offlineProviders: providerRefusals(message.status.offlineProviders),
+              providerProblems: providerRefusals(message.status.providerProblems),
             }
           : {}),
       };
@@ -5197,8 +5247,6 @@ export class Kitshn extends DurableObject<Env> {
         requestId: message.requestId.slice(0, 64),
         error,
       } satisfies ServerToDaemon);
-    } else if (message.type === "audit") {
-      this.recordLinkEvent(machine, message.audit);
     } else if (message.type === "health" && attachment.check === "signed") {
       let report: HealthReport;
       try {
@@ -5216,6 +5264,10 @@ export class Kitshn extends DurableObject<Env> {
           progress.outcome.state === "running" ? finishProgress(progress, Date.now()) : progress,
         );
       this.broadcast();
+    } else if (message.type === "execStart" && attachment.check === "signed") {
+      await this.execStart(socket, machine, message);
+    } else if (message.type === "execFrame" && attachment.check === "signed") {
+      this.execRelay(socket, machine, message);
     } else if (message.type === "desiredSet" && typeof message.kind === "string") {
       // K-709: the provider gets kitshn's own answer, also a refusal.
       // A failed write is an answer too, so the provider never waits for one that does not come.
@@ -5304,6 +5356,7 @@ export class Kitshn extends DurableObject<Env> {
       );
       // Only a result that this machine's job took counts; a stray or late one changes no deploy.
       const [{ taken } = { taken: 0 }] = this.sql<{ taken: number }>("SELECT changes() AS taken");
+      if (taken) this.jobsEnded([message.id]);
       // K-1131: the asker of a wizard site counts only when its job made the site.
       const asker = taken ? this.siteAskers.get(message.id) : undefined;
       if (asker && result.ok === true) asker.done = true;
@@ -6680,11 +6733,34 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /** Returns how many jobs expired. */
+  /** K-1612: a machine that queued a job with an ask hears of its end, so its agent needs no polling. */
+  private jobsEnded(ids: ReadonlyArray<number>) {
+    for (const id of ids) {
+      const [job] = this.sql<{ state: string; exit_code: number | null; output: string; actor: string }>(
+        "SELECT state, exit_code, output, actor FROM jobs WHERE id = ?",
+        id,
+      );
+      if (!job || (job.state !== "done" && job.state !== "failed" && job.state !== "expired")) continue;
+      const actor = JSON.parse(job.actor) as Actor;
+      const socket = actor._tag === "machine" ? this.openSocket(actor.machineId) : null;
+      if (socket)
+        send(socket, {
+          type: "jobEnded",
+          jobId: id,
+          state: job.state,
+          exitCode: job.exit_code,
+          output: job.output.slice(-16_000),
+        } satisfies ServerToDaemon);
+    }
+  }
+
   private expireJobs(now: number) {
-    const expired = this.sql(
+    const rows = this.sql<{ id: number }>(
       "UPDATE jobs SET state = 'expired' WHERE state IN ('queued', 'sent') AND expires_at <= ? RETURNING id",
       now,
-    ).length;
+    );
+    this.jobsEnded(rows.map((row) => row.id));
+    const expired = rows.length;
     // K-627: an expired step ends without a failure, and the next machine can go.
     if (expired > 0) this.autoUpdate();
     return expired;
@@ -8092,6 +8168,25 @@ export class Kitshn extends DurableObject<Env> {
       machines: this.deviceMachines(visitor).machines,
       machinesUrl: `https://${this.env.KITSHN_HOST}/device/machines`,
     });
+  }
+
+  /**
+   * K-722: the code step of migration 43. Each `t3.agents` share moves to the `t3.app` card of its machine, and an
+   * exec share turns on "runs commands" (`migrateAgentShares`), as one History revision that the owner can undo. A
+   * share that it cannot move goes to the log and into the revision text, for the owner.
+   */
+  private migrateAgents() {
+    this.load();
+    const { changes, unmet } = migrateAgentShares(this.state);
+    if (changes.length === 0 && unmet.length === 0) return;
+    this.persist(changes);
+    for (const line of unmet) console.error(`K-722 migration 43: ${line}`);
+    this.insertRevision(
+      { _tag: "kitshn", reason: "provider protocol 2 (K-722)" },
+      `Moved the T3 agents shares to the T3 app cards (K-722)${unmet.length > 0 ? `. ${unmet.join(" ")}` : ""}`,
+      changes,
+      null,
+    );
   }
 
   /**
@@ -9853,7 +9948,7 @@ export class Kitshn extends DurableObject<Env> {
       at,
     );
     if (!fresh) return refuse(403, "The nonce of this forwarded call was used (K-1714).");
-    const prefixes = this.attesterPrefixesOf(machine.id);
+    const prefixes = this.labelPrefixesOf(machine.id);
     let parsed: unknown = null;
     try {
       parsed = JSON.parse(labelsText);
@@ -10607,15 +10702,22 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /** K-1710 to K-1722: checks one ask, runs it, makes a proposal, or refuses it with the reason. */
-  private async ask(machine: Machine, raw: Record<string, unknown>): Promise<AskOutcome> {
+  private async ask(
+    machine: Machine,
+    raw: Record<string, unknown>,
+    /** K-722: only `execStart` asks for `exec`, after its own checks. */
+    exec = false,
+  ): Promise<AskOutcome> {
     const now = Date.now();
     const action = raw["action"];
+    if ((action === "exec") !== exec)
+      return { outcome: "refused", reason: "An exec starts with the exec request of the daemon (K-722)." };
     const target = typeof raw["target"] === "string" ? raw["target"].slice(0, 512) : "";
     const reason = typeof raw["reason"] === "string" ? raw["reason"].slice(0, 500) : null;
     const problem = labelProblem(raw["labels"]);
-    // K-1752, K-1753: labels of an attester prefix count only from the daemon's `attested`; a caller's own are dropped.
-    const prefixes = this.attesterPrefixesOf(machine.id);
-    const reserved = [...prefixes, "t3."];
+    // K-1752, K-1753: labels of a provider prefix count only from the daemon's `attested`; a caller's own are dropped.
+    const prefixes = this.labelPrefixesOf(machine.id);
+    const reserved = prefixes;
     const claimed = Object.fromEntries(
       Object.entries(
         problem === null && isRecord(raw["labels"]) ? (raw["labels"] as Record<string, string>) : {},
@@ -10905,6 +11007,7 @@ export class Kitshn extends DurableObject<Env> {
     ownerApproved: OwnerApproval | null = null,
   ): Promise<AskOutcome> {
     if (action === "pass") return this.issuePass(machine, target, labels);
+    if (action === "exec") return this.startExecRun(machine, target, body);
     // K-1819, K-1820: a backup now or a restore of a Compose card that the machine manages.
     if (action === "backup" || action === "restore") {
       const visitor = { email: null, clientId: machine.clientId, ip: null };
@@ -11039,13 +11142,12 @@ export class Kitshn extends DurableObject<Env> {
     return login ?? "unknown";
   }
 
-  /** K-1751: the label prefixes of the attesters that the machine reports now; none while it is offline. */
-  private attesterPrefixesOf(machineId: string): Array<string> {
-    const socket = this.openSocket(machineId);
-    const attachment = socket ? attachmentOf(socket) : null;
-    return attachment?.kind === "machine"
-      ? (attachment.status?.attesters ?? []).map((item) => item.prefix)
-      : [];
+  /**
+   * K-1752, K-1753: the label prefix of each provider of the machine and `t3.`; only the daemon sets labels of these,
+   * from the attestation of that provider.
+   */
+  private labelPrefixesOf(machineId: string): Array<string> {
+    return [...new Set(["t3.", ...(this.providerRegs.get(machineId) ?? []).map((reg) => `${reg.name}.`)])];
   }
 
   /** K-1771: the pass keys, newest first; the first is current. One read of a small table. */
@@ -11226,9 +11328,7 @@ export class Kitshn extends DurableObject<Env> {
           unset));
     const right: MachineRight = write ? "writesCode" : "readsCode";
     const mode = codeRightMode(this.state, machine.id, right, fullName, now);
-    const failed = mode
-      ? conditionProblem(mode.conditions, labels, this.attesterPrefixesOf(machine.id))
-      : null;
+    const failed = mode ? conditionProblem(mode.conditions, labels, this.labelPrefixesOf(machine.id)) : null;
     if (failed) return { outcome: "refused", reason: failed };
     // K-1776: a code right that no card sets asks the Owner for this token; one set to "off" refuses.
     if (mode === null) {
@@ -11610,7 +11710,7 @@ export class Kitshn extends DurableObject<Env> {
     const failed = conditionProblem(
       mode?.conditions,
       proposal.labels,
-      this.attesterPrefixesOf(proposal.machineId),
+      this.labelPrefixesOf(proposal.machineId),
     );
     if (failed) return failed;
     const circle = this.state.circles.get(proposal.circleId);
@@ -11624,7 +11724,10 @@ export class Kitshn extends DurableObject<Env> {
       !this.state.resources.has(proposal.target)
     )
       return `the card ${proposal.target} is gone.`;
-    if (proposal.action === "job" && !this.state.machines.has(proposal.target))
+    if (
+      (proposal.action === "job" || proposal.action === "exec") &&
+      !this.state.machines.has(proposal.target)
+    )
       return `the machine ${proposal.target} is gone.`;
     if (
       proposal.action === "allow" &&
@@ -11644,6 +11747,9 @@ export class Kitshn extends DurableObject<Env> {
 
   /** K-1722 to K-1724: the answer goes to the machine's open connection; an offline machine misses it. */
   private sendAskResult(machineId: string, result: AskResult) {
+    // K-722: an exec run that waited ends with the proposal; the daemon of A ends it for its caller.
+    if (result.outcome !== "approved")
+      this.sql("DELETE FROM exec_runs WHERE proposal_id = ? AND state = 'waiting'", result.proposalId);
     const socket = this.openSocket(machineId);
     if (socket) send(socket, { type: "askResult", ...result });
   }
@@ -11715,58 +11821,237 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-1610: one call that a source machine reports. The source is always the machine of the connection, so a machine
-   * cannot report for another one. A report that does not decode is dropped and logged. Known limit: only the source
-   * reports (see `LinkAudit`).
+   * K-722: the exec start of machine A. kitshn checks that A controls a card of the target, then the right "runs
+   * commands" decides like an ask: the run starts, waits for an approval, or ends at once with an `exit` frame.
    */
-  private recordLinkEvent(machine: Machine, value: unknown) {
-    let audit: LinkAudit;
+  private async execStart(
+    socket: WebSocket,
+    machine: Machine,
+    message: Extract<DaemonMessage, { type: "execStart" }>,
+  ) {
+    const execId = typeof message.execId === "string" ? message.execId.slice(0, 64) : "";
+    const end = (reason: string) =>
+      send(socket, {
+        type: "execFrame",
+        execId,
+        frame: { type: "exit", exitCode: null, signal: null, durationMs: 0, reason },
+      } satisfies ServerToDaemon);
+    if (execId === "") return;
+    let run: ExecRun;
     try {
-      audit = decodeLinkAudit(value);
+      run = decodeExecRun(message.run);
     } catch (error) {
-      console.warn(`kitshn dropped an audit report of ${machine.name}: ${String(error)}`);
-      return;
+      return end(`refused: the run does not decode: ${String(error)}`);
     }
-    // A machine reports only calls on machines that it reaches now, so it cannot put calls on another machine's record.
-    const reached = (this.providerRegs.get(machine.id) ?? []).some((reg) =>
-      reachOf(this.state, machine.id, reg.name, Date.now()).some((card) => card.machineId === audit.target),
-    );
-    if (!reached) {
-      console.warn(
-        `kitshn dropped an audit report of ${machine.name}: it reaches no machine ${audit.target}.`,
+    if (run.execId !== execId) return end("refused: the run names another exec id.");
+    if (this.sql("SELECT 1 AS one FROM exec_runs WHERE exec_id = ?", execId).length > 0)
+      return end("refused: this exec id is in use.");
+    const target = typeof message.target === "string" ? message.target : "";
+    if (!this.state.machines.has(target)) return end(`refused: kitshn has no machine ${target}.`);
+    if (this.openSocket(target) === null) return end("the target is offline");
+    const now = Date.now();
+    if (!mayExecOn(this.state, machine.id, target, now))
+      return end(
+        `refused: ${machine.name} controls no card on ${this.state.machines.get(target)?.name ?? target}; share its machine card or a provider card to an agent circle of ${machine.name} at control (K-722).`,
       );
+    const provider =
+      typeof message.provider === "string" && message.provider.length <= 32 ? message.provider : null;
+    const thread = this.execThread(message.attested, provider);
+    const outcome = await this.ask(
+      machine,
+      {
+        action: "exec",
+        target,
+        body: { ...run, provider, thread },
+        ...(isRecord(message.attested) ? { attested: message.attested } : {}),
+      },
+      true,
+    );
+    if (outcome.outcome === "refused") return end(`refused: ${outcome.reason}`);
+    if (outcome.outcome === "waiting") {
+      this.sql(
+        `INSERT INTO exec_runs (exec_id, source, target, provider, command, cwd, thread, proposal_id, state, started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?)`,
+        execId,
+        machine.id,
+        target,
+        provider,
+        run.command,
+        run.cwd ?? null,
+        thread,
+        outcome.proposalId,
+        now,
+      );
+      return send(socket, {
+        type: "execState",
+        execId,
+        state: "waiting",
+        proposalId: outcome.proposalId,
+      } satisfies ServerToDaemon);
+    }
+    // `runAsk` started the run, or ended it at once with its `exit` frame.
+    if (outcome.outcome === "done" && isRecord(outcome.result) && outcome.result["state"] === "running")
+      send(socket, { type: "execState", execId, state: "running" } satisfies ServerToDaemon);
+  }
+
+  /** K-722: the thread of an attested run, for History: the `<provider>.thread.id` label. */
+  private execThread(attested: unknown, provider: string | null) {
+    const value = provider && isRecord(attested) ? attested[`${provider}.thread.id`] : undefined;
+    return typeof value === "string" ? value.slice(0, 200) : null;
+  }
+
+  /** K-722: starts a run on its target, now or after its approval; an offline target ends it. */
+  private startExecRun(machine: Machine, target: string, body: unknown): AskOutcome {
+    let run: ExecRun;
+    try {
+      run = decodeExecRun(body);
+    } catch {
+      return { outcome: "refused", reason: "the stored run does not decode." };
+    }
+    const provider = isRecord(body) && typeof body["provider"] === "string" ? body["provider"] : null;
+    const thread = isRecord(body) && typeof body["thread"] === "string" ? body["thread"] : null;
+    const source = this.openSocket(machine.id);
+    const targetSocket = this.openSocket(target);
+    const now = Date.now();
+    if (!targetSocket) {
+      this.sql("DELETE FROM exec_runs WHERE exec_id = ?", run.execId);
+      if (source)
+        send(source, {
+          type: "execFrame",
+          execId: run.execId,
+          frame: {
+            type: "exit",
+            exitCode: null,
+            signal: null,
+            durationMs: 0,
+            reason: "the target is offline",
+          },
+        } satisfies ServerToDaemon);
+      return { outcome: "done", result: { execId: run.execId, state: "ended" } };
+    }
+    this.sql(
+      `INSERT INTO exec_runs (exec_id, source, target, provider, command, cwd, thread, proposal_id, state, started_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'running', ?)
+       ON CONFLICT (exec_id) DO UPDATE SET state = 'running'`,
+      run.execId,
+      machine.id,
+      target,
+      provider,
+      run.command,
+      run.cwd ?? null,
+      thread,
+      now,
+    );
+    send(targetSocket, { type: "execRun", provider, run } satisfies ServerToDaemon);
+    return { outcome: "done", result: { execId: run.execId, state: "running" } };
+  }
+
+  /**
+   * K-722: passes one frame to the other machine of its run: from A its credit, stdin and close, from B its output,
+   * stdin credit and exit. A frame of an unknown run, or one whose other side is gone, ends it on the sender's side.
+   */
+  private execRelay(
+    socket: WebSocket,
+    machine: Machine,
+    message: Extract<DaemonMessage, { type: "execFrame" }>,
+  ) {
+    const execId = typeof message.execId === "string" ? message.execId.slice(0, 64) : "";
+    let frame: ExecFrame;
+    try {
+      frame = decodeExecFrame(message.frame);
+    } catch (error) {
+      console.warn(`kitshn dropped an exec frame of ${machine.name}: ${String(error)}`);
       return;
     }
-    // At most LINK_AUDITS_PER_MINUTE reports of one machine a minute; the rest are counted and dropped.
-    const minute = Math.floor(Date.now() / 60_000);
-    const rate = this.linkRates.get(machine.id);
-    const counted = rate?.minute === minute ? rate : { minute, count: 0, dropped: 0 };
-    this.linkRates.set(machine.id, counted);
-    if (counted.count >= LINK_AUDITS_PER_MINUTE) {
-      counted.dropped += 1;
-      if (counted.dropped === 1)
-        console.warn(`kitshn drops audit reports of ${machine.name} for the rest of this minute.`);
+    const fromB = frame.type === "output" || frame.type === "stdin-credit" || frame.type === "exit";
+    const [row] = this.sql<ExecRow>("SELECT * FROM exec_runs WHERE exec_id = ?", execId);
+    const lost = () =>
+      send(socket, {
+        type: "execFrame",
+        execId,
+        frame: fromB
+          ? { type: "close", what: "kill" }
+          : { type: "exit", exitCode: null, signal: null, durationMs: 0, reason: "the relay was lost" },
+      } satisfies ServerToDaemon);
+    if (!row || (fromB ? row.target : row.source) !== machine.id)
+      return frame.type === "exit" ? undefined : lost();
+    if (row.state === "waiting") {
+      // Only a kill of A means something before the approval: the run ends, and its proposal stays for History.
+      if (frame.type === "close" && frame.what === "kill") {
+        this.sql("DELETE FROM exec_runs WHERE exec_id = ?", execId);
+        send(socket, {
+          type: "execFrame",
+          execId,
+          frame: {
+            type: "exit",
+            exitCode: null,
+            signal: null,
+            durationMs: 0,
+            reason: "killed by the caller",
+          },
+        } satisfies ServerToDaemon);
+      }
       return;
     }
-    counted.count += 1;
+    const other = this.openSocket(fromB ? row.source : row.target);
+    if (frame.type === "exit") {
+      this.sql("DELETE FROM exec_runs WHERE exec_id = ?", execId);
+      this.recordExec(row, frame);
+    }
+    if (!other) {
+      if (frame.type !== "exit") lost();
+      if (!fromB) this.sql("DELETE FROM exec_runs WHERE exec_id = ?", execId);
+      return;
+    }
+    send(other, { type: "execFrame", execId, frame } satisfies ServerToDaemon);
+  }
+
+  /** K-722: a machine's connection closed: each of its runs ends on the other machine. */
+  private endExecRuns(machineId: string) {
+    const rows = this.sql<ExecRow>(
+      "DELETE FROM exec_runs WHERE source = ? OR target = ? RETURNING *",
+      machineId,
+      machineId,
+    );
+    for (const row of rows) {
+      const toSource = row.target === machineId;
+      const socket = this.openSocket(toSource ? row.source : row.target);
+      if (!socket) continue;
+      send(socket, {
+        type: "execFrame",
+        execId: row.exec_id,
+        frame: toSource
+          ? { type: "exit", exitCode: null, signal: null, durationMs: 0, reason: "the relay was lost" }
+          : { type: "close", what: "kill" },
+      } satisfies ServerToDaemon);
+      if (toSource && row.state === "running")
+        this.recordExec(row, { exitCode: null, reason: "the relay was lost" });
+    }
+  }
+
+  /**
+   * K-1610, K-722: History keeps one event per run: the command name, never its arguments or output, the folder, the
+   * outcome and the exit code. kitshn writes it at the end of the run, so no machine reports for another one.
+   */
+  private recordExec(
+    row: ExecRow,
+    exit: { readonly exitCode: number | null; readonly reason: string | null },
+  ) {
     this.sql(
       `INSERT INTO link_events (at, source, target, kind, thread, name, cwd, outcome, exit_code)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      // The time of the report, not the claim of the machine, orders History.
+       VALUES (?, ?, ?, 'exec', ?, ?, ?, ?, ?)`,
       Date.now(),
-      machine.id,
-      audit.target,
-      audit.kind,
-      audit.thread,
-      audit.name,
-      audit.cwd,
-      audit.outcome,
-      audit.exitCode,
+      row.source,
+      row.target,
+      row.thread,
+      commandName(row.command),
+      row.cwd ? row.cwd.slice(0, 500) : null,
+      execOutcome(exit),
+      exit.exitCode,
     );
     this.sql(
       "DELETE FROM link_events WHERE id <= (SELECT id FROM link_events ORDER BY id DESC LIMIT 1 OFFSET 2000)",
     );
-    // A burst of calls must not rebuild every map's snapshot per call: an audit broadcasts at most every 10 seconds.
     // Known limit: the last events of a burst show with the next change of the map; revisit if History must be live.
     if (Date.now() - this.linkBroadcastAt >= LINK_BROADCAST_MS) {
       this.linkBroadcastAt = Date.now();
@@ -11836,11 +12121,11 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-1752: the labels of an attester prefix are attested, because the daemon drops a caller's own of them. Asks store
-   * the result, because the attesters that a machine reports change later.
+   * K-1752: the labels of a provider prefix are attested, because the daemon drops a caller's own of them. Asks store
+   * the result, because the providers of a machine change later.
    */
   private verifiedKeys(machineId: string, labels: Readonly<Record<string, string>>): Array<string> {
-    const prefixes = [...this.attesterPrefixesOf(machineId), "t3."];
+    const prefixes = this.labelPrefixesOf(machineId);
     return Object.keys(labels).filter((key) => prefixes.some((prefix) => key.startsWith(prefix)));
   }
 
@@ -16169,7 +16454,7 @@ interface ProposalRow extends Record<string, SqlStorageValue> {
   readonly state: string;
   readonly created_at: number;
   readonly expires_at: number;
-  /** K-1752: the label keys that an attester of the machine set, as JSON, fixed at ask time. */
+  /** K-1752: the label keys that a provider of the machine vouched for, as JSON, fixed at ask time. */
   readonly verified: string;
 }
 
@@ -16201,6 +16486,6 @@ interface AskEventRow extends Record<string, SqlStorageValue> {
   readonly labels: string;
   readonly outcome: string;
   readonly detail: string;
-  /** K-1752: the label keys that an attester of the machine set, as JSON, fixed at ask time. */
+  /** K-1752: the label keys that a provider of the machine vouched for, as JSON, fixed at ask time. */
   readonly verified: string;
 }

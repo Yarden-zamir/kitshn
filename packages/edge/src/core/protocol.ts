@@ -35,7 +35,7 @@ export interface AskEventView {
   readonly outcome: "done" | "waiting" | "refused" | "not-kitshn";
   /** The reason of a refusal, or the proposal id of a waiting ask. */
   readonly detail: string;
-  /** K-1752: the label keys that an attester set; the rest are claims. */
+  /** K-1752: the label keys that a provider vouched for; the rest are claims. */
   readonly verified: ReadonlyArray<string>;
 }
 
@@ -56,7 +56,7 @@ export interface LinkEventView {
 /** K-1722: an open proposal, with the name of the machine that asked, for the Asks list. */
 export type ProposalView = Proposal & {
   readonly machineName: string;
-  /** K-1752: the label keys that an attester set; the rest are claims. */
+  /** K-1752: the label keys that a provider vouched for; the rest are claims. */
   readonly verified: ReadonlyArray<string>;
 };
 

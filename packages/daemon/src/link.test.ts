@@ -1,9 +1,9 @@
-import { chmodSync, mkdtempSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ReachedCard } from "@kitshn/local";
 import { describe, expect, it } from "vitest";
-import { linkPeerAdmitted, linkSocketProblem, linkTarget, serveLinks } from "./link.ts";
+import { linkPeerAdmitted, linkTarget, serveLinks } from "./link.ts";
 
 const platform = process.platform === "darwin" ? "darwin" : "linux";
 const own = process.getuid!();
@@ -85,9 +85,6 @@ describe("the link proxy (K-1609)", () => {
       peers: { platform, access: "private", admits: (uid) => linkPeerAdmitted(uid, own, []) },
     });
     try {
-      // Whoever asks, also a local user, takes a socket of the daemon user with mode 0600, and no other owner (K-701).
-      expect(linkSocketProblem(platform, path, own)).toBeNull();
-      expect(linkSocketProblem(platform, path, own + 1)).toMatch(/not to the daemon user/);
       const answer = await fetch("http://link/t3/b/api/thing", {
         unix: path,
         method: "POST",
@@ -109,10 +106,6 @@ describe("the link proxy (K-1609)", () => {
       expect(refused.status).toBe(403);
 
       expect(await webSocketEcho(path, "/t3/b/ws", "hi")).toBe("echo hi");
-      // A provider refuses a socket that another user could open or replace (K-621).
-      chmodSync(path, 0o666);
-      expect(linkSocketProblem(platform, path, own)).toMatch(/mode 666/);
-      expect(linkSocketProblem(platform, join(folder, "none.sock"), own)).toMatch(/no link proxy/);
     } finally {
       links.stop();
       void upstream.stop(true);

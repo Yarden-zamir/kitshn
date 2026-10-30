@@ -38,10 +38,12 @@ describe("local users in machine.json (K-701)", () => {
     }
     expect(requestAllowed("status", 1001, own, [])).toBe(true);
     expect(requestAllowed("rotate-key", 1001, own, [])).toBe(false);
-    // K-1751: an attester vouches for threads, so a user in localUsers cannot register one.
-    expect(requestAllowed("attester-set", 1001, own, [])).toBe(false);
-    expect(requestAllowed("attester-set", own, own, [])).toBe(true);
-    expect(requestAllowed("attester-set", 0, own, [])).toBe(true);
+    // K-721: a session check reads the grants of a provider, so a user in localUsers cannot send one.
+    expect(requestAllowed("check", 1001, own, [])).toBe(false);
+    expect(requestAllowed("check", own, own, [])).toBe(true);
+    expect(requestAllowed("check", 0, own, [])).toBe(true);
+    // K-722: an agent runs a command on another machine like an ask; kitshn checks the right.
+    expect(requestAllowed("exec", 1001, own, [])).toBe(true);
     expect(requestAllowed("reconnect", 1001, own, [])).toBe(false);
     // K-1710: a local user asks kitshn as the machine.
     expect(requestAllowed("ask", 1001, own, [])).toBe(true);
@@ -63,22 +65,29 @@ describe("local users in machine.json (K-701)", () => {
     }
   });
 
-  it("lets a provider user run a provider and its attester, and nothing of the machine admin (K-701)", () => {
+  it("lets a provider user run a provider, and nothing of the machine admin (K-701)", () => {
     const own = 1000;
-    // A plain local user stays narrow; a provider user also sends the provider requests and `attester-set`.
+    // A plain local user stays narrow; a provider user also sends the provider requests.
     for (const type of [
       "register",
       "upsert",
       "remove",
       "command-result",
       "desired-set",
-      "audit",
-      "attester-set",
+      "check",
+      "attest-result",
+      "exec-frame",
     ] as const) {
       expect(requestAllowed(type, 1001, own, [1002])).toBe(false);
       expect(requestAllowed(type, 1002, own, [1002])).toBe(true);
     }
-    for (const type of ["provider-forget", "provider-rebind", "rotate-key", "reconnect"] as const)
+    for (const type of [
+      "provider-forget",
+      "provider-rebind",
+      "provider-exec-user",
+      "rotate-key",
+      "reconnect",
+    ] as const)
       expect(requestAllowed(type, 1002, own, [1002])).toBe(false);
     // Only a user that `localUsers` still holds keeps the provider right; a file that cannot be read gives none.
     expect(providerUsersOf({ localUsers: [1001, 1002], providerUsers: [1002, 1003] })).toEqual([1002]);

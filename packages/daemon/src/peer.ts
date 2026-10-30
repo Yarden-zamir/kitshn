@@ -54,7 +54,7 @@ function readPeer(calls: Calls, fd: number): number | null {
 
 /**
  * K-701: who may send each request. A user in `localUsers` reads the status and asks kitshn (K-1710). A provider user
- * (`kitshn local-users add <user> --provider`) also runs a provider and its attester. The machine-admin requests stay
+ * (`kitshn local-users add <user> --provider`) also runs a provider. The machine-admin requests stay
  * with the daemon user and root. A new request kind must take a side here.
  */
 const REQUEST_SENDERS: Record<Request["type"], "local-users" | "providers" | "daemon-user-or-root"> = {
@@ -64,15 +64,24 @@ const REQUEST_SENDERS: Record<Request["type"], "local-users" | "providers" | "da
   ask: "local-users",
   "forget-token": "local-users",
   forward: "local-users",
-  // K-1751: an attester vouches for threads; a provider user registers only the prefix of its own provider.
-  "attester-set": "providers",
   // K-704: a provider adds cards that circles share and enforces their grants, so it acts for the machine.
   register: "providers",
   upsert: "providers",
   remove: "providers",
   "command-result": "providers",
   "desired-set": "providers",
-  audit: "providers",
+  // K-721, K-1752: only the connection that registered a provider checks sessions and attests its threads.
+  check: "providers",
+  "attest-result": "providers",
+  // K-722: a bridge reports a run that it runs as the provider user.
+  "exec-frame": "providers",
+  // K-722: an agent runs a command on another machine like an ask; kitshn checks the right of this machine.
+  exec: "local-users",
+  "exec-input": "local-users",
+  "exec-close": "local-users",
+  "exec-credit": "local-users",
+  pong: "local-users",
+  "provider-exec-user": "daemon-user-or-root",
   "provider-forget": "daemon-user-or-root",
   "provider-rebind": "daemon-user-or-root",
   // K-701: the daemon edits its own `machine.json`, whoever runs the command.
