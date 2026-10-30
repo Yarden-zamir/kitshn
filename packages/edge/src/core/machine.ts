@@ -68,6 +68,8 @@ export interface MachineStatus {
   readonly arch: string;
   readonly hostname: string;
   readonly tunnel: "starting" | "running" | "stopped";
+  /** K-632: the data centers of the tunnel's connections, for example `hfa02 ×4 (pinned)`. */
+  readonly tunnelLocations?: string;
   /** Job kinds that this daemon knows beyond shell, diagnostics and restart. Old daemons send none. */
   readonly capabilities?: ReadonlyArray<string>;
   /** K-821: the bytes of the images that the daemon keeps for rollbacks, at most; shared layers count once per image. */

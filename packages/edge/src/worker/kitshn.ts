@@ -5121,6 +5121,9 @@ export class Kitshn extends DurableObject<Env> {
         tunnel: ["starting", "running", "stopped"].includes(String(message.status.tunnel))
           ? message.status.tunnel
           : "stopped",
+        ...(typeof message.status.tunnelLocations === "string"
+          ? { tunnelLocations: message.status.tunnelLocations.slice(0, 120) }
+          : {}),
         ...(typeof message.status.keptBytes === "number" &&
         Number.isSafeInteger(message.status.keptBytes) &&
         message.status.keptBytes >= 0
