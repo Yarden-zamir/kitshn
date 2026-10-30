@@ -3,53 +3,53 @@ import type { MachineView } from "../core/protocol.ts";
 import type { Resource } from "../core/model.ts";
 import {
   type Door,
-  type Game,
-  type GamePort,
+  type PortCard,
+  type ServicePort,
   HOUR_MS,
   busyPort,
-  gameError,
+  portCardError,
   parsePort,
   portKey,
-} from "../core/game.ts";
+} from "../core/port.ts";
 import type { ServerReport } from "../core/sites.ts";
 import { Radio } from "./controls.tsx";
 import { callApi, useStore } from "./store.ts";
 
-/** K-534: a game card as `GET /api/games` gives it (K-2001 to K-2008). */
-export type GameView = Game & {
-  readonly join: string;
+/** K-534: a port card as `GET /api/ports` gives it (K-2001 to K-2008). */
+export type PortView = PortCard & {
+  readonly connect: string;
   readonly address: string;
   readonly listening: ReadonlyArray<string>;
   readonly problem: string | null;
   readonly doors: ReadonlyArray<Door>;
 };
 
-export const isGameCard = (resource: Resource) => resource.kind === "game";
+export const isPortCard = (resource: Resource) => resource.kind === "port";
 
-/** K-534: the machines that can hold game cards: online, with the daemon capability `doors` (K-2002). */
+/** K-534: the machines that can hold port cards: online, with the daemon capability `doors` (K-2002). */
 export const doorMachines = (machines: ReadonlyArray<MachineView>) =>
   machines.filter((view) => view.online && (view.status?.capabilities ?? []).includes("doors"));
 
 /**
- * K-534: the ports of the Game step ("25565, 19132/udp"), or the reason kitshn refuses them, in the words of K-2001:
- * the rules of `gameError` and another service of the machine that `busyPort` finds in its running servers (K-619).
+ * K-534: the ports of the Ports step ("25565, 19132/udp"), or the reason kitshn refuses them, in the words of K-2001:
+ * the rules of `portCardError` and another service of the machine that `busyPort` finds in its running servers (K-619).
  * The server checks all of it again, also the ports of a kitshn site of the machine.
  */
-export function gamePorts(
+export function servicePorts(
   input: { readonly ports: string; readonly name: string; readonly hours: number; readonly srv: string },
   servers: ReadonlyArray<ServerReport>,
-): { readonly ports: ReadonlyArray<GamePort> } | { readonly problem: string } {
+): { readonly ports: ReadonlyArray<ServicePort> } | { readonly problem: string } {
   const parts = input.ports
     .split(",")
     .map((part) => part.trim())
     .filter((part) => part !== "");
-  const ports: Array<GamePort> = [];
+  const ports: Array<ServicePort> = [];
   for (const part of parts) {
     const port = parsePort(part);
     if (!port) return { problem: `${part}: a port is like 25565/tcp or 19132/udp.` };
     ports.push(port);
   }
-  const error = gameError({
+  const error = portCardError({
     name: input.name,
     ports,
     doorMs: input.hours * HOUR_MS,
@@ -60,7 +60,7 @@ export function gamePorts(
   const busy = busyPort(ports, servers);
   if (busy)
     return {
-      problem: `${busy.port}/tcp on this machine is ${busy.title ? `"${busy.title}"` : (busy.process ?? "another service")}, which is no game, so a game card cannot close it.`,
+      problem: `${busy.port}/tcp on this machine is ${busy.title ? `"${busy.title}"` : (busy.process ?? "another service")}, which is not the service, so a port card cannot close it.`,
     };
   return { ports };
 }
@@ -68,8 +68,8 @@ export function gamePorts(
 const HOURS = [1, 12, 24, 72, 168] as const;
 const hoursLabel = (hours: number) => (hours < 24 ? `${hours} h` : `${hours / 24} d`);
 
-/** K-534: the "Game, from a machine" step of the site wizard; it posts `POST /api/games`. */
-export function GameForm(props: {
+/** K-534: the "Ports" step of the site wizard; it posts `POST /api/ports`. */
+export function PortForm(props: {
   zone: string;
   machines: ReadonlyArray<MachineView>;
   onClose: () => void;
@@ -84,20 +84,22 @@ export function GameForm(props: {
   const [srv, setSrv] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const checked = gamePorts({ ports, name, hours, srv }, machine?.servers ?? []);
+  const checked = servicePorts({ ports, name, hours, srv }, machine?.servers ?? []);
   // The ports alone, while the owner types them, so a missing name does not show as a port problem.
-  const portsAlone = gamePorts({ ports, name: "game", hours, srv: "" }, machine?.servers ?? []);
+  const portsAlone = servicePorts({ ports, name: "port", hours, srv: "" }, machine?.servers ?? []);
   const without = props.machines.filter((view) => view.online && !able.includes(view));
-  // The running servers that a game card may take: another service of the machine is no game (K-2001).
+  // The running servers that a port card may take: another service of the machine is not the service of the card (K-2001).
   const offered = (machine?.servers ?? []).filter(
     (server) => busyPort([{ port: server.port, proto: "tcp" }], [server]) === null,
   );
   const add = async () => {
     if (!machine)
-      return setError("No online machine can hold a game: install its doors first (kitshn doors install).");
+      return setError(
+        "No online machine can hold a port card: install its doors first (kitshn doors install).",
+      );
     if ("problem" in checked) return setError(checked.problem);
     setBusy(true);
-    const result = await callApi<{ address: string; join: string }>("POST", "/api/games", {
+    const result = await callApi<{ address: string; connect: string }>("POST", "/api/ports", {
       machine: machine.machine.id,
       name,
       ports: checked.ports.map(portKey),
@@ -106,7 +108,7 @@ export function GameForm(props: {
     });
     setBusy(false);
     if ("error" in result) return setError(result.error);
-    props.onDone(`${name} plays at ${result.address}. Players open their door at ${result.join}.`);
+    props.onDone(`${name} plays at ${result.address}. Players open their door at ${result.connect}.`);
     props.onClose();
   };
   return (
@@ -117,28 +119,28 @@ export function GameForm(props: {
       }}
     >
       <p class="help">
-        A game server of a machine. Its ports stay closed; each player of the card's circles opens them for
-        their own address on the join page.
+        A service on a machine, such as a game server. Its ports stay closed; each player of the card's
+        circles opens them for their own address on the connect page.
       </p>
       <div class="field-row">
-        <span class="label" data-tip="Machine: an online machine whose daemon holds game doors.">
+        <span class="label" data-tip="Machine: an online machine whose daemon holds doors.">
           Machine
         </span>
         <div>
           {able.length === 0 ? (
             <span class="help">
-              No online machine holds game doors. Run <code>kitshn doors install --user &lt;user&gt;</code> on
-              one as root.
+              No online machine holds doors. Run <code>kitshn doors install --user &lt;user&gt;</code> on one
+              as root.
             </span>
           ) : (
             <div class="choices" role="radiogroup" aria-label="Machine">
               {able.map((view) => (
                 <Radio
                   key={view.machine.id}
-                  name="game-machine"
+                  name="port-machine"
                   checked={view.machine.id === machine?.machine.id}
                   label={view.machine.name}
-                  tip={`Run the game on ${view.machine.name}.`}
+                  tip={`Run the port card on ${view.machine.name}.`}
                   onSelect={() => setPicked(view.machine.id)}
                 />
               ))}
@@ -147,14 +149,14 @@ export function GameForm(props: {
           {without.length > 0 ? (
             <p class="help">
               {without
-                .map((view) => `${view.machine.name}: ${view.status?.doorsProblem ?? "no game doors yet"}`)
+                .map((view) => `${view.machine.name}: ${view.status?.doorsProblem ?? "no doors yet"}`)
                 .join(" · ")}
             </p>
           ) : null}
         </div>
       </div>
       <div class="field-row">
-        <span class="label" data-tip="Ports: 1 to 4 ports of the game, TCP unless you add /udp.">
+        <span class="label" data-tip="Ports: 1 to 4 ports of the port card, TCP unless you add /udp.">
           Ports
         </span>
         <div>
@@ -189,7 +191,7 @@ export function GameForm(props: {
         </div>
       </div>
       <div class="field-row">
-        <span class="label" data-tip="Name: the first part of the game address and of the join page.">
+        <span class="label" data-tip="Name: the first part of the port card address and of the connect page.">
           Name
         </span>
         <div>
@@ -197,7 +199,7 @@ export function GameForm(props: {
             class="field"
             value={name}
             aria-label="Name"
-            data-tip="The name of the game: lowercase letters, digits and dashes."
+            data-tip="The name of the port card: lowercase letters, digits and dashes."
             placeholder="minecraft"
             onInput={(event) => setName(event.currentTarget.value.toLowerCase())}
           />
@@ -214,7 +216,7 @@ export function GameForm(props: {
           {HOURS.map((each) => (
             <Radio
               key={each}
-              name="game-door-time"
+              name="port-door-time"
               checked={hours === each}
               label={hoursLabel(each)}
               tip={`A door stays open ${hoursLabel(each)}, then the player opens it again.`}
@@ -241,9 +243,9 @@ export function GameForm(props: {
         <button
           class="btn primary"
           disabled={busy || able.length === 0}
-          data-tip="Make the game card. It waits in the tray; players of its circles open doors on the join page."
+          data-tip="Make the port card. It waits in the tray; players of its circles open doors on the connect page."
         >
-          Add the game
+          Add the port card
         </button>
         <button
           type="button"
@@ -258,9 +260,9 @@ export function GameForm(props: {
   );
 }
 
-/** K-534: the open doors of a game card in its panel, each with Close; the owner's view of K-2003. */
-export function GameDoors(props: { resource: Resource; onRemove: () => void }) {
-  const [game, setGame] = useState<GameView | null | "error">(null);
+/** K-534: the open doors of a port card in its panel, each with Close; the owner's view of K-2003. */
+export function PortDoors(props: { resource: Resource; onRemove: () => void }) {
+  const [portCard, setPortCard] = useState<PortView | null | "error">(null);
   const [error, setError] = useState<string | null>(null);
   /** The door whose Close waits for "Yes", and whether its call runs. */
   const [asking, setAsking] = useState<string | null>(null);
@@ -268,18 +270,18 @@ export function GameDoors(props: { resource: Resource; onRemove: () => void }) {
   // K-2004: each door that opens or closes is a revision, so a new revision reads the doors again.
   const revision = useStore().snapshot?.revision ?? 0;
   const load = async () => {
-    const result = await callApi<ReadonlyArray<GameView>>("GET", "/api/games");
-    if ("error" in result) return setGame("error");
-    setGame(result.find((each) => each.card === props.resource.id) ?? "error");
+    const result = await callApi<ReadonlyArray<PortView>>("GET", "/api/ports");
+    if ("error" in result) return setPortCard("error");
+    setPortCard(result.find((each) => each.card === props.resource.id) ?? "error");
   };
   useEffect(() => void load(), [props.resource.id, revision]);
-  if (game === null) return <p class="help">Loading the doors…</p>;
-  if (game === "error") return <p class="help">kitshn could not read the doors of this game.</p>;
+  if (portCard === null) return <p class="help">Loading the doors…</p>;
+  if (portCard === "error") return <p class="help">kitshn could not read the doors of this port card.</p>;
   const close = async (door: Door) => {
     setClosing(true);
     const result = await callApi<object>(
       "DELETE",
-      `/api/games/${encodeURIComponent(game.card)}/doors/${encodeURIComponent(door.address)}`,
+      `/api/ports/${encodeURIComponent(portCard.card)}/doors/${encodeURIComponent(door.address)}`,
     );
     setClosing(false);
     setAsking(null);
@@ -289,19 +291,19 @@ export function GameDoors(props: { resource: Resource; onRemove: () => void }) {
   };
   // A door that ended is shut already; the alarm removes it soon.
   const now = Date.now();
-  const doors = game.doors.filter((door) => door.endsAt > now);
+  const doors = portCard.doors.filter((door) => door.endsAt > now);
   return (
     <div>
-      <div class="label" data-tip="Doors: the addresses that may reach the game ports now (K-2003).">
+      <div class="label" data-tip="Doors: the addresses that may reach the gated ports now (K-2003).">
         Doors
       </div>
-      {game.problem ? <p class="error">{game.problem}</p> : null}
+      {portCard.problem ? <p class="error">{portCard.problem}</p> : null}
       <p class="help">
-        Join page <code>{game.join}</code> · listening{" "}
-        {game.listening.length > 0 ? game.listening.join(", ") : "nothing"}
+        Connect page <code>{portCard.connect}</code> · listening{" "}
+        {portCard.listening.length > 0 ? portCard.listening.join(", ") : "nothing"}
       </p>
       {doors.length === 0 ? (
-        <p class="help">No door is open. A player opens one on the join page.</p>
+        <p class="help">No door is open. A player opens one on the connect page.</p>
       ) : (
         <ul class="opens">
           {doors.map((door) => (
@@ -354,7 +356,7 @@ export function GameDoors(props: { resource: Resource; onRemove: () => void }) {
           data-tip={`Remove ${props.resource.name}: its doors close for everyone and its records go. kitshn asks first.`}
           onClick={props.onRemove}
         >
-          Remove game…
+          Remove ports…
         </button>
       </div>
     </div>

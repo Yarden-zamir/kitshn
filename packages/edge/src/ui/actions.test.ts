@@ -604,20 +604,20 @@ describe("per-item undo (K-1507)", () => {
   });
 });
 
-describe("game cards (K-534)", () => {
-  it("offer Remove game as a dangerous action, the way out of the Game step", () => {
+describe("port cards (K-534)", () => {
+  it("offer Remove ports as a dangerous action, the way out of the Ports step", () => {
     const { handlers, calls } = recorder();
     const base = context();
-    const game = card("mc", "game", ["mc.example.com"]);
+    const portCard = card("mc", "port", ["mc.example.com"]);
     const ctx = {
       ...base,
-      state: { ...base.state, resources: new Map(base.state.resources).set("mc", game) },
+      state: { ...base.state, resources: new Map(base.state.resources).set("mc", portCard) },
     };
     const groups = actionsFor(ctx, handlers, { _tag: "card", id: "mc" });
-    const remove = find(groups, "remove-game");
+    const remove = find(groups, "remove-port card");
     expect(remove.danger).toBe(true);
     run(remove);
-    expect(calls).toEqual([["removeGame", game]]);
-    expect(ids(actionsFor(base, handlers, { _tag: "card", id: "riffle" }))).not.toContain("remove-game");
+    expect(calls).toEqual([["removePortCard", portCard]]);
+    expect(ids(actionsFor(base, handlers, { _tag: "card", id: "riffle" }))).not.toContain("remove-port card");
   });
 });

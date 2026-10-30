@@ -116,8 +116,8 @@ export interface ActionHandlers {
   readonly toggleStack: (key: string) => void;
   readonly renameStack: (stackId: string) => void;
   readonly removeApp: (resource: Resource) => void;
-  /** K-534: removes a game card with its doors and records, after a confirm. */
-  readonly removeGame: (resource: Resource) => void;
+  /** K-534: removes a port card with its doors and records, after a confirm. */
+  readonly removePortCard: (resource: Resource) => void;
   /** K-1623: moves the address of a provider card from what serves it now to kitshn, after a confirm. */
   readonly takeAddress: (resource: Resource) => void;
   /** K-1623: gives a taken address back to what served it before, after a confirm. */
@@ -899,14 +899,14 @@ export function cardActions(ctx: ActionContext, h: ActionHandlers, resource: Res
             },
           ]
         : []),
-      ...(resource.kind === "game"
+      ...(resource.kind === "port"
         ? [
             {
-              id: "remove-game",
-              label: "Remove game…",
+              id: "remove-port card",
+              label: "Remove ports…",
               tip: `Remove ${resource.name}: its doors close for everyone at once, its records go, and its ports stay closed. kitshn asks first; there is no Undo.`,
               danger: true as const,
-              run: () => h.removeGame(resource),
+              run: () => h.removePortCard(resource),
             },
           ]
         : []),

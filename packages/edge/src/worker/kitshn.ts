@@ -166,14 +166,14 @@ import {
 import { MIGRATIONS } from "./migrations.ts";
 import {
   type DoorRow,
-  type GameRecordRow,
-  type GameRow,
+  type PortRecordRow,
+  type PortRow,
   doorOf,
-  gameOf,
-  gameRecords,
-  gameStatus,
+  portOf,
+  portRecords,
+  portStatus,
   recordBody,
-} from "./games.ts";
+} from "./ports.ts";
 import {
   DEFAULT_DOOR_MS,
   type Door,
@@ -182,14 +182,14 @@ import {
   doorFamily,
   doorMachine,
   doorPlan,
-  gameError,
-  joinAddress,
+  portCardError,
+  connectAddress,
   openDoors,
   parsePort,
   portKey,
   busyPort,
   relayHost,
-} from "../core/game.ts";
+} from "../core/port.ts";
 import type {
   AddressHold,
   DeployNote,
@@ -853,8 +853,8 @@ export class Kitshn extends DurableObject<Env> {
   private presence = new Map<string, { online: boolean; lastSeen: number; os: MachineOs | null }>();
   /** K-2004: the last open or close of a door, by card and person. */
   private doorTurns = new Map<string, number>();
-  /** K-2004: the open-to-all game cards of the last door plans; null after a restart, so the next check sends all. */
-  private openGamesSent: string | null = null;
+  /** K-2004: the open-to-all port cards of the last door plans; null after a restart, so the next check sends all. */
+  private openPortsSent: string | null = null;
   /**
    * K-1113: the hash of each stored card icon, the bytes stay in SQLite until a map asks. K-1114: when each icon
    * last changed, so a daemon changes one at most once an hour. Read on first use (K-1302).
@@ -1931,7 +1931,7 @@ export class Kitshn extends DurableObject<Env> {
     if (changes.some((change) => change._tag === "pause" || change._tag === "autoUpdate")) this.autoUpdate();
     this.clearAccessFailures();
     this.closeLostDoors(now);
-    this.syncOpenGames(now);
+    this.syncOpenPorts(now);
     for (const change of changes) {
       if (change._tag === "shareSetting" || change._tag === "cardEnd" || change._tag === "place")
         this.stuckShares.delete(change.id);
@@ -4340,7 +4340,7 @@ export class Kitshn extends DurableObject<Env> {
     if (path === "/internal/backup-access")
       return this.backupAccess((await request.json()) as { card: string; clientId: string });
     if (path === "/internal/content") return this.contentDecision((await request.json()) as ContentRequest);
-    if (path === "/internal/game") return this.gameDecision((await request.json()) as GameRequest);
+    if (path === "/internal/connect") return this.connectDecision((await request.json()) as ConnectRequest);
     if (path === "/internal/well-known/openid-configuration" || path === "/internal/well-known/jwks.json")
       return this.wellKnown(path.slice("/internal/well-known/".length).replace(".json", ""));
     if (path.startsWith("/deploy/")) {
@@ -4684,14 +4684,14 @@ export class Kitshn extends DurableObject<Env> {
     if (path === "/api/devices" && request.method === "GET") return this.listDevices();
     if (path === "/api/usage" && request.method === "GET") return await this.readUsage();
     if (path === "/api/library" && request.method === "GET") return Response.json(this.libraryItems());
-    // Section 20: game cards and their doors (K-2001, K-2006).
-    if (path === "/api/games" && request.method === "GET")
-      return Response.json(this.gameRows().map((row) => this.gameView(row, Date.now())));
-    if (path === "/api/games" && request.method === "POST")
-      return this.createGame(caller.actor, await request.json().catch(() => null));
-    if (path.startsWith("/api/games/") && request.method === "DELETE") {
-      const [card = "", doors, address] = path.slice("/api/games/".length).split("/");
-      if (doors === undefined) return this.deleteGame(caller.actor, card);
+    // Section 20: port cards and their doors (K-2001, K-2006).
+    if (path === "/api/ports" && request.method === "GET")
+      return Response.json(this.portRows().map((row) => this.portView(row, Date.now())));
+    if (path === "/api/ports" && request.method === "POST")
+      return this.createPortCard(caller.actor, await request.json().catch(() => null));
+    if (path.startsWith("/api/ports/") && request.method === "DELETE") {
+      const [card = "", doors, address] = path.slice("/api/ports/".length).split("/");
+      if (doors === undefined) return this.deletePortCard(caller.actor, card);
       if (doors === "doors" && address)
         return this.closeDoorBy(caller.actor, card, decodeURIComponent(address));
     }
@@ -5140,7 +5140,7 @@ export class Kitshn extends DurableObject<Env> {
                 .map((item) => ({ prefix: item.prefix.slice(0, 32), address: item.address.slice(0, 200) })),
             }
           : {}),
-        ...gameStatus(message.status),
+        ...portStatus(message.status),
         // K-1708: a connection on the token alone opens no notification.
         ...(attachment.check === "signed"
           ? {
@@ -5155,7 +5155,7 @@ export class Kitshn extends DurableObject<Env> {
       if (status.offlineProviders) this.notifyOfflineProviders(machine, status.offlineProviders, Date.now());
       // K-627: a daemon that connects, or that runs another release now, can start or end an update.
       if (attachment.status === null || attachment.status.version !== status.version) this.autoUpdate();
-      this.updateGameAddresses(machine.id, status.publicAddresses);
+      this.updatePortAddresses(machine.id, status.publicAddresses);
       // K-2005: a daemon that connects gets its door plan, also an empty one: the last card may have gone while it was
       // offline for longer than a plan job waits, and only an empty plan removes its table and its boot ports.
       if (attachment.status === null && status.capabilities?.includes("doors"))
@@ -5670,13 +5670,13 @@ export class Kitshn extends DurableObject<Env> {
       for (const card of this.state.resources.values())
         if (card.machine === id && card.provider && !this.sitesOf(id).some((site) => site.id === card.id))
           forgotten.push(this.forgetCard(card.id));
-      // K-2001: the game cards of the machine, or that it relays, go too, with their doors; the alarm removes their
+      // K-2001: the port cards of the machine, or that it relays, go too, with their doors; the alarm removes their
       // records, so no name keeps pointing at an address that the provider may give to someone else.
-      for (const row of this.gameRows("machine_id = ? OR relay_id = ?", id, id)) {
-        this.sql("DELETE FROM games WHERE card_id = ?", row.card_id);
+      for (const row of this.portRows("machine_id = ? OR relay_id = ?", id, id)) {
+        this.sql("DELETE FROM port_cards WHERE card_id = ?", row.card_id);
         this.sql("DELETE FROM doors WHERE card_id = ?", row.card_id);
         forgotten.push(this.forgetCard(row.card_id));
-        const other = doorMachine(gameOf(row));
+        const other = doorMachine(portOf(row));
         if (other !== id) relaysLeft.add(other);
       }
       const key = machine.key?.kind === "public" ? ` and its key ${machine.key.fingerprint}` : "";
@@ -5685,7 +5685,7 @@ export class Kitshn extends DurableObject<Env> {
     this.presence.delete(id);
     this.keyFailures.delete(id);
     this.load();
-    // A relay machine that stays drops the ports of the removed machine's games.
+    // A relay machine that stays drops the ports of the removed machine's port cards.
     for (const relay of relaysLeft) this.queueDoors(relay, caller.actor, Date.now());
     this.broadcast();
     void this.scheduleAlarm();
@@ -6719,7 +6719,7 @@ export class Kitshn extends DurableObject<Env> {
       checking ||
       (ready("DNS") && this.dnsWork().length > 0) ||
       (ready("routes") && this.routeWork().length > 0) ||
-      (ready("game DNS") && this.gameDnsWork(now))
+      (ready("port card DNS") && this.portDnsWork(now))
     );
   }
 
@@ -6759,13 +6759,13 @@ export class Kitshn extends DurableObject<Env> {
 
   /** Live sites whose address is checked and whose Access application exists in Cloudflare. */
   /**
-   * K-2008: the relay host of each game behind NAT, as a live site of the game's machine. So it gets its tunnel
+   * K-2008: the relay host of each port card behind NAT, as a live site of the port card's machine. So it gets its tunnel
    * ingress, its proxied record and its Access check from the site path; `tcp://` makes cloudflared carry raw TCP.
    */
   private relaySites(): Array<LiveSite> {
-    return this.gameRows("relay_id IS NOT NULL").flatMap((row) => {
+    return this.portRows("relay_id IS NOT NULL").flatMap((row) => {
       const address = this.state.resources.get(row.card_id)?.addresses[1];
-      const port = gameOf(row).ports[0];
+      const port = portOf(row).ports[0];
       if (!address || !port) return [];
       return [
         {
@@ -9787,14 +9787,14 @@ export class Kitshn extends DurableObject<Env> {
         path === "/agent/sites/plan" &&
         isRecord(input) &&
         !this.folderSiteKnown(machine.clientId, String(input["folder"] ?? "").trim(), now);
-      const game =
+      const portCard =
         request.method === "DELETE" &&
         path.startsWith("/agent/cards/") &&
-        this.gameRows("card_id = ?", decodeURIComponent(path.slice("/agent/cards/".length))).length > 0;
+        this.portRows("card_id = ?", decodeURIComponent(path.slice("/agent/cards/".length))).length > 0;
       const needed = [
         ...new Set<MachineRight>([
           ...(right === null ? [] : [right]),
-          ...(game ? (["addsApps"] as const) : []),
+          ...(portCard ? (["addsApps"] as const) : []),
           ...(newSite ? (["addsApps"] as const) : []),
           ...(publishes ? (["publishes"] as const) : []),
         ]),
@@ -10182,8 +10182,8 @@ export class Kitshn extends DurableObject<Env> {
     // K-1116: an agent key publishes a page or a file, the same upload as a drop on the map.
     if (path === "/agent/library" && request.method === "POST")
       return this.agentPublish(agent, request, now, approved);
-    // K-2006: an agent adds a game on a machine that it controls and closes its doors; it never opens one.
-    if (path === "/agent/games" && request.method === "POST") {
+    // K-2006: an agent adds a port card on a machine that it controls and closes its doors; it never opens one.
+    if (path === "/agent/ports" && request.method === "POST") {
       const body: unknown = await request.json().catch(() => null);
       const machineId = isRecord(body) && typeof body["machine"] === "string" ? body["machine"] : "";
       const relay = isRecord(body) && typeof body["relay"] === "string" ? body["relay"] : "";
@@ -10197,18 +10197,18 @@ export class Kitshn extends DurableObject<Env> {
         );
       if (!managed.has(machineId) || (relay !== "" && !managed.has(relay)))
         return Response.json(
-          { error: "An agent adds a game only on machines that it controls (K-2006)." },
+          { error: "An agent adds a port card only on machines that it controls (K-2006)." },
           { status: 403 },
         );
-      return this.createGame(agent.actor, body);
+      return this.createPortCard(agent.actor, body);
     }
     // K-1117, K-1123: an agent takes down a page, a file or a folder site that it published, and needs no right,
-    // because that lowers access (K-715). A game card goes on below, with "adds apps".
+    // because that lowers access (K-715). A port card goes on below, with "adds apps".
     const removed =
       path.startsWith("/agent/cards/") && request.method === "DELETE"
         ? decodeURIComponent(path.slice("/agent/cards/".length))
         : null;
-    if (removed !== null && !removed.includes("/") && this.gameRows("card_id = ?", removed).length === 0) {
+    if (removed !== null && !removed.includes("/") && this.portRows("card_id = ?", removed).length === 0) {
       const card = this.agentCard(agent, removed, now);
       if (card === null)
         return Response.json(
@@ -10235,17 +10235,17 @@ export class Kitshn extends DurableObject<Env> {
         );
       return this.rollbackResponse(agent, card, back.deployId);
     }
-    // K-2006: an agent removes a game card on a machine that it controls, with "adds apps", as it adds one.
+    // K-2006: an agent removes a port card on a machine that it controls, with "adds apps", as it adds one.
     if (
       path.startsWith("/agent/cards/") &&
       request.method === "DELETE" &&
       !path.slice("/agent/cards/".length).includes("/")
     ) {
       const card = path.slice("/agent/cards/".length);
-      const [row] = this.gameRows("card_id = ?", card);
+      const [row] = this.portRows("card_id = ?", card);
       if (!row)
         return Response.json(
-          { error: `An agent removes only game cards; ${card} is none.` },
+          { error: `An agent removes only port cards; ${card} is none.` },
           { status: 404 },
         );
       if (!agentHas(this.state, caller.visitor, "addsApps", now, approved))
@@ -10258,20 +10258,20 @@ export class Kitshn extends DurableObject<Env> {
         );
       if (!managed.has(row.machine_id) || (row.relay_id !== null && !managed.has(row.relay_id)))
         return Response.json(
-          { error: "An agent removes a game only on machines that it controls (K-2006)." },
+          { error: "An agent removes a port card only on machines that it controls (K-2006)." },
           { status: 403 },
         );
-      return this.deleteGame(agent.actor, card);
+      return this.deletePortCard(agent.actor, card);
     }
     if (path.startsWith("/agent/cards/") && path.includes("/doors")) {
       const [card = "", address] = path.slice("/agent/cards/".length).split("/doors");
-      const [row] = this.gameRows("card_id = ?", card);
-      if (!row || !managed.has(doorMachine(gameOf(row))))
+      const [row] = this.portRows("card_id = ?", card);
+      if (!row || !managed.has(doorMachine(portOf(row))))
         return Response.json(
-          { error: "An agent sees the doors only of games on machines that it controls (K-2006)." },
+          { error: "An agent sees the doors only of port cards on machines that it controls (K-2006)." },
           { status: 403 },
         );
-      if (request.method === "GET" && !address) return Response.json(this.gameView(row, now));
+      if (request.method === "GET" && !address) return Response.json(this.portView(row, now));
       if (request.method === "DELETE" && address?.startsWith("/"))
         return this.closeDoorBy(agent.actor, card, decodeURIComponent(address.slice(1)));
     }
@@ -13327,8 +13327,8 @@ export class Kitshn extends DurableObject<Env> {
       : sent;
   }
 
-  private gameRows(where = "1 = 1", ...values: Array<SqlStorageValue>) {
-    return this.sql<GameRow>(`SELECT * FROM games WHERE ${where}`, ...values);
+  private portRows(where = "1 = 1", ...values: Array<SqlStorageValue>) {
+    return this.sql<PortRow>(`SELECT * FROM port_cards WHERE ${where}`, ...values);
   }
 
   private openDoors(now: number, card?: string) {
@@ -13368,8 +13368,8 @@ export class Kitshn extends DurableObject<Env> {
     this.deliverJobs();
   }
 
-  /** K-2001: a new game card in the tray. The owner or an agent puts it into circles later. */
-  private createGame(actor: Actor, body: unknown) {
+  /** K-2001: a new port card in the tray. The owner or an agent puts it into circles later. */
+  private createPortCard(actor: Actor, body: unknown) {
     const refuse = (error: string, status = 400) => Response.json({ error }, { status });
     if (!isRecord(body)) return refuse("Send a JSON object.");
     const name = typeof body["name"] === "string" ? body["name"].trim().toLowerCase() : "";
@@ -13380,42 +13380,47 @@ export class Kitshn extends DurableObject<Env> {
     const hours = body["doorHours"] ?? DEFAULT_DOOR_MS / HOUR_MS;
     const srv = typeof body["srv"] === "string" && body["srv"] !== "" ? body["srv"] : null;
     const relay = typeof body["relay"] === "string" && body["relay"] !== "" ? body["relay"] : null;
-    const game = {
+    const portCard = {
       name,
       ports: ports.filter((port) => port !== null),
       doorMs: typeof hours === "number" ? hours * HOUR_MS : Number.NaN,
       srv,
       relay,
     };
-    const error = gameError(game);
+    const error = portCardError(portCard);
     if (error) return refuse(error);
     if (!this.state.machines.has(machineId)) return refuse(`No machine "${machineId}" exists.`, 404);
-    if (relay === machineId) return refuse("A machine does not relay its own game.");
+    if (relay === machineId) return refuse("A machine does not relay its own port card.");
     const problem = this.doorsProblem(relay ?? machineId);
     if (problem) return refuse(problem, 409);
     // K-2001: a door must not close a port that a kitshn site of the door machine serves.
     const site = [...this.liveSites.values()].find(
       (item) =>
         item.machineId === (relay ?? machineId) &&
-        game.ports.some((port) => port.proto === "tcp" && item.target === `http://localhost:${port.port}`),
+        portCard.ports.some(
+          (port) => port.proto === "tcp" && item.target === `http://localhost:${port.port}`,
+        ),
     );
     if (site)
       return refuse(
-        `${site.address} serves from ${site.target} on this machine, so a game card cannot close it.`,
+        `${site.address} serves from ${site.target} on this machine, so a port card cannot close it.`,
         409,
       );
     // K-2001, K-619: a port that another service of the door machine listens on.
-    const busy = busyPort(game.ports, this.machineView(this.state.machines.get(relay ?? machineId)!).servers);
+    const busy = busyPort(
+      portCard.ports,
+      this.machineView(this.state.machines.get(relay ?? machineId)!).servers,
+    );
     if (busy)
       return refuse(
-        `${busy.port}/tcp on this machine is ${busy.title ? `"${busy.title}"` : (busy.process ?? "another service")}, which is no game, so a game card cannot close it.`,
+        `${busy.port}/tcp on this machine is ${busy.title ? `"${busy.title}"` : (busy.process ?? "another service")}, which is not the service, so a port card cannot close it.`,
         409,
       );
     const host = `${name}.${this.env.KITSHN_ZONE}`;
     const addresses = relay ? [host, relayHost(name, this.env.KITSHN_ZONE)] : [host];
     const taken = (address: string) =>
       RESERVED_SITE_NAMES.has(address.split(".")[0] ?? "") ||
-      this.gameRows("name = ?", name).length > 0 ||
+      this.portRows("name = ?", name).length > 0 ||
       [...this.state.resources.values()].some((resource) => resource.addresses.includes(address)) ||
       [...this.liveSites.values()].some((site) => site.address === address) ||
       this.sql("SELECT address FROM dns_objects WHERE address = ?", address).length > 0;
@@ -13425,7 +13430,7 @@ export class Kitshn extends DurableObject<Env> {
     const id = newLibraryId();
     const resource: Resource = {
       id,
-      kind: "game",
+      kind: "port",
       name,
       addresses,
       status: "unknown",
@@ -13435,39 +13440,39 @@ export class Kitshn extends DurableObject<Env> {
     };
     const revision = this.ctx.storage.transactionSync(() => {
       this.sql(
-        "INSERT INTO games (card_id, machine_id, name, ports, door_ms, srv, relay_id, v4, v6) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO port_cards (card_id, machine_id, name, ports, door_ms, srv, relay_id, v4, v6) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         id,
         machineId,
         name,
-        JSON.stringify(game.ports),
-        game.doorMs,
+        JSON.stringify(portCard.ports),
+        portCard.doorMs,
         srv,
         relay,
         status?.publicAddresses?.v4 ?? null,
         status?.publicAddresses?.v6 ?? null,
       );
-      return this.addCard(actor, resource, null, `the game server ${name}`);
+      return this.addCard(actor, resource, null, `the port card ${name}`);
     });
     this.queueDoors(relay ?? machineId, actor, Date.now());
     this.load();
     this.broadcast();
     void this.scheduleAlarm();
     return Response.json(
-      { id, address: host, join: `https://pages.${this.env.KITSHN_ZONE}/join/${name}`, revision },
+      { id, address: host, connect: `https://pages.${this.env.KITSHN_ZONE}/connect/${name}`, revision },
       { status: 201 },
     );
   }
 
-  /** K-2001: removes a game card, its doors and, through the alarm, its records. */
-  private deleteGame(actor: Actor, id: string) {
-    const [row] = this.gameRows("card_id = ?", id);
-    if (!row) return Response.json({ error: `No game card "${id}" exists.` }, { status: 404 });
+  /** K-2001: removes a port card, its doors and, through the alarm, its records. */
+  private deletePortCard(actor: Actor, id: string) {
+    const [row] = this.portRows("card_id = ?", id);
+    if (!row) return Response.json({ error: `No port card "${id}" exists.` }, { status: 404 });
     this.ctx.storage.transactionSync(() => {
-      this.sql("DELETE FROM games WHERE card_id = ?", id);
+      this.sql("DELETE FROM port_cards WHERE card_id = ?", id);
       this.sql("DELETE FROM doors WHERE card_id = ?", id);
-      this.insertRevision(actor, `Removed the game server ${row.name}`, [this.forgetCard(id)], null);
+      this.insertRevision(actor, `Removed the port card ${row.name}`, [this.forgetCard(id)], null);
     });
-    this.queueDoors(doorMachine(gameOf(row)), actor, Date.now());
+    this.queueDoors(doorMachine(portOf(row)), actor, Date.now());
     this.load();
     this.broadcast();
     void this.scheduleAlarm();
@@ -13486,8 +13491,8 @@ export class Kitshn extends DurableObject<Env> {
           door.person,
           door.address,
         );
-        const [row] = this.gameRows("card_id = ?", door.card);
-        if (row) machines.add(doorMachine(gameOf(row)));
+        const [row] = this.portRows("card_id = ?", door.card);
+        if (row) machines.add(doorMachine(portOf(row)));
         this.insertRevision(
           actor,
           `Closed the door of ${door.person} on ${row?.name ?? door.card} for ${door.address} (${why})`,
@@ -13502,18 +13507,18 @@ export class Kitshn extends DurableObject<Env> {
   private doorPlanOf(machineId: string, now: number) {
     return doorPlan(
       machineId,
-      this.gameRows().map(gameOf),
+      this.portRows().map(portOf),
       this.openDoors(now),
       now,
       this.env.KITSHN_ZONE,
-      this.openGames(now),
+      this.openPortCards(now),
     );
   }
 
-  /** K-2004: the game cards with an active share in Everyone, whose ports are open to every address. */
-  private openGames(now: number) {
+  /** K-2004: the port cards with an active share in Everyone, whose ports are open to every address. */
+  private openPortCards(now: number) {
     return new Set(
-      this.gameRows()
+      this.portRows()
         .map((row) => row.card_id)
         .filter((card) => {
           const resource = this.state.resources.get(card);
@@ -13523,13 +13528,13 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /** K-2005: a share in Everyone that starts or ends sends new plans, so the ports open or close for all. */
-  private syncOpenGames(now: number) {
-    const open = [...this.openGames(now)].sort().join(" ");
-    if (open === this.openGamesSent) return;
-    const restarted = this.openGamesSent === null;
-    this.openGamesSent = open;
-    const actor: Actor = { _tag: "kitshn", reason: "Everyone share of a game (K-2004)" };
-    for (const machine of new Set(this.gameRows().map(gameOf).map(doorMachine))) {
+  private syncOpenPorts(now: number) {
+    const open = [...this.openPortCards(now)].sort().join(" ");
+    if (open === this.openPortsSent) return;
+    const restarted = this.openPortsSent === null;
+    this.openPortsSent = open;
+    const actor: Actor = { _tag: "kitshn", reason: "Everyone share of a port card (K-2004)" };
+    for (const machine of new Set(this.portRows().map(portOf).map(doorMachine))) {
       // After a restart the last change is not known, so a machine gets a plan only when its gated ports differ from
       // its last plan that did not fail.
       if (restarted && JSON.stringify(this.doorPlanOf(machine, now).ports) === this.lastDoorPorts(machine))
@@ -13564,34 +13569,34 @@ export class Kitshn extends DurableObject<Env> {
     return true;
   }
 
-  /** K-2003: the join page asks here; `open` and `close` change the doors of the visitor alone. */
-  private gameDecision(input: GameRequest) {
+  /** K-2003: the connect page asks here; `open` and `close` change the doors of the visitor alone. */
+  private connectDecision(input: ConnectRequest) {
     const now = Date.now();
     const visitor = this.freshVisitor(input.visitor);
     const stale = visitor !== input.visitor;
-    const [row] = this.gameRows("name = ?", input.name);
+    const [row] = this.portRows("name = ?", input.name);
     const resource = row ? this.state.resources.get(row.card_id) : undefined;
     if (!row || !resource) return Response.json({ decision: "missing", stale });
-    // A door belongs to a person, so the join page needs a login, also on a card in Everyone.
-    const game = gameOf(row);
-    const machine = doorMachine(game);
+    // A door belongs to a person, so the connect page needs a login, also on a card in Everyone.
+    const portCard = portOf(row);
+    const machine = doorMachine(portCard);
     const status = this.state.machines.get(machine);
-    const gameView = {
-      name: game.name,
-      address: joinAddress(game, resource.addresses[0] ?? ""),
-      ports: game.ports.map(portKey),
-      doorHours: game.doorMs / HOUR_MS,
+    const portView = {
+      name: portCard.name,
+      address: connectAddress(portCard, resource.addresses[0] ?? ""),
+      ports: portCard.ports.map(portKey),
+      doorHours: portCard.doorMs / HOUR_MS,
       reachable: row.v4 !== null || row.v6 !== null,
       machineOnline: status ? this.machineView(status).online : false,
-      needsIpv4: game.relay !== null,
+      needsIpv4: portCard.relay !== null,
     };
-    // K-2004: a game in Everyone has no doors, so its page needs no login.
+    // K-2004: a port card in Everyone has no doors, so its page needs no login.
     if (openToAll(this.state, resource, now))
       return Response.json({
         decision: "allow",
         stale,
-        error: input.action === "view" ? null : "This game is open to everyone, so it needs no door.",
-        game: gameView,
+        error: input.action === "view" ? null : "This port card is open to everyone, so it needs no door.",
+        portCard: portView,
         openToAll: true,
         doors: [],
         seen: visitor.ip,
@@ -13603,7 +13608,7 @@ export class Kitshn extends DurableObject<Env> {
     let error: string | null = null;
     // K-2004: one open or close per person and card in 10 s, so a loop cannot fill History or the machine's jobs.
     // In memory, as the limits of K-1908: a restart of the Durable Object only resets the wait.
-    const turn = `${game.card} ${person}`;
+    const turn = `${portCard.card} ${person}`;
     const waiting =
       (input.action === "open" || input.action === "close") && (this.doorTurns.get(turn) ?? 0) > now - 10_000;
     if (waiting) error = "You changed a door a few seconds ago. Wait a moment.";
@@ -13627,7 +13632,7 @@ export class Kitshn extends DurableObject<Env> {
       error =
         ("error" in seen ? `kitshn sees your address as ${visitor.ip ?? "none"}: ${seen.error}` : null) ??
         // K-2004: a relay listens on IPv4 only, so an IPv6-only open would open nothing that works.
-        (game.relay !== null && !addresses.some((address) => doorFamily(address) === 4)
+        (portCard.relay !== null && !addresses.some((address) => doorFamily(address) === 4)
           ? "This server needs IPv4, and no IPv4 address answered."
           : null) ??
         // An offline machine gets the plan when it connects; an online one must hold doors now.
@@ -13635,13 +13640,19 @@ export class Kitshn extends DurableObject<Env> {
           ? null
           : this.doorsProblem(machine));
       if (error === null) {
-        const { open, close } = openDoors(this.openDoors(now, game.card), game, person, addresses, now);
-        const ends = new Date(now + game.doorMs).toISOString().slice(0, 16).replace("T", " ");
+        const { open, close } = openDoors(
+          this.openDoors(now, portCard.card),
+          portCard,
+          person,
+          addresses,
+          now,
+        );
+        const ends = new Date(now + portCard.doorMs).toISOString().slice(0, 16).replace("T", " ");
         this.ctx.storage.transactionSync(() => {
           for (const address of close)
             this.sql(
               "DELETE FROM doors WHERE card_id = ? AND person = ? AND address = ?",
-              game.card,
+              portCard.card,
               person,
               address,
             );
@@ -13657,7 +13668,7 @@ export class Kitshn extends DurableObject<Env> {
             );
           this.insertRevision(
             actor,
-            `${person} opened ${game.name} for ${open.map((door) => door.address).join(", ")} until ${ends} UTC`,
+            `${person} opened ${portCard.name} for ${open.map((door) => door.address).join(", ")} until ${ends} UTC`,
             [],
             null,
           );
@@ -13670,38 +13681,38 @@ export class Kitshn extends DurableObject<Env> {
     }
     if (input.action === "close" && !waiting) {
       // K-2004: End now closes every door of this person on the card.
-      const doors = this.openDoors(now, game.card).filter((item) => item.person === person);
+      const doors = this.openDoors(now, portCard.card).filter((item) => item.person === person);
       if (doors.length > 0) {
         this.closeDoors(actor, doors, "End now", now);
         tookTurn();
         this.load();
         this.broadcast();
-      } else error = "You have no open door on this game.";
+      } else error = "You have no open door on this port card.";
     }
     return Response.json({
       decision,
       stale,
       error,
-      game: gameView,
+      portCard: portView,
       openToAll: false,
-      doors: this.openDoors(now, game.card).filter((door) => door.person === person),
+      doors: this.openDoors(now, portCard.card).filter((door) => door.person === person),
       seen: visitor.ip,
     });
   }
 
-  /** K-2006: a game card as the owner and agents see it: its doors, records and what listens. */
-  private gameView(row: GameRow, now: number) {
-    const game = gameOf(row);
-    const machine = this.state.machines.get(doorMachine(game));
+  /** K-2006: a port card as the owner and agents see it: its doors, records and what listens. */
+  private portView(row: PortRow, now: number) {
+    const portCard = portOf(row);
+    const machine = this.state.machines.get(doorMachine(portCard));
     const listening = new Set(machine ? (this.machineView(machine).status?.listening ?? []) : []);
     return {
-      ...game,
-      join: `https://pages.${this.env.KITSHN_ZONE}/join/${game.name}`,
-      address: joinAddress(game, `${game.name}.${this.env.KITSHN_ZONE}`),
-      listening: game.ports.map(portKey).filter((port) => listening.has(port)),
-      problem: this.doorsProblem(doorMachine(game)),
-      doors: this.openDoors(now, game.card),
-      records: this.sql<GameRecordRow>("SELECT * FROM game_records WHERE card_id = ?", game.card).map(
+      ...portCard,
+      connect: `https://pages.${this.env.KITSHN_ZONE}/connect/${portCard.name}`,
+      address: connectAddress(portCard, `${portCard.name}.${this.env.KITSHN_ZONE}`),
+      listening: portCard.ports.map(portKey).filter((port) => listening.has(port)),
+      problem: this.doorsProblem(doorMachine(portCard)),
+      doors: this.openDoors(now, portCard.card),
+      records: this.sql<PortRecordRow>("SELECT * FROM port_records WHERE card_id = ?", portCard.card).map(
         (record) => ({
           type: record.type,
           name: record.name,
@@ -13724,11 +13735,11 @@ export class Kitshn extends DurableObject<Env> {
     return Response.json({ closed: doors.length });
   }
 
-  /** K-2002: a new public address of a machine moves the records of its games. */
-  private updateGameAddresses(machineId: string, found: MachineStatus["publicAddresses"]) {
+  /** K-2002: a new public address of a machine moves the records of its port cards. */
+  private updatePortAddresses(machineId: string, found: MachineStatus["publicAddresses"]) {
     if (!found) return;
     const moved = this.sql(
-      `UPDATE games SET v4 = ?, v6 = ? WHERE COALESCE(relay_id, machine_id) = ?
+      `UPDATE port_cards SET v4 = ?, v6 = ? WHERE COALESCE(relay_id, machine_id) = ?
        AND (v4 IS NOT ? OR v6 IS NOT ?) RETURNING card_id`,
       found.v4,
       found.v6,
@@ -13739,12 +13750,12 @@ export class Kitshn extends DurableObject<Env> {
     if (moved.length > 0) void this.scheduleAlarm();
   }
 
-  /** K-2007: true when a game record waits for the alarm. */
-  private gameDnsWork(now: number) {
+  /** K-2007: true when a port card record waits for the alarm. */
+  private portDnsWork(now: number) {
     const want = new Map(
-      gameRecords(this.gameRows(), this.env.KITSHN_ZONE).map((r) => [`${r.type} ${r.name}`, r]),
+      portRecords(this.portRows(), this.env.KITSHN_ZONE).map((r) => [`${r.type} ${r.name}`, r]),
     );
-    const rows = this.sql<GameRecordRow>("SELECT * FROM game_records");
+    const rows = this.sql<PortRecordRow>("SELECT * FROM port_records");
     const keys = new Set(rows.map((row) => `${row.type} ${row.name}`));
     return (
       rows.some(
@@ -13756,24 +13767,24 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-2007: makes, moves and removes the A, AAAA and SRV records of game cards; returns the Cloudflare calls. A new
+   * K-2007: makes, moves and removes the A, AAAA and SRV records of port cards; returns the Cloudflare calls. A new
    * record first checks that no record of that type and name exists, so kitshn never adds to one it did not make.
    */
-  private async syncGameDns(api: Api, budget: number) {
+  private async syncPortDns(api: Api, budget: number) {
     const now = Date.now();
     let calls = 0;
     const want = new Map(
-      gameRecords(this.gameRows(), this.env.KITSHN_ZONE).map((r) => [`${r.type} ${r.name}`, r]),
+      portRecords(this.portRows(), this.env.KITSHN_ZONE).map((r) => [`${r.type} ${r.name}`, r]),
     );
-    // Every game record is on the kitshn zone. zonePath takes one label only, so an SRV name like _x._tcp.<name> fails it.
+    // Every port card record is on the kitshn zone. zonePath takes one label only, so an SRV name like _x._tcp.<name> fails it.
     const zone = `${this.zonePath(this.env.KITSHN_ZONE)}/dns_records`;
-    const rows = this.sql<GameRecordRow>("SELECT * FROM game_records");
+    const rows = this.sql<PortRecordRow>("SELECT * FROM port_records");
     const failed = (
       row: { type: string; name: string; card_id: string; content: string; record_id: string },
       error: unknown,
     ) =>
       this.sql(
-        "INSERT OR REPLACE INTO game_records (type, name, card_id, content, record_id, error, retry_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO port_records (type, name, card_id, content, record_id, error, retry_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         row.type,
         row.name,
         row.card_id,
@@ -13792,7 +13803,7 @@ export class Kitshn extends DurableObject<Env> {
             error instanceof CloudflareError && error.status === 404 ? undefined : Promise.reject(error),
           );
         }
-        this.sql("DELETE FROM game_records WHERE type = ? AND name = ?", row.type, row.name);
+        this.sql("DELETE FROM port_records WHERE type = ? AND name = ?", row.type, row.name);
       } catch (error) {
         failed(row, error);
       }
@@ -13813,7 +13824,7 @@ export class Kitshn extends DurableObject<Env> {
           );
           if (found.length > 0)
             throw new Error(
-              `A ${record.type} record for ${record.name} exists that kitshn did not make. Remove it, or give the game another name.`,
+              `A ${record.type} record for ${record.name} exists that kitshn did not make. Remove it, or give the port card another name.`,
             );
         }
         calls++;
@@ -13822,7 +13833,7 @@ export class Kitshn extends DurableObject<Env> {
           : await api<{ id: string }>("POST", zone, recordBody(record));
         recordId = made.id;
         this.sql(
-          "INSERT OR REPLACE INTO game_records (type, name, card_id, content, record_id, error, retry_at) VALUES (?, ?, ?, ?, ?, NULL, 0)",
+          "INSERT OR REPLACE INTO port_records (type, name, card_id, content, record_id, error, retry_at) VALUES (?, ?, ?, ?, ?, NULL, 0)",
           record.type,
           record.name,
           record.card,
@@ -15081,7 +15092,7 @@ export class Kitshn extends DurableObject<Env> {
     const before = JSON.stringify(accessStates(this.desired(now), this.access));
     await this.alarmStep("share ends", undefined, () => this.endShares(now));
     if (await this.alarmStep("doors", false, () => this.closeLostDoors(now))) changed = true;
-    await this.alarmStep("open games", undefined, () => this.syncOpenGames(now));
+    await this.alarmStep("open port cards", undefined, () => this.syncOpenPorts(now));
     // A daily run that threw or waits for its retry is no daily run, so the compare below waits with it.
     const daily =
       this.dailyAt() <= now &&
@@ -15155,7 +15166,7 @@ export class Kitshn extends DurableObject<Env> {
       await this.alarmStep("tunnels", undefined, () => this.syncTunnels(api, 6));
       spent += await this.alarmStep("site checks", 6, () => this.checkSites(api, 6), 0);
       await this.alarmStep("DNS", undefined, () => this.syncDns(api, 5));
-      spent += await this.alarmStep("game DNS", 4, () => this.syncGameDns(api, 4), 0);
+      spent += await this.alarmStep("port card DNS", 4, () => this.syncPortDns(api, 4), 0);
       await this.alarmStep("routes", undefined, () => this.syncRoutes(api, 5));
       // K-1124: after the tunnel and DNS steps, so an old Compose address has lost its record. The daily run spends
       // its calls on the compare; redirectWork asks for the next run at once.
@@ -15171,7 +15182,7 @@ export class Kitshn extends DurableObject<Env> {
       // K-113: take an unwanted enrollment policy off the App Launcher before the sync deletes it.
       spent += await this.alarmStep("launcher", 3, () => this.syncLauncher(api, daily), 0);
       // K-406: at most 40 calls. `spent` counts the daily compare (12), the site checks (6), the redirect step (5),
-      // the game records (4), the launcher step (3) and the path read of taken addresses (1); the tunnels, DNS records and offline routes above made at most 6 + 5 + 5, and the launcher
+      // the port card records (4), the launcher step (3) and the path read of taken addresses (1); the tunnels, DNS records and offline routes above made at most 6 + 5 + 5, and the launcher
       // step after the sync needs 3. The login step and the sync share what is left. A policy that the sync
       // makes goes on the login applications in the next alarm, which runs at once (loginWork).
       await this.alarmStep("Access", 0, () => this.syncAccessLocked(api, CALLS_PER_RUN - spent - 16 - 3));
@@ -15395,7 +15406,7 @@ const ALARM_STEPS = [
   "provider offline",
   "share ends",
   "doors",
-  "open games",
+  "open port cards",
   "daily",
   "uptime",
   "bell",
@@ -15405,7 +15416,7 @@ const ALARM_STEPS = [
   "tunnels",
   "site checks",
   "DNS",
-  "game DNS",
+  "port card DNS",
   "routes",
   "launcher",
   "Access",
@@ -15623,8 +15634,8 @@ const send = (socket: WebSocket, message: ServerMessage | ServerToDaemon) => {
   socket.send(JSON.stringify(message));
 };
 
-/** K-2003: a request of the join page. */
-interface GameRequest {
+/** K-2003: a request of the connect page. */
+interface ConnectRequest {
   readonly name: string;
   readonly visitor: ContentVisitor;
   readonly action: "view" | "open" | "close";
@@ -15892,8 +15903,8 @@ export function forwardRight(path: string, method: string): MachineRight | null 
   if (card !== null && card.includes("/redirects") && (method === "POST" || method === "DELETE"))
     return "addsPages";
   if (card !== null && card.endsWith("/handover") && method === "POST") return "addsApps";
-  if (path === "/agent/games" && method === "POST") return "addsApps";
-  // A removal lowers access (K-715), so it needs only a card that the machine manages; a game also "adds apps".
+  if (path === "/agent/ports" && method === "POST") return "addsApps";
+  // A removal lowers access (K-715), so it needs only a card that the machine manages; a port card also "adds apps".
   if (card !== null && !card.includes("/") && method === "DELETE") return null;
   if (card !== null && card.endsWith("/previous") && method === "POST") return "addsPages";
   if (card !== null && card.includes("/doors") && (method === "GET" || method === "DELETE")) return null;

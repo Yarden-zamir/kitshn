@@ -1,10 +1,10 @@
-// Section 20: the door of game servers on this machine. The daemon has no privilege, so one root helper writes the
-// nftables table; the daemon sends it the game ports and the open doors as plain lines.
+// Section 20: the door of port cards on this machine. The daemon has no privilege, so one root helper writes the
+// nftables table; the daemon sends it the gated ports and the open doors as plain lines.
 import { type ChildProcess, type SpawnSyncReturns, spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import { dirname } from "node:path";
-import { type DoorPlan, type GamePort, doorAddress, portKey } from "@kitshn/edge/game";
+import { type DoorPlan, type ServicePort, doorAddress, portKey } from "@kitshn/edge/port";
 
 export const HELPER_PATH = "/usr/local/lib/kitshn/doors";
 export const SUDOERS_PATH = "/etc/sudoers.d/kitshn-doors";
@@ -12,9 +12,9 @@ export const TABLE = "kitshn_doors";
 export const STATE_PATH = "/var/lib/kitshn/doors.ports";
 export const BOOT_UNIT_PATH = "/etc/systemd/system/kitshn-doors.service";
 
-/** K-2005: loads the last game ports with no door before the network and Docker start, so a reboot opens nothing. */
+/** K-2005: loads the last gated ports with no door before the network and Docker start, so a reboot opens nothing. */
 export const BOOT_UNIT = `[Unit]
-Description=kitshn game doors: game ports start closed (K-2005)
+Description=kitshn port doors: portCard ports start closed (K-2005)
 DefaultDependencies=no
 # After nftables.service, whose \`flush ruleset\` would delete the table again.
 After=local-fs.target nftables.service
@@ -35,9 +35,9 @@ WantedBy=multi-user.target
  * `inet kitshn_doors` in one nft transaction. `off` removes the table. It touches no other table.
  */
 export const HELPER = `#!/bin/sh
-# kitshn doors (K-2005): the one root step of kitshn game servers. Installed by \`kitshn doors install\`.
+# kitshn doors (K-2005): the one root step of kitshn port cards. Installed by \`kitshn doors install\`.
 # Usage: doors apply < lines | doors boot | doors off. It changes only the nftables table inet ${TABLE}.
-# \`boot\` runs before the network at each start: it loads the last game ports with no door, so they start closed.
+# \`boot\` runs before the network at each start: it loads the last gated ports with no door, so they start closed.
 set -eu
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 table=${TABLE}
@@ -74,7 +74,7 @@ ipv6net() {
 ports="" portlines="" open4="" open6="" lines=0
 while IFS=' ' read -r kind a b c d extra; do
   lines=$((lines + 1))
-  # At boot a bad line costs only itself: the good game ports still load, so a damaged file fails closed.
+  # At boot a bad line costs only itself: the good gated ports still load, so a damaged file fails closed.
   if [ "$mode" = boot ]; then
     [ "$lines" -le 4000 ] || break
     if [ "$kind" = port ] && proto "$a" && port "$b" && [ -z "\${c:-}" ] && [ -z "\${extra:-}" ]; then
@@ -115,7 +115,7 @@ cat >"$script" <<EOF
 table inet $table
 delete table inet $table
 table inet $table {
-  set game_ports { type inet_proto . inet_service; elements = { $ports } }
+  set gated_ports { type inet_proto . inet_service; elements = { $ports } }
   set open4 { type ipv4_addr . inet_proto . inet_service; flags timeout; $elements4 }
   set open6 { type ipv6_addr . inet_proto . inet_service; flags timeout; $elements6 }
   chain input {
@@ -125,9 +125,9 @@ table inet $table {
     meta l4proto != { tcp, udp } accept
     ip saddr . meta l4proto . th dport @open4 accept
     ip6 saddr and ffff:ffff:ffff:ffff:0:0:0:0 . meta l4proto . th dport @open6 accept
-    meta l4proto . th dport @game_ports drop
+    meta l4proto . th dport @gated_ports drop
   }
-  # "End now" cuts both ways: the game server's own packets to a closed address go too.
+  # "End now" cuts both ways: the service's own packets to a closed address go too.
   chain output {
     type filter hook output priority filter - 10; policy accept;
     oifname "lo" accept
@@ -135,7 +135,7 @@ table inet $table {
     meta l4proto != { tcp, udp } accept
     ip daddr . meta l4proto . th sport @open4 accept
     ip6 daddr and ffff:ffff:ffff:ffff:0:0:0:0 . meta l4proto . th sport @open6 accept
-    meta l4proto . th sport @game_ports drop
+    meta l4proto . th sport @gated_ports drop
   }
   # A port that system Docker publishes goes DNAT and through here, in both directions.
   chain forward {
@@ -146,13 +146,13 @@ table inet $table {
     ct direction original ip6 saddr and ffff:ffff:ffff:ffff:0:0:0:0 . meta l4proto . ct original proto-dst @open6 accept
     ct direction reply ip daddr . meta l4proto . ct original proto-dst @open4 accept
     ct direction reply ip6 daddr and ffff:ffff:ffff:ffff:0:0:0:0 . meta l4proto . ct original proto-dst @open6 accept
-    meta l4proto . ct original proto-dst @game_ports drop
+    meta l4proto . ct original proto-dst @gated_ports drop
   }
 }
 EOF
 nft -c -f "$script"
 nft -f "$script"
-# The game ports alone, for \`boot\`; root's file, so the daemon user cannot change what loads before the network.
+# The gated ports alone, for \`boot\`; root's file, so the daemon user cannot change what loads before the network.
 if [ "$mode" = apply ]; then
   mkdir -p "\${state%/*}"
   umask 077
@@ -178,8 +178,8 @@ export function helperInput(plan: DoorPlan, now: number): string {
 }
 
 /**
- * K-2008: one `cloudflared access tcp` per game that this machine relays. It listens on the game port, so the door
- * table gates it like a local game; the service token goes in the environment, never into the process arguments.
+ * K-2008: one `cloudflared access tcp` per port card that this machine relays. It listens on the gated port, so the door
+ * table gates it like a local port; the service token goes in the environment, never into the process arguments.
  */
 export class Relays {
   private readonly running = new Map<string, ChildProcess>();
@@ -258,7 +258,7 @@ export function publicAddresses(interfaces: ReturnType<typeof networkInterfaces>
   return { v4, v6 };
 }
 
-/** K-2006: which game ports listen now, from `ss -H -ltnu` (the local address is the fifth field). */
+/** K-2006: which gated ports listen now, from `ss -H -ltnu` (the local address is the fifth field). */
 export function listening(ssOutput: string): ReadonlySet<string> {
   const found = new Set<string>();
   for (const line of ssOutput.split("\n")) {
@@ -291,9 +291,9 @@ export function toolProblem(name: string, run: SpawnSyncReturns<string>, failed 
   return `${name} ${failed}: ${output || run.error?.message || `exit ${run.status ?? run.signal}`}`;
 }
 
-/** Why this machine cannot gate game ports, or null when it can (K-2002). */
+/** Why this machine cannot gate gated ports, or null when it can (K-2002). */
 export function doorsProblem(platform: NodeJS.Platform): string | null {
-  if (platform !== "linux") return "game servers need a Linux machine with nftables";
+  if (platform !== "linux") return "port cards need a Linux machine with nftables";
   if (!existsSync(HELPER_PATH))
     return `the door helper is not installed; run \`kitshn doors install\` as root`;
   const check = spawnSync(systemTool("sudo"), ["-n", "-l", HELPER_PATH, "apply"], { encoding: "utf8" });
@@ -320,7 +320,7 @@ export function applyDoors(plan: DoorPlan, keptFile: string, now: number): { ok:
   const doors = plan.doors.filter((door) => door.endsAt > now).length;
   return {
     ok: true,
-    output: `doors: ${plan.ports.map(portKey).join(" ") || "no game ports"}; ${doors} open`,
+    output: `doors: ${plan.ports.map(portKey).join(" ") || "no gated ports"}; ${doors} open`,
   };
 }
 
@@ -339,11 +339,11 @@ export function keptPlan(keptFile: string): DoorPlan | null {
   }
 }
 
-const isGamePort = (value: unknown): value is GamePort =>
+const isServicePort = (value: unknown): value is ServicePort =>
   typeof value === "object" &&
   value !== null &&
-  Number.isInteger((value as GamePort).port) &&
-  ((value as GamePort).proto === "tcp" || (value as GamePort).proto === "udp");
+  Number.isInteger((value as ServicePort).port) &&
+  ((value as ServicePort).proto === "tcp" || (value as ServicePort).proto === "udp");
 
 /**
  * K-2005: a door plan from JSON, or null when its shape is not this daemon's, such as a plan that an older daemon
@@ -352,7 +352,7 @@ const isGamePort = (value: unknown): value is GamePort =>
 export function planOf(value: unknown): DoorPlan | null {
   if (typeof value !== "object" || value === null) return null;
   const { ports, doors, relays } = value as Record<string, unknown>;
-  if (!Array.isArray(ports) || !ports.every(isGamePort) || !Array.isArray(doors)) return null;
+  if (!Array.isArray(ports) || !ports.every(isServicePort) || !Array.isArray(doors)) return null;
   const doorsOk = doors.every(
     (door: unknown) =>
       typeof door === "object" &&
@@ -360,7 +360,7 @@ export function planOf(value: unknown): DoorPlan | null {
       typeof (door as { address?: unknown }).address === "string" &&
       typeof (door as { endsAt?: unknown }).endsAt === "number" &&
       Array.isArray((door as { ports?: unknown }).ports) &&
-      (door as { ports: Array<unknown> }).ports.every(isGamePort),
+      (door as { ports: Array<unknown> }).ports.every(isServicePort),
   );
   const relaysOk =
     relays === undefined ||
@@ -378,7 +378,7 @@ export function planOf(value: unknown): DoorPlan | null {
 
 /**
  * `kitshn doors install|uninstall`, as root: the helper and its one sudoers line for the daemon user. Nothing else
- * changes; the table appears with the first game card.
+ * changes; the table appears with the first port card.
  */
 export function doorsCommand(action: string | undefined, user: string | undefined): void {
   if (process.getuid?.() !== 0) throw new Error("run `kitshn doors install|uninstall` as root");

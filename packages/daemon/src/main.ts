@@ -19,7 +19,7 @@ import {
   type AskOutcome,
   type AppAccess,
 } from "@kitshn/edge/machine";
-import type { DoorPlan } from "@kitshn/edge/game";
+import type { DoorPlan } from "@kitshn/edge/port";
 import type { BackupReport } from "@kitshn/edge/backups";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -1973,7 +1973,7 @@ function report() {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
 }
 
-/** K-2002, K-2006: whether this machine can gate game ports, and which game ports listen. */
+/** K-2002, K-2006: whether this machine can gate ports, and which gated ports listen. */
 const doorState: { problem: string | null; listening: ReadonlySet<string> } = {
   problem: "not checked yet",
   listening: new Set(),
@@ -1989,7 +1989,7 @@ function syncRelays(plan: DoorPlan) {
     .catch((error: unknown) => log(`the relays could not start: ${String(error)}`));
 }
 
-/** K-2006: the game ports of the kept plan that something listens on; a change goes out in the status. */
+/** K-2006: the gated ports of the kept plan that something listens on; a change goes out in the status. */
 function checkListening() {
   const plan = keptPlan(doorsFile());
   const wanted = new Set((plan?.ports ?? []).map(({ port, proto }) => `${port}/${proto}`));
@@ -3479,7 +3479,7 @@ switch (command) {
   case "repo":
   case "redirect":
   case "time":
-  case "game":
+  case "port":
     await runAgentCommand(command, args, daemonTransport);
     break;
   case "local-users":

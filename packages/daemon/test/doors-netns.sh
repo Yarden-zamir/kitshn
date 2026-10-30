@@ -1,7 +1,7 @@
 #!/bin/sh
 # K-2005: the door helper with real traffic, in network namespaces, never in the host's own table. Run as root:
 #   sh packages/daemon/test/doors-netns.sh <helper file>
-# kc is a player (10.9.0.2, fd09::2), kh the machine with the game ports, kd a container behind Docker-style DNAT.
+# kc is a player (10.9.0.2, fd09::2), kh the machine with the gated ports, kd a container behind Docker-style DNAT.
 set -eu
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin:$PATH
 work=$(mktemp -d)
@@ -53,14 +53,14 @@ expect() { # open|closed, address, port, what
 }
 apply() { ip netns exec kh sh "$helper" apply; }
 
-expect open 10.9.0.1 25565 "no table: game port"
+expect open 10.9.0.1 25565 "no table: gated port"
 expect open 10.9.0.1 25566 "no table: forwarded port"
 printf 'port tcp 25565\nport tcp 25566\n' | apply
-expect closed 10.9.0.1 25565 "no door: game port"
+expect closed 10.9.0.1 25565 "no door: gated port"
 expect closed 10.9.0.1 25566 "no door: forwarded (DNAT) port"
-expect closed fd09::1 25565 "no door: game port over IPv6"
+expect closed fd09::1 25565 "no door: gated port over IPv6"
 printf 'port tcp 25565\nport tcp 25566\nopen4 10.9.0.2 tcp 25565 60\nopen4 10.9.0.2 tcp 25566 60\n' | apply
-expect open 10.9.0.1 25565 "IPv4 door: game port"
+expect open 10.9.0.1 25565 "IPv4 door: gated port"
 expect open 10.9.0.1 25566 "IPv4 door: forwarded (DNAT) port"
 expect closed fd09::1 25565 "IPv4 door: IPv6 stays closed"
 printf 'port tcp 25565\nopen6 fd09:0:0:0:: tcp 25565 60\n' | apply
@@ -69,7 +69,7 @@ expect closed 10.9.0.1 25565 "IPv6 door: IPv4 stays closed"
 printf 'port tcp 25565\nopen4 10.9.0.2 tcp 25565 2\n' | apply
 sleep 3
 expect closed 10.9.0.1 25565 "a 2 s door after 3 s"
-# A reboot: the table is gone; boot loads the last game ports with no door before anything listens.
+# A reboot: the table is gone; boot loads the last gated ports with no door before anything listens.
 ip netns exec kh nft delete table inet kitshn_doors
 expect open 10.9.0.1 25565 "after a reboot, before boot"
 ip netns exec kh sh "$helper" boot
@@ -83,7 +83,7 @@ for bad in 'port tcp 80' 'open4 10.9.0.2;x tcp 25565 60' 'open6 fd09::1 tcp 2556
   if printf '%s\n' "$bad" | apply 2>/dev/null; then echo "FAIL took: $bad"; failures=$((failures + 1)); else echo "ok   refused: $bad"; fi
 done
 ip netns exec kh sh "$helper" off
-expect open 10.9.0.1 25565 "off: game port"
+expect open 10.9.0.1 25565 "off: gated port"
 [ ! -e "$state" ] || { echo "FAIL off left the state file"; failures=$((failures + 1)); }
 echo "$failures failures"
 [ "$failures" -eq 0 ]

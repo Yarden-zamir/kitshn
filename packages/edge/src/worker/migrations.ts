@@ -299,6 +299,12 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
     "ALTER TABLE proposals ADD COLUMN used_at INTEGER",
     "ALTER TABLE handovers ADD COLUMN approved TEXT NOT NULL DEFAULT '[]'",
   ],
+  // 43: section 20 is "Ports" (K-2001): the kind `game` becomes `port`, and its tables follow the name.
+  [
+    "ALTER TABLE games RENAME TO port_cards",
+    "ALTER TABLE game_records RENAME TO port_records",
+    `UPDATE resources SET body = json_set(body, '$.kind', 'port') WHERE json_extract(body, '$.kind') = 'game'`,
+  ],
 ];
 
 /** K-819: the migration after which the Durable Object derives the repo ids of older deploy rows. */

@@ -1,7 +1,7 @@
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { expect, it } from "vitest";
-import { type DoorPlan, HOUR_MS } from "../src/core/game.ts";
+import { type DoorPlan, HOUR_MS } from "../src/core/port.ts";
 import type { Machine } from "../src/core/machine.ts";
 import type { Circle, Resource } from "../src/core/model.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
@@ -33,8 +33,8 @@ async function setup() {
     tunnelId: "tunnel-vps",
   };
   const card: Resource = {
-    id: "game1",
-    kind: "game",
+    id: "card1",
+    kind: "port",
     name: "mc",
     addresses: ["mc.example.com"],
     status: "unknown",
@@ -46,11 +46,11 @@ async function setup() {
     const sql = state.storage.sql;
     sql.exec("INSERT OR REPLACE INTO machines (id, body) VALUES ('vps', ?)", JSON.stringify(machine));
     sql.exec("INSERT OR REPLACE INTO circles (id, body) VALUES ('friends', ?)", JSON.stringify(friends));
-    sql.exec("INSERT OR REPLACE INTO resources (id, body) VALUES ('game1', ?)", JSON.stringify(card));
-    sql.exec("INSERT OR REPLACE INTO places (id, x, y) VALUES ('game1', 9000, 9000)");
+    sql.exec("INSERT OR REPLACE INTO resources (id, body) VALUES ('card1', ?)", JSON.stringify(card));
+    sql.exec("INSERT OR REPLACE INTO places (id, x, y) VALUES ('card1', 9000, 9000)");
     sql.exec(
-      `INSERT OR REPLACE INTO games (card_id, machine_id, name, ports, door_ms, srv, relay_id, v4, v6)
-       VALUES ('game1', 'vps', 'mc', '[{"port":25565,"proto":"tcp"}]', 3600000, 'minecraft', NULL, '198.51.100.7', NULL)`,
+      `INSERT OR REPLACE INTO port_cards (card_id, machine_id, name, ports, door_ms, srv, relay_id, v4, v6)
+       VALUES ('card1', 'vps', 'mc', '[{"port":25565,"proto":"tcp"}]', 3600000, 'minecraft', NULL, '198.51.100.7', NULL)`,
     );
     sql.exec("DELETE FROM doors");
     sql.exec("DELETE FROM jobs");
@@ -67,8 +67,8 @@ const visitor = (email: string | null, ip: string) => ({
   issuedAt: null,
 });
 
-async function game(stub: DurableObjectStub, body: unknown) {
-  const answer = await stub.fetch("https://kitshn.internal/internal/game", {
+async function portCard(stub: DurableObjectStub, body: unknown) {
+  const answer = await stub.fetch("https://kitshn.internal/internal/connect", {
     method: "POST",
     body: JSON.stringify(body),
   });
@@ -94,11 +94,11 @@ it("opens a door per address for a person of the card, and closes them when the 
   const stub = await setup();
   // A door belongs to a person, so no login means the login step.
   expect(
-    (await game(stub, { name: "mc", action: "view", visitor: visitor(null, "203.0.113.9") })).decision,
+    (await portCard(stub, { name: "mc", action: "view", visitor: visitor(null, "203.0.113.9") })).decision,
   ).toBe("login");
   expect(
     (
-      await game(stub, {
+      await portCard(stub, {
         name: "mc",
         action: "view",
         visitor: visitor("stranger@example.com", "203.0.113.9"),
@@ -107,7 +107,7 @@ it("opens a door per address for a person of the card, and closes them when the 
   ).toBe("deny");
 
   // A private address never opens a door.
-  const refused = await game(stub, {
+  const refused = await portCard(stub, {
     name: "mc",
     action: "open",
     visitor: visitor("friend@example.com", "10.1.2.3"),
@@ -116,7 +116,7 @@ it("opens a door per address for a person of the card, and closes them when the 
   expect(refused.error).toMatch(/private/);
 
   // The seen address and each address that the browser found open, an IPv6 one as its /64; a private one does not.
-  const opened = await game(stub, {
+  const opened = await portCard(stub, {
     name: "mc",
     action: "open",
     visitor: visitor("friend@example.com", "203.0.113.9"),
@@ -165,7 +165,7 @@ it("keeps a door when its circle checks the address, and refuses a second open w
   });
   await evictDurableObject(stub);
   // A browser address outside the circle's range opens no door.
-  const opened = await game(stub, {
+  const opened = await portCard(stub, {
     name: "mc",
     action: "open",
     visitor: visitor("friend@example.com", "203.0.113.9"),
@@ -183,7 +183,7 @@ it("keeps a door when its circle checks the address, and refuses a second open w
     body: JSON.stringify({ edits: [{ _tag: "circle", id: "friends", after: { ...office, x: 9001 } }] }),
   });
   expect(edited.status, await edited.clone().text()).toBe(200);
-  const again = await game(stub, {
+  const again = await portCard(stub, {
     name: "mc",
     action: "open",
     visitor: visitor("friend@example.com", "203.0.113.9"),
@@ -196,16 +196,16 @@ it("counts End now as a door change, so open and close in a loop wait 10 s (K-20
   stubAccessCerts();
   const stub = await setup();
   const friend = visitor("friend@example.com", "203.0.113.9");
-  expect((await game(stub, { name: "mc", action: "open", visitor: friend })).error).toBeNull();
-  const closed = await game(stub, { name: "mc", action: "close", visitor: friend });
+  expect((await portCard(stub, { name: "mc", action: "open", visitor: friend })).error).toBeNull();
+  const closed = await portCard(stub, { name: "mc", action: "close", visitor: friend });
   expect(closed.error).toMatch(/Wait a moment/);
   expect(closed.doors.map((door) => door.address)).toEqual(["203.0.113.9"]);
 });
 
-it("removes the game cards, doors and wanted records of a removed machine (K-2001, K-2007)", async () => {
+it("removes the port cards, doors and wanted records of a removed machine (K-2001, K-2007)", async () => {
   stubAccessCerts();
   const stub = await setup();
-  await game(stub, { name: "mc", action: "open", visitor: visitor("friend@example.com", "203.0.113.9") });
+  await portCard(stub, { name: "mc", action: "open", visitor: visitor("friend@example.com", "203.0.113.9") });
   const left = await runInDurableObject(stub, async (instance) => {
     const kitshn = instance as unknown as {
       api: () => unknown;
@@ -222,19 +222,19 @@ it("removes the game cards, doors and wanted records of a removed machine (K-200
     const removed = await kitshn.removeMachine(caller, "vps");
     return {
       status: removed.status,
-      games: kitshn.sql("SELECT * FROM games").length,
+      portCards: kitshn.sql("SELECT * FROM port_cards").length,
       doors: kitshn.sql("SELECT * FROM doors").length,
-      card: kitshn.state.resources.has("game1"),
+      card: kitshn.state.resources.has("card1"),
     };
   });
-  expect(left).toEqual({ status: 200, games: 0, doors: 0, card: false });
+  expect(left).toEqual({ status: 200, portCards: 0, doors: 0, card: false });
 });
 
-it("makes the A and SRV records of a game in one run (K-2007)", async () => {
+it("makes the A and SRV records of a port card in one run (K-2007)", async () => {
   const stub = await setup();
   const result = await runInDurableObject(stub, async (instance) => {
     const kitshn = instance as unknown as {
-      syncGameDns: (api: unknown, budget: number) => Promise<number>;
+      syncPortDns: (api: unknown, budget: number) => Promise<number>;
       sql: (query: string) => Array<{ type: string; error: string | null }>;
     };
     const calls: Array<{ method: string; path: string; body: unknown }> = [];
@@ -242,8 +242,8 @@ it("makes the A and SRV records of a game in one run (K-2007)", async () => {
       calls.push({ method, path, body });
       return method === "GET" ? [] : { id: `record-${calls.length}` };
     };
-    const spent = await kitshn.syncGameDns(api, 4);
-    return { spent, calls, rows: kitshn.sql("SELECT type, error FROM game_records ORDER BY type") };
+    const spent = await kitshn.syncPortDns(api, 4);
+    return { spent, calls, rows: kitshn.sql("SELECT type, error FROM port_records ORDER BY type") };
   });
   expect(result.spent).toBe(4);
   expect(result.rows).toEqual([
@@ -260,13 +260,13 @@ it("makes the A and SRV records of a game in one run (K-2007)", async () => {
   });
 });
 
-it("opens nothing for a relayed game when no IPv4 address answered, because the relay listens on IPv4 only (K-2004)", async () => {
+it("opens nothing for a relayed port card when no IPv4 address answered, because the relay listens on IPv4 only (K-2004)", async () => {
   stubAccessCerts();
   const stub = await setup();
   await runInDurableObject(stub, (_, state) => {
-    state.storage.sql.exec("UPDATE games SET relay_id = 'relay1' WHERE card_id = 'game1'");
+    state.storage.sql.exec("UPDATE port_cards SET relay_id = 'relay1' WHERE card_id = 'card1'");
   });
-  const opened = await game(stub, {
+  const opened = await portCard(stub, {
     name: "mc",
     action: "open",
     visitor: visitor("friend@example.com", "2001:db8:1:2::5"),
@@ -288,13 +288,13 @@ it("closes every door of the person on the card with End now (K-2004)", async ()
       ["other@example.com", "203.0.113.9"],
     ])
       state.storage.sql.exec(
-        "INSERT INTO doors (card_id, person, address, opened_at, ends_at, seen_ip) VALUES ('game1', ?, ?, 0, ?, NULL)",
+        "INSERT INTO doors (card_id, person, address, opened_at, ends_at, seen_ip) VALUES ('card1', ?, ?, 0, ?, NULL)",
         person,
         address,
         Date.now() + HOUR_MS,
       );
   });
-  const closed = await game(stub, {
+  const closed = await portCard(stub, {
     name: "mc",
     action: "close",
     visitor: visitor("friend@example.com", "203.0.113.9"),
@@ -307,7 +307,7 @@ it("closes every door of the person on the card with End now (K-2004)", async ()
   expect(left.map((row) => row.person)).toEqual(["other@example.com"]);
 });
 
-it("opens the ports of a game in Everyone to all and gates them again after the unshare (K-2004, K-2005)", async () => {
+it("opens the ports of a port card in Everyone to all and gates them again after the unshare (K-2004, K-2005)", async () => {
   stubAccessCerts();
   const stub = await setup();
   const owner = {
@@ -323,7 +323,7 @@ it("opens the ports of a game in Everyone to all and gates them again after the 
     send("/api/apply", {
       method: "POST",
       headers: owner,
-      body: JSON.stringify({ edits: [{ _tag: "place", id: "game1", after }] }),
+      body: JSON.stringify({ edits: [{ _tag: "place", id: "card1", after }] }),
     });
 
   expect((await place({ x: everyone.x, y: everyone.y })).status).toBe(200);
@@ -333,8 +333,12 @@ it("opens the ports of a game in Everyone to all and gates them again after the 
   const before = (await doorJobs(stub)).length;
   expect((await place({ x: everyone.x + 1, y: everyone.y })).status).toBe(200);
   expect(await doorJobs(stub)).toHaveLength(before);
-  // The join page needs no login and offers no door.
-  const view = (await game(stub, { name: "mc", action: "view", visitor: visitor(null, "203.0.113.9") })) as {
+  // The connect page needs no login and offers no door.
+  const view = (await portCard(stub, {
+    name: "mc",
+    action: "view",
+    visitor: visitor(null, "203.0.113.9"),
+  })) as {
     decision: string;
     openToAll?: boolean;
   };
@@ -342,7 +346,7 @@ it("opens the ports of a game in Everyone to all and gates them again after the 
 
   expect((await place({ x: 9000, y: 9000 })).status).toBe(200);
   expect((await doorJobs(stub)).at(-1)?.plan.ports).toEqual([{ port: 25565, proto: "tcp" }]);
-  const opened = await game(stub, {
+  const opened = await portCard(stub, {
     name: "mc",
     action: "open",
     visitor: visitor("friend@example.com", "203.0.113.9"),
@@ -350,7 +354,7 @@ it("opens the ports of a game in Everyone to all and gates them again after the 
   expect(opened.error).toBeNull();
   expect((await doorJobs(stub)).at(-1)?.plan.doors.map((door) => door.address)).toEqual(["203.0.113.9"]);
 
-  // Shared again, then a pause gates the ports, and the join page asks for a login (K-1504).
+  // Shared again, then a pause gates the ports, and the connect page asks for a login (K-1504).
   expect((await place({ x: everyone.x, y: everyone.y })).status).toBe(200);
   expect((await doorJobs(stub)).at(-1)?.plan.ports).toEqual([]);
   const paused = await send("/api/apply", {
@@ -360,6 +364,6 @@ it("opens the ports of a game in Everyone to all and gates them again after the 
   });
   expect(paused.status).toBe(200);
   expect((await doorJobs(stub)).at(-1)?.plan.ports).toEqual([{ port: 25565, proto: "tcp" }]);
-  const login = await game(stub, { name: "mc", action: "view", visitor: visitor(null, "203.0.113.9") });
+  const login = await portCard(stub, { name: "mc", action: "view", visitor: visitor(null, "203.0.113.9") });
   expect(login.decision).toBe("login");
 });

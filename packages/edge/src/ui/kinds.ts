@@ -91,9 +91,9 @@ export const KINDS: Record<ResourceKind, KindInfo> = {
     color: "var(--pink)",
     tilt: "2.5deg",
   },
-  game: {
-    label: "Game servers",
-    help: "A game server on a machine. A person in its circles opens the ports for their address on its join page.",
+  port: {
+    label: "Ports",
+    help: "A port card on a machine. A person in its circles opens the ports for their address on its connect page.",
     icon: "🎮",
     color: "var(--green)",
     tilt: "2deg",
