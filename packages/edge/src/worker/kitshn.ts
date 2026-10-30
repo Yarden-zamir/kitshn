@@ -11662,7 +11662,17 @@ export class Kitshn extends DurableObject<Env> {
       return end("refused: this exec id is in use.");
     const target = typeof message.target === "string" ? message.target : "";
     if (!this.state.machines.has(target)) return end(`refused: kitshn has no machine ${target}.`);
-    if (this.openSocket(target) === null) return end("the target is offline");
+    const targetSocket = this.openSocket(target);
+    if (targetSocket === null) return end("the target is offline");
+    // A daemon of provider protocol 1 ignores `execRun`, so the caller would wait forever for a run that never starts.
+    const targetAttachment = attachmentOf(targetSocket);
+    if (
+      targetAttachment?.kind !== "machine" ||
+      !targetAttachment.status?.capabilities?.includes("protocol-2")
+    )
+      return end(
+        `refused: the daemon of ${this.state.machines.get(target)?.name ?? target} is too old to run commands from other machines; update it (K-722).`,
+      );
     const now = Date.now();
     const wanted =
       typeof message.targetProvider === "string" && message.targetProvider.length <= 32

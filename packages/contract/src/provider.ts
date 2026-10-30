@@ -15,16 +15,55 @@ const offline = (message: DaemonMessage): message is Extract<DaemonMessage, { ty
   message.providers.length > 0 &&
   message.providers.every((item) => !item.online);
 
-/** Starts the provider by its own PID and stops it with the scenario. */
+/** How long a provider may take to end after TERM, and how long the kernel may take after KILL. */
+const TERM_MS = 3_000;
+const KILL_MS = 2_000;
+
+/** Whether any process of the group is left. A zombie counts until its parent reaps it. */
+const groupAlive = (group: number) => {
+  try {
+    process.kill(-group, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Waits until the group is gone, or `ms` passed. Known limit: this polls, because the kernel has no event for the end
+ * of a group of other processes, and a pipe would miss children that the provider spawned with only its own stdio.
+ */
+async function groupGone(group: number, ms: number) {
+  const until = Date.now() + ms;
+  while (groupAlive(group) && Date.now() < until) await new Promise((done) => setTimeout(done, 25));
+  return !groupAlive(group);
+}
+
+/**
+ * Ends the whole group of the provider, so nothing of it still writes into the daemon's home when the home goes.
+ * Known limit: a process that starts its own session leaves the group; the provider must end those itself.
+ */
+async function endProvider(group: number) {
+  if (!groupAlive(group)) return;
+  process.kill(-group, "SIGTERM");
+  if (await groupGone(group, TERM_MS)) return;
+  console.error(`the provider still runs ${TERM_MS} ms after TERM, so it gets KILL.`);
+  process.kill(-group, "SIGKILL");
+  // On a runner with no init that reaps, a killed orphan stays a zombie, which writes nothing.
+  await groupGone(group, KILL_MS);
+}
+
+/** Starts the provider in a process group of its own, and ends that group with the scenario. */
 async function withProvider(daemon: Daemon, command: string, steps: () => Promise<void>) {
   const child: ChildProcess = spawn("/bin/sh", ["-c", command], {
     env: { ...process.env, ...daemon.env },
     stdio: "inherit",
+    detached: true,
   });
   try {
     await steps();
   } finally {
-    child.kill("SIGTERM");
+    if (child.pid) await endProvider(child.pid);
   }
 }
 
