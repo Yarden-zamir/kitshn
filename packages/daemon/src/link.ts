@@ -1,10 +1,11 @@
 // K-1609, K-711: the link proxy. A provider reaches the address of a card on another machine through this machine's
 // daemon, which adds the machine token. The provider never holds a Cloudflare credential. It serves a Unix socket in
 // the daemon's private folder and one in its shared folder for local users (K-701), or a named pipe on Windows (K-621).
+import { once } from "node:events";
 import { chmodSync, rmSync } from "node:fs";
 import { type IncomingMessage, type ServerResponse, createServer } from "node:http";
 import { type Socket, connect as connectTcp, createServer as createListener } from "node:net";
-import { Readable } from "node:stream";
+import { Readable, type Writable } from "node:stream";
 import { connect as connectTls } from "node:tls";
 import type { ReachedCard } from "@kitshn/local";
 import type { ReachedSite } from "@kitshn/edge/machine";
@@ -138,6 +139,16 @@ const HOP_HEADERS: ReadonlySet<string> = new Set([
 /** Whether a `Set-Cookie` value sets the Access session, which never comes back through the proxy. */
 const setsAccessSession = (cookie: string) => cookie.trimStart().startsWith("CF_Authorization=");
 
+/** K-1609: wait for a slow client before reading more of an upstream response. */
+export async function forwardBody(
+  body: AsyncIterable<Uint8Array>,
+  response: Writable,
+  signal: AbortSignal,
+): Promise<void> {
+  for await (const chunk of body) if (!response.write(chunk)) await once(response, "drain", { signal });
+  response.end();
+}
+
 interface LinkOptions {
   readonly reachOf: (provider: string) => ReadonlyArray<ReachedCard>;
   /** K-1609: the signed connection owns this in-memory list, independent of providers. */
@@ -202,11 +213,18 @@ export function serveLinks(path: string, options: LinkOptions): Promise<{ readon
     const audit = (status: number) => {
       if (provider !== "site") options.audit?.({ provider, machineId, name, status });
     };
+    const controller = new AbortController();
+    // An origin may answer before it consumes the upload, so request abort does not by itself mean the client left.
+    const cancel = () => {
+      if (!response.writableFinished) controller.abort();
+    };
+    response.once("close", cancel);
     try {
       const answer = await fetch(found.target, {
         method,
         headers: linkHeaders(request.rawHeaders, token),
         redirect: "manual",
+        signal: controller.signal,
         // The bytes go on as B sends them, so a compressed answer keeps its own encoding header.
         decompress: false,
         ...(method === "GET" || method === "HEAD"
@@ -221,13 +239,17 @@ export function serveLinks(path: string, options: LinkOptions): Promise<{ readon
         if (!setsAccessSession(cookie)) headers.push(["set-cookie", cookie]);
       response.writeHead(answer.status, headers.flat());
       audit(answer.status);
-      if (answer.body) for await (const chunk of answer.body) response.write(chunk);
-      response.end();
+      if (answer.body) await forwardBody(answer.body, response, controller.signal);
+      else response.end();
     } catch (error) {
-      options.log(`link: ${found.target.host} failed: ${String(error)}`);
-      if (!response.headersSent) audit(0);
-      if (response.headersSent) response.destroy();
-      else refuse(response, 502, "the link to the other machine failed.");
+      if (!controller.signal.aborted) {
+        options.log(`link: ${found.target.host} failed: ${String(error)}`);
+        if (!response.headersSent) audit(0);
+        if (response.headersSent) response.destroy();
+        else refuse(response, 502, "the link to the other machine failed.");
+      }
+    } finally {
+      response.off("close", cancel);
     }
   };
   server.on("upgrade", (request: IncomingMessage, client: Socket, head: Buffer) => {
