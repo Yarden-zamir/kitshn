@@ -53,6 +53,10 @@ jobs:
       - name: Peer user id self-test, compiled for linux-x64 (K-701)
         working-directory: packages/daemon
         run: bun build src/peer.selftest.ts --compile --outfile="$RUNNER_TEMP/selftest" && "$RUNNER_TEMP/selftest"
+      # K-722: a root daemon enters the folder of a run only as the exec user.
+      - name: Exec as another user, from root (K-722)
+        working-directory: packages/daemon
+        run: sudo "$(command -v bun)" --bun vitest run src/exec.root.test.ts
       # K-2005: the door helper with real traffic in network namespaces, the Docker DNAT path and a reboot included.
       - name: Door helper traffic test (K-2005)
         working-directory: packages/daemon

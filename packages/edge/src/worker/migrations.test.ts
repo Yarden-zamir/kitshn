@@ -14,7 +14,7 @@ describe("Durable Object migrations", () => {
     expect(columns(db, "providers")).toEqual(["machine_id", "name", "body"]);
     expect(columns(db, "desired_state")).toEqual(["kind", "machine_id", "body"]);
     expect(columns(db, "jobs")).toContain("when_idle");
-    // K-722: the code step of the t3.agents shares runs with the migration that makes the exec table, never earlier.
+    // K-722: migration 42 makes the exec table; an import from before it runs the t3.agents step again.
     expect(MIGRATIONS[AGENTS_MIGRATION - 1]?.join()).toContain("exec_runs");
     expect(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()).toEqual({
       value: String(MIGRATIONS.length),

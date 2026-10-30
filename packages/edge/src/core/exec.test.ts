@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyChanges } from "./changes.ts";
-import { execMachinesOf, mayExecOn, migrateAgentShares } from "./exec.ts";
+import { commandName, execMachinesOf, execProviderOn, mayExecOn, migrateAgentShares } from "./exec.ts";
 import type { Machine } from "./machine.ts";
 import {
   type Circle,
@@ -112,6 +112,27 @@ describe("exec on another machine (K-722)", () => {
   });
 });
 
+describe("what a run on another machine records and who runs it (K-722, K-1610)", () => {
+  it("records the command name only, after its leading assignments", () => {
+    expect(commandName("GITHUB_TOKEN=x A_B=2 git push origin")).toBe("git");
+    expect(commandName("  ls -la")).toBe("ls");
+    expect(commandName("TOKEN=x")).toBe("(empty)");
+  });
+
+  it("picks the provider of the card that the caller controls, never one that the caller names", () => {
+    expect(execProviderOn(world(mac({ mode: "automatic" }), ["vps/t3/app"]), "mac", "vps", 0)).toEqual({
+      provider: "t3",
+    });
+    // Only the machine card: B's own rule decides, with no provider.
+    expect(execProviderOn(world(mac({ mode: "automatic" }), ["vps"]), "mac", "vps", 0)).toEqual({
+      provider: null,
+    });
+    expect(execProviderOn(world(mac({ mode: "automatic" }), []), "mac", "vps", 0)).toMatchObject({
+      refused: "no card",
+    });
+  });
+});
+
 describe("the t3.agents migration (K-722, migration 42)", () => {
   it("shares the T3 app card wherever the T3 agents card was, keeps its other shares, and turns on runs commands for an exec share", () => {
     const before = world(mac(), ["vps/t3/agents"]);
@@ -148,11 +169,12 @@ describe("the t3.agents migration (K-722, migration 42)", () => {
     });
     // Both cards sit in the circle and a "use" share is no exec share, so nothing changes.
     expect(migrateAgentShares(base)).toEqual({ changes: [], unmet: [] });
-    // An exec share never turns on a right that the owner set off.
-    expect(migrateAgentShares(world(mac({ mode: "off" }), ["vps/t3/agents", "vps/t3/app"]))).toEqual({
-      changes: [],
-      unmet: [],
-    });
+    // An exec share keeps every mode that the owner set: off, ask a circle, and automatic.
+    for (const mode of [{ mode: "off" }, { mode: "ask", circleId: "owner" }, { mode: "automatic" }] as const)
+      expect(migrateAgentShares(world(mac(mode), ["vps/t3/agents", "vps/t3/app"]))).toEqual({
+        changes: [],
+        unmet: [],
+      });
 
     const stacked = migrateAgentShares(
       world(mac(), ["vps/t3/agents"], {
@@ -160,5 +182,39 @@ describe("the t3.agents migration (K-722, migration 42)", () => {
       }),
     );
     expect(stacked.unmet).toEqual([expect.stringMatching(/share it there by hand/)]);
+  });
+
+  it("moves no share of a circle that holds more than machines, and sets no right that would cover another machine", () => {
+    // A person in the circle would get T3 itself with the app card, so the card stays where it is.
+    const people = world(mac(), ["vps/t3/agents"], {
+      circles: new Map([
+        [
+          "machines",
+          circle("machines", [mac(), { _tag: "email", email: "her@example.com" }], { x: 0, r: 100 }),
+        ],
+      ]),
+    });
+    expect(migrateAgentShares(people)).toEqual({
+      changes: [],
+      unmet: [expect.stringMatching(/machines holds more than machines/)],
+    });
+    // mac also controls the machine card of db in that circle, so automatic would cover db too.
+    const db = card("db", "machine", null);
+    const wider = world(mac(), ["vps/t3/agents", "vps/t3/app", "db"], {
+      machines: new Map([
+        ["mac", machineOf("mac")],
+        ["vps", machineOf("vps")],
+        ["db", machineOf("db")],
+      ]),
+    });
+    const withDb: State = {
+      ...wider,
+      resources: new Map([...wider.resources, ["db", db]]),
+      places: new Map([...wider.places, ["db", { x: 0, y: 0 }]]),
+    };
+    expect(migrateAgentShares(withDb)).toEqual({
+      changes: [],
+      unmet: [expect.stringMatching(/"Runs commands" of mac stays unset: automatic would also cover db/)],
+    });
   });
 });

@@ -77,10 +77,12 @@ describe("the link proxy (K-1609)", () => {
     });
     const folder = mkdtempSync(join(tmpdir(), "kitshn-link-"));
     const path = join(folder, "link.sock");
+    const calls: Array<object> = [];
     const links = await serveLinks(path, {
       reachOf: (provider) => (provider === "t3" ? [card(`127.0.0.1:${upstream.port}`)] : []),
       token: () => ({ clientId: "a.access", clientSecret: "secret" }),
       log: () => {},
+      audit: (call) => calls.push(call),
       scheme: "http",
       peers: { platform, access: "private", admits: (uid) => linkPeerAdmitted(uid, own, []) },
     });
@@ -91,6 +93,7 @@ describe("the link proxy (K-1609)", () => {
         headers: {
           "CF-Access-Client-Id": "forged",
           "x-keep": "1",
+          "Kitshn-Audit-Name": "read_file",
           cookie: "CF_Authorization=person; lang=he",
         },
         body: "x".repeat(200_000),
@@ -99,6 +102,9 @@ describe("the link proxy (K-1609)", () => {
       expect(seen[0]?.get("cf-access-client-id")).toBe("a.access");
       expect(seen[0]?.get("cf-access-client-secret")).toBe("secret");
       expect(seen[0]?.get("x-keep")).toBe("1");
+      // K-1610: the tool name goes to History, never to B.
+      expect(seen[0]?.has("kitshn-audit-name")).toBe(false);
+      expect(calls).toEqual([{ provider: "t3", machineId: "b", name: "read_file", status: 200 }]);
       // An Access session never crosses the proxy, in either direction.
       expect(seen[0]?.get("cookie")).toBe("lang=he");
       expect(answer.headers.getSetCookie()).toEqual(["theme=dark; Path=/"]);

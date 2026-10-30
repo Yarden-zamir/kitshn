@@ -4,8 +4,9 @@ import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Request } from "@kitshn/local";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  bridgeSession,
   type Caller,
   type LocalOptions,
   askLocal,
@@ -304,5 +305,36 @@ it("answers over the Windows pipe code, and a second daemon cannot take the name
     await askLocal(path, { id: "8", type: "status" } as never, 5000, { platform: "win32", daemonUid: -1 }),
   ).toEqual({
     kind: "not-running",
+  });
+});
+
+describe("the bridge (K-704, K-722)", () => {
+  it("sends the frames of a run that it runs only between two whole lines of the provider", async () => {
+    const written: Array<string> = [];
+    const exited = Promise.withResolvers<void>();
+    const session = bridgeSession(
+      (bytes) => {
+        const text = new TextDecoder().decode(bytes);
+        written.push(text);
+        if (text.includes('"exit"')) exited.resolve();
+      },
+      () => {},
+    );
+    session.fromProvider(new TextEncoder().encode('{"id":"1","type":"upsert","provider":"t3",'));
+    const run = { execId: "e1", command: "echo hi", timeoutSeconds: 5, stdin: false };
+    session.fromDaemon(new TextEncoder().encode(`${JSON.stringify({ type: "exec-run", run })}\n`));
+    // The run ends while the provider is in the middle of its line, so its frames wait.
+    await vi.waitFor(() => expect(session.queued()).toBeGreaterThan(1));
+    expect(written).toHaveLength(1);
+    session.fromProvider(new TextEncoder().encode('"resources":[]}\n'));
+    await exited.promise;
+    const joined = written.join("");
+    expect(joined.startsWith('{"id":"1","type":"upsert","provider":"t3","resources":[]}\n')).toBe(true);
+    expect(
+      joined
+        .split("\n")
+        .filter(Boolean)
+        .every((text) => JSON.parse(text) !== null),
+    ).toBe(true);
   });
 });

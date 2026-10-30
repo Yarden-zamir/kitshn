@@ -77,6 +77,15 @@ const folderOf = (cwd: string | undefined, home: string) =>
       ? `${home}${cwd.slice(1)}`
       : cwd;
 
+/**
+ * Changes to the folder as the user that runs the command, then runs it. The process starts in `/` and enters the
+ * folder only after it dropped to that user, so a run never sees a folder that its user cannot enter.
+ */
+const IN_FOLDER = 'cd -- "$1" || exit 126; exec /bin/sh -c "$2"';
+
+/** K-722: how long a run that exited may still deliver output that its pipes hold, before it ends anyway. */
+export const DRAIN_MS = 2_000;
+
 /** K-722: starts one run; `sink` gets its output under credit, the stdin credit it gives back, and its end. */
 export function startExec(spec: ExecSpec, sink: ExecSink): ExecHandle {
   const started = Date.now();
@@ -88,87 +97,129 @@ export function startExec(spec: ExecSpec, sink: ExecSink): ExecHandle {
     clearTimeout(timer);
     sink.exit({ ...value, durationMs: Date.now() - started });
   };
+  const nothing: ExecHandle = { credit: () => {}, input: () => {}, closeStdin: () => {}, kill: () => {} };
   const account = spec.uid === undefined ? null : accountOf(spec.uid);
   if (spec.uid !== undefined && !account) {
     queueMicrotask(() =>
       end({ exitCode: null, signal: null, reason: `this machine has no user id ${spec.uid}.` }),
     );
-    return { credit: () => {}, input: () => {}, closeStdin: () => {}, kill: () => {} };
+    return nothing;
   }
+  const windows = spec.platform === "win32";
   const home = account?.home ?? homedir();
+  const user = account?.name ?? process.env["USER"] ?? "";
   const [program = "", ...args] = spec.sudoUser
     ? execSudoArgv(spec.sudoUser, spec.cwd, spec.command)
-    : spec.platform === "win32"
+    : windows
       ? ["powershell.exe", "-NoProfile", "-Command", spec.command]
-      : ["/bin/sh", "-c", spec.command];
+      : ["/bin/sh", "-c", IN_FOLDER, "kitshn-exec", folderOf(spec.cwd, home), spec.command];
   let child: ChildProcessByStdio<Writable, Readable, Readable>;
   try {
     child = spawn(program, args, {
-      // The helper changes to the folder as the exec user, who may read folders that the daemon user cannot.
-      cwd: spec.sudoUser ? "/" : folderOf(spec.cwd, home),
+      cwd: windows ? folderOf(spec.cwd, home) : "/",
       stdio: ["pipe", "pipe", "pipe"],
-      ...(account
-        ? {
-            uid: account.uid,
-            gid: account.gid,
-            env: {
-              PATH: process.env["PATH"] ?? "/usr/bin:/bin",
-              HOME: account.home,
-              USER: account.name,
-              LOGNAME: account.name,
-            },
-          }
-        : {}),
+      // Its own process group, so an exit, a timeout or a kill ends every process of the run, also one in the
+      // background. Windows has no process groups; there only the main process ends (known limit).
+      detached: !windows,
+      ...(account ? { uid: account.uid, gid: account.gid } : {}),
+      // The same small environment for every user, so a run never sees the daemon's own variables.
+      env: windows
+        ? process.env
+        : {
+            PATH: process.env["PATH"] ?? "/usr/bin:/bin",
+            HOME: home,
+            USER: user,
+            LOGNAME: user,
+            ...(process.env["LANG"] ? { LANG: process.env["LANG"] } : {}),
+          },
     });
   } catch (error) {
     queueMicrotask(() =>
       end({ exitCode: null, signal: null, reason: `the run did not start: ${String(error)}` }),
     );
-    return { credit: () => {}, input: () => {}, closeStdin: () => {}, kill: () => {} };
+    return nothing;
   }
+  /** Ends every process of the run. The daemon cannot signal the processes of a sudo run; its helper ends them. */
+  const killGroup = (signal: NodeJS.Signals) => {
+    try {
+      if (!windows && !spec.sudoUser && child.pid) process.kill(-child.pid, signal);
+      else child.kill(signal);
+    } catch {
+      // The group is gone already.
+    }
+  };
   if (!spec.stdin) child.stdin.end();
   let credit = OUTPUT_WINDOW;
   let stdinCredit = STDIN_WINDOW;
   const streams = [child.stdout, child.stderr] as const;
-  const pump = (stream: Readable, name: "stdout" | "stderr") =>
+  // Output beyond the credit waits here; the streams pause, so the process blocks on its full pipe.
+  const queue: Array<{ readonly stream: "stdout" | "stderr"; readonly part: Uint8Array }> = [];
+  let exited: Omit<ExecEnd, "durationMs"> | null = null;
+  let open: number = streams.length;
+  const maybeEnd = () => {
+    if (exited !== null && open === 0 && queue.length === 0) end(exited);
+  };
+  const flush = () => {
+    while (queue.length > 0 && credit > 0) {
+      const { stream, part } = queue.shift()!;
+      credit -= part.length;
+      sink.output(stream, part);
+    }
+    // After the exit the pipes hold at most their buffers, so the rest is read into the queue.
+    for (const each of streams)
+      if (queue.length === 0 || exited !== null) each.resume();
+      else each.pause();
+    maybeEnd();
+  };
+  const pump = (stream: Readable, name: "stdout" | "stderr") => {
     stream.on("data", (chunk: Buffer) => {
-      for (let start = 0; start < chunk.length; start += FRAME_BYTES) {
-        const part = chunk.subarray(start, start + FRAME_BYTES);
-        credit -= part.length;
-        sink.output(name, part);
-      }
-      if (credit <= 0) for (const each of streams) each.pause();
+      for (let start = 0; start < chunk.length; start += FRAME_BYTES)
+        queue.push({ stream: name, part: chunk.subarray(start, start + FRAME_BYTES) });
+      flush();
     });
+    stream.once("close", () => {
+      open--;
+      maybeEnd();
+    });
+  };
   pump(child.stdout, "stdout");
   pump(child.stderr, "stderr");
   child.stdin.on("error", () => {});
   child.on("error", (error) =>
     end({ exitCode: null, signal: null, reason: `the run failed: ${error.message}` }),
   );
-  child.on("close", (code, signal) =>
-    // The helper ends a killed run with 137; the run still ended by the kill, not by itself.
-    end(
-      spec.sudoUser && reason !== null
-        ? { exitCode: null, signal: "SIGKILL", reason }
-        : { exitCode: signal ? null : code, signal: signal ?? null, reason },
-    ),
-  );
+  // The run ends with its main process: the rest of its group goes, and the pipes drain for a short time. `close`
+  // alone could wait forever for a process that left the group and holds a pipe.
+  child.on("exit", (code, signal) => {
+    killGroup("SIGKILL");
+    exited =
+      reason !== null
+        ? { exitCode: null, signal: signal ?? "SIGKILL", reason }
+        : { exitCode: signal ? null : code, signal: signal ?? null, reason };
+    setTimeout(() => {
+      for (const each of streams) each.destroy();
+    }, DRAIN_MS).unref();
+    flush();
+  });
   const kill = (why: string) => {
-    if (ended) return;
+    if (ended || reason !== null || exited !== null) return;
     reason = why;
-    if (!spec.sudoUser) return void child.kill("SIGKILL");
-    // sudo passes TERM on to the helper, which kills the group; sudo itself cannot pass on a KILL.
+    if (!spec.sudoUser) return killGroup("SIGKILL");
+    // sudo passes TERM on to the helper, which kills its group; sudo itself cannot pass on a KILL.
     child.kill("SIGTERM");
     setTimeout(() => child.kill("SIGKILL"), 5_000).unref();
   };
-  const timer = setTimeout(
-    () => kill(`timed out after ${Math.round(spec.timeoutMs / 1000)} s`),
-    spec.timeoutMs,
-  );
+  // A run that exited but whose caller takes no more output ends at its timeout too, with what it sent.
+  const timer = setTimeout(() => {
+    if (exited === null) return kill(`timed out after ${Math.round(spec.timeoutMs / 1000)} s`);
+    queue.length = 0;
+    open = 0;
+    maybeEnd();
+  }, spec.timeoutMs);
   return {
     credit: (bytes) => {
       credit += bytes;
-      if (credit > 0) for (const each of streams) each.resume();
+      flush();
     },
     input: (data) => {
       if (!spec.stdin) throw new Error("this run has no stdin (K-722).");
@@ -189,7 +240,7 @@ export function startExec(spec: ExecSpec, sink: ExecSink): ExecHandle {
 
 /**
  * K-722: applies one frame from A to a run on B. A frame that only B sends is a mistake of the relay and throws. A
- * stdin chunk beyond the credit throws too, so its sender gets the error.
+ * stdin chunk beyond the credit throws too; the hub logs it, because A checks the same credit before it sends.
  */
 export function applyFrame(run: ExecHandle, frame: ExecFrame): void {
   if (frame.type === "credit") return run.credit(frame.bytes);

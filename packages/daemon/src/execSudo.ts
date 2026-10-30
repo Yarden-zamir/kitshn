@@ -1,6 +1,6 @@
 // K-722: a daemon that is not root runs exec as the provider's exec user through one narrow sudo rule, so a broken
 // provider never blocks a repair. The daemon user holds the machine key, so running as that user is a step down.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { systemTool, toolProblem } from "./doors.ts";
@@ -10,8 +10,9 @@ const SUDOERS_DIR = "/etc/sudoers.d";
 const sudoersPath = (execUser: string) => `${SUDOERS_DIR}/kitshn-exec-${execUser}`;
 
 /**
- * The helper runs one command in a folder as the user that sudo made. Its command gets its own process group, and a
- * TERM, which sudo passes on, kills that whole group: the daemon cannot signal another user's processes itself.
+ * The helper runs one command in a folder as the user that sudo made. Its command gets its own process group. A
+ * TERM, which sudo passes on, and the end of the command both kill that whole group: the daemon cannot signal
+ * another user's processes itself.
  */
 export const EXEC_HELPER = `#!/bin/sh
 # kitshn exec helper (K-722): kitshn-exec <folder> <command>
@@ -20,11 +21,23 @@ case "$1" in
   "~/"*) cd "$HOME/\${1#"~/"}" || exit 126 ;;
   *) cd "$1" || exit 126 ;;
 esac
-set -m
-/bin/sh -c "$2" &
+# The trap comes first, so a TERM right after the start still ends the group. Known limit: a TERM between the
+# start and child=$! leaves the group; revisit if runs are killed in their first milliseconds in use.
+child=
+trap '[ -n "$child" ] && kill -KILL -$child 2>/dev/null; exit 137' TERM INT HUP
+# Its own process group: setsid on Linux (dash ignores set -m in a script), set -m where setsid is missing.
+if command -v setsid >/dev/null 2>&1; then
+  setsid /bin/sh -c "$2" &
+else
+  set -m
+  /bin/sh -c "$2" &
+fi
 child=$!
-trap 'kill -KILL -- -$child 2>/dev/null; exit 137' TERM INT HUP
 wait $child
+status=$?
+# A process that the command left in the background ends with it, so it holds no pipe of the run.
+kill -KILL -$child 2>/dev/null
+exit $status
 `;
 
 export const execSudoersLine = (daemonUser: string, execUser: string) =>
@@ -42,11 +55,18 @@ export const execSudoArgv = (execUser: string, cwd: string | undefined, command:
   command,
 ];
 
-/** K-722: whether the daemon user may run the helper as `execUser` now; it runs `true` once, with no password. */
-export function execSudoReady(execUser: string): boolean {
-  if (!existsSync(EXEC_HELPER_PATH)) return false;
+/**
+ * K-722: whether the daemon user may run the helper as `execUser` now; it runs `true` once, with no password. It
+ * never blocks the daemon: a sudo that asks or hangs counts as no rule after 5 seconds.
+ */
+export function execSudoReady(execUser: string): Promise<boolean> {
+  if (!existsSync(EXEC_HELPER_PATH)) return Promise.resolve(false);
   const [program = "", ...args] = execSudoArgv(execUser, "/", "true");
-  return spawnSync(program, args, { stdio: "ignore", timeout: 5_000 }).status === 0;
+  return new Promise((resolve) => {
+    const child = spawn(program, args, { stdio: "ignore", timeout: 5_000 });
+    child.once("error", () => resolve(false));
+    child.once("exit", (code) => resolve(code === 0));
+  });
 }
 
 /** A Linux user name: a lower-case letter or `_` first, then letters, digits, `_` and `-`, at most 32. */

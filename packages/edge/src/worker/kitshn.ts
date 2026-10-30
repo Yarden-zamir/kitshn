@@ -303,9 +303,15 @@ import {
 } from "../core/library.ts";
 import { badgeState } from "../core/badge.ts";
 import { listedApps } from "../core/listing.ts";
-import { commandsFor, machineBusy, providerCards, providerPushes } from "../core/providers.ts";
+import { commandsFor, machineBusy, providerCards, providerPushes, reachOf } from "../core/providers.ts";
 import { healthCell, healthNotices } from "../core/health.ts";
-import { commandName, execMachinesOf, execOutcome, mayExecOn, migrateAgentShares } from "../core/exec.ts";
+import {
+  commandName,
+  execMachinesOf,
+  execOutcome,
+  execProviderOn,
+  migrateAgentShares,
+} from "../core/exec.ts";
 import {
   HealthReport as HealthReportSchema,
   type HealthReport,
@@ -520,9 +526,13 @@ const saveMachine = (socket: WebSocket, attachment: Extract<Attachment, { kind: 
 
 const decodeHealth = Schema.decodeUnknownSync(HealthReportSchema);
 const decodeExecFrame = Schema.decodeUnknownSync(ExecFrameSchema);
+/** K-722: the meta key that marks the `t3.agents` step of migration 42 as done. */
+const AGENTS_MIGRATED = "agents-migrated";
 const decodeExecRun = Schema.decodeUnknownSync(ExecRunSchema);
 /** K-1610: how often the maps hear of new link events. */
 const LINK_BROADCAST_MS = 10_000;
+/** K-1610: the forwarded calls of one machine that kitshn records in a minute; the rest are counted and dropped. */
+const LINK_CALLS_PER_MINUTE = 120;
 
 /** K-722: one run that kitshn relays; a row of `exec_runs`, so an evicted Durable Object finds it again. */
 type ExecRow = {
@@ -899,6 +909,8 @@ export class Kitshn extends DurableObject<Env> {
   private liveSites = new Map<string, LiveSite>();
   /** K-1610: when an audit last told the maps of new link events. */
   private linkBroadcastAt = 0;
+  /** K-1610: the recorded link calls of each machine in the current minute. */
+  private linkRates = new Map<string, { minute: number; count: number; dropped: number }>();
   /** K-704: the kinds and commands of each machine's providers, by machine id. */
   private providerRegs = new Map<string, Array<ProviderRegistration>>();
   /** K-1608: the hash of each push of each machine with providers, by machine id and push key. */
@@ -1286,7 +1298,7 @@ export class Kitshn extends DurableObject<Env> {
         migrate((query) => ctx.storage.sql.exec(query), from);
         // The rest of migration 6 needs code: the repo id comes out of each card id.
         if (from < REPO_GATE_MIGRATION) this.backfillRepoIds();
-        if (from < AGENTS_MIGRATION) this.migrateAgents();
+        this.migrateAgents();
       });
       this.load();
       // K-1833: a bootstrap with KITSHN_IMPORT asks for one import, before the start steps, so they run on the
@@ -2642,7 +2654,9 @@ export class Kitshn extends DurableObject<Env> {
       this.ctx.storage.transactionSync(() => {
         writeImport(this.ctx.storage.sql, state, (from) => {
           if (from < REPO_GATE_MIGRATION) this.backfillRepoIds();
-          if (from < AGENTS_MIGRATION) this.migrateAgents();
+          // An export from before migration 42 still holds `t3.agents` shares, so its step runs again.
+          if (from < AGENTS_MIGRATION) this.sql("DELETE FROM meta WHERE key = ?", AGENTS_MIGRATED);
+          this.migrateAgents();
           this.insertRevision(
             IMPORT_ACTOR,
             `Imported the state of ${new Date(state.exportedAt).toISOString()} (K-1833)`,
@@ -5262,6 +5276,8 @@ export class Kitshn extends DurableObject<Env> {
       this.broadcast();
     } else if (message.type === "execStart" && attachment.check === "signed") {
       await this.execStart(socket, machine, message);
+    } else if (message.type === "linkCall" && attachment.check === "signed") {
+      this.recordLinkCall(machine, message);
     } else if (message.type === "execFrame" && attachment.check === "signed") {
       this.execRelay(socket, machine, message);
     } else if (message.type === "desiredSet" && typeof message.kind === "string") {
@@ -7612,6 +7628,12 @@ export class Kitshn extends DurableObject<Env> {
       );
       this.sql("DELETE FROM join_codes WHERE expires_at < ?", now);
       this.sql("DELETE FROM device_invites WHERE expires_at < ?", now);
+      // K-722: a run lasts at most 3,600 s and an approval 24 hours, so a row that a restart left with no socket goes.
+      this.sql(
+        "DELETE FROM exec_runs WHERE (state = 'running' AND started_at < ?) OR started_at < ?",
+        now - 70 * 60_000,
+        now - 25 * 60 * 60_000,
+      );
       // K-1610: link events stay 30 days, at most 2,000.
       this.sql(
         "DELETE FROM link_events WHERE at < ? OR id <= (SELECT id FROM link_events ORDER BY id DESC LIMIT 1 OFFSET 2000)",
@@ -8048,8 +8070,11 @@ export class Kitshn extends DurableObject<Env> {
    * share that it cannot move goes to the log and into the revision text, for the owner.
    */
   private migrateAgents() {
+    // Its own mark, not the schema version, keeps it to one run: a second run would undo an owner's Undo.
+    if (this.meta(AGENTS_MIGRATED) !== null) return;
     this.load();
     const { changes, unmet } = migrateAgentShares(this.state);
+    this.setMeta(AGENTS_MIGRATED, String(Date.now()));
     if (changes.length === 0 && unmet.length === 0) return;
     this.persist(changes);
     for (const line of unmet) console.error(`K-722 migration 42: ${line}`);
@@ -11485,6 +11510,12 @@ export class Kitshn extends DurableObject<Env> {
 
   /** K-1712: why an approved ask may no longer run, or null. */
   private proposalGone(proposal: Proposal, now: number): string | null {
+    if (
+      proposal.action === "exec" &&
+      this.sql("SELECT 1 AS one FROM exec_runs WHERE proposal_id = ? AND state = 'waiting'", proposal.id)
+        .length === 0
+    )
+      return "the caller of this run is gone.";
     const mode =
       proposal.right === "readsCode" || proposal.right === "writesCode"
         ? codeRightMode(this.state, proposal.machineId, proposal.right, proposal.target, now)
@@ -11633,13 +11664,31 @@ export class Kitshn extends DurableObject<Env> {
     if (!this.state.machines.has(target)) return end(`refused: kitshn has no machine ${target}.`);
     if (this.openSocket(target) === null) return end("the target is offline");
     const now = Date.now();
-    if (!mayExecOn(this.state, machine.id, target, now))
+    const via = execProviderOn(this.state, machine.id, target, now);
+    if ("refused" in via)
       return end(
-        `refused: ${machine.name} controls no card on ${this.state.machines.get(target)?.name ?? target}; share its machine card or a provider card to an agent circle of ${machine.name} at control (K-722).`,
+        via.refused === "no card"
+          ? `refused: ${machine.name} controls no card on ${this.state.machines.get(target)?.name ?? target}; share its machine card or a provider card to an agent circle of ${machine.name} at control (K-722).`
+          : `refused: ${via.refused}`,
       );
-    const provider =
+    // B's provider comes from the card that A controls; A's own provider names only the label of its thread.
+    const { provider } = via;
+    const sourceProvider =
       typeof message.provider === "string" && message.provider.length <= 32 ? message.provider : null;
-    const thread = this.execThread(message.attested, provider);
+    const thread = this.execThread(message.attested, sourceProvider);
+    // The row stands for the caller until the run ends, so an approval starts only a run whose caller still waits.
+    this.sql(
+      `INSERT INTO exec_runs (exec_id, source, target, provider, command, cwd, thread, proposal_id, state, started_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'waiting', ?)`,
+      execId,
+      machine.id,
+      target,
+      provider,
+      run.command,
+      run.cwd ?? null,
+      thread,
+      now,
+    );
     const outcome = await this.ask(
       machine,
       {
@@ -11650,21 +11699,12 @@ export class Kitshn extends DurableObject<Env> {
       },
       true,
     );
-    if (outcome.outcome === "refused") return end(`refused: ${outcome.reason}`);
+    if (outcome.outcome === "refused") {
+      this.sql("DELETE FROM exec_runs WHERE exec_id = ?", execId);
+      return end(`refused: ${outcome.reason}`);
+    }
     if (outcome.outcome === "waiting") {
-      this.sql(
-        `INSERT INTO exec_runs (exec_id, source, target, provider, command, cwd, thread, proposal_id, state, started_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?)`,
-        execId,
-        machine.id,
-        target,
-        provider,
-        run.command,
-        run.cwd ?? null,
-        thread,
-        outcome.proposalId,
-        now,
-      );
+      this.sql("UPDATE exec_runs SET proposal_id = ? WHERE exec_id = ?", outcome.proposalId, execId);
       return send(socket, {
         type: "execState",
         execId,
@@ -11691,11 +11731,18 @@ export class Kitshn extends DurableObject<Env> {
     } catch {
       return { outcome: "refused", reason: "the stored run does not decode." };
     }
-    const provider = isRecord(body) && typeof body["provider"] === "string" ? body["provider"] : null;
-    const thread = isRecord(body) && typeof body["thread"] === "string" ? body["thread"] : null;
+    const [row] = this.sql<ExecRow>(
+      "SELECT * FROM exec_runs WHERE exec_id = ? AND source = ? AND state = 'waiting'",
+      run.execId,
+      machine.id,
+    );
     const source = this.openSocket(machine.id);
+    // A run whose caller gave up, or whose machine went away, never starts, also after an approval.
+    if (!row || !source) {
+      this.sql("DELETE FROM exec_runs WHERE exec_id = ?", run.execId);
+      return { outcome: "refused", reason: "the caller of this run is gone, so it does not start (K-722)." };
+    }
     const targetSocket = this.openSocket(target);
-    const now = Date.now();
     if (!targetSocket) {
       this.sql("DELETE FROM exec_runs WHERE exec_id = ?", run.execId);
       if (source)
@@ -11712,20 +11759,8 @@ export class Kitshn extends DurableObject<Env> {
         } satisfies ServerToDaemon);
       return { outcome: "done", result: { execId: run.execId, state: "ended" } };
     }
-    this.sql(
-      `INSERT INTO exec_runs (exec_id, source, target, provider, command, cwd, thread, proposal_id, state, started_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'running', ?)
-       ON CONFLICT (exec_id) DO UPDATE SET state = 'running'`,
-      run.execId,
-      machine.id,
-      target,
-      provider,
-      run.command,
-      run.cwd ?? null,
-      thread,
-      now,
-    );
-    send(targetSocket, { type: "execRun", provider, run } satisfies ServerToDaemon);
+    this.sql("UPDATE exec_runs SET state = 'running' WHERE exec_id = ?", run.execId);
+    send(targetSocket, { type: "execRun", provider: row.provider, run } satisfies ServerToDaemon);
     return { outcome: "done", result: { execId: run.execId, state: "running" } };
   }
 
@@ -11759,9 +11794,10 @@ export class Kitshn extends DurableObject<Env> {
     if (!row || (fromB ? row.target : row.source) !== machine.id)
       return frame.type === "exit" ? undefined : lost();
     if (row.state === "waiting") {
-      // Only a kill of A means something before the approval: the run ends, and its proposal stays for History.
+      // Only a kill of A means something before the approval: the run ends, and so does its proposal.
       if (frame.type === "close" && frame.what === "kill") {
         this.sql("DELETE FROM exec_runs WHERE exec_id = ?", execId);
+        this.closeExecProposal(row.proposal_id, "the caller ended the run before the approval");
         send(socket, {
           type: "execFrame",
           execId,
@@ -11797,6 +11833,8 @@ export class Kitshn extends DurableObject<Env> {
       machineId,
     );
     for (const row of rows) {
+      if (row.state === "waiting")
+        this.closeExecProposal(row.proposal_id, "a machine of the run went offline");
       const toSource = row.target === machineId;
       const socket = this.openSocket(toSource ? row.source : row.target);
       if (!socket) continue;
@@ -11809,6 +11847,66 @@ export class Kitshn extends DurableObject<Env> {
       } satisfies ServerToDaemon);
       if (toSource && row.state === "running")
         this.recordExec(row, { exitCode: null, reason: "the relay was lost" });
+    }
+  }
+
+  /**
+   * K-722: a run that ends before its approval closes its proposal, so no later approval starts it. The approvers'
+   * Inbox drops it with the next map update.
+   */
+  private closeExecProposal(proposalId: string | null, why: string) {
+    if (proposalId === null) return;
+    const closed = this.sql(
+      "UPDATE proposals SET state = 'denied', decided_at = ?, decided_by = ? WHERE id = ? AND state = 'pending' RETURNING id",
+      Date.now(),
+      JSON.stringify({ actor: { _tag: "kitshn", reason: why }, reason: why }),
+      proposalId,
+    );
+    if (closed.length > 0) this.broadcast();
+  }
+
+  /**
+   * K-1610: one forwarded tool call of a machine's link proxy (MM-1922), with the tool name only. kitshn records it
+   * only for a machine that the caller reaches now, so a machine cannot put calls on another machine's record, and
+   * at most LINK_CALLS_PER_MINUTE of one machine a minute.
+   */
+  private recordLinkCall(machine: Machine, message: Extract<DaemonMessage, { type: "linkCall" }>) {
+    const name = typeof message.name === "string" ? message.name.slice(0, 100) : "";
+    const target = typeof message.target === "string" ? message.target : "";
+    const status = Number.isSafeInteger(message.status) ? message.status : 0;
+    if (name === "" || name.includes(" ")) return;
+    const now = Date.now();
+    const reached = (this.providerRegs.get(machine.id) ?? []).some((reg) =>
+      reachOf(this.state, machine.id, reg.name, now).some((card) => card.machineId === target),
+    );
+    if (!reached)
+      return console.warn(`kitshn dropped a link call of ${machine.name}: it reaches no machine ${target}.`);
+    const minute = Math.floor(now / 60_000);
+    const rate = this.linkRates.get(machine.id);
+    const counted = rate?.minute === minute ? rate : { minute, count: 0, dropped: 0 };
+    this.linkRates.set(machine.id, counted);
+    if (counted.count >= LINK_CALLS_PER_MINUTE) {
+      counted.dropped += 1;
+      if (counted.dropped === 1)
+        console.warn(`kitshn drops link calls of ${machine.name} for the rest of this minute.`);
+      return;
+    }
+    counted.count += 1;
+    this.sql(
+      `INSERT INTO link_events (at, source, target, kind, thread, name, cwd, outcome, exit_code)
+       VALUES (?, ?, ?, 'tool', NULL, ?, NULL, ?, NULL)`,
+      now,
+      machine.id,
+      target,
+      name,
+      status >= 200 && status < 400 ? "succeeded" : status === 401 || status === 403 ? "refused" : "failed",
+    );
+    this.sql(
+      "DELETE FROM link_events WHERE id <= (SELECT id FROM link_events ORDER BY id DESC LIMIT 1 OFFSET 2000)",
+    );
+    if (now - this.linkBroadcastAt >= LINK_BROADCAST_MS) {
+      this.linkBroadcastAt = now;
+      this.broadcast();
     }
   }
 

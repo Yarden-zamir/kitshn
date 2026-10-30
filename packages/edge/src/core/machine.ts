@@ -320,6 +320,11 @@ export type DaemonMessage =
       readonly run: ExecRun;
       readonly attested: Readonly<Record<string, string>>;
     }
+  /**
+   * K-1610: one call that the link proxy of this machine forwarded with a tool name (MM-1922), and the status of its
+   * answer, 0 when the link failed. Never its arguments or its answer.
+   */
+  | { readonly type: "linkCall"; readonly target: string; readonly name: string; readonly status: number }
   /** K-722: one frame of a run: from B its output, stdin credit and exit; from A its credit, stdin and close. */
   | { readonly type: "execFrame"; readonly execId: string; readonly frame: ExecFrame }
   /** K-1608: the daemon saved the push with this key and hash and gave it to its provider. */

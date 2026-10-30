@@ -1,17 +1,28 @@
 import { describe, expect, it } from "vitest";
+import { gone } from "./processes.testing.ts";
 import { type ExecEnd, OUTPUT_WINDOW, FRAME_BYTES, startExec } from "./exec.ts";
 
 const platform = process.platform;
 
 /** One run with a sink that records everything and resolves at the end. */
-function run(command: string, more: { stdin?: boolean; timeoutMs?: number; grant?: boolean } = {}) {
+function run(
+  command: string,
+  more: { stdin?: boolean; timeoutMs?: number; grant?: boolean; cwd?: string; uid?: number } = {},
+) {
   const out: Array<{ stream: string; text: string; bytes: number }> = [];
   const credits: Array<number> = [];
   const ended = Promise.withResolvers<ExecEnd>();
   let received = 0;
   const reached = new Map<number, () => void>();
   const handle = startExec(
-    { command, timeoutMs: more.timeoutMs ?? 30_000, stdin: more.stdin ?? false, platform },
+    {
+      command,
+      timeoutMs: more.timeoutMs ?? 30_000,
+      stdin: more.stdin ?? false,
+      platform,
+      ...(more.cwd === undefined ? {} : { cwd: more.cwd }),
+      ...(more.uid === undefined ? {} : { uid: more.uid }),
+    },
     {
       output: (stream, data) => {
         received += data.length;
@@ -50,12 +61,43 @@ describe("an exec run (K-722)", () => {
     });
   });
 
+  it("ends with its main process and ends what it left in the background, also at a timeout (C-13)", async () => {
+    const left = run("sleep 30 & echo $!; exit 0");
+    expect(await left.ended).toMatchObject({ exitCode: 0, signal: null });
+    const pid = Number(
+      left.out
+        .map((frame) => frame.text)
+        .join("")
+        .trim(),
+    );
+    expect(gone(pid)).toBe(true);
+    const both = run("sleep 30 & echo $!; sleep 30", { timeoutMs: 100 });
+    expect(await both.ended).toMatchObject({
+      exitCode: null,
+      signal: "SIGKILL",
+      reason: "timed out after 0 s",
+    });
+    const text = (frames: typeof both.out) =>
+      frames
+        .map((frame) => frame.text)
+        .join("")
+        .trim();
+    expect(gone(Number(text(both.out)))).toBe(true);
+  });
+
+  it("runs in the folder that it names, and ends a run in a folder that does not exist with 126", async () => {
+    const root = run("pwd -P", { cwd: "/" });
+    await root.ended;
+    expect(root.out.map((frame) => frame.text).join("")).toBe("/\n");
+    expect(await run("true", { cwd: "/no/such/folder" }).ended).toMatchObject({ exitCode: 126 });
+  });
+
   it("stops at the output credit until the caller grants more, so no hop buffers more than the window", async () => {
     const big = 3 * OUTPUT_WINDOW;
     const slow = run(`head -c ${big} /dev/zero`, { grant: false });
     await slow.atLeast(OUTPUT_WINDOW - FRAME_BYTES);
     // Without credit the daemon stops reading; the rest waits in the pipe of the process.
-    expect(slow.received()).toBeLessThanOrEqual(OUTPUT_WINDOW + 64 * 1024);
+    expect(slow.received()).toBeLessThanOrEqual(OUTPUT_WINDOW + FRAME_BYTES);
     slow.handle.credit(big);
     expect(await slow.ended).toMatchObject({ exitCode: 0 });
     expect(slow.received()).toBe(big);
