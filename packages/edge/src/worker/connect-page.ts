@@ -54,7 +54,7 @@ export function connectPage(view: ConnectView, email: string, nonce: string): st
   const data = JSON.stringify({ ...view, probes: ADDRESS_PROBES }).replaceAll("<", "\\u003c");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Join ${escapeHtml(portCard.name)}</title>
+<title>Connect to ${escapeHtml(portCard.name)}</title>
 <style>
 :root { color-scheme: light dark; --ink: #111; --paper: #fffdf6; --accent: #7c3aed; }
 @media (prefers-color-scheme: dark) { :root { --ink: #f5f3ea; --paper: #17161c; } }
@@ -74,9 +74,9 @@ li { margin: 6px 0; }
 <h1>${escapeHtml(portCard.name)}</h1>
 ${
   view.openToAll
-    ? `<section><div>Open to everyone: join</div><p><code>${escapeHtml(portCard.address)}</code></p>
-<div class="note">Ports: ${escapeHtml(portCard.ports.join(", "))}${portCard.reachable ? "" : ". The port card has no public address yet, so it is not reachable."}</div></section>
-<p class="note">Anyone who knows the address can reach the portCard. Keep the portCard's own whitelist on if you want to choose the players.</p>
+    ? `<section><div>Open to everyone: connect to</div><p><code>${escapeHtml(portCard.address)}</code></p>
+<div class="note">Ports: ${escapeHtml(portCard.ports.join(", "))}${portCard.reachable ? "" : ". This server has no public address yet, so it is not reachable."}</div></section>
+<p class="note">Anyone who knows the address can reach this server. Keep the server's own whitelist on if you want to choose the players.</p>
 </main></body></html>`
     : `<p class="note">Logged in as ${escapeHtml(email)}</p>
 <section id="connect"><div>Connect to</div><p><code id="address"></code> <button class="quiet" id="copy">Copy</button></p>
@@ -84,7 +84,7 @@ ${
 <section id="open"><div><strong>Open the door for your addresses</strong></div><ul id="addresses"><li>Looking for your addresses…</li></ul>
 <p class="note" id="probe-note"></p><button id="open-button" disabled>Open</button> <span class="error" id="error"></span></section>
 <section id="doors-section"><div><strong>Your open doors</strong></div><ul id="doors"></ul><button class="quiet" id="end" hidden>End now</button></section>
-<p class="note">While a door is open, everyone who shares your internet address can reach the portCard. Keep the portCard's own whitelist on.</p>
+<p class="note">While a door is open, everyone who shares your internet address can reach this server. Keep the server's own whitelist on.</p>
 </main>
 <script type="application/json" id="data">${data}</script>
 <script nonce="${nonce}">
@@ -106,7 +106,7 @@ async function send(body) {
   location.reload();
 }
 $("address").textContent = data.portCard.address;
-$("ports").textContent = "Ports: " + data.portCard.ports.join(", ") + (data.portCard.reachable ? "" : ". The port card has no public address yet, so it is not reachable.");
+$("ports").textContent = "Ports: " + data.portCard.ports.join(", ") + (data.portCard.reachable ? "" : ". This server has no public address yet, so it is not reachable.");
 $("copy").onclick = () => navigator.clipboard.writeText(data.portCard.address);
 $("open-button").textContent = "Open for " + data.portCard.doorHours + " h";
 if (data.error) $("error").textContent = data.error;

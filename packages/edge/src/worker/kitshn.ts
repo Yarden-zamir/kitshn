@@ -1104,21 +1104,23 @@ export class Kitshn extends DurableObject<Env> {
           ? this.jobProgress(source.jobId, row.progress, now)
           : source._tag === "takeover"
             ? this.takeoverProgress(cardId, row.progress, now)
-            : source._tag === "deploy"
-              ? settle
-                ? this.deployProgress(source.deployId, row.progress, now)
-                : row.progress
-              : source._tag === "rollback"
+            : source._tag === "relay"
+              ? this.relayProgress(cardId, row.progress, now)
+              : source._tag === "deploy"
                 ? settle
-                  ? this.runRollbackProgress(source.id, row.progress, now)
+                  ? this.deployProgress(source.deployId, row.progress, now)
                   : row.progress
-                : source._tag === "health"
-                  ? now >= source.until
-                    ? failProgress(row.progress, "The daemon sent no health report within a minute.", now)
+                : source._tag === "rollback"
+                  ? settle
+                    ? this.runRollbackProgress(source.id, row.progress, now)
                     : row.progress
-                  : wake
-                    ? failProgress(row.progress, INTERRUPTED, now)
-                    : row.progress;
+                  : source._tag === "health"
+                    ? now >= source.until
+                      ? failProgress(row.progress, "The daemon sent no health report within a minute.", now)
+                      : row.progress
+                    : wake
+                      ? failProgress(row.progress, INTERRUPTED, now)
+                      : row.progress;
       if (this.setProgress(cardId, { ...row, progress })) changed = true;
     }
     // The open jobs only after a new job came, so most map updates read no job rows.
@@ -1224,6 +1226,65 @@ export class Kitshn extends DurableObject<Env> {
     return reachStep(progress, row.next, now);
   }
 
+  /** K-407, K-410: a refused or unclear Cloudflare write of the step that runs shows on the sticker. */
+  private alarmWait(alarmStep: AlarmStep, now: number): ActionProgress["retry"] {
+    const failure = this.alarmSteps().get(alarmStep);
+    return failure && failure.retryAt > now
+      ? { reason: `The ${alarmStep} step of kitshn failed.`, at: failure.retryAt }
+      : null;
+  }
+
+  /** K-2009, K-538: the step of a new relayed port card, from what each step leaves behind. */
+  private relayProgress(cardId: string, progress: ActionProgress, now: number): ActionProgress {
+    const [row] = this.portRows("card_id = ?", cardId);
+    const portCard = row ? portOf(row) : null;
+    const address = this.state.resources.get(cardId)?.addresses[1];
+    const port = portCard?.ports[0];
+    if (!portCard?.relay || !address || !port)
+      return failProgress(progress, "The relay stopped: its port card went.", now);
+    const tunnel = this.tunnelRows().find((item) => item.machine_id === portCard.machine);
+    const [dns] = this.sql<{ error: string | null }>(
+      "SELECT error FROM dns_objects WHERE address = ?",
+      address,
+    );
+    const [record] = this.sql<PortRecordRow>(
+      "SELECT * FROM port_records WHERE card_id = ? AND type = 'A'",
+      cardId,
+    );
+    const relayMachine = this.state.machines.get(portCard.relay);
+    const listening = relayMachine ? (this.machineView(relayMachine).status?.listening ?? []) : [];
+    const step = !this.access.get(`app:${cardId}:${address}`)?.cfId
+      ? 0
+      : !tunnel?.applied.includes(address)
+        ? 1
+        : !dns || dns.error
+          ? 2
+          : !record || record.error
+            ? 3
+            : !listening.includes(portKey(port))
+              ? 4
+              : 5;
+    if (step === 5) return finishProgress(progress, now);
+    let retry: ActionProgress["retry"] = null;
+    if (step === 0) {
+      const access = accessStates(this.desired(now), this.access)[cardId];
+      if (access?.state === "failed") return failProgress(progress, access.error, now);
+      retry =
+        access?.state === "retrying"
+          ? { reason: access.error, at: access.at }
+          : this.alarmWait("Access", now);
+    } else if (step === 1) {
+      retry = tunnel?.error ? { reason: tunnel.error, at: tunnel.retry_at } : this.alarmWait("tunnels", now);
+    } else if (step === 2) {
+      retry = dns?.error ? { reason: dns.error, at: now } : this.alarmWait("DNS", now);
+    } else if (step === 3) {
+      retry = record?.error
+        ? { reason: record.error, at: record.retry_at }
+        : this.alarmWait("port card DNS", now);
+    }
+    return withRetry(reachStep(progress, step, now), retry);
+  }
+
   /** K-1623, K-538: the step of "Take the address", from the handover, the Access row and the machine's push. */
   private takeoverProgress(cardId: string, progress: ActionProgress, now: number): ActionProgress {
     const site = this.liveSites.get(cardId);
@@ -1241,13 +1302,7 @@ export class Kitshn extends DurableObject<Env> {
           : now < handover.ingressAt + HANDOVER_INGRESS_MS
             ? 3
             : 4;
-    // K-407, K-410: a refused or unclear Cloudflare write of the step that runs shows on the sticker.
-    const waiting = (alarmStep: AlarmStep) => {
-      const failure = this.alarmSteps().get(alarmStep);
-      return failure && failure.retryAt > now
-        ? { reason: `The ${alarmStep} step of kitshn failed.`, at: failure.retryAt }
-        : null;
-    };
+    const waiting = (alarmStep: AlarmStep) => this.alarmWait(alarmStep, now);
     let retry: ActionProgress["retry"] = null;
     if (step === 0) {
       const access = accessStates(this.desired(now), this.access)[cardId];
@@ -5237,7 +5292,8 @@ export class Kitshn extends DurableObject<Env> {
       this.updatePortAddresses(machine.id, status.publicAddresses);
       // K-2006: a daemon that connects gets its door plan, also an empty one: the last card may have gone while it was
       // offline for longer than a plan job waits, and only an empty plan removes its table and its boot ports.
-      if (attachment.status === null && status.capabilities?.includes("doors"))
+      // A first status can come before the machine has `doors`, so the plan goes out when it gets them.
+      if (!attachment.status?.capabilities?.includes("doors") && status.capabilities?.includes("doors"))
         this.queueDoors(machine.id, { _tag: "kitshn", reason: "door plan on connect (K-2006)" }, Date.now());
       this.setMachineOs(machine.id, machineOs(status.os));
       // An update job waits for the status; it can go now.
@@ -14041,27 +14097,44 @@ export class Kitshn extends DurableObject<Env> {
     if (relay === machineId) return refuse("A machine does not relay its own port card.");
     const problem = this.doorsProblem(relay ?? machineId);
     if (problem) return refuse(problem, 409);
-    // K-2001: a door must not close a port that a kitshn site of the door machine serves.
+    // K-2009: two relay listeners cannot share a port, and a door of one card would open the other.
+    const doorHost = relay ?? machineId;
+    const holder = this.portRows().find((row) => {
+      const other = portOf(row);
+      return (
+        doorMachine(other) === doorHost &&
+        (relay !== null || other.relay !== null) &&
+        other.ports.some((port) => portCard.ports.some((mine) => portKey(mine) === portKey(port)))
+      );
+    });
+    if (holder)
+      return refuse(
+        `The port card ${holder.name} already holds this port on ${this.state.machines.get(doorHost)?.name ?? doorHost}, and a relayed port has one card. Pick another port or another relay machine.`,
+        409,
+      );
+    // K-2001: a door must not open or close a port that a kitshn site of a machine on the route serves. A relay reaches
+    // the port machine past the site's Access check, and its listener binds on the relay machine.
+    const routeMachines = relay ? [machineId, relay] : [machineId];
     const site = [...this.liveSites.values()].find(
       (item) =>
-        item.machineId === (relay ?? machineId) &&
+        routeMachines.includes(item.machineId) &&
         portCard.ports.some(
           (port) => port.proto === "tcp" && item.target === `http://localhost:${port.port}`,
         ),
     );
     if (site)
       return refuse(
-        `${site.address} serves from ${site.target} on this machine, so a port card cannot close it.`,
+        `${site.address} serves from ${site.target} on ${this.state.machines.get(site.machineId)?.name ?? site.machineId}, so a port card cannot close it.`,
         409,
       );
-    // K-2001, K-619: a port that another service of the door machine listens on.
+    // K-2001, K-619: a port that another service of a machine on the route listens on.
     const busy = busyPort(
       portCard.ports,
-      this.machineView(this.state.machines.get(relay ?? machineId)!).servers,
+      routeMachines.flatMap((id) => this.machineView(this.state.machines.get(id)!).servers),
     );
     if (busy)
       return refuse(
-        `${busy.port}/tcp on this machine is ${busy.title ? `"${busy.title}"` : (busy.process ?? "another service")}, which is not the service, so a port card cannot close it.`,
+        `${busy.port}/tcp on a machine of this route is ${busy.title ? `"${busy.title}"` : (busy.process ?? "another service")}, which is not the service, so a port card cannot close it.`,
         409,
       );
     const host = `${name}.${this.env.KITSHN_ZONE}`;
@@ -14099,7 +14172,9 @@ export class Kitshn extends DurableObject<Env> {
         status?.publicAddresses?.v4 ?? null,
         status?.publicAddresses?.v6 ?? null,
       );
-      return this.addCard(actor, resource, null, `the port card ${name}`);
+      const added = this.addCard(actor, resource, null, `the port card ${name}`);
+      if (relay) this.startAction(id, { _tag: "relay" }, "Set up the relay", RELAY_STEPS);
+      return added;
     });
     this.queueDoors(relay ?? machineId, actor, Date.now());
     this.load();
@@ -14365,9 +14440,14 @@ export class Kitshn extends DurableObject<Env> {
     const problems = [
       this.doorsProblem(doorMachine(portCard)),
       doorStatus?.hostFirewall ? `${named(doorMachine(portCard))}: ${doorStatus.hostFirewall}` : null,
-      portCard.relay !== null && portStatus && portStatus.tunnel !== "running"
-        ? `${named(portCard.machine)}: its tunnel has no connection`
-        : null,
+      // K-632: a daemon reports data centers only while its tunnel has a connection.
+      portCard.relay === null
+        ? null
+        : !portStatus
+          ? `${named(portCard.machine)} is offline`
+          : !portStatus.tunnelLocations
+            ? `${named(portCard.machine)}: its tunnel has no connection`
+            : null,
     ].filter((problem) => problem !== null);
     // K-2010: a share whose members a door cannot let in: doors open for people and addresses, not devices or machines.
     const resource = this.state.resources.get(portCard.card);
@@ -14388,8 +14468,9 @@ export class Kitshn extends DurableObject<Env> {
       unchecked,
       connect: `https://pages.${this.env.KITSHN_ZONE}/connect/${portCard.name}`,
       address: connectAddress(portCard, `${portCard.name}.${this.env.KITSHN_ZONE}`),
-      listening: portCard.ports.map(portKey).filter((port) => listening.has(port)),
-      problem: this.doorsProblem(doorMachine(portCard)),
+      // K-2007: a relay's own listener always answers, so it says nothing about the service behind it.
+      listening:
+        portCard.relay === null ? portCard.ports.map(portKey).filter((port) => listening.has(port)) : null,
       doors: this.openDoors(now, portCard.card),
       records: this.sql<PortRecordRow>("SELECT * FROM port_records WHERE card_id = ?", portCard.card).map(
         (record) => ({
@@ -16132,6 +16213,8 @@ interface StoredProgress {
   readonly source:
     | { readonly _tag: "job"; readonly jobId: number }
     | { readonly _tag: "takeover" }
+    /** K-2009: a new relayed port card, until its relay listens. */
+    | { readonly _tag: "relay" }
     | { readonly _tag: "give-back" }
     | { readonly _tag: "deploy"; readonly deployId: string }
     | { readonly _tag: "rollback"; readonly id: string }
@@ -16176,6 +16259,15 @@ const RESTORE_STEPS: ReadonlyArray<PlannedStep> = [
 const HEALTH_CHECK_WAIT_MS = 60_000;
 const HEALTH_CHECK_STEPS: ReadonlyArray<PlannedStep> = [
   { label: "Check the providers and the links", expectedMs: 3_000 },
+];
+
+/** K-2009: the steps of a new relayed port card, which the alarm and the relay machine run. */
+const RELAY_STEPS: ReadonlyArray<PlannedStep> = [
+  { label: "Make the Access application", expectedMs: 4_000 },
+  { label: "Add the tunnel ingress", expectedMs: 4_000 },
+  { label: "Make the relay record", expectedMs: 4_000 },
+  { label: "Make the address record", expectedMs: 4_000 },
+  { label: "Start the relay listener", expectedMs: 30_000 },
 ];
 
 const TAKE_ADDRESS_STEPS: ReadonlyArray<PlannedStep> = [

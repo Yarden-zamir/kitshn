@@ -79,7 +79,7 @@ export interface MachineStatus {
   readonly keptBytes?: number;
   /** K-2003: the public addresses on the machine's interfaces, for the records of its port cards. */
   readonly publicAddresses?: { readonly v4: string | null; readonly v6: string | null };
-  /** K-2003: why the machine cannot gate gated ports; absent when it reports the capability `doors`. */
+  /** K-2003: why the machine cannot gate ports; absent when it reports the capability `doors`. */
   readonly doorsProblem?: string;
   /** K-2003: the host firewall rules that stop a new connection to the ports, named for the owner. */
   readonly hostFirewall?: string;

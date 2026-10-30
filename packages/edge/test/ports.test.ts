@@ -367,3 +367,145 @@ it("opens the ports of a port card in Everyone to all and gates them again after
   const login = await portCard(stub, { name: "mc", action: "view", visitor: visitor(null, "203.0.113.9") });
   expect(login.decision).toBe("login");
 });
+
+type PortInternals = {
+  setPresence(machineId: string, online: boolean): void;
+  createPortCard(actor: object, body: object): Response;
+  liveSites: Map<string, object>;
+  progressRows(): Map<string, { source: { _tag: string } }>;
+  portRows(where: string, ...values: Array<string>): Array<unknown>;
+  portView(row: unknown, now: number): { listening: unknown };
+};
+
+/** Runs with signed daemon connections: `vps` without doors and `relay1` with them, as the Durable Object keeps them. */
+async function withMachines(
+  scenario: (
+    kitshn: PortInternals,
+    sockets: Record<string, WebSocket>,
+    instance: { webSocketMessage(socket: WebSocket, message: string): Promise<void> },
+    state: DurableObjectState,
+  ) => Promise<void>,
+  capabilities: Record<string, Array<string>> = { vps: [], relay1: ["doors"] },
+) {
+  const stub = await setup();
+  const relay: Machine = {
+    id: "relay1",
+    name: "relay1",
+    labels: [],
+    order: 1,
+    serviceTokenId: "token-relay1",
+    clientId: "relay1.access",
+    tunnelId: "tunnel-relay1",
+  };
+  await runInDurableObject(stub, (_, state) => {
+    state.storage.sql.exec(
+      "INSERT OR REPLACE INTO machines (id, body) VALUES ('relay1', ?)",
+      JSON.stringify(relay),
+    );
+    state.storage.sql.exec(
+      "DELETE FROM resources WHERE id IN (SELECT card_id FROM port_cards WHERE card_id <> 'card1')",
+    );
+    state.storage.sql.exec("DELETE FROM port_cards WHERE card_id <> 'card1'");
+  });
+  await evictDurableObject(stub);
+  await runInDurableObject(stub, async (instance, state) => {
+    const kitshn = instance as unknown as PortInternals;
+    const sockets: Record<string, WebSocket> = {};
+    for (const [machineId, list] of Object.entries(capabilities)) {
+      const pair = new WebSocketPair();
+      state.acceptWebSocket(pair[1], [machineId, "machines"]);
+      pair[0].accept();
+      pair[1].serializeAttachment({
+        kind: "machine",
+        machineId,
+        since: Date.now(),
+        challenge: "",
+        check: "signed",
+        answered: true,
+        rotateBy: null,
+        status: {
+          version: "1",
+          os: "linux",
+          arch: "x64",
+          hostname: machineId,
+          tunnel: "running",
+          capabilities: list,
+        },
+        sample: null,
+      });
+      kitshn.setPresence(machineId, true);
+      sockets[machineId] = pair[1];
+    }
+    try {
+      await scenario(kitshn, sockets, instance, state);
+    } finally {
+      for (const socket of Object.values(sockets)) socket.close(1000, "test over");
+    }
+  });
+}
+
+const owner = { _tag: "kitshn", reason: "test" };
+const addPortCard = async (kitshn: PortInternals, body: object) => {
+  const made = kitshn.createPortCard(owner, body);
+  return { status: made.status, body: (await made.json()) as { id?: string; error?: string } };
+};
+const relayed = { machine: "vps", relay: "relay1", ports: ["25565/tcp"], doorHours: 12 };
+
+it("sends the door plan when a connected machine gets `doors` after its first status (K-2006)", async () => {
+  await withMachines(async (_, sockets, instance, state) => {
+    const server = sockets["vps"];
+    if (!server) throw new Error("no socket");
+    const status = { version: "1", os: "linux", arch: "x64", hostname: "vps", tunnel: "running" };
+    const report = () =>
+      instance.webSocketMessage(
+        server,
+        JSON.stringify({ type: "status", status: { ...status, capabilities: ["doors"] } }),
+      );
+    const plans = () =>
+      state.storage.sql.exec("SELECT id FROM jobs WHERE json_extract(command, '$.kind') = 'doors'").toArray()
+        .length;
+    await report();
+    expect(plans()).toBe(1);
+    // A later status that still has `doors` sends no second plan.
+    await report();
+    expect(plans()).toBe(1);
+  });
+});
+
+it("refuses a second relayed card on a relay port with a clear reason (K-2009)", async () => {
+  await withMachines(async (kitshn) => {
+    const first = await addPortCard(kitshn, { ...relayed, name: "first" });
+    expect(first.status, first.body.error).toBe(201);
+    const second = await addPortCard(kitshn, { ...relayed, name: "second" });
+    expect(second.status).toBe(409);
+    expect(second.body.error).toMatch(/first already holds this port on relay1/);
+    const otherPort = await addPortCard(kitshn, { ...relayed, name: "third", ports: ["25566/tcp"] });
+    expect(otherPort.status, otherPort.body.error).toBe(201);
+  });
+});
+
+it("refuses a relayed port that a kitshn site of the port machine serves, on the server (K-2001)", async () => {
+  await withMachines(async (kitshn) => {
+    kitshn.liveSites.set("site1", {
+      id: "site1",
+      machineId: "vps",
+      address: "site.example.com",
+      target: "http://localhost:25565",
+    });
+    const made = await addPortCard(kitshn, { ...relayed, name: "behind" });
+    expect(made.status).toBe(409);
+    expect(made.body.error).toMatch(/site\.example\.com serves from .* on vps/);
+    kitshn.liveSites.delete("site1");
+  });
+});
+
+it("shows the steps of a new relayed card and no listening state for it (K-538, K-2007, K-2009)", async () => {
+  await withMachines(async (kitshn) => {
+    const made = await addPortCard(kitshn, { ...relayed, name: "steps" });
+    expect(made.status, made.body.error).toBe(201);
+    const id = made.body.id ?? "";
+    expect(kitshn.progressRows().get(id)?.source._tag).toBe("relay");
+    const [row] = kitshn.portRows("card_id = ?", id);
+    expect(kitshn.portView(row, Date.now()).listening).toBeNull();
+  });
+});
