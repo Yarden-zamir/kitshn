@@ -7,6 +7,7 @@ import { type Socket, connect as connectTcp, createServer as createListener } fr
 import { Readable } from "node:stream";
 import { connect as connectTls } from "node:tls";
 import type { ReachedCard } from "@kitshn/local";
+import type { ReachedSite } from "@kitshn/edge/machine";
 import type { Platform } from "./service.ts";
 import { peerUid } from "./peer.ts";
 
@@ -14,6 +15,33 @@ import { peerUid } from "./peer.ts";
 export interface MachineToken {
   readonly clientId: string;
   readonly clientSecret: string;
+}
+
+/** K-1609: a live-site reach belongs to exactly one kitshn connection and is never persisted. */
+export class SiteReach {
+  private owner: object | null = null;
+  private sites: ReadonlyArray<ReachedSite> = [];
+
+  connect(owner: object) {
+    this.owner = owner;
+    this.sites = [];
+  }
+
+  apply(owner: object, sites: ReadonlyArray<ReachedSite>): boolean {
+    if (this.owner !== owner) return false;
+    this.sites = sites;
+    return true;
+  }
+
+  disconnect(owner: object) {
+    if (this.owner !== owner) return;
+    this.owner = null;
+    this.sites = [];
+  }
+
+  current(): ReadonlyArray<ReachedSite> {
+    return this.sites;
+  }
 }
 
 /** K-621: at most this many connections at once, and a connection that sends nothing in this time closes. */
@@ -29,14 +57,20 @@ export function linkTarget(
   reachOf: (provider: string) => ReadonlyArray<ReachedCard>,
   url: URL,
   scheme: "https" | "http" = "https",
+  sites: ReadonlyArray<ReachedSite> = [],
 ): { readonly target: URL } | { readonly error: string; readonly status: number } {
   const [, provider = "", machineId = "", ...rest] = url.pathname.split("/");
-  const address = reachOf(provider).find(
-    (card) => card.machineId === machineId && card.address !== null,
-  )?.address;
+  // `site` is reserved, and the second part is a card id rather than a caller-supplied host.
+  const address =
+    provider === "site"
+      ? sites.find((card) => card.id === machineId)?.address
+      : reachOf(provider).find((card) => card.machineId === machineId && card.address !== null)?.address;
   if (!address)
     return {
-      error: `the provider ${provider} of this machine reaches no address of the machine ${machineId} (K-1609).`,
+      error:
+        provider === "site"
+          ? `this machine reaches no live site ${machineId} (K-1609).`
+          : `the provider ${provider} of this machine reaches no address of the machine ${machineId} (K-1609).`,
       status: 403,
     };
   const target = new URL(`${scheme}://${address}/${rest.join("/")}${url.search}`);
@@ -106,6 +140,8 @@ const setsAccessSession = (cookie: string) => cookie.trimStart().startsWith("CF_
 
 interface LinkOptions {
   readonly reachOf: (provider: string) => ReadonlyArray<ReachedCard>;
+  /** K-1609: the signed connection owns this in-memory list, independent of providers. */
+  readonly siteReach?: () => ReadonlyArray<ReachedSite>;
   readonly token: () => MachineToken | null;
   readonly log: (text: string) => void;
   /** `http` only in tests. */
@@ -146,7 +182,12 @@ export function serveLinks(path: string, options: LinkOptions): Promise<{ readon
   };
   const server = createServer((request, response) => void forward(request, response));
   const forward = async (request: IncomingMessage, response: ServerResponse) => {
-    const found = linkTarget(options.reachOf, new URL(request.url ?? "/", "http://link"), scheme);
+    const found = linkTarget(
+      options.reachOf,
+      new URL(request.url ?? "/", "http://link"),
+      scheme,
+      options.siteReach?.(),
+    );
     if ("error" in found) return refuse(response, found.status, found.error);
     const token = options.token();
     if (!token) return refuse(response, 503, "the daemon has no machine token.");
@@ -158,7 +199,9 @@ export function serveLinks(path: string, options: LinkOptions): Promise<{ readon
     const name =
       auditName(request.headers[AUDIT_HEADER]) ??
       `${method}:/${rest.join("/")}`.replaceAll(" ", "").slice(0, 100);
-    const audit = (status: number) => options.audit?.({ provider, machineId, name, status });
+    const audit = (status: number) => {
+      if (provider !== "site") options.audit?.({ provider, machineId, name, status });
+    };
     try {
       const answer = await fetch(found.target, {
         method,
@@ -188,7 +231,12 @@ export function serveLinks(path: string, options: LinkOptions): Promise<{ readon
     }
   };
   server.on("upgrade", (request: IncomingMessage, client: Socket, head: Buffer) => {
-    const found = linkTarget(options.reachOf, new URL(request.url ?? "/", "http://link"), scheme);
+    const found = linkTarget(
+      options.reachOf,
+      new URL(request.url ?? "/", "http://link"),
+      scheme,
+      options.siteReach?.(),
+    );
     const token = options.token();
     if ("error" in found || !token) {
       client.end(`HTTP/1.1 ${"error" in found ? found.status : 503} Refused\r\nConnection: close\r\n\r\n`);

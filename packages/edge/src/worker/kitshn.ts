@@ -305,7 +305,15 @@ import {
 } from "../core/library.ts";
 import { badgeState } from "../core/badge.ts";
 import { listedApps } from "../core/listing.ts";
-import { commandsFor, machineBusy, providerCards, providerPushes, reachOf } from "../core/providers.ts";
+import {
+  commandsFor,
+  machineBusy,
+  providerCards,
+  providerPushes,
+  reachOf,
+  siteReachOf,
+} from "../core/providers.ts";
+import { SITE_LINKS_CAPABILITY, SITE_REACH_KEY } from "../core/machine.ts";
 import { healthCell, healthNotices } from "../core/health.ts";
 import {
   commandName,
@@ -3927,7 +3935,7 @@ export class Kitshn extends DurableObject<Env> {
   /** K-706: sends each provider of each signed connection its grant tables when they changed since the last send. */
   private pushGrants(now = Date.now()) {
     this.pushHashes.clear();
-    for (const machineId of this.providerRegs.keys()) {
+    for (const machineId of this.state.machines.keys()) {
       const pushes = this.pushesOf(machineId, now);
       this.pushHashes.set(machineId, new Map(pushes.map(({ key, hash }) => [key, hash])));
       const socket = this.ctx.getWebSockets(machineId).find((item) => {
@@ -3935,7 +3943,15 @@ export class Kitshn extends DurableObject<Env> {
         return attachment?.kind === "machine" && attachment.check === "signed";
       });
       if (!socket) continue;
+      const attachment = attachmentOf(socket);
       for (const { key, hash, push } of pushes) {
+        // The first push follows the signed handshake, before status names this capability.
+        if (
+          push.type === "siteReach" &&
+          (attachment?.kind !== "machine" ||
+            !attachment.status?.capabilities?.includes(SITE_LINKS_CAPABILITY))
+        )
+          continue;
         if (this.sentGrants.get(`${machineId}/${key}`) === hash) continue;
         this.sentGrants.set(`${machineId}/${key}`, hash);
         const { key: _key, ...message } = push;
@@ -3979,6 +3995,7 @@ export class Kitshn extends DurableObject<Env> {
               },
             ],
       )
+      .concat([{ key: SITE_REACH_KEY, type: "siteReach", cards: siteReachOf(this.state, machineId, now) }])
       .map((push) => {
         const text = JSON.stringify(push);
         return { key: push.key, hash: `${fnv(text)}${fnv(text, 0x050c5d1f)}`, push };
@@ -4091,20 +4108,22 @@ export class Kitshn extends DurableObject<Env> {
   private queuedFor(machine: Machine, status: MachineStatus | null): number | null {
     // A machine without a key gets no pushes (K-1708), so nothing waits for it.
     if (machine.key?.kind !== "public") return 0;
-    const pushes = this.hashesOf(machine.id);
-    if (pushes.size === 0) return 0;
-    // An online daemon that does not name `applied` never answers it, so its count is unknown.
-    if (status !== null && !status.capabilities?.includes("applied")) return null;
     // A daemon from before K-1623 never applies the access push, so its count leaves that push out.
     const access = status === null || status.capabilities?.includes("access") === true;
     // K-721: only a daemon of provider protocol 2 applies the pushes of the pause and the exec rights.
     const v2 = status === null || status.capabilities?.includes("protocol-2") === true;
-    return [...pushes].filter(
-      ([key, hash]) =>
+    // Until this connection reports support, do not count a push that an old daemon cannot apply.
+    const siteLinks = status?.capabilities?.includes(SITE_LINKS_CAPABILITY) === true;
+    const pushes = [...this.hashesOf(machine.id)].filter(
+      ([key]) =>
         (access || !key.startsWith("access:")) &&
         (v2 || !key.startsWith("kitshn:")) &&
-        this.applied.get(`${machine.id}/${key}`) !== hash,
-    ).length;
+        (siteLinks || key !== SITE_REACH_KEY),
+    );
+    if (pushes.length === 0) return 0;
+    // An online daemon that does not name `applied` never answers it, so its count is unknown.
+    if (status !== null && !status.capabilities?.includes("applied")) return null;
+    return pushes.filter(([key, hash]) => this.applied.get(`${machine.id}/${key}`) !== hash).length;
   }
 
   /** K-1608: the hash of each push of a machine, from the last `pushGrants`, or counted now after a restart. */
@@ -5223,6 +5242,17 @@ export class Kitshn extends DurableObject<Env> {
           : {}),
       };
       saveMachine(socket, { ...attachment, status });
+      // A supporting daemon gets its first site reach only after it reports the capability.
+      if (
+        attachment.check === "signed" &&
+        status.capabilities?.includes(SITE_LINKS_CAPABILITY) &&
+        !attachment.status?.capabilities?.includes(SITE_LINKS_CAPABILITY)
+      ) {
+        // This reach lives only for one connection, so an acknowledgement from the previous one is stale.
+        if (this.applied.delete(`${machine.id}/${SITE_REACH_KEY}`))
+          this.sql("DELETE FROM applied_state WHERE machine_id = ? AND key = ?", machine.id, SITE_REACH_KEY);
+        this.pushGrants();
+      }
       if (status.refusedProviders) this.notifyRefusals(machine, status.refusedProviders);
       if (status.offlineProviders) this.notifyOfflineProviders(machine, status.offlineProviders, Date.now());
       // K-627: a daemon that connects, or that runs another release now, can start or end an update.

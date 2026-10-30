@@ -9,6 +9,8 @@ import {
   signText,
   forwardText,
   FORWARD_HEADERS,
+  SITE_LINKS_CAPABILITY,
+  SITE_REACH_KEY,
   type Command,
   type DaemonMessage,
   type LiveSiteReport,
@@ -139,7 +141,7 @@ import { keepBuild, keptId, keptTag, rollbackOverride, serviceImages, staleTags 
 import { TokenCache } from "./tokens.ts";
 import { Providers, parseSaved } from "./providers.ts";
 import { desiredProblem } from "@kitshn/local";
-import { linkPeerAdmitted, serveLinks } from "./link.ts";
+import { SiteReach, linkPeerAdmitted, serveLinks } from "./link.ts";
 import { lastHour, lastSamples } from "./samples.ts";
 import { pushKey } from "@kitshn/local";
 import { MAX_FORWARDS, forwardTarget, passedHeaders, readBounded } from "./forward.ts";
@@ -1871,6 +1873,8 @@ function runJob(
 
 let tunnelState: "starting" | "running" | "stopped" = "stopped";
 let socket: WebSocket | null = null;
+// K-1609: a signed connection owns this reach; never persist it or give it to a provider.
+const siteReach = new SiteReach();
 
 function report() {
   const message: DaemonMessage = {
@@ -1880,7 +1884,16 @@ function report() {
       capabilities:
         platform === "win32"
           ? // K-622: "task-restart": this daemon starts its task again from outside the task's run.
-            ["update", "update-gz", "provider", "access", "health", "task-restart"]
+            [
+              "update",
+              "update-gz",
+              "provider",
+              "applied",
+              "access",
+              "health",
+              "task-restart",
+              SITE_LINKS_CAPABILITY,
+            ]
           : [
               "update",
               "update-gz",
@@ -1900,6 +1913,7 @@ function report() {
               "health",
               // K-721: this daemon speaks provider protocol 2 and applies the pause and exec rights pushes.
               "protocol-2",
+              SITE_LINKS_CAPABILITY,
               ...(doorState.problem === null ? ["doors"] : []),
             ],
       ...(keptBytes === undefined ? {} : { keptBytes }),
@@ -2431,6 +2445,7 @@ function connect(config: JoinSecrets) {
       log(`connected to kitshn ${how}`);
       // K-1762: a new connection can follow a reset or a lost right that the daemon did not hear of.
       keptTokens.drop(null);
+      siteReach.connect(ws);
       socket = ws;
       delay = 1000;
       stopped = false;
@@ -2486,6 +2501,8 @@ function connect(config: JoinSecrets) {
         // K-1608: the daemon saves each push, gives it to the provider, and tells kitshn that it applied it.
         applyPush(message);
         sendOn(ws, { type: "applied", key: pushKeyOf(message), hash: message.hash });
+      } else if (message.type === "siteReach" && socket === ws && siteReach.apply(ws, message.cards)) {
+        sendOn(ws, { type: "applied", key: SITE_REACH_KEY, hash: message.hash });
       } else if (message.type === "paused") {
         hub().fromKitshnState({ paused: message.paused });
         sendOn(ws, { type: "applied", key: pushKey.paused(), hash: message.hash });
@@ -2581,6 +2598,7 @@ function connect(config: JoinSecrets) {
       // K-1805: kitshn forgets the tails of a closed connection.
       if (socket === ws) stopTails();
       if (socket === ws) {
+        siteReach.disconnect(ws);
         socket = null;
         // K-722: the runs of both sides end with the relay.
         hub().kitshnLost();
@@ -2881,6 +2899,7 @@ async function runCommand() {
   // K-1609, K-621: a start without the link proxy still serves the rest; the answer to register then names none.
   const linkOptions = {
     reachOf: (provider: string) => registry().reachOf(provider),
+    siteReach: () => siteReach.current(),
     token: () => (joined ? { clientId: joined.clientId, clientSecret: joined.clientSecret } : null),
     log,
     // K-1610: kitshn records each forwarded tool call; a call while kitshn is out of reach gets no event.

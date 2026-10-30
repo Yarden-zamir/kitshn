@@ -305,6 +305,87 @@ it("counts the pushes that a machine has not applied, and takes applied only for
   await sql("INSERT OR REPLACE INTO machines (id, body) VALUES ('vps', ?)", JSON.stringify(machine));
 });
 
+it("pushes live-site reach only to a supporting signed daemon, including without providers (K-1609)", async () => {
+  const { stub, sql } = await setup();
+  const keyed: Machine = { ...machine, key: { kind: "public", publicKey: "k", fingerprint: "f", since: 0 } };
+  await sql("INSERT OR REPLACE INTO machines (id, body) VALUES ('vps', ?)", JSON.stringify(keyed));
+  await sql("DELETE FROM applied_state WHERE machine_id = 'vps'");
+  await runInDurableObject(stub, async (instance, state) => {
+    const pair = new WebSocketPair();
+    state.acceptWebSocket(pair[1], ["vps", "machines"]);
+    pair[0].accept();
+    const attachment = {
+      kind: "machine",
+      machineId: "vps",
+      since: 0,
+      challenge: "",
+      check: "signed",
+      answered: true,
+      rotateBy: null,
+      status: null,
+      sample: null,
+    };
+    pair[1].serializeAttachment(attachment);
+    const internals = instance as unknown as {
+      pushGrants(): void;
+      pushesOf(id: string): Array<{ key: string; hash: string }>;
+      queuedFor(machine: Machine, status: MachineStatus | null): number | null;
+      sentGrants: Map<string, string>;
+      presence: Map<string, { online: boolean; lastSeen: number; os: string | null }>;
+    };
+    const previousPresence = internals.presence.get("vps");
+    internals.presence.set("vps", { online: true, lastSeen: Date.now(), os: null });
+    const status = (capabilities: Array<string>): MachineStatus => ({
+      version: "dev",
+      os: "linux",
+      arch: "x64",
+      hostname: "vps",
+      tunnel: "running",
+      capabilities,
+    });
+    const sendStatus = (capabilities: Array<string>) =>
+      instance.webSocketMessage(pair[1], JSON.stringify({ type: "status", status: status(capabilities) }));
+    try {
+      internals.pushGrants();
+      expect(internals.sentGrants.has("vps/site:reach")).toBe(false);
+      expect(internals.queuedFor(keyed, null)).toBe(0);
+      await sendStatus(["applied"]);
+      expect(internals.sentGrants.has("vps/site:reach")).toBe(false);
+      expect(internals.queuedFor(keyed, status(["applied"]))).toBe(0);
+      await sendStatus(["applied", "site-links"]);
+      const push = internals.pushesOf("vps").find((item) => item.key === "site:reach")!;
+      expect(internals.sentGrants.get("vps/site:reach")).toBe(push.hash);
+      expect(internals.queuedFor(keyed, status(["applied", "site-links"]))).toBe(1);
+      await instance.webSocketMessage(
+        pair[1],
+        JSON.stringify({ type: "applied", key: push.key, hash: push.hash }),
+      );
+      expect(internals.queuedFor(keyed, status(["applied", "site-links"]))).toBe(0);
+      // A reconnect starts with no in-memory reach, so the old acknowledgement cannot settle its push.
+      internals.sentGrants.delete("vps/site:reach");
+      pair[1].serializeAttachment(attachment);
+      await sendStatus(["applied", "site-links"]);
+      expect(internals.sentGrants.get("vps/site:reach")).toBe(push.hash);
+      expect(internals.queuedFor(keyed, status(["applied", "site-links"]))).toBe(1);
+      await instance.webSocketMessage(
+        pair[1],
+        JSON.stringify({ type: "applied", key: push.key, hash: push.hash }),
+      );
+      // A connection with the Access token alone may report status, but gets no reach push.
+      internals.sentGrants.delete("vps/site:reach");
+      pair[1].serializeAttachment({ ...attachment, check: "token" });
+      await sendStatus(["applied", "site-links"]);
+      internals.pushGrants();
+      expect(internals.sentGrants.has("vps/site:reach")).toBe(false);
+    } finally {
+      pair[1].close(1000, "test over");
+      pair[0].close(1000, "test over");
+      if (previousPresence) internals.presence.set("vps", previousPresence);
+      else internals.presence.delete("vps");
+    }
+  });
+});
+
 it("holds a job that waits for an idle machine while a provider is busy, and the next report sends it (K-1608)", async () => {
   const { stub, message } = await setup();
   await message("signed", [report([app])]);

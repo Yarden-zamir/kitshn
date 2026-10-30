@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ReachedCard } from "@kitshn/local";
 import { describe, expect, it } from "vitest";
-import { linkPeerAdmitted, linkTarget, serveLinks } from "./link.ts";
+import { SiteReach, linkPeerAdmitted, linkTarget, serveLinks } from "./link.ts";
 
 const platform = process.platform === "darwin" ? "darwin" : "linux";
 const own = process.getuid!();
@@ -18,6 +18,25 @@ const card = (address: string | null): ReachedCard => ({
 });
 
 describe("the link proxy (K-1609)", () => {
+  it("forgets site reach on disconnect and refuses stale updates or closes after a reconnect", () => {
+    const reach = new SiteReach();
+    const first = {};
+    const next = {};
+    const cards = [{ id: "live-b-proxy", address: "proxy.example.com" }];
+    expect(reach.apply(first, cards)).toBe(false);
+    reach.connect(first);
+    expect(reach.apply(first, cards)).toBe(true);
+    expect(reach.current()).toEqual(cards);
+    reach.connect(next);
+    expect(reach.current()).toEqual([]);
+    expect(reach.apply(first, cards)).toBe(false);
+    expect(reach.apply(next, cards)).toBe(true);
+    reach.disconnect(first);
+    expect(reach.current()).toEqual(cards);
+    reach.disconnect(next);
+    expect(reach.current()).toEqual([]);
+  });
+
   it("admits the daemon user and the users of kitshn local-users, and no other user (K-701)", async () => {
     expect(linkPeerAdmitted(1000, 1000, [])).toBe(true);
     expect(linkPeerAdmitted(1001, 1000, [1001])).toBe(true);
@@ -34,6 +53,7 @@ describe("the link proxy (K-1609)", () => {
     });
     try {
       await expect(fetch("http://link/t3/b/x", { unix: path } as RequestInit)).rejects.toThrow();
+      await expect(fetch("http://link/site/live-b-proxy/x", { unix: path } as RequestInit)).rejects.toThrow();
     } finally {
       links.stop();
     }
@@ -54,6 +74,18 @@ describe("the link proxy (K-1609)", () => {
     expect(linkTarget(reachOf, new URL("http://link/t3/b//evil.example.com/x"))).toMatchObject({
       target: { host: "t3-b.example.com" },
     });
+    const sites = [{ id: "live-b-proxy", address: "proxy.example.com" }];
+    expect(
+      linkTarget(reachOf, new URL("http://link/site/live-b-proxy/v1/messages?stream=1"), "https", sites),
+    ).toEqual({ target: new URL("https://proxy.example.com/v1/messages?stream=1") });
+    expect(linkTarget(reachOf, new URL("http://link/site/evil.example.com/x"), "https", sites)).toMatchObject(
+      {
+        status: 403,
+      },
+    );
+    expect(
+      linkTarget(reachOf, new URL("http://link/site/live-b-proxy//evil.example.com/x"), "https", sites),
+    ).toMatchObject({ target: { host: "proxy.example.com" } });
   });
 
   it("adds the machine token, drops the caller's Access headers, and streams HTTP and WebSocket both ways", async () => {
@@ -78,8 +110,10 @@ describe("the link proxy (K-1609)", () => {
     const folder = mkdtempSync(join(tmpdir(), "kitshn-link-"));
     const path = join(folder, "link.sock");
     const calls: Array<object> = [];
+    let sites = [{ id: "live-b-proxy", address: `127.0.0.1:${upstream.port}` }];
     const links = await serveLinks(path, {
       reachOf: (provider) => (provider === "t3" ? [card(`127.0.0.1:${upstream.port}`)] : []),
+      siteReach: () => sites,
       token: () => ({ clientId: "a.access", clientSecret: "secret" }),
       log: () => {},
       audit: (call) => calls.push(call),
@@ -115,7 +149,81 @@ describe("the link proxy (K-1609)", () => {
       expect(refused.status).toBe(403);
 
       expect(await webSocketEcho(path, "/t3/b/ws", "hi")).toBe("echo hi");
+      const beforeSite = calls.length;
+      const siteAnswer = await fetch("http://link/site/live-b-proxy/v1/messages?key=private", {
+        unix: path,
+        method: "POST",
+        headers: {
+          "CF-Access-Client-Id": "forged",
+          "CF-Access-Client-Secret": "forged",
+          "Kitshn-Audit-Name": "private",
+          cookie: "CF_Authorization=person; lang=he",
+        },
+        body: "request body",
+      } as RequestInit);
+      expect(await siteAnswer.text()).toBe("POST /v1/messages");
+      const siteHeaders = seen.at(-1)!;
+      expect(siteHeaders.get("cf-access-client-id")).toBe("a.access");
+      expect(siteHeaders.get("cf-access-client-secret")).toBe("secret");
+      expect(siteHeaders.get("cookie")).toBe("lang=he");
+      expect(siteHeaders.has("kitshn-audit-name")).toBe(false);
+      expect(siteAnswer.headers.getSetCookie()).toEqual(["theme=dark; Path=/"]);
+      expect(await webSocketEcho(path, "/site/live-b-proxy/ws", "site")).toBe("echo site");
+      expect(calls).toHaveLength(beforeSite);
+      sites = [];
+      expect(
+        (await fetch("http://link/site/live-b-proxy/v1/messages", { unix: path } as RequestInit)).status,
+      ).toBe(403);
     } finally {
+      links.stop();
+      void upstream.stop(true);
+    }
+  });
+  it("delivers a live-site response incrementally and forwards its request body", async () => {
+    const release = Promise.withResolvers<void>();
+    let body = "";
+    const upstream = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(request) {
+        body = await request.text();
+        return new Response(
+          new ReadableStream({
+            async start(controller) {
+              controller.enqueue(new TextEncoder().encode("first\n"));
+              await release.promise;
+              controller.enqueue(new TextEncoder().encode("second\n"));
+              controller.close();
+            },
+          }),
+        );
+      },
+    });
+    const path = join(mkdtempSync(join(tmpdir(), "kitshn-site-stream-")), "link.sock");
+    const links = await serveLinks(path, {
+      reachOf: () => [],
+      siteReach: () => [{ id: "live-b-proxy", address: `127.0.0.1:${upstream.port}` }],
+      token: () => ({ clientId: "a.access", clientSecret: "secret" }),
+      log: () => {},
+      scheme: "http",
+      peers: { platform, access: "private", admits: (uid) => linkPeerAdmitted(uid, own, []) },
+    });
+    try {
+      const answer = await fetch("http://link/site/live-b-proxy/v1/messages", {
+        unix: path,
+        method: "POST",
+        body: "request body",
+      } as RequestInit);
+      const reader = answer.body!.getReader();
+      const first = await reader.read();
+      expect(new TextDecoder().decode(first.value)).toBe("first\n");
+      expect(body).toBe("request body");
+      release.resolve();
+      const second = await reader.read();
+      expect(new TextDecoder().decode(second.value)).toBe("second\n");
+      expect((await reader.read()).done).toBe(true);
+    } finally {
+      release.resolve();
       links.stop();
       void upstream.stop(true);
     }

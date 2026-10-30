@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Machine } from "./machine.ts";
 import { type Circle, OWNER_CIRCLE_ID, type Resource, type State, levelForKind, shareKey } from "./model.ts";
 import { applyChanges, forgetProviderChanges, invert, ruleViolation } from "./changes.ts";
+import { circlePolicies } from "./access.ts";
 import {
   commandsFor,
   grantTables,
@@ -11,6 +12,7 @@ import {
   providerCards,
   providerPushes,
   siteAudiences,
+  siteReachOf,
   reachOf,
 } from "./providers.ts";
 
@@ -320,6 +322,87 @@ describe("reach of a machine (K-1609)", () => {
     // A machine never reaches its own cards, and a pause closes every link (K-1504).
     expect(reachOf(value, "vps", "t3", 0)).toEqual([]);
     expect(reachOf({ ...value, paused: "keep-public" }, "mac", "t3", 0)).toEqual([]);
+  });
+});
+
+describe("live-site reach of a machine (K-1609)", () => {
+  const mac: Machine = {
+    ...machine,
+    id: "mac",
+    name: "Mac",
+    clientId: "mac.access",
+    serviceTokenId: "mac-token",
+  };
+  const site: Resource = {
+    id: "live-mac-proxy",
+    kind: "site.live",
+    name: "proxy",
+    addresses: ["proxy.example.com"],
+    status: "running",
+    group: null,
+    machine: "mac",
+  };
+  const share = circle("links", [{ _tag: "machine", machineId: "vps" }], { level: "view" });
+  const value = () => {
+    const base = state([share]);
+    return {
+      ...base,
+      machines: new Map([...base.machines, [mac.id, mac]]),
+      resources: new Map([...base.resources, [site.id, site]]),
+      places: new Map([...base.places, [site.id, { x: 0, y: 0 }]]),
+    };
+  };
+
+  it("uses ordinary view-only circles and their non-identity Access policy, with no provider registration", () => {
+    const base = value();
+    expect(circlePolicies(share, base.machines).get("policy:links:tokens")).toMatchObject({
+      decision: "non_identity",
+      include: [{ service_token: { token_id: "t" } }],
+    });
+    expect(siteReachOf(base, "vps", 0)).toEqual([{ id: site.id, address: "proxy.example.com" }]);
+    expect(siteReachOf(base, "mac", 0)).toEqual([]);
+    expect(siteReachOf(base, "unknown", 0)).toEqual([]);
+    const noAddress = { ...site, addresses: [] };
+    expect(siteReachOf({ ...base, resources: new Map([[site.id, noAddress]]) }, "vps", 0)).toEqual([]);
+    const unrelated = { ...site, kind: "page" as const };
+    expect(siteReachOf({ ...base, resources: new Map([[site.id, unrelated]]) }, "vps", 0)).toEqual([]);
+    const otherMember = { ...share, members: [{ _tag: "machine" as const, machineId: "mac" }] };
+    expect(siteReachOf({ ...base, circles: new Map([[share.id, otherMember]]) }, "vps", 0)).toEqual([]);
+  });
+
+  it("follows expiry, pause, and all-must-match without widening a private share", () => {
+    const base = value();
+    expect(siteReachOf({ ...base, paused: "keep-public" }, "vps", 0)).toEqual([]);
+    expect(siteReachOf({ ...base, paused: "lockdown" }, "vps", 0)).toEqual([]);
+    expect(siteReachOf({ ...base, ends: new Map([[site.id, 10]]) }, "vps", 10)).toEqual([]);
+    expect(
+      siteReachOf(
+        { ...base, shareSettings: new Map([[shareKey(site.id, share.id), { level: null, endsAt: 10 }]]) },
+        "vps",
+        10,
+      ),
+    ).toEqual([]);
+    const expired = { ...share, endsAt: 10 };
+    expect(siteReachOf({ ...base, circles: new Map([[share.id, expired]]) }, "vps", 10)).toEqual([]);
+    const strict: Circle = {
+      ...share,
+      match: "all",
+      members: [...share.members, { _tag: "email", email: "x@y.z" }],
+    };
+    expect(siteReachOf({ ...base, circles: new Map([[share.id, strict]]) }, "vps", 0)).toEqual([]);
+    // Both members have the same client id, but Access refuses an all-must-match policy with two tokens.
+    const twoTokens: Circle = {
+      ...share,
+      match: "all",
+      members: [...share.members, { _tag: "device", tokenId: "t", clientId: "vps.access", name: "same" }],
+    };
+    expect(siteReachOf({ ...base, circles: new Map([[share.id, twoTokens]]) }, "vps", 0)).toEqual([]);
+    const publicShare: Circle = { ...share, members: [{ _tag: "everyone" }] };
+    const publicState = { ...base, circles: new Map([[share.id, publicShare]]) };
+    expect(siteReachOf({ ...publicState, paused: "keep-public" }, "vps", 0)).toEqual([
+      { id: site.id, address: "proxy.example.com" },
+    ]);
+    expect(siteReachOf({ ...publicState, paused: "lockdown" }, "vps", 0)).toEqual([]);
   });
 });
 

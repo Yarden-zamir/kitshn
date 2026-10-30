@@ -15,6 +15,16 @@ import type {
 } from "@kitshn/local";
 import type { ServerReport } from "./sites.ts";
 import type { DoorPlan } from "./game.ts";
+/** K-1609: daemon-only live-site reach, never sent to a provider. */
+export interface ReachedSite {
+  readonly id: string;
+  readonly address: string;
+}
+
+/** K-1609: the push and capability for the daemon's live-site link route. */
+export const SITE_REACH_KEY = "site:reach";
+export const SITE_LINKS_CAPABILITY = "site-links";
+
 /** A joined machine (K-602). Its resource card has the same id and the kind `machine`. */
 export interface Machine {
   readonly id: string;
@@ -402,6 +412,8 @@ export type ServerToDaemon =
       readonly cards: ReadonlyArray<ReachedCard>;
       readonly hash: string;
     }
+  /** K-1609: the live-site cards on other machines that this machine's token opens. */
+  | { readonly type: "siteReach"; readonly cards: ReadonlyArray<ReachedSite>; readonly hash: string }
   /** K-1623: the Access audiences of one provider's site hosts on this machine. */
   | {
       readonly type: "access";

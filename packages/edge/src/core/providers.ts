@@ -11,8 +11,9 @@ import {
   type ReachedCard,
   pushKey,
 } from "@kitshn/local";
-import { visitorLevel } from "./visitor.ts";
-import type { Machine } from "./machine.ts";
+import { circleMatches, visitorLevel } from "./visitor.ts";
+import { circlePolicies } from "./access.ts";
+import { type Machine, type ReachedSite } from "./machine.ts";
 import {
   type Member,
   type Resource,
@@ -164,6 +165,7 @@ export type ProviderPush =
     }
   | { readonly key: string; readonly type: "paused"; readonly paused: boolean }
   | { readonly key: string; readonly type: "execRights"; readonly machines: ReadonlyArray<string> }
+  | { readonly key: string; readonly type: "siteReach"; readonly cards: ReadonlyArray<ReachedSite> }
   | {
       readonly key: string;
       readonly type: "reach";
@@ -325,4 +327,27 @@ export function reachOf(state: State, machineId: string, provider: string, now: 
           },
         ];
   });
+}
+
+/** K-1609: live sites on other machines that Access admits this machine to, independent of providers. */
+export function siteReachOf(state: State, machineId: string, now: number): Array<ReachedSite> {
+  const machine = state.machines.get(machineId);
+  if (!machine) return [];
+  const visitor = { email: null, clientId: machine.clientId, ip: null };
+  return [...state.resources.values()]
+    .flatMap((card): Array<ReachedSite> => {
+      const address = card.addresses[0];
+      if (card.kind !== "site.live" || card.machine === null || card.machine === machineId || !address)
+        return [];
+      if (visitorLevel(state, card, visitor, now) === null) return [];
+      // Access refuses impossible "all" policies (such as two tokens), even when the raw members match.
+      const allowed = activeShares(state, card, now).some(({ circle }) => {
+        if (!circleMatches(circle, visitor, state.machines)) return false;
+        return [...circlePolicies(circle, state.machines).values()].some(
+          (policy) => policy.decision === "non_identity" || policy.decision === "bypass",
+        );
+      });
+      return allowed ? [{ id: card.id, address }] : [];
+    })
+    .sort((a, b) => a.id.localeCompare(b.id));
 }
