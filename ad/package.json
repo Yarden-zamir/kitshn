@@ -1,0 +1,23 @@
+{
+  "name": "kitshn-ad",
+  "private": true,
+  "version": "0.1.0",
+  "description": "kitshn promo videos (Remotion), timed by an ElevenLabs voice-over through mv/",
+  "type": "module",
+  "scripts": {
+    "studio": "remotion studio",
+    "render": "remotion render Explainer-16x9 out/explainer/kitshn-explainer-16x9.mp4",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.534",
+    "@remotion/google-fonts": "4.0.534",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "remotion": "4.0.534"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,27 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1010 290" width="1010" height="290" role="img" aria-label="A deploy: a push runs GitHub Actions, which sends the recipe and its OIDC token to the kitshn Worker; the app goes to Cloudflare or to a machine, and its card gets Access from its circles">
 <title>A deploy: a push runs GitHub Actions, which sends the recipe and its OIDC token to the kitshn Worker; the app goes to Cloudflare or to a machine, and its card gets Access from its circles</title>
 <style>
-  text { font-family: "Bricolage Grotesque", system-ui, sans-serif; font-size: 15px; fill: #000; }
+  text { font-family: "Bricolage Grotesque", system-ui, sans-serif; font-size: 15px; fill: #19191b; }
   .t { font-weight: 800; font-size: 16px; }
-  .s { font-size: 13px; fill: #3d3d5c; }
-  .m { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; fill: #3d3d5c; }
-  .box { fill: #fff; stroke: #000; stroke-width: 2; }
-  .shadow { fill: #000; }
-  .frame { fill: #f1f2ff; stroke: #000; stroke-width: 2; stroke-dasharray: 6 5; }
-  .yellow { fill: #ffe14d; } .green { fill: #7cff8a; } .pink { fill: #ff9eb0; } .blue { fill: #00b3ff; } .lilac { fill: #e4e7ff; }
-  .line { stroke: #000; stroke-width: 2.5; fill: none; }
+  .s { font-size: 13px; fill: #6b6b70; }
+  .m { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; fill: #6b6b70; }
+  .box { fill: #fff; stroke: #19191b; stroke-width: 2; }
+  .shadow { fill: #19191b; }
+  .frame { fill: #f4f4f2; stroke: #19191b; stroke-width: 2; stroke-dasharray: 6 5; }
+  .yellow { fill: #ffd23f; } .green { fill: #6ee7a0; } .pink { fill: #ff9fb2; } .blue { fill: #5cc8ff; } .lilac { fill: #ececea; }
+  .line { stroke: #19191b; stroke-width: 2.5; fill: none; }
   .dash { stroke-dasharray: 7 5; }
-  .head { fill: #000; }
-  .on-color { fill: #000; }
-  @media (prefers-color-scheme: dark) {
-    text { fill: #f3f0ff; } .s, .m { fill: #bdb6e6; }
-    .box { fill: #262147; stroke: #f3f0ff; } .shadow { fill: #b9a8ff; }
-    .frame { fill: #1d1938; stroke: #f3f0ff; }
-    .line { stroke: #f3f0ff; } .head { fill: #f3f0ff; }
-    .on-color, .yellow + text, text.on-color { fill: #000; }
-    .lilac { fill: #15122b; }
-    .box.yellow { fill: #ffe14d; } .box.green { fill: #7cff8a; } .box.pink { fill: #ff9eb0; } .box.blue { fill: #00b3ff; }
-  }
+  .head { fill: #19191b; }
+  .on-color { fill: #19191b; }
 </style>
 <defs>
   <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">

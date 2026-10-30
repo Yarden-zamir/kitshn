@@ -17,8 +17,8 @@ import {
   machineView,
   noop,
   resource,
-  rootTokens,
 } from "./guide-kit.tsx";
+import { rootTokens } from "./theme.ts";
 import { AskRow } from "./Asks.tsx";
 import {
   Check,
@@ -94,8 +94,8 @@ function Tokens() {
         </div>
       </Entry>
       <Entry
-        heading="Size, radius, border, shadow and fonts"
-        what="The other tokens: the 2px ink border, the 0.25rem radius, the hard 4px card shadow, and the two fonts."
+        heading="Size, radius, border, lift and fonts"
+        what="The other tokens: the hairline border, the round radius and the pill, the one soft lift of floating layers, the press spring, and the two fonts. The map is flat: cards and controls have no shadow."
         source=":root · styles.css"
       >
         <dl class="guide-values">
@@ -109,26 +109,15 @@ function Tokens() {
           ))}
         </dl>
         <div class="row">
-          <span
-            class="guide-shadow"
-            style={{ boxShadow: "var(--shadow)" }}
-            data-tip="var(--shadow): cards, dialogs, panels."
-          >
-            card 4px
+          <span class="guide-shadow" data-tip="Flat: cards, buttons, stickers and controls.">
+            flat
           </span>
           <span
             class="guide-shadow"
-            style={{ boxShadow: "3px 3px 0 0 var(--shadow-ink)" }}
-            data-tip="3px: controls, menus, tooltips."
+            style={{ boxShadow: "var(--lift)" }}
+            data-tip="var(--lift): the toolbar, the panel, menus, dialogs, toasts and tooltips."
           >
-            control 3px
-          </span>
-          <span
-            class="guide-shadow"
-            style={{ boxShadow: "2px 2px 0 0 var(--shadow-ink)" }}
-            data-tip="2px: stickers, checkboxes."
-          >
-            sticker 2px
+            lift
           </span>
         </div>
       </Entry>
@@ -178,14 +167,11 @@ function Controls() {
     <>
       <Entry
         heading="Buttons"
-        what="Every action. A press lifts the button on hover and pushes it into its shadow on click."
+        what="Every action: a flat pill. Hover darkens it a little; a press squashes it and it springs back."
         source=".btn, .btn.primary, .btn.danger, .btn.resume, .btn.toggle, .btn.add · styles.css"
       >
         <div class="row">
-          <button
-            class="btn"
-            data-tip="A plain button: hover lifts it, a press moves it 3px into its shadow."
-          >
+          <button class="btn" data-tip="A plain button: hover darkens it, a press squashes it.">
             Plain
           </button>
           <button class="btn primary" data-tip="The main action of a view.">
@@ -355,19 +341,14 @@ function Controls() {
       </Entry>
       <Entry
         heading="Keyboard focus"
-        what="An accent ring and a pink glow, so focus is easy to find on the dots canvas. Components with their own hard shadow (card, checkbox, radio, switch) keep that shadow and show only the ring, on purpose."
+        what="An ink ring and a yellow glow, so focus is easy to find on the dots canvas. Checkbox, radio and switch show only the ring, on purpose."
         source=":focus-visible · styles.css"
       >
         <div class="row">
           <button class="btn" data-tip="Tab to me: the ring and the glow.">
             Tab to me
           </button>
-          <Check
-            label="Tab to me"
-            tip="Tab to me: the ring only, with the box's own shadow."
-            checked={false}
-            onChange={noop}
-          />
+          <Check label="Tab to me" tip="Tab to me: the ring only." checked={false} onChange={noop} />
         </div>
       </Entry>
       <Entry
@@ -632,7 +613,7 @@ function Stickers() {
     <>
       <Entry
         heading="Stickers"
-        what="Status, levels and tags as small tilted stickers with black text; neighbours lean different ways."
+        what="Status, levels and tags as small tilted pills with dark text and no outline; neighbours lean different ways."
         source=".sticker and its tones · styles.css; KINDS, LEVEL_COLORS · kinds.ts"
       >
         <div class="row">
@@ -835,6 +816,10 @@ function Lists(props: { state: State }) {
  */
 const DIFFERENCES: ReadonlyArray<{ readonly what: string; readonly decision: "kept" | "skill" }> = [
   {
+    what: "Look: kitshn is flat (K-517): no ink outlines and no hard shadows, round pills, graphite and yellow, and one soft lift for floating layers. The skill keeps 2px ink borders, hard offset shadows and the lilac canvas.",
+    decision: "kept",
+  },
+  {
     what: "Tokens: the skill has --code-bg, --warning-fg, --warning-surface, --info-fg and --info-surface; kitshn adds them only when a state needs them.",
     decision: "kept",
   },
@@ -845,8 +830,8 @@ const DIFFERENCES: ReadonlyArray<{ readonly what: string; readonly decision: "ke
   },
   { what: "Stickers: kitshn sets 0.72rem; the skill sets 0.65rem.", decision: "skill" },
   {
-    what: "Buttons: kitshn uses 0.9rem text, 3px 10px padding and a 3px shadow on hover; the skill uses 1rem, 4px 10px and the 4px card shadow.",
-    decision: "skill",
+    what: "Buttons: kitshn uses 0.9rem text and 4px 14px padding on a flat pill that squashes when pressed; the skill uses 1rem, 4px 10px and the 4px card shadow.",
+    decision: "kept",
   },
   {
     what: "Tabs: kitshn marks the chosen tab with aria-pressed; the skill names aria-pressed or aria-selected, and either is fine.",
@@ -883,7 +868,10 @@ export function StyleGuide() {
       <section class="guide-entry guide-differences">
         <header>
           <h3>Differences with the neo-brutalism skill</h3>
-          <p>The differences that are left. The skill follows kitshn on stickers, buttons and tabs.</p>
+          <p>
+            The differences that are left. kitshn keeps its flat look; the skill follows kitshn on stickers
+            and tabs.
+          </p>
         </header>
         <ol>
           {DIFFERENCES.map((difference) => (

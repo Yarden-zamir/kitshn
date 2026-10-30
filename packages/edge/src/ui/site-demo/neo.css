@@ -1,0 +1,391 @@
+/* The site demo wears the kitshn.com look: a soft neo-brutalism in graphite ink and one yolk yellow, on white.
+   Thick ink edges, short hard shadows, round corners, and a lift on hover. It comes after styles.css and re-declares
+   the selectors of its flat block (K-517), so it wins on order alone. Light only, as the site; `html:root` beats
+   the dark block of styles.css. */
+html:root {
+  color-scheme: light;
+  --canvas: #fbfbf9;
+  --dots: #19191b1f;
+  --surface: #ffffff;
+  --raised: #f4f4f2;
+  --ink: #19191b;
+  --muted: #5d5d63;
+  --border: #19191b;
+  --edge: #19191b;
+  --shadow-ink: #19191b;
+  --lift: 4px 4px 0 0 #19191b;
+  --accent: #ffd23f;
+  --accent-fg: #19191b;
+  --select: #ffd23f;
+  --select-fg: #19191b;
+  --error: #ff5c7a;
+  --error-fg: #b0002a;
+  --error-surface: #ffe3e9;
+  --warning: #ffad4d;
+  --info: #5cc8ff;
+  --green: #6ee7a0;
+  --yellow: #ffd23f;
+  --pink: #ff9fb2;
+  --radius: 12px;
+  --pill: 999px;
+  --bw: 2px;
+  --shadow: 3px 3px 0 0 var(--shadow-ink);
+  --shadow-up: 5px 5px 0 0 var(--shadow-ink);
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+body {
+  background-size: 18px 18px;
+}
+h1,
+h2,
+h3 {
+  font-weight: 800;
+}
+:focus-visible {
+  outline: var(--bw) solid var(--ink);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--yellow) 70%, transparent);
+}
+
+/* The demo is the map alone: no toolbar, no line of shortcuts, no member chips, no level on a circle head, no menus,
+   tooltips, toasts or live previews, and no grip to resize a circle. */
+header.bar,
+.circle .members,
+.circle .head .more,
+.circle .grip,
+.circle .head .sticker,
+.toast,
+.tooltip,
+.menu,
+.peek,
+.preview-frame {
+  display: none;
+}
+/* A swipe or a pinch on the map scrolls or zooms the page, as on any picture; a card still drags after a long
+   press (K-516). */
+.viewport {
+  touch-action: pan-x pan-y pinch-zoom;
+}
+.card {
+  touch-action: none;
+}
+/* The fit measures the map down to the top of the shortcut line, so the line moves below the frame, not away. */
+.hint {
+  visibility: hidden;
+  top: 100%;
+  bottom: auto;
+}
+
+.sticker {
+  padding: 0 7px;
+  font-weight: 800;
+  color: #19191b;
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--pill);
+  box-shadow: 2px 2px 0 0 var(--ink);
+}
+
+/* Buttons rise toward the light on hover and press flat into their shadow. */
+.btn {
+  padding: 4px 14px;
+  font-weight: 700;
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--pill);
+  box-shadow: 2px 2px 0 0 var(--ink);
+  transition:
+    transform 160ms var(--spring),
+    box-shadow 160ms var(--spring),
+    background-color 120ms;
+}
+.btn:not(:disabled):hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 0 var(--ink);
+  background: var(--surface);
+}
+.btn:not(:disabled):active {
+  transform: translate(2px, 2px);
+  box-shadow: 0 0 0 0 var(--ink);
+  transition-duration: 60ms;
+}
+.btn.primary,
+.btn.primary:not(:disabled):hover {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.btn.danger:not(:disabled):hover {
+  background: var(--error-surface);
+}
+
+.seg {
+  gap: 0;
+  padding: 0;
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--pill);
+  box-shadow: 2px 2px 0 0 var(--ink);
+}
+.seg button {
+  font-weight: 700;
+  border-radius: 0;
+}
+.seg button + button {
+  border-left: var(--bw) solid var(--ink);
+}
+.seg button:not([aria-pressed="true"]):hover {
+  background: var(--raised);
+}
+
+.field {
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: 10px;
+}
+.field:hover {
+  border-color: var(--ink);
+}
+.field:focus-visible {
+  background: var(--surface);
+  border-color: var(--ink);
+}
+.chip {
+  font-weight: 700;
+  padding: 0 8px;
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--pill);
+}
+
+/* The toolbar, the side panel and floating layers: white slabs with an ink edge and a hard shadow. */
+.bar {
+  padding: 6px 10px;
+  border: var(--bw) solid var(--ink);
+  border-radius: 16px;
+  box-shadow: var(--lift);
+}
+.bar .sep {
+  width: var(--bw);
+  margin: 2px 2px;
+  background: var(--ink);
+}
+.overlay-panel {
+  padding: 16px;
+  border: var(--bw) solid var(--ink);
+  border-radius: 18px;
+  box-shadow: 6px 6px 0 0 var(--ink);
+}
+.overlay-panel li {
+  padding: 8px 12px;
+  border: var(--bw) solid var(--ink);
+  border-radius: 12px;
+}
+.menu,
+.tooltip,
+.toast,
+.dialog {
+  border: var(--bw) solid var(--ink);
+  border-radius: 14px;
+  box-shadow: var(--lift);
+}
+.toast {
+  width: max-content;
+  animation: neo-pop 320ms var(--spring);
+}
+.menu {
+  padding: 6px;
+}
+.menu-item {
+  border-radius: 8px;
+}
+
+/* Map: circles are discs of their colour inside an ink ring; cards are white slabs that cast a hard shadow. */
+.circle {
+  border: var(--bw) solid var(--ink);
+  background: color-mix(in srgb, var(--c) 22%, transparent);
+  box-shadow: inset 0 0 0 6px var(--c);
+  transition: box-shadow 220ms var(--spring);
+}
+.circle.preview {
+  box-shadow:
+    inset 0 0 0 6px var(--c),
+    0 0 0 5px var(--select),
+    5px 5px 0 6px var(--ink);
+}
+.circle .head {
+  gap: 8px;
+  padding: 2px 8px 2px 8px;
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--pill);
+  font-weight: 800;
+  box-shadow: 3px 3px 0 0 var(--ink);
+}
+.circle .head::before {
+  content: "";
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: var(--bw) solid var(--ink);
+  border-radius: 50%;
+  background: var(--c);
+}
+.circle .counts {
+  font-weight: 800;
+}
+
+/* A held card stays under the pointer and leans into its motion (feel.ts sets `--lean`, which eases); let go, it
+   springs into place. Undo and Organize glide the cards the same way. A held card that eased its place too would
+   restart the ease at each pointer move and lag behind the pointer. */
+.card {
+  padding: 8px 10px;
+  border: var(--bw) solid var(--ink);
+  border-radius: 14px;
+  box-shadow: 4px 4px 0 0 var(--ink);
+  transition:
+    left 380ms var(--spring),
+    top 380ms var(--spring),
+    transform 260ms var(--spring),
+    box-shadow 200ms var(--spring);
+}
+.world > .card:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 5px 5px 0 0 var(--ink);
+}
+.card.dragging,
+.world > .card.dragging:hover {
+  cursor: grabbing;
+  transform: translate(-3px, -4px) rotate(var(--lean, -2deg)) scale(1.04);
+  box-shadow: 9px 10px 0 0 var(--ink);
+  transition:
+    transform 120ms ease-out,
+    box-shadow 160ms var(--spring);
+}
+.card.sel {
+  background: var(--select);
+}
+/* A card is one line: its icon, its name, and a dot for each circle that holds it. It keeps the width and the
+   centre of a map card, so drops and stacks land as on the real map. */
+.card:not(.stack-card) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 10px 10px 12px;
+}
+.world > .card:not(.stack-card) {
+  margin-top: -23px;
+}
+.card:not(.stack-card) .name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.98rem;
+}
+.card:not(.stack-card) .sub {
+  display: none;
+}
+.card:not(.stack-card) .foot {
+  margin: 0;
+  flex-wrap: nowrap;
+}
+.card:not(.stack-card) .foot > :not(.dot) {
+  display: none;
+}
+.card .dot {
+  width: 11px;
+  height: 11px;
+}
+.mini {
+  border: var(--bw) solid var(--ink);
+  box-shadow: 2px 2px 0 0 var(--ink);
+}
+.more {
+  border-radius: var(--pill);
+}
+.more:hover,
+.more:focus-visible {
+  border-color: var(--ink);
+  background: var(--surface);
+  box-shadow: 2px 2px 0 0 var(--ink);
+}
+.box {
+  border: var(--bw) dashed var(--ink);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--yellow) 30%, transparent);
+}
+.drop-label span {
+  padding: 2px 10px;
+  color: #19191b;
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--pill);
+  box-shadow: 2px 2px 0 0 var(--ink);
+  animation: neo-pop 260ms var(--spring);
+}
+.tray {
+  border: var(--bw) dashed var(--ink);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  backdrop-filter: blur(6px);
+}
+.hint {
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--pill);
+}
+
+.check,
+.radio,
+.switch {
+  border: var(--bw) solid var(--ink);
+  box-shadow: 2px 2px 0 0 var(--ink);
+}
+.check:checked,
+.radio:checked,
+.switch:checked {
+  border-color: var(--ink);
+}
+
+/* The pointer of the first-drag hint (feel.ts). */
+.demo-cursor {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 100;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 240ms;
+}
+.demo-cursor.on {
+  opacity: 1;
+}
+.demo-cursor svg {
+  display: block;
+  transform-origin: 4px 2px;
+  transition: transform 160ms var(--spring);
+}
+.demo-cursor.press svg {
+  transform: scale(0.82);
+}
+
+@keyframes neo-pop {
+  from {
+    scale: 0.6;
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .card,
+  .circle,
+  .card.dragging {
+    transition: none;
+  }
+  .card.dragging {
+    transform: none;
+  }
+  .toast,
+  .drop-label span {
+    animation: none;
+  }
+}

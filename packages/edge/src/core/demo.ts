@@ -129,6 +129,139 @@ export function demo() {
   return { resources, places, circles: [her, qlik, agents] };
 }
 
+/**
+ * Local development only (DEV_DEMO=teams): the map of a small company, for the teams pages. Engineering has the
+ * company domain, Design two people, a contractor one email for a week, the office a domain and a network, and an
+ * agent key manages staging. The machines and the repo gate are the same as in `demo()`.
+ */
+export function teamsDemo(now: number) {
+  const resource = (
+    id: string,
+    kind: Resource["kind"],
+    name: string,
+    address: string | null,
+    group: string | null = null,
+  ): Resource => ({
+    id,
+    kind,
+    name,
+    addresses: address ? [address] : [],
+    status: "running",
+    group,
+    machine: null,
+  });
+  const resources = [
+    resource("mac", "machine", "Mac", "t3-mac.example.com"),
+    resource("vps", "machine", "VPS", "t3-vps.example.com"),
+    resource("admin-panel", "site.worker", "Admin panel", "admin.acme.dev"),
+    resource("api", "site.compose", "api", "api.acme.dev", "api"),
+    resource("api-pr-118", "site.compose", "api pr-118", "api-pr-118.acme.dev", "api"),
+    resource("api-pr-121", "site.compose", "api pr-121", "api-pr-121.acme.dev", "api"),
+    resource("design-system", "site.static", "Design system", "ds.acme.dev"),
+    resource("launch", "site.static", "Launch page", "launch.acme.dev"),
+    resource("docs", "site.static", "Docs", "docs.acme.dev"),
+    resource("status", "site.static", "Status", "status.acme.dev"),
+    resource("metabase", "site.compose", "Metabase", "bi.acme.dev"),
+    resource("handbook", "file", "handbook.pdf", null),
+    resource("staging", "site.compose", "staging", "staging.acme.dev"),
+    resource("experiment", "site.static", "experiment", "experiment.acme.dev"),
+    resource("platform-repo", "repo", "acme/platform", null),
+  ];
+  const places: Array<readonly [string, Point]> = [
+    ["mac", { x: -175, y: -190 }],
+    ["vps", { x: 120, y: -190 }],
+    ["admin-panel", { x: -90, y: 640 }],
+    ["api", { x: -40, y: 800 }],
+    ["api-pr-118", { x: -40, y: 800 }],
+    ["api-pr-121", { x: -40, y: 800 }],
+    ["design-system", { x: 230, y: 740 }],
+    ["launch", { x: 900, y: 660 }],
+    ["docs", { x: 700, y: -40 }],
+    ["status", { x: 820, y: 80 }],
+    ["metabase", { x: -600, y: 260 }],
+    ["handbook", { x: -540, y: 380 }],
+    ["staging", { x: 1250, y: 220 }],
+  ];
+  const circle = (
+    id: string,
+    name: string,
+    color: string,
+    level: Circle["level"],
+    members: Circle["members"],
+    [x, y, r]: readonly [number, number, number],
+    more: Partial<Pick<Circle, "match" | "needsPasskey" | "endsAt">> = {},
+  ): Circle => ({
+    id,
+    name,
+    color,
+    level,
+    members,
+    match: "any",
+    needsPasskey: false,
+    endsAt: null,
+    x,
+    y,
+    r,
+    ...more,
+  });
+  const circles = [
+    circle(
+      "engineering",
+      "Engineering",
+      "#8B5CF6",
+      "control",
+      [{ _tag: "domain", domain: "acme.dev" }],
+      [0, 700, 280],
+      {
+        needsPasskey: true,
+      },
+    ),
+    circle(
+      "design",
+      "Design",
+      "#FF5277",
+      "use",
+      [
+        { _tag: "email", email: "maya@acme.dev" },
+        { _tag: "email", email: "noa@acme.dev" },
+      ],
+      [440, 740, 220],
+    ),
+    circle(
+      "contractor",
+      "Contractor",
+      "#FFB347",
+      "view",
+      [{ _tag: "email", email: "dana@studio.example" }],
+      [900, 660, 180],
+      {
+        endsAt: now + 7 * 86_400_000,
+      },
+    ),
+    circle(
+      "office",
+      "Office",
+      "#00B3FF",
+      "use",
+      [
+        { _tag: "domain", domain: "acme.dev" },
+        { _tag: "ip", range: "10.20.0.0/16" },
+      ],
+      [-570, 320, 220],
+      { match: "all" },
+    ),
+    circle(
+      "ci",
+      "CI bots",
+      "#14B8A6",
+      "control",
+      [{ _tag: "device", tokenId: "demo-agent", clientId: "demo-agent.access", name: "Deploy bot" }],
+      [1250, 220, 190],
+    ),
+  ];
+  return { resources, places, circles };
+}
+
 /** K-1303: the Usage view of the local demo, so captures show each level without a Cloudflare account. */
 export const demoUsage = (now: number): Usage => ({
   at: now,

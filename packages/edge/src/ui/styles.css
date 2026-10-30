@@ -1,32 +1,37 @@
 @import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=JetBrains+Mono:wght@400;600&display=swap");
 
-/* tick3d tokens (K-517). Keep them equal to the neo-brutalism skill. */
+/* K-517: the flat kitshn look. Graphite and one loud yolk yellow; no hard shadows, no ink outlines. Surfaces part
+   by fill, edges are hairlines, shapes are round. K-535 can set the light or the dark tokens over the media query. */
 :root {
   color-scheme: light;
-  --canvas: #e4e7ff;
-  --dots: #00000026;
+  --canvas: #ececea;
+  --dots: #19191b1c;
   --surface: #ffffff;
-  --raised: #f1f2ff;
-  --ink: #000000;
-  --muted: #3d3d5c;
-  --border: #000000;
-  --shadow-ink: #000000;
-  --accent: #6c5ce7;
-  --accent-fg: #ffffff;
-  --select: #ffe14d;
-  --select-fg: #000000;
-  --error: #ff5277;
-  --error-fg: #b0002a;
-  --error-surface: #ffe3e9;
-  --warning: #ffb347;
-  --info: #00b3ff;
-  --green: #7cff8a;
-  --yellow: #ffe14d;
-  --pink: #ff9eb0;
+  --raised: #f4f4f2;
+  --ink: #19191b;
+  --muted: #6b6b70;
+  --border: #19191b1f;
+  --edge: #19191b59;
+  --shadow-ink: transparent;
+  --lift: 0 10px 30px -14px #19191b59;
+  --accent: #ffd23f;
+  --accent-fg: #19191b;
+  --select: #ffd23f;
+  --select-fg: #19191b;
+  --error: #ff5c7a;
+  --error-fg: #c0183d;
+  --error-surface: #ffe6eb;
+  --warning: #ffad4d;
+  --info: #5cc8ff;
+  --green: #6ee7a0;
+  --yellow: #ffd23f;
+  --pink: #ff9fb2;
   --stamp: #8250df;
-  --radius: 0.25rem;
-  --bw: 2px;
-  --shadow: 4px 4px 0 0 var(--shadow-ink);
+  --radius: 14px;
+  --pill: 999px;
+  --bw: 1px;
+  --shadow: none;
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --sans: "Bricolage Grotesque", system-ui, sans-serif;
   --mono: "JetBrainsMono Nerd Font Mono", "JetBrains Mono", monospace;
   /* The overlay panel and the shelf; App.tsx sets both from the widths this device keeps (K-525). */
@@ -36,18 +41,18 @@
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --canvas: #15122b;
-    --dots: #f3f0ff22;
-    --surface: #262147;
-    --raised: #1d1938;
-    --ink: #f3f0ff;
-    --muted: #bdb6e6;
-    --border: #f3f0ff;
-    --shadow-ink: #b9a8ff;
-    --select: #6c5ce7;
-    --select-fg: #ffffff;
-    --error-fg: #ff8a8a;
-    --error-surface: #3a1830;
+    --canvas: #161618;
+    --dots: #f4f4ef14;
+    --surface: #232327;
+    --raised: #2c2c31;
+    --ink: #f4f4ef;
+    --muted: #a3a3aa;
+    --border: #f4f4ef1a;
+    --edge: #f4f4ef4d;
+    --shadow-ink: transparent;
+    --lift: 0 14px 34px -12px #000000b3;
+    --error-fg: #ff8a9e;
+    --error-surface: #3a1a24;
     --stamp: #a371f7;
   }
 }
@@ -2633,4 +2638,275 @@ a > code {
 }
 .facts dd {
   margin: 0;
+}
+
+/* K-517: the flat look. These rules come after the components they change, with the same selectors, so they win
+   on order alone. */
+body {
+  background-size: 22px 22px;
+}
+h1,
+h2,
+h3 {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--yellow) 55%, transparent);
+}
+.label {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+/* Stickers stay tilted, the one wink in the room; they lose the outline and the shouting caps. */
+.sticker {
+  padding: 0 8px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #19191b;
+  border: 0;
+  border-radius: var(--pill);
+}
+
+/* Buttons: soft pills that squash a little when pressed and spring back. */
+.btn {
+  padding: 4px 14px;
+  font-weight: 600;
+  background: var(--raised);
+  border: 0;
+  border-radius: var(--pill);
+  transition:
+    transform 220ms var(--spring),
+    background-color 120ms;
+}
+.btn:not(:disabled):hover {
+  transform: none;
+  box-shadow: none;
+  background: color-mix(in srgb, var(--ink) 10%, var(--raised));
+}
+.btn:not(:disabled):active {
+  transform: scale(0.94);
+  transition-duration: 60ms;
+}
+.btn.primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.btn.primary:not(:disabled):hover {
+  background: color-mix(in srgb, #000000 8%, var(--accent));
+}
+.btn.danger:not(:disabled):hover {
+  background: color-mix(in srgb, var(--error) 22%, var(--error-surface));
+}
+
+/* A segmented control is a track with a yellow puck on the chosen part. */
+.seg {
+  gap: 2px;
+  padding: 3px;
+  background: var(--raised);
+  border: 0;
+  border-radius: var(--pill);
+}
+.seg button {
+  font-weight: 600;
+  border-radius: var(--pill);
+  transition: background-color 120ms;
+}
+.seg button + button {
+  border-left: 0;
+}
+.seg button:not([aria-pressed="true"]):hover {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
+.field {
+  background: var(--raised);
+  border-color: transparent;
+  border-radius: 10px;
+}
+.field:hover {
+  border-color: var(--border);
+}
+.field:focus-visible {
+  background: var(--surface);
+  border-color: var(--ink);
+}
+.chip {
+  font-weight: 600;
+  padding: 0 8px;
+  background: var(--raised);
+  border-color: transparent;
+  border-radius: var(--pill);
+}
+
+/* The toolbar, the side panel and floating layers: flat surfaces with one soft lift, so they sit above the map. */
+.bar {
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 20px;
+  box-shadow: var(--lift);
+}
+.bar .sep {
+  width: 1px;
+  margin: 4px 2px;
+  background: var(--border);
+}
+.overlay-panel {
+  padding: 16px;
+  border: 0;
+  border-radius: 22px;
+  box-shadow: var(--lift);
+}
+.overlay-head {
+  top: -16px;
+  margin: -16px -16px 10px;
+  padding: 16px 16px 10px;
+}
+.overlay-panel li {
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 12px;
+}
+.menu,
+.tooltip,
+.toast,
+.dialog {
+  border: var(--bw) solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--lift);
+}
+.menu {
+  padding: 6px;
+}
+.menu-item {
+  border-radius: 10px;
+}
+
+/* Map: circles are flat discs of their colour with a thin ring; cards are plain white tiles. */
+.circle {
+  border: 0;
+  background: color-mix(in srgb, var(--c) 18%, transparent);
+  box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--c) 85%, transparent);
+}
+.circle.preview {
+  box-shadow:
+    inset 0 0 0 3px var(--c),
+    0 0 0 5px var(--select);
+}
+.circle .head {
+  gap: 8px;
+  padding: 3px 6px 3px 10px;
+  border: 0;
+  border-radius: var(--pill);
+  font-weight: 700;
+  box-shadow: 0 4px 14px -8px #19191b80;
+}
+.circle .head::before {
+  content: "";
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--c);
+}
+.circle .counts {
+  font-weight: 700;
+}
+.card {
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 16px;
+  box-shadow: 0 1px 0 var(--border);
+  transition: transform 220ms var(--spring);
+}
+.card.dragging {
+  transform: rotate(-2deg) scale(1.03);
+}
+.mini {
+  border: 0;
+  box-shadow: inset 0 0 0 2px var(--edge);
+}
+.more {
+  border-radius: var(--pill);
+}
+.more:hover,
+.more:focus-visible {
+  border-color: transparent;
+  background: var(--raised);
+  box-shadow: none;
+}
+.box {
+  border: 2px dashed var(--ink);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--yellow) 22%, transparent);
+}
+.drop-label span {
+  border: 0;
+  border-radius: var(--pill);
+  padding: 2px 10px;
+}
+.tray {
+  border: 0;
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  backdrop-filter: blur(6px);
+}
+.hint {
+  border-radius: var(--pill);
+}
+
+/* Controls keep a visible edge: a hairline field is too faint to find on a white panel. */
+.check,
+.radio,
+.switch {
+  border: 1.5px solid var(--edge);
+  box-shadow: none;
+  transition:
+    transform 220ms var(--spring),
+    background-color 120ms,
+    border-color 120ms;
+}
+.check {
+  border-radius: 6px;
+}
+.check:checked,
+.radio:checked,
+.switch:checked {
+  border-color: var(--select);
+}
+.check:active,
+.radio:active,
+.switch:active {
+  transform: scale(0.88);
+}
+.switch {
+  background: var(--raised);
+}
+.switch::before {
+  transition: left 260ms var(--spring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .card,
+  .check,
+  .radio,
+  .switch,
+  .switch::before {
+    transition: none;
+  }
+  .card.dragging {
+    transform: none;
+  }
+}
+/* The panel moves focus to its heading on open; a ring there reads as a text field. */
+.overlay-head h2:focus-visible {
+  outline: none;
+  box-shadow: none;
 }

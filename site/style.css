@@ -1,46 +1,39 @@
 @import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=JetBrains+Mono:wght@400;600&display=swap");
 
+/* The kitshn site in the logo colours: graphite ink and one yolk yellow, on white. A soft neo-brutalism: thin ink
+   edges and short hard shadows, round corners, and a lift on hover. Light only for now. */
 :root {
   color-scheme: light;
-  --canvas: #e4e7ff;
-  --dots: #00000026;
+  --canvas: #fbfbf9;
+  --dots: #19191b14;
   --surface: #ffffff;
-  --raised: #f1f2ff;
-  --code-bg: #ffffff;
-  --ink: #000000;
-  --muted: #3d3d5c;
-  --border: #000000;
-  --shadow-ink: #000000;
-  --accent: #6c5ce7;
-  --accent-fg: #ffffff;
-  --select: #ffe14d;
-  --select-fg: #000000;
-  --info: #00b3ff;
-  --warning: #ffb347;
-  --green: #7cff8a;
-  --yellow: #ffe14d;
-  --pink: #ff9eb0;
-  --radius: 0.25rem;
-  --bw: 2px;
-  --shadow: 4px 4px 0 0 var(--shadow-ink);
+  --raised: #f4f4f2;
+  --tint: #fff7d1;
+  --code-bg: #19191b;
+  --code-ink: #f4f4ef;
+  --ink: #19191b;
+  --muted: #6b6b70;
+  --border: #19191b;
+  --hairline: #19191b1f;
+  --shadow-ink: #19191b;
+  --accent: #ffd23f;
+  --accent-fg: #19191b;
+  --select: #ffd23f;
+  --select-fg: #19191b;
+  --info: #5cc8ff;
+  --warning: #ffad4d;
+  --green: #6ee7a0;
+  --yellow: #ffd23f;
+  --pink: #ff9fb2;
+  --radius: 14px;
+  --pill: 999px;
+  --square: 4px;
+  --bw: 1.5px;
+  --shadow: 3px 3px 0 0 var(--shadow-ink);
+  --shadow-up: 5px 5px 0 0 var(--shadow-ink);
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --sans: "Bricolage Grotesque", system-ui, sans-serif;
   --mono: "JetBrainsMono Nerd Font Mono", "JetBrains Mono", monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --canvas: #15122b;
-    --dots: #f3f0ff22;
-    --surface: #262147;
-    --raised: #1d1938;
-    --code-bg: #1d1938;
-    --ink: #f3f0ff;
-    --muted: #bdb6e6;
-    --border: #f3f0ff;
-    --shadow-ink: #b9a8ff;
-    --select: #6c5ce7;
-    --select-fg: #ffffff;
-  }
 }
 
 * {
@@ -48,6 +41,8 @@
 }
 html {
   font-size: 18px;
+  scroll-behavior: smooth;
+  overflow-x: clip;
 }
 body {
   margin: 0;
@@ -55,21 +50,21 @@ body {
   color: var(--ink);
   background-color: var(--canvas);
   background-image: radial-gradient(var(--dots) 1.2px, transparent 1.2px);
-  background-size: 16px 16px;
+  background-size: 18px 18px;
 }
 h1,
 h2,
 h3 {
   font-weight: 800;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
   margin: 0 0 0.5rem;
-  line-height: 1.15;
+  line-height: 1.1;
 }
 h1 {
-  font-size: 3rem;
+  font-size: clamp(2.4rem, 5.5vw, 4.2rem);
 }
 h2 {
-  font-size: 1.8rem;
+  font-size: clamp(1.6rem, 3vw, 2.3rem);
 }
 h3 {
   font-size: 1.2rem;
@@ -78,53 +73,127 @@ p {
   margin: 0 0 0.8rem;
 }
 a {
-  color: var(--accent);
+  color: var(--ink);
   font-weight: 600;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 3px;
+  text-underline-offset: 3px;
 }
-@media (prefers-color-scheme: dark) {
-  a {
-    color: #b9a8ff;
-  }
+a:hover {
+  text-decoration-color: var(--ink);
 }
 code,
 pre {
   font-family: var(--mono);
   font-size: 0.85em;
 }
+/* A yellow marker band behind inline code, no box. */
 :not(pre) > code {
   background: linear-gradient(transparent 35%, var(--select) 35%, var(--select) 88%, transparent 88%);
+  color: var(--select-fg);
   padding: 0 2px;
+  overflow-wrap: anywhere;
 }
 pre {
   margin: 0 0 1rem;
-  padding: 10px 12px;
+  padding: 14px 16px;
   overflow-x: auto;
+  color: var(--code-ink);
   background: var(--code-bg);
   border: var(--bw) solid var(--border);
   border-radius: var(--radius);
-  box-shadow: 3px 3px 0 0 var(--shadow-ink);
+  box-shadow: var(--shadow);
 }
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--ink);
   outline-offset: 2px;
+  box-shadow: 0 0 0 6px #ffd23f99;
 }
 img {
   max-width: 100%;
   height: auto;
   display: block;
 }
+ul {
+  padding-left: 1.2rem;
+}
 
 .wrap {
-  width: min(64rem, calc(100% - 2rem));
+  width: min(78rem, calc(100% - 1.5rem));
   margin-inline: auto;
 }
+@media (max-width: 760px) {
+  .wrap {
+    width: calc(100% - 1rem);
+  }
+}
+
+.card {
+  background: var(--surface);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+section {
+  margin-block: 4.5rem;
+}
+.pad {
+  padding: 1.4rem 1.5rem;
+}
+.label {
+  display: block;
+  margin-bottom: 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.muted {
+  color: var(--muted);
+}
+/* The highlight keeps its words together, except on a very small phone, where it would run off the page. */
+.mark {
+  white-space: nowrap;
+  background: linear-gradient(transparent 58%, var(--accent) 58%, var(--accent) 92%, transparent 92%);
+  padding: 0 0.08em;
+}
+@media (max-width: 400px) {
+  .mark {
+    white-space: normal;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+}
+.lede {
+  font-size: 1.2rem;
+  color: var(--muted);
+  max-width: 40rem;
+}
+.head {
+  max-width: 44rem;
+  margin-bottom: 1.8rem;
+}
+.head.center {
+  margin-inline: auto;
+  text-align: center;
+}
+.head.center .lede {
+  margin-inline: auto;
+}
+
+/* The header: brand on the left, links and the main action on the right. */
 .top {
+  position: sticky;
+  top: 0.6rem;
+  z-index: 10;
   display: flex;
   align-items: center;
   gap: 1rem;
   flex-wrap: wrap;
-  margin: 1rem auto 0;
-  padding: 0.5rem 0.9rem;
+  margin: 0.6rem auto 0;
+  padding: 0.45rem 0.6rem 0.45rem 0.8rem;
+  border-radius: var(--square);
 }
 .top .brand {
   display: flex;
@@ -142,60 +211,50 @@ img {
 }
 .top nav {
   display: flex;
-  gap: 0.4rem;
+  align-items: center;
+  gap: 0.2rem;
   flex-wrap: wrap;
 }
-
-.card {
-  background: var(--surface);
-  border: var(--bw) solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
+.top nav a:not(.btn) {
+  padding: 4px 10px;
+  border-radius: var(--square);
+  text-decoration: none;
 }
-section {
-  margin-block: 3rem;
+.top nav a:not(.btn):hover,
+.top nav a:not(.btn)[aria-current="page"] {
+  background: var(--raised);
 }
-.pad {
-  padding: 1.4rem 1.6rem;
+.top nav .btn {
+  margin-left: 0.3rem;
 }
-.label {
-  display: block;
-  margin-bottom: 0.3rem;
-  font-size: 0.7rem;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.muted {
-  color: var(--muted);
-}
-
-.hero {
-  position: relative;
-  padding: 2.4rem 2rem;
-}
-.hero p {
-  font-size: 1.25rem;
-  max-width: 40rem;
-}
-.hero .sticker {
-  position: absolute;
-  top: -0.8rem;
-  right: 1.5rem;
-}
-.actions {
-  display: flex;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-  margin-top: 1.2rem;
+/* On a phone the header keeps the brand and Install on one row; the first screen links to the rest. */
+@media (max-width: 640px) {
+  .top {
+    gap: 0.5rem;
+    padding-left: 0.6rem;
+  }
+  .top .brand {
+    font-size: 1.1rem;
+  }
+  .top .brand img {
+    width: 1.7rem;
+    height: 1.7rem;
+  }
+  .top nav a:not(.btn) {
+    display: none;
+  }
+  .top nav .btn {
+    margin-left: 0;
+    padding: 4px 10px;
+    font-size: 0.9rem;
+  }
 }
 
 .btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 12px;
+  padding: 6px 16px;
   cursor: pointer;
   font: inherit;
   font-weight: 700;
@@ -203,22 +262,27 @@ section {
   text-decoration: none;
   background: var(--surface);
   border: var(--bw) solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--square);
+  box-shadow: 2px 2px 0 0 var(--shadow-ink);
   transition:
-    transform 80ms,
-    box-shadow 80ms;
+    transform 160ms var(--spring),
+    box-shadow 160ms var(--spring);
 }
 .btn:hover {
   transform: translate(-1px, -1px);
   box-shadow: 3px 3px 0 0 var(--shadow-ink);
 }
 .btn:active {
-  transform: translate(3px, 3px);
+  transform: translate(2px, 2px);
   box-shadow: none;
 }
 .btn.primary {
   background: var(--accent);
   color: var(--accent-fg);
+}
+.btn.big {
+  padding: 10px 22px;
+  font-size: 1.05rem;
 }
 .btn[aria-current="page"] {
   background: var(--select);
@@ -227,19 +291,18 @@ section {
 
 .sticker {
   display: inline-block;
-  padding: 0 6px;
+  padding: 1px 8px;
   line-height: 1.5;
   white-space: nowrap;
-  font-size: 0.65rem;
+  font-size: 0.66rem;
   font-weight: 800;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: #000000;
+  color: var(--ink);
   background: var(--pink);
-  border: var(--bw) solid var(--shadow-ink);
-  border-radius: 4px;
-  box-shadow: 2px 2px 0 0 var(--shadow-ink);
-  transform: rotate(var(--tilt, -3deg));
+  border: var(--bw) solid var(--border);
+  border-radius: var(--pill);
+  transform: rotate(var(--tilt, -2deg));
 }
 .sticker.ok {
   background: var(--green);
@@ -254,37 +317,1179 @@ section {
   background: var(--warning);
 }
 
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  margin-top: 1.4rem;
+}
+
+/* The first screen of a page. On the home page it splits into words and a picture of the map. */
+.hero {
+  position: relative;
+  padding: 2rem 1.6rem;
+}
+.hero p {
+  font-size: 1.2rem;
+  max-width: 40rem;
+}
+.hero > .sticker {
+  position: absolute;
+  top: -0.7rem;
+  right: 1.5rem;
+}
+.landing {
+  display: grid;
+  grid-template-columns: 1.05fr 1fr;
+  gap: 2.5rem;
+  align-items: center;
+  margin-top: 3.5rem;
+}
+.landing h1 {
+  margin-bottom: 1rem;
+}
+.landing .lede {
+  font-size: 1.3rem;
+}
+.landing .picture {
+  position: relative;
+}
+.landing .picture .sticker {
+  position: absolute;
+  z-index: 1;
+  font-size: 0.75rem;
+}
+.landing .picture .sticker.one {
+  top: -0.8rem;
+  left: 1.5rem;
+}
+@media (max-width: 860px) {
+  .landing {
+    grid-template-columns: 1fr;
+    margin-top: 2rem;
+  }
+}
+
+/* Three numbered steps. */
+.how {
+  display: grid;
+  gap: 1.2rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  counter-reset: how;
+}
+.how li {
+  counter-increment: how;
+  padding: 1.3rem 1.4rem 1rem;
+}
+.how li::before {
+  content: counter(how);
+  display: grid;
+  place-content: center;
+  width: 2.4rem;
+  height: 2.4rem;
+  margin-bottom: 0.8rem;
+  font-weight: 800;
+  font-size: 1.1rem;
+  background: var(--accent);
+  border: var(--bw) solid var(--border);
+  border-radius: 50%;
+}
+
+/* How it works on the home page: a storyboard of three frames that plays on a loop. One cycle is 9 s, a third per
+   step: the push in a terminal, the drag on a little map, and a phone that opens the site. The step that
+   plays lifts. */
+.flow {
+  --cycle: 9s;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2.4rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.flow-step {
+  position: relative;
+  min-width: 0;
+}
+.flow-pic {
+  position: relative;
+  height: 12.5rem;
+  overflow: hidden;
+  margin-bottom: 1.1rem;
+  background: var(--surface);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  animation: flow-on var(--cycle) infinite;
+}
+.flow-step:nth-child(2) .flow-pic {
+  animation-delay: calc(var(--cycle) / -3 * 2);
+}
+.flow-step:nth-child(3) .flow-pic {
+  animation-delay: calc(var(--cycle) / -3);
+}
+@keyframes flow-on {
+  0%,
+  31% {
+    transform: translate(-3px, -3px);
+    box-shadow: 6px 6px 0 0 var(--shadow-ink);
+  }
+  35%,
+  97% {
+    transform: none;
+    box-shadow: var(--shadow);
+  }
+}
+.flow-n {
+  display: inline-grid;
+  place-content: center;
+  width: 2rem;
+  height: 2rem;
+  margin-right: 0.5rem;
+  font-weight: 800;
+  background: var(--accent);
+  border: var(--bw) solid var(--border);
+  border-radius: 50%;
+  vertical-align: middle;
+}
+.flow-step h3 {
+  display: inline;
+  vertical-align: middle;
+}
+.flow-step p {
+  margin-top: 0.6rem;
+  color: var(--muted);
+}
+
+/* 1: the terminal types the push, and kitshn answers. */
+.term {
+  padding: 0 1rem;
+  font: 0.82rem/1.5 var(--mono);
+  color: var(--code-ink);
+  background: var(--code-bg);
+}
+.term-bar {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  margin: 0 -1rem 0.9rem;
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid #ffffff22;
+}
+.term-bar i {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: #ffffff33;
+}
+.term-bar i:first-child {
+  background: var(--accent);
+}
+.term-bar span {
+  margin-left: 0.5rem;
+  color: #a3a3aa;
+  font-size: 0.75rem;
+}
+.term-line {
+  margin: 0 0 0.45rem;
+  white-space: nowrap;
+  overflow: hidden;
+  opacity: 0;
+}
+.term-line b {
+  color: var(--accent);
+}
+/* --w is the width of the typed command and --type its number of keys. */
+.term-line.one {
+  width: 0;
+  animation: term-type var(--cycle) steps(var(--type, 12)) infinite;
+}
+.term-line.two {
+  animation: term-two var(--cycle) infinite;
+}
+.term-line.three {
+  color: var(--green);
+  animation: term-three var(--cycle) infinite;
+}
+@keyframes term-type {
+  0%,
+  2% {
+    width: 0;
+    opacity: 1;
+  }
+  10%,
+  97% {
+    width: var(--w, 11ch);
+    opacity: 1;
+  }
+  100% {
+    width: var(--w, 11ch);
+    opacity: 0;
+  }
+}
+@keyframes term-two {
+  0%,
+  13% {
+    opacity: 0;
+  }
+  15%,
+  97% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes term-three {
+  0%,
+  23% {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  26%,
+  97% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* 1 has three ways in: a push, a dev server shared where it runs, and a folder dropped on the map. The pictures of
+   the three play together, and the one that is on shows; the pill row above the frame picks one. */
+.way-pick {
+  position: absolute;
+  z-index: 2;
+  top: -0.95rem;
+  left: 50%;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  background: var(--surface);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--pill);
+  box-shadow: 2px 2px 0 0 var(--shadow-ink);
+}
+.way-pick button {
+  padding: 0.05rem 0.65rem;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: var(--pill);
+  transition:
+    background 200ms,
+    color 200ms;
+}
+.way-pick button:hover {
+  color: var(--ink);
+}
+.way-pick button[aria-selected="true"] {
+  color: var(--ink);
+  background: var(--accent);
+}
+.way,
+.way-text {
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 350ms ease,
+    visibility 0s 350ms;
+}
+.way.on,
+.way-text.on {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 350ms ease;
+}
+.way {
+  position: absolute;
+  inset: 0;
+}
+.way-pics {
+  background: var(--code-bg);
+}
+.way-pics .term {
+  padding-top: 0.5rem;
+}
+.way-texts {
+  display: grid;
+}
+/* The expose command is the longest line; a narrow phone gets a smaller terminal so it fits. */
+@media (max-width: 420px) {
+  .term {
+    font-size: 0.72rem;
+  }
+}
+.way-text {
+  grid-area: 1 / 1;
+}
+
+/* The folder rides the pointer onto the map, and lands as a site with its own address. */
+.drop {
+  display: grid;
+  place-items: center;
+  background-color: var(--canvas);
+  background-image: radial-gradient(var(--dots) 1.2px, transparent 1.2px);
+  background-size: 14px 14px;
+}
+.drop-target {
+  position: absolute;
+  inset: 2.6rem 1.2rem 2.9rem;
+  display: grid;
+  place-items: end center;
+  padding-bottom: 0.4rem;
+  border: 2px dashed #19191b44;
+  border-radius: 12px;
+  animation: drop-target var(--cycle) infinite;
+}
+.drop-target span {
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: var(--muted);
+}
+.drop-folder,
+.drop-card {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.82rem;
+  font-weight: 800;
+  white-space: nowrap;
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: 10px;
+  box-shadow: 3px 3px 0 0 var(--ink);
+}
+.drop-folder {
+  animation: drop-folder var(--cycle) infinite;
+}
+.drop-folder i {
+  font-style: normal;
+}
+.drop-folder small {
+  font-weight: 400;
+  color: var(--muted);
+}
+.drop-cursor {
+  position: absolute;
+  right: -0.5rem;
+  bottom: -0.7rem;
+  width: 0;
+  height: 0;
+  border-left: 0.45rem solid transparent;
+  border-right: 0.45rem solid transparent;
+  border-bottom: 0.95rem solid var(--ink);
+  transform: rotate(-30deg);
+}
+.drop-card {
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  animation: drop-card var(--cycle) infinite;
+}
+.drop-card i {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 3px;
+  background: var(--info);
+}
+.drop-card .sticker {
+  --tilt: 0deg;
+}
+.drop-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 0.8rem;
+  padding: 0.1rem 0.6rem;
+  font: 600 0.7rem var(--mono);
+  white-space: nowrap;
+  background: var(--green);
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--pill);
+  box-shadow: 2px 2px 0 0 var(--ink);
+  opacity: 0;
+  animation: drop-toast var(--cycle) infinite;
+}
+@keyframes drop-folder {
+  0%,
+  2% {
+    opacity: 0;
+    transform: translate(-150%, -230%) rotate(-6deg);
+  }
+  4% {
+    opacity: 1;
+    transform: translate(-140%, -210%) rotate(-6deg);
+  }
+  11% {
+    opacity: 1;
+    transform: translate(-50%, -50%) rotate(3deg) scale(1.05);
+  }
+  14%,
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.7);
+  }
+}
+@keyframes drop-target {
+  0%,
+  5% {
+    border-color: #19191b44;
+    background: transparent;
+  }
+  8%,
+  13% {
+    border-color: var(--ink);
+    background: #ffd23f33;
+  }
+  16%,
+  97% {
+    opacity: 0;
+  }
+}
+@keyframes drop-card {
+  0%,
+  12% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.6);
+  }
+  16%,
+  97% {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%);
+  }
+}
+@keyframes drop-toast {
+  0%,
+  21% {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+  25%,
+  97% {
+    opacity: 1;
+    transform: translateX(-50%);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-50%);
+  }
+}
+
+/* 2: the card leaves its spot, leans into the drag, and lands in Everyone, which lights up and asks first. */
+.map {
+  /* The card's way to the middle of Friends: the frame's width comes from the container. */
+  container-type: inline-size;
+  background-color: var(--canvas);
+  background-image: radial-gradient(var(--dots) 1.2px, transparent 1.2px);
+  background-size: 14px 14px;
+}
+.map-circle {
+  position: absolute;
+  right: 1.2rem;
+  top: 50%;
+  width: 8.5rem;
+  height: 8.5rem;
+  margin-top: -4.25rem;
+  border: var(--bw) solid var(--ink);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--green) 30%, transparent);
+  box-shadow: inset 0 0 0 5px var(--green);
+  animation: map-ring var(--cycle) infinite;
+}
+.map-circle span {
+  position: absolute;
+  left: 50%;
+  top: -0.8rem;
+  transform: translateX(-50%);
+  padding: 0 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 800;
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--pill);
+}
+.map-card {
+  position: absolute;
+  left: 1rem;
+  top: 1.2rem;
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.8rem;
+  font-weight: 800;
+  white-space: nowrap;
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: 10px;
+  box-shadow: 3px 3px 0 0 var(--ink);
+  --to-x: calc(100cqw - 10.4rem);
+  --to-y: 4.1rem;
+  animation: map-drag var(--cycle) infinite;
+}
+.map-card i {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 3px;
+  background: var(--info);
+}
+.map-card b {
+  width: 0.55rem;
+  height: 0.55rem;
+  border: 1.5px solid var(--ink);
+  border-radius: 50%;
+  background: var(--green);
+  transform: scale(0);
+  animation: map-dot var(--cycle) infinite;
+}
+.map-diff {
+  position: absolute;
+  left: 50%;
+  bottom: 0.8rem;
+  padding: 0.1rem 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+  background: var(--accent);
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--pill);
+  box-shadow: 2px 2px 0 0 var(--ink);
+  opacity: 0;
+  animation: map-diff var(--cycle) infinite;
+}
+@keyframes map-drag {
+  0%,
+  37% {
+    transform: none;
+  }
+  40% {
+    transform: translate(4px, -4px) rotate(-3deg) scale(1.05);
+    box-shadow: 7px 8px 0 0 var(--ink);
+  }
+  52% {
+    transform: translate(var(--to-x), calc(var(--to-y) - 0.2rem)) rotate(4deg) scale(1.05);
+    box-shadow: 7px 8px 0 0 var(--ink);
+    background: var(--accent);
+  }
+  56%,
+  95% {
+    transform: translate(var(--to-x), var(--to-y));
+    box-shadow: 3px 3px 0 0 var(--ink);
+    background: var(--accent);
+  }
+  100% {
+    transform: none;
+  }
+}
+@keyframes map-ring {
+  0%,
+  44% {
+    box-shadow: inset 0 0 0 5px var(--green);
+  }
+  48%,
+  56% {
+    box-shadow:
+      inset 0 0 0 5px var(--green),
+      0 0 0 5px var(--accent);
+  }
+  60%,
+  100% {
+    box-shadow: inset 0 0 0 5px var(--green);
+  }
+}
+@keyframes map-dot {
+  0%,
+  54% {
+    transform: scale(0);
+  }
+  58%,
+  95% {
+    transform: scale(1);
+  }
+  100% {
+    transform: scale(0);
+  }
+}
+@keyframes map-diff {
+  0%,
+  43% {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.6);
+  }
+  46%,
+  56% {
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
+  }
+  60%,
+  100% {
+    opacity: 0;
+    transform: translateX(-50%) scale(1);
+  }
+}
+
+/* 3: a phone opens the portfolio: the address types, the page loads, and the site is there with no login. The
+   screen's corners follow the frame: its radius is the frame's radius less the frame's padding. */
+.stage {
+  display: grid;
+  place-items: center;
+  background-color: var(--canvas);
+  background-image: radial-gradient(var(--dots) 1.2px, transparent 1.2px);
+  background-size: 14px 14px;
+}
+.phone {
+  --frame: 0.4rem;
+  --round: 1.6rem;
+  width: 10.5rem;
+  height: 11rem;
+  padding: var(--frame);
+  background: var(--ink);
+  border-radius: var(--round);
+  box-shadow: 3px 3px 0 0 #19191b33;
+}
+.phone-screen {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--surface);
+  border-radius: calc(var(--round) - var(--frame));
+}
+.phone-url {
+  flex: none;
+  margin: 0.45rem 0.5rem 0.3rem;
+  padding: 0.12rem 0.5rem;
+  font: 0.6rem var(--mono);
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  background: var(--raised);
+  border-radius: var(--pill);
+}
+.phone-url span {
+  display: inline-block;
+  width: 17ch;
+  overflow: hidden;
+  vertical-align: bottom;
+  animation: phone-type var(--cycle) steps(17) infinite;
+}
+.phone-load {
+  flex: none;
+  width: 0;
+  height: 3px;
+  background: var(--accent);
+  animation: phone-load var(--cycle) infinite;
+}
+.phone-site {
+  flex: 1;
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 0.1rem;
+  padding: 0.45rem 0.6rem 0.4rem;
+  text-align: center;
+  background: var(--tint);
+  animation: phone-site var(--cycle) infinite;
+}
+.phone-site b {
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+.phone-site small {
+  font-size: 0.58rem;
+  line-height: 1.2;
+  color: var(--muted);
+}
+.folio-me {
+  width: 1.4rem;
+  height: 1.4rem;
+  margin-bottom: 0.1rem;
+  border: 1.5px solid var(--ink);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 38%, var(--ink) 0 22%, transparent 23%),
+    radial-gradient(circle at 50% 105%, var(--ink) 0 42%, transparent 43%), var(--pink);
+}
+.folio-work {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.25rem;
+  width: 100%;
+  margin-top: 0.2rem;
+}
+.folio-work i {
+  height: 0.8rem;
+  border: 1.5px solid var(--ink);
+  border-radius: 5px;
+  background: var(--info);
+}
+.folio-work i:nth-child(2) {
+  background: var(--pink);
+}
+.folio-work i:nth-child(3) {
+  background: var(--green);
+}
+.folio-work i:nth-child(4) {
+  background: var(--accent);
+}
+.phone-ok {
+  margin-top: 0.25rem;
+  padding: 0.05rem 0.45rem;
+  font-size: 0.55rem;
+  font-weight: 800;
+  white-space: nowrap;
+  background: var(--green);
+  border: 1.5px solid var(--ink);
+  border-radius: var(--pill);
+}
+@keyframes phone-type {
+  0%,
+  63% {
+    width: 17ch;
+  }
+  65% {
+    width: 0;
+  }
+  72%,
+  100% {
+    width: 17ch;
+  }
+}
+@keyframes phone-load {
+  0%,
+  71% {
+    width: 0;
+    opacity: 1;
+  }
+  77% {
+    width: 100%;
+    opacity: 1;
+  }
+  80%,
+  100% {
+    width: 100%;
+    opacity: 0;
+  }
+}
+@keyframes phone-site {
+  0%,
+  62% {
+    opacity: 1;
+    transform: none;
+  }
+  64%,
+  76% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  80%,
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (max-width: 860px) {
+  .flow {
+    grid-template-columns: 1fr;
+    max-width: 26rem;
+    margin-inline: auto;
+  }
+}
+
+/* Without motion the frames show their end: the push done, the card in Everyone, the site open. */
+@media (prefers-reduced-motion: reduce) {
+  .flow *,
+  .flow-pic {
+    animation: none !important;
+  }
+  .term-line {
+    opacity: 1;
+  }
+  .term-line.one {
+    width: var(--w, 11ch);
+  }
+  .drop-folder,
+  .drop-target {
+    visibility: hidden;
+  }
+  .drop-card,
+  .drop-toast {
+    opacity: 1;
+  }
+  .drop-toast {
+    transform: translateX(-50%);
+  }
+  .map-card {
+    transform: translate(var(--to-x), var(--to-y));
+    background: var(--accent);
+  }
+  .map-card b {
+    transform: none;
+  }
+  .phone-load {
+    opacity: 0;
+  }
+}
+
+/* Sharing on the home page: overlapping circles drawn like the map, with the people of each circle on its edge and
+   the cards inside, beside three short points. Positions are in percent of the drawing, so it scales with its box. */
+.share {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr;
+  gap: 1.6rem;
+  align-items: start;
+}
+.venn {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  container: venn / inline-size;
+}
+.venn-map {
+  position: relative;
+  aspect-ratio: 16 / 11;
+  background-color: var(--canvas);
+  background-image: radial-gradient(var(--dots) 1.2px, transparent 1.2px);
+  background-size: 16px 16px;
+  border-bottom: var(--bw) solid var(--border);
+}
+.venn figcaption {
+  padding: 0.7rem 1rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.venn-circle {
+  position: absolute;
+  aspect-ratio: 1;
+  border: var(--bw) solid var(--ink);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--c) 22%, transparent);
+  box-shadow: inset 0 0 0 5px var(--c);
+}
+.venn-circle span {
+  position: absolute;
+  left: 50%;
+  top: -0.85rem;
+  transform: translateX(-50%);
+  padding: 0.05rem 0.7rem;
+  font-size: 0.8rem;
+  font-weight: 800;
+  white-space: nowrap;
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--pill);
+  box-shadow: 2px 2px 0 0 var(--ink);
+}
+.venn-circle.friends {
+  --c: var(--pink);
+  left: 6%;
+  top: 14%;
+  width: 40%;
+}
+.venn-circle.family {
+  --c: var(--info);
+  left: 30%;
+  top: 30%;
+  width: 38%;
+}
+.venn-circle.everyone {
+  --c: var(--green);
+  left: 70%;
+  top: 12%;
+  width: 26%;
+}
+.venn-who {
+  position: absolute;
+  padding: 0.05rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  white-space: nowrap;
+  background: var(--surface);
+  border: 1.5px solid var(--ink);
+  border-radius: var(--pill);
+}
+.w-maya {
+  left: 3%;
+  top: 4%;
+}
+.w-sam {
+  left: 2%;
+  top: 60%;
+}
+.w-mom {
+  left: 46%;
+  top: 88%;
+}
+.w-phone {
+  left: 63%;
+  top: 72%;
+}
+.w-anyone {
+  left: 76%;
+  top: 2%;
+}
+.venn-card {
+  position: absolute;
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 800;
+  white-space: nowrap;
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: 9px;
+  box-shadow: 3px 3px 0 0 var(--ink);
+  transform: translate(-50%, -50%);
+}
+.venn-card i {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 3px;
+  background: var(--accent);
+  border: 1.5px solid var(--ink);
+}
+.venn-card b {
+  width: 0.55rem;
+  height: 0.55rem;
+  border: 1.5px solid var(--ink);
+  border-radius: 50%;
+}
+.venn-card b.pink {
+  background: var(--pink);
+}
+.venn-card b.blue {
+  background: var(--info);
+}
+.venn-card b.green {
+  background: var(--green);
+}
+.c-trip {
+  left: 37%;
+  top: 50%;
+  background: var(--accent);
+  animation: venn-pulse 2.8s ease-in-out infinite;
+}
+.c-habits {
+  left: 22%;
+  top: 33%;
+}
+.c-site {
+  left: 83%;
+  top: 37%;
+}
+@keyframes venn-pulse {
+  0%,
+  100% {
+    box-shadow: 3px 3px 0 0 var(--ink);
+    transform: translate(-50%, -50%);
+  }
+  50% {
+    box-shadow: 6px 6px 0 0 var(--ink);
+    transform: translate(calc(-50% - 2px), calc(-50% - 2px));
+  }
+}
+.share-points {
+  display: grid;
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.share-points li {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  padding: 1rem 1.2rem;
+}
+.share-icon {
+  flex: none;
+  display: grid;
+  place-content: center;
+  width: 2.6rem;
+  height: 2.6rem;
+  font-size: 1.2rem;
+  background: var(--tint);
+  border: var(--bw) solid var(--border);
+  border-radius: 12px;
+}
+.share-points h3 {
+  margin-bottom: 0.25rem;
+}
+.share-points p {
+  margin: 0;
+  color: var(--muted);
+}
+@media (max-width: 860px) {
+  .share {
+    grid-template-columns: 1fr;
+  }
+}
+/* A narrow drawing (a phone, or beside the points on a small laptop) is taller, so the people above a circle clear
+   its name. */
+@container venn (max-width: 32rem) {
+  .venn-map {
+    aspect-ratio: 8 / 7;
+  }
+  .w-maya {
+    top: 2%;
+  }
+  .w-anyone {
+    top: 1%;
+  }
+  .w-sam {
+    top: 59%;
+  }
+  .c-habits {
+    left: 20%;
+    top: 27%;
+  }
+  .venn-circle.family {
+    left: 33%;
+  }
+  .c-trip {
+    left: 38%;
+    top: 44%;
+  }
+  .w-phone {
+    top: 62%;
+  }
+  .w-mom {
+    top: 71%;
+  }
+}
+@container venn (max-width: 26rem) {
+  .venn-who {
+    font-size: 0.6rem;
+  }
+  .venn-card {
+    font-size: 0.65rem;
+  }
+}
+@container venn (max-width: 21rem) {
+  .venn-map {
+    aspect-ratio: 1;
+  }
+  .venn-who {
+    padding: 0 0.35rem;
+    font-size: 0.55rem;
+  }
+  .venn-card {
+    gap: 0.25rem;
+    padding: 0.25rem 0.4rem;
+    font-size: 0.6rem;
+  }
+  .w-anyone {
+    left: 70%;
+  }
+  .c-habits {
+    left: 21%;
+    top: 25%;
+  }
+  .venn-circle.family {
+    left: 36%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .c-trip {
+    animation: none;
+  }
+}
+
 .grid {
   display: grid;
   gap: 1.2rem;
-  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(17rem, 100%), 1fr));
 }
 .grid > .card {
-  padding: 1rem 1.2rem;
+  min-width: 0;
+  padding: 1.2rem 1.3rem;
+}
+.grid > .card .sticker {
+  margin-bottom: 0.6rem;
 }
 .grid > .card:nth-child(3n + 2) .sticker {
   --tilt: 2deg;
 }
 .grid > .card:nth-child(3n) .sticker {
-  --tilt: -1.5deg;
+  --tilt: -1deg;
+}
+.lift {
+  transition:
+    transform 160ms var(--spring),
+    box-shadow 160ms var(--spring);
+}
+.lift:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: var(--shadow-up);
 }
 
 .split {
   display: grid;
-  gap: 1.6rem;
+  gap: 2.5rem;
   grid-template-columns: 1fr 1fr;
   align-items: center;
 }
 .split.narrow-pic {
   grid-template-columns: 2fr 1fr;
 }
+.split p {
+  font-size: 1.05rem;
+}
+.split ul.ticks {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0;
+}
+.ticks li {
+  position: relative;
+  padding-left: 1.8rem;
+  margin-bottom: 0.4rem;
+}
+.ticks li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  top: 0.15rem;
+  width: 1.2rem;
+  height: 1.2rem;
+  display: grid;
+  place-content: center;
+  font-size: 0.7rem;
+  font-weight: 800;
+  background: var(--green);
+  border: var(--bw) solid var(--border);
+  border-radius: 50%;
+}
 @media (max-width: 760px) {
-  h1 {
-    font-size: 2.2rem;
-  }
   .split,
   .split.narrow-pic {
     grid-template-columns: 1fr;
+    gap: 1.4rem;
+  }
+  .split > figure {
+    order: -1;
   }
 }
 figure {
@@ -295,44 +1500,760 @@ figure.shot {
   padding: 0;
 }
 figcaption {
-  padding: 0.5rem 0.8rem;
+  padding: 0.55rem 0.9rem;
   border-top: var(--bw) solid var(--border);
   font-size: 0.85rem;
   color: var(--muted);
+  background: var(--raised);
 }
 .diagram {
-  padding: 1rem;
+  padding: 1.2rem;
 }
 .diagram img {
   margin: 0 auto;
 }
 
+/* A soft yellow band that runs the full width. */
+.band {
+  margin-block: 4.5rem;
+  padding-block: 4rem;
+  background: var(--tint);
+  border-block: var(--bw) solid var(--border);
+}
+.band > section {
+  margin-block: 0;
+}
+
+/* Projects on the home page: one recipe with a site, an API and a photo album, and what one push does with it. The
+   colour of each kind in the code is the colour of its sticker in the list. */
+.recipe {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 1.6rem;
+  align-items: start;
+}
+.recipe-code {
+  margin: 0;
+  overflow: hidden;
+  background: var(--code-bg);
+}
+.recipe-file {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.55rem 1rem;
+  font: 0.8rem var(--mono);
+  color: #a3a3aa;
+  border-bottom: 1px solid #ffffff22;
+}
+.recipe-file .sticker {
+  font-family: var(--sans);
+}
+.recipe-code pre {
+  margin: 0;
+  padding: 1rem;
+  font-size: 0.74rem;
+  line-height: 1.6;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.c-kw {
+  color: #c4b5fd;
+}
+.c-str {
+  color: var(--green);
+}
+.c-key {
+  font-weight: 700;
+  color: #ffffff;
+}
+.c-kind {
+  padding: 0 0.3em;
+  font-weight: 700;
+  color: var(--ink);
+  border-radius: 4px;
+}
+.k-static {
+  background: var(--green);
+}
+.k-worker {
+  background: var(--info);
+}
+.k-compose {
+  background: var(--warning);
+}
+.recipe-out ol {
+  display: grid;
+  gap: 0.8rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: deploy;
+}
+.recipe-out li {
+  position: relative;
+  padding: 0.9rem 1.1rem 0.9rem 3.2rem;
+  counter-increment: deploy;
+}
+.recipe-out li::before {
+  content: counter(deploy);
+  position: absolute;
+  left: 0.9rem;
+  top: 0.95rem;
+  display: grid;
+  place-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  font-size: 0.85rem;
+  font-weight: 800;
+  background: var(--accent);
+  border: var(--bw) solid var(--border);
+  border-radius: 50%;
+}
+.recipe-out li .sticker {
+  float: right;
+  margin-left: 0.5rem;
+}
+.recipe-out h3 {
+  margin-bottom: 0.25rem;
+  font-family: var(--mono);
+  font-size: 1rem;
+}
+.recipe-out h3 span {
+  font-family: var(--sans);
+  font-weight: 600;
+  color: var(--muted);
+}
+.recipe-out li p {
+  margin: 0;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+.recipe-push,
+.recipe-pr {
+  margin: 0 0 0.8rem;
+  font-size: 0.95rem;
+}
+.recipe-pr {
+  margin: 0.9rem 0 0;
+  color: var(--muted);
+}
+@media (max-width: 960px) {
+  .recipe {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Self-hosting on the home page: a visitor, Cloudflare and a home server in a row. The tunnel starts at home and
+   ends at Cloudflare; dots run through it both ways, and the router wall stays shut. A narrow frame stacks them. */
+.home {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  container: home / inline-size;
+}
+.home-map {
+  display: grid;
+  grid-template-columns: 1fr 2.2rem 1.1fr 3.2rem 1.5fr;
+  align-items: center;
+  padding: 2.2rem 1.2rem;
+  background-color: var(--canvas);
+  background-image: radial-gradient(var(--dots) 1.2px, transparent 1.2px);
+  background-size: 16px 16px;
+  border-bottom: var(--bw) solid var(--border);
+}
+.home figcaption {
+  padding: 0.7rem 1rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.home-node {
+  min-width: 0;
+}
+.visitor,
+.edge,
+.home-box {
+  display: grid;
+  justify-items: center;
+  gap: 0.25rem;
+  padding: 0.8rem 0.5rem;
+  text-align: center;
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: 12px;
+  box-shadow: 3px 3px 0 0 var(--ink);
+}
+.home-node b {
+  font-size: 0.85rem;
+}
+.home-icon {
+  font-size: 1.5rem;
+  line-height: 1;
+}
+.home-sub {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.edge {
+  background: var(--tint);
+}
+.home-chip {
+  padding: 0.05rem 0.45rem;
+  font-size: 0.62rem;
+  font-weight: 800;
+  white-space: nowrap;
+  border: 1.5px solid var(--ink);
+  border-radius: var(--pill);
+}
+.home-chip.ok {
+  background: var(--green);
+}
+.house {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: stretch;
+}
+/* The router: a brick wall that the tunnel passes, with its ports shut. */
+.home-wall {
+  position: relative;
+  width: 0.9rem;
+  margin-right: 0.5rem;
+  border: var(--bw) solid var(--ink);
+  border-radius: 4px;
+  background: repeating-linear-gradient(0deg, transparent 0 9px, var(--ink) 9px 11px), var(--warning);
+}
+.home-wall span {
+  position: absolute;
+  left: 50%;
+  bottom: -1.6rem;
+  transform: translateX(-30%);
+  padding: 0.05rem 0.45rem;
+  font-size: 0.62rem;
+  font-weight: 800;
+  white-space: nowrap;
+  background: var(--surface);
+  border: 1.5px solid var(--ink);
+  border-radius: var(--pill);
+}
+.home-app {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  width: 100%;
+  padding: 0.15rem 0.4rem;
+  font: 0.65rem var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  background: var(--raised);
+  border-radius: 6px;
+}
+.home-app i {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border: 1.5px solid var(--ink);
+  border-radius: 50%;
+}
+.home-app i.compose {
+  background: var(--warning);
+}
+.home-app i.live {
+  background: var(--pink);
+}
+/* A wire, with dots that travel it. The tunnel is thick and dashed, and its dots go both ways. */
+.home-wire {
+  position: relative;
+  height: 0.9rem;
+  margin: 0 -1px;
+}
+.home-wire::before {
+  content: "";
+  position: absolute;
+  inset: 50% 0 auto;
+  height: 3px;
+  margin-top: -1.5px;
+  background: var(--ink);
+}
+.home-wire.tunnel::before {
+  height: 0.9rem;
+  margin-top: -0.45rem;
+  background: repeating-linear-gradient(90deg, var(--accent) 0 8px, var(--surface) 8px 12px);
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--pill);
+}
+.home-wire span {
+  position: absolute;
+  left: 50%;
+  top: 1.2rem;
+  transform: translateX(-50%);
+  font-size: 0.62rem;
+  font-weight: 800;
+  color: var(--muted);
+}
+.home-wire i {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 0.55rem;
+  height: 0.55rem;
+  margin-top: -0.275rem;
+  background: var(--ink);
+  border-radius: 50%;
+  animation: home-dot 2.4s linear infinite;
+}
+.home-wire i:nth-child(2) {
+  animation-delay: -1.2s;
+}
+.home-wire.tunnel i {
+  background: var(--surface);
+  border: 1.5px solid var(--ink);
+}
+.home-wire.tunnel i:nth-child(2) {
+  animation-name: home-dot-back;
+  animation-delay: -0.6s;
+}
+.home-wire.tunnel i:nth-child(3) {
+  animation-delay: -1.6s;
+}
+@keyframes home-dot {
+  from {
+    left: 0;
+  }
+  to {
+    left: calc(100% - 0.55rem);
+  }
+}
+@keyframes home-dot-back {
+  from {
+    left: calc(100% - 0.55rem);
+  }
+  to {
+    left: 0;
+  }
+}
+@container home (max-width: 30rem) {
+  .home-map {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    padding: 1.4rem 1rem 2.4rem;
+  }
+  .visitor,
+  .edge {
+    width: min(11rem, 100%);
+  }
+  .house {
+    width: min(13rem, 100%);
+    grid-template-columns: 1fr;
+  }
+  .home-wall {
+    width: auto;
+    height: 0.9rem;
+    margin: 0 0 0.5rem;
+    background: repeating-linear-gradient(90deg, transparent 0 9px, var(--ink) 9px 11px), var(--warning);
+  }
+  .home-wall span {
+    bottom: auto;
+    top: 50%;
+    transform: translate(-50%, -50%);
+  }
+  .home-wire {
+    width: 0.9rem;
+    height: 2.2rem;
+    margin: -1px 0;
+  }
+  .home-wire.tunnel {
+    height: 3rem;
+  }
+  .home-wire::before {
+    inset: 0 auto 0 50%;
+    width: 3px;
+    height: auto;
+    margin: 0 0 0 -1.5px;
+  }
+  .home-wire.tunnel::before {
+    width: 0.9rem;
+    height: auto;
+    margin-left: -0.45rem;
+    background: repeating-linear-gradient(0deg, var(--accent) 0 8px, var(--surface) 8px 12px);
+  }
+  .home-wire span {
+    left: 1.4rem;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+  .home-wire i {
+    left: 50%;
+    margin: 0 0 0 -0.275rem;
+    animation-name: home-dot-down;
+  }
+  .home-wire.tunnel i:nth-child(2) {
+    animation-name: home-dot-up;
+  }
+}
+@keyframes home-dot-down {
+  from {
+    top: 0;
+  }
+  to {
+    top: calc(100% - 0.55rem);
+  }
+}
+@keyframes home-dot-up {
+  from {
+    top: calc(100% - 0.55rem);
+  }
+  to {
+    top: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .home-wire i {
+    animation: none;
+  }
+  .home-wire i:nth-child(2) {
+    left: 45%;
+  }
+}
+
+/* Safety on the home page: the repo's empty secrets beside the checks of a push, which tick one by one on a loop of
+   8 s and end with the site live. Without motion every check shows ticked. */
+.safe {
+  --cycle: 8s;
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+  gap: 1.6rem;
+  align-items: start;
+}
+.safe figure {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.safe-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 1rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  background: var(--raised);
+  border-bottom: var(--bw) solid var(--border);
+}
+.safe-count {
+  padding: 0.05rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 800;
+  background: var(--green);
+  border: 1.5px solid var(--ink);
+  border-radius: var(--pill);
+}
+.safe-gone {
+  display: grid;
+  gap: 0.7rem;
+  margin: 0;
+  padding: 1.2rem 1rem;
+  list-style: none;
+}
+.safe-gone li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  border: var(--bw) dashed var(--hairline);
+  border-radius: 10px;
+}
+.safe-gone code {
+  background: none;
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--error, #ff5c7a);
+  text-decoration-thickness: 2px;
+}
+.safe-gone .safe-no {
+  flex: none;
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: var(--ink);
+}
+.safe-repo figcaption {
+  padding: 0 1rem 1.2rem;
+  background: none;
+  border: 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.safe-run {
+  animation: safe-run var(--cycle) infinite;
+}
+.safe-steps {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0.8rem 1rem 0.4rem;
+  list-style: none;
+}
+.safe-steps li {
+  display: flex;
+  gap: 0.8rem;
+  align-items: flex-start;
+  padding: 0.5rem 0;
+}
+.safe-steps li + li {
+  border-top: var(--bw) dashed var(--hairline);
+}
+.safe-steps i {
+  flex: none;
+  display: grid;
+  place-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-top: 0.1rem;
+  font-style: normal;
+  font-weight: 800;
+  font-size: 0.8rem;
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: 50%;
+}
+.safe-steps i::before {
+  content: "✓";
+  opacity: 0;
+}
+.safe-steps li div {
+  display: grid;
+  gap: 0.1rem;
+}
+.safe-steps b {
+  font-size: 0.95rem;
+}
+.safe-steps span {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.safe-steps li:nth-child(1) i {
+  animation: safe-tick-1 var(--cycle) infinite;
+}
+.safe-steps li:nth-child(1) i::before {
+  animation: safe-mark-1 var(--cycle) infinite;
+}
+.safe-steps li:nth-child(2) i {
+  animation: safe-tick-2 var(--cycle) infinite;
+}
+.safe-steps li:nth-child(2) i::before {
+  animation: safe-mark-2 var(--cycle) infinite;
+}
+.safe-steps li:nth-child(3) i {
+  animation: safe-tick-3 var(--cycle) infinite;
+}
+.safe-steps li:nth-child(3) i::before {
+  animation: safe-mark-3 var(--cycle) infinite;
+}
+.safe-steps li:nth-child(4) i {
+  animation: safe-tick-4 var(--cycle) infinite;
+}
+.safe-steps li:nth-child(4) i::before {
+  animation: safe-mark-4 var(--cycle) infinite;
+}
+.safe-live {
+  margin: 0.4rem 1rem 1rem;
+  padding: 0.55rem 0.8rem;
+  font-weight: 800;
+  text-align: center;
+  background: var(--green);
+  border: var(--bw) solid var(--ink);
+  border-radius: 10px;
+  box-shadow: 3px 3px 0 0 var(--ink);
+  animation: safe-live var(--cycle) infinite;
+}
+/* Check n ticks at about (n × 15 + 5) % of the cycle; the site goes live at 75 %, and all of it resets at the end. */
+@keyframes safe-tick-1 {
+  0%,
+  19% {
+    background: var(--surface);
+  }
+  20%,
+  97% {
+    background: var(--green);
+  }
+}
+@keyframes safe-mark-1 {
+  0%,
+  19% {
+    opacity: 0;
+  }
+  20%,
+  97% {
+    opacity: 1;
+  }
+}
+@keyframes safe-tick-2 {
+  0%,
+  34% {
+    background: var(--surface);
+  }
+  35%,
+  97% {
+    background: var(--green);
+  }
+}
+@keyframes safe-mark-2 {
+  0%,
+  34% {
+    opacity: 0;
+  }
+  35%,
+  97% {
+    opacity: 1;
+  }
+}
+@keyframes safe-tick-3 {
+  0%,
+  49% {
+    background: var(--surface);
+  }
+  50%,
+  97% {
+    background: var(--green);
+  }
+}
+@keyframes safe-mark-3 {
+  0%,
+  49% {
+    opacity: 0;
+  }
+  50%,
+  97% {
+    opacity: 1;
+  }
+}
+@keyframes safe-tick-4 {
+  0%,
+  64% {
+    background: var(--surface);
+  }
+  65%,
+  97% {
+    background: var(--green);
+  }
+}
+@keyframes safe-mark-4 {
+  0%,
+  64% {
+    opacity: 0;
+  }
+  65%,
+  97% {
+    opacity: 1;
+  }
+}
+@keyframes safe-live {
+  0%,
+  74% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  78%,
+  97% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes safe-run {
+  0%,
+  74% {
+    background: var(--yellow);
+  }
+  78%,
+  97% {
+    background: var(--green);
+  }
+}
+@media (max-width: 860px) {
+  .safe {
+    grid-template-columns: 1fr;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .safe *,
+  .safe *::before {
+    animation: none !important;
+  }
+  .safe-steps i {
+    background: var(--green);
+  }
+  .safe-steps i::before {
+    opacity: 1;
+  }
+}
+
+/* The three kinds of apps. */
+.kinds {
+  display: grid;
+  gap: 1.2rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+}
+.kinds .card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 1.3rem 1.4rem;
+}
+.kinds .sticker {
+  align-self: flex-start;
+  margin-bottom: 0.5rem;
+}
+.kinds dl {
+  margin: 0.6rem 0 0;
+  padding-top: 0.8rem;
+  border-top: var(--bw) dashed var(--hairline);
+  font-size: 0.92rem;
+}
+.kinds dt {
+  font-weight: 800;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.kinds dd {
+  margin: 0 0 0.5rem;
+}
+
 .apps {
   display: grid;
   gap: 1rem;
-  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(15rem, 100%), 1fr));
   row-gap: 1.6rem;
   padding: 0;
   margin: 0;
   list-style: none;
 }
 .apps li a {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0.7rem;
-  padding: 0.8rem 0.9rem;
+  padding: 1.1rem 0.9rem 0.8rem;
   color: var(--ink);
   text-decoration: none;
   transition:
-    transform 80ms,
-    box-shadow 80ms;
+    transform 160ms var(--spring),
+    box-shadow 160ms var(--spring);
 }
 .apps li a:hover {
-  transform: translate(-1px, -1px);
-  box-shadow: 5px 5px 0 0 var(--shadow-ink);
+  transform: translate(-2px, -2px);
+  box-shadow: var(--shadow-up);
 }
 .apps li a:active {
-  transform: translate(3px, 3px);
+  transform: translate(2px, 2px);
   box-shadow: none;
 }
 .apps .icon {
@@ -341,8 +2262,8 @@ figcaption {
   height: 2.2rem;
   padding: 3px;
   background: var(--raised);
-  border: var(--bw) solid var(--border);
-  border-radius: 4px;
+  border: var(--bw) solid var(--hairline);
+  border-radius: 8px;
   object-fit: contain;
 }
 .apps .name {
@@ -360,11 +2281,7 @@ figcaption {
   --tilt: 2deg;
 }
 .apps li:nth-child(3n) .sticker {
-  --tilt: -1.5deg;
-}
-.apps li a {
-  position: relative;
-  padding-top: 1.1rem;
+  --tilt: -1deg;
 }
 .apps li a > span:not(.sticker) {
   min-width: 0;
@@ -373,6 +2290,84 @@ figcaption {
   position: absolute;
   top: -0.7rem;
   right: 0.7rem;
+}
+
+/* The way to kitshn for teams (app.kitshn.com): a graphite card, so it reads apart from the rest. */
+.teams {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr auto;
+  gap: 1.5rem 2rem;
+  align-items: center;
+  padding: 2rem;
+  color: var(--code-ink);
+  background: var(--ink);
+}
+.teams > * {
+  min-width: 0;
+}
+.teams .label,
+.teams .lede {
+  color: #a3a3aa;
+}
+.teams .lede {
+  margin: 0;
+}
+.teams ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.6rem;
+}
+.teams li {
+  position: relative;
+  padding-left: 1.6rem;
+  font-weight: 600;
+}
+.teams li::before {
+  content: "✦";
+  position: absolute;
+  left: 0;
+  color: var(--accent);
+}
+.teams .btn {
+  box-shadow: 3px 3px 0 0 var(--accent);
+  border-color: var(--accent);
+}
+@media (max-width: 960px) {
+  .teams {
+    grid-template-columns: 1fr;
+    padding: 1.6rem 1.2rem;
+  }
+  .teams .btn {
+    justify-self: start;
+  }
+}
+
+/* The last call to action. */
+.cta {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+  gap: 2rem;
+  align-items: center;
+  padding: 2.2rem 2rem;
+  background: var(--accent);
+}
+.cta > * {
+  min-width: 0;
+}
+.cta pre {
+  margin: 0;
+  box-shadow: none;
+}
+.cta .lede {
+  color: var(--ink);
+}
+@media (max-width: 860px) {
+  .cta {
+    grid-template-columns: 1fr;
+    padding: 1.6rem 1.2rem;
+  }
 }
 
 ol.steps {
@@ -384,14 +2379,15 @@ ol.steps {
   gap: 1.2rem;
 }
 ol.steps > li {
+  min-width: 0;
   counter-increment: step;
   position: relative;
-  padding: 1.1rem 1.3rem 0.4rem 3.6rem;
+  padding: 1.1rem 1.3rem 0.4rem 3.8rem;
 }
 ol.steps > li::before {
   content: counter(step);
   position: absolute;
-  left: 0.9rem;
+  left: 1rem;
   top: 1rem;
   width: 2rem;
   height: 2rem;
@@ -401,7 +2397,7 @@ ol.steps > li::before {
   background: var(--select);
   color: var(--select-fg);
   border: var(--bw) solid var(--border);
-  border-radius: 4px;
+  border-radius: 50%;
 }
 
 table {
@@ -413,23 +2409,68 @@ th,
 td {
   text-align: left;
   vertical-align: top;
-  padding: 0.5rem 0.7rem;
-  border: var(--bw) solid var(--border);
+  padding: 0.55rem 0.8rem;
+  border-bottom: var(--bw) solid var(--hairline);
 }
 th {
   background: var(--raised);
   font-weight: 800;
+  border-bottom-color: var(--border);
 }
 .table-wrap {
   overflow-x: auto;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius);
   box-shadow: var(--shadow);
 }
 
 footer {
-  margin: 3rem auto 2rem;
-  padding: 1rem 1.2rem;
+  margin: 4rem auto 1.5rem;
+  padding: 1rem 1.3rem;
   display: flex;
-  gap: 1rem;
+  align-items: center;
+  gap: 1rem 1.4rem;
   flex-wrap: wrap;
   font-size: 0.9rem;
+}
+footer .brand {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-right: auto;
+  font-weight: 800;
+  text-decoration: none;
+}
+footer .brand img {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+/* A picture keeps its own size in a split, so a narrow one leaves no empty frame. */
+.split > figure.shot {
+  justify-self: center;
+  width: fit-content;
+}
+.ticks.row {
+  display: grid;
+  gap: 0.6rem 1.6rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+  list-style: none;
+  padding: 0;
+  margin: 1.4rem 0 0;
+}
+
+/* The map demo beside the headline: the real kitshn map, with no toolbar or panels, on a made-up kitshn that lives in
+   the page (site/demo, built from packages/edge/src/ui/site-demo), in the neo-brutal look of this site. */
+.demo-frame {
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+}
+.demo-frame iframe {
+  display: block;
+  width: 100%;
+  height: clamp(420px, 64vh, 580px);
+  border: 0;
+  background: var(--canvas);
 }

@@ -3,10 +3,11 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
     <title>How kitshn works</title>
     <meta
       name="description"
-      content="The parts of kitshn, where its state lives, how a request and a deploy travel, and how it fits the Cloudflare free plan."
+      content="Follow a visit, a share, a deploy and an outage through kitshn: one Worker and Durable Object on Cloudflare, Access at every door, and a small daemon on each machine."
     />
     <meta property="og:title" content="How kitshn works" />
     <meta property="og:url" content="https://kitshn.com/architecture/" />
@@ -16,239 +17,326 @@
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/architecture/how.css" />
+    <script>
+      document.documentElement.classList.add("js");
+    </script>
+    <script src="/architecture/how.js" defer></script>
   </head>
   <body>
     <header class="wrap top card">
       <a class="brand" href="/"><img src="/favicon.svg" alt="" /> kitshn</a>
       <nav>
-        <a class="btn" href="/">Home</a>
-        <a class="btn" href="/install/">Install</a>
-        <a class="btn" href="/architecture/" aria-current="page">How it works</a>
-        <a class="btn" href="https://github.com/Yarden-zamir/kitshn">GitHub</a>
+        <a href="/architecture/" aria-current="page">How it works</a>
+        <a href="/enterprise/">Enterprise</a>
+        <a href="https://github.com/Yarden-zamir/kitshn">GitHub</a>
+        <a class="btn primary" href="/install/">Install</a>
       </nav>
     </header>
 
     <main>
-      <section class="wrap card hero">
-        <span class="sticker blue">Architecture</span>
-        <h1>How kitshn works</h1>
-        <p>
-          All of kitshn's logic and state run in one Cloudflare Worker with one Durable Object. Machines do only
-          machine work: tunnels, Compose apps, local sites and commands.
+      <section class="wrap how-hero">
+        <span class="label">Architecture</span>
+        <h1>How kitshn <span class="mark">works</span></h1>
+        <p class="lede">
+          kitshn is one brain on Cloudflare and a pair of hands on each of your machines. Cloudflare Access stands at
+          every door, so a visit to your app never has to ask kitshn.
         </p>
+        <ul class="ideas">
+          <li class="card reveal">
+            <span class="idea-icon" aria-hidden="true">🧠</span>
+            <h3>One brain</h3>
+            <p>A Cloudflare Worker and one Durable Object hold the map, every rule and all state.</p>
+          </li>
+          <li class="card reveal">
+            <span class="idea-icon" aria-hidden="true">🚪</span>
+            <h3>Access at every door</h3>
+            <p>Your circles become Access policies. Cloudflare checks them at its edge, on every visit.</p>
+          </li>
+          <li class="card reveal">
+            <span class="idea-icon" aria-hidden="true">🔌</span>
+            <h3>No open ports</h3>
+            <p>A small daemon on each machine dials out through its own tunnel, and runs your apps.</p>
+          </li>
+        </ul>
+        <nav class="jump" aria-label="On this page">
+          <a href="#follow">Follow a request</a>
+          <a href="#access">Circles and Access</a>
+          <a href="#state">Where state lives</a>
+          <a href="#budget">The free plan</a>
+        </nav>
       </section>
 
-      <section class="wrap">
-        <span class="label">Parts</span>
-        <h2>The parts</h2>
-        <figure class="card diagram">
-          <img src="/diagrams/parts.svg" alt="People and devices reach Cloudflare Access. Behind it are the kitshn Worker and Durable Object, static and Worker apps, R2, and one tunnel per machine. On the machine, the kitshn daemon keeps a WebSocket to the Durable Object and runs Compose apps and live sites." width="1000" height="460" />
+      <!-- The explorer: the parts in three zones, and journeys that light up the path a request takes. how.js draws the
+           wires and plays the steps; without it the parts and the written steps still read in order. -->
+      <section class="wrap" id="follow">
+        <div class="head">
+          <span class="label">Follow a request</span>
+          <h2>Watch it travel</h2>
+          <p class="lede">Pick a journey and watch where it goes, or click any part to see what it does.</p>
+        </div>
+
+        <div class="journeys" role="tablist" aria-label="Journeys">
+          <button role="tab" data-journey="parts" aria-selected="false"><span aria-hidden="true">🧭</span> The parts</button>
+          <button role="tab" data-journey="visit" aria-selected="true"><span aria-hidden="true">👋</span> A friend opens your app</button>
+          <button role="tab" data-journey="share"><span aria-hidden="true">🫳</span> You share a card</button>
+          <button role="tab" data-journey="deploy"><span aria-hidden="true">🚀</span> You push code</button>
+          <button role="tab" data-journey="offline"><span aria-hidden="true">🔌</span> A machine goes off</button>
+        </div>
+
+        <div class="explorer card">
+          <div class="stage-wrap">
+            <div class="plan" id="stage">
+              <svg class="wires" aria-hidden="true"></svg>
+
+              <div class="zone z-net"><span>The internet</span></div>
+              <div class="zone z-cf"><span>Cloudflare</span></div>
+              <div class="zone z-home"><span>Your machine</span></div>
+              <div class="zone z-more"><span>More machines</span></div>
+
+              <button class="node" data-node="github" style="grid-area: github">
+                <i aria-hidden="true">🐙</i><b>GitHub</b><small>Actions, the App</small>
+              </button>
+              <button class="node" data-node="you" style="grid-area: you">
+                <i aria-hidden="true">🧑‍🍳</i><b>You</b><small>on the map</small>
+              </button>
+              <button class="node" data-node="visitor" style="grid-area: visitor">
+                <i aria-hidden="true">👋</i><b>Visitors</b><small>friends, phones</small>
+              </button>
+              <button class="node gate" data-node="access" style="grid-area: access">
+                <i aria-hidden="true">🚪</i><b>Cloudflare Access</b><small>checks the circles at the door</small>
+              </button>
+              <button class="node brain" data-node="worker" style="grid-area: worker">
+                <i aria-hidden="true">⚙️</i><b>Worker</b><small>kitshn's front</small>
+              </button>
+              <button class="node brain" data-node="do" style="grid-area: do">
+                <i aria-hidden="true">🧠</i><b>Durable Object</b><small>all state, SQLite</small>
+              </button>
+              <button class="node" data-node="apps" style="grid-area: apps">
+                <i aria-hidden="true">📦</i><b>App Workers</b><small>sites and APIs</small>
+              </button>
+              <button class="node tube" data-node="tunnel" style="grid-area: tunnel">
+                <i aria-hidden="true">🚇</i><b>Tunnel</b><small>one per machine</small>
+              </button>
+              <button class="node" data-node="r2" style="grid-area: r2">
+                <i aria-hidden="true">🗄️</i><b>R2</b><small>pages, files</small>
+              </button>
+              <button class="node hands" data-node="daemon" style="grid-area: daemon">
+                <i aria-hidden="true">🤲</i><b>kitshn daemon</b><small>cloudflared, Docker, checks</small>
+              </button>
+              <button class="node" data-node="compose" style="grid-area: compose">
+                <i aria-hidden="true">🐳</i><b>Compose app</b><small>photos</small>
+              </button>
+              <button class="node" data-node="live" style="grid-area: live">
+                <i aria-hidden="true">⚡</i><b>Live site</b><small>a dev server</small>
+              </button>
+              <button class="node ghost" data-node="more" style="grid-area: more">
+                <i aria-hidden="true">🖥️</i><b>Machine 2</b><small>its own daemon, tunnel</small>
+              </button>
+            </div>
+          </div>
+
+          <aside class="panel" aria-live="polite">
+            <div class="panel-body"></div>
+            <div class="controls" hidden>
+              <button class="ctl" data-ctl="prev" aria-label="Previous step">←</button>
+              <button class="ctl play" data-ctl="play" aria-label="Pause">❚❚</button>
+              <button class="ctl" data-ctl="next" aria-label="Next step">→</button>
+              <span class="count"></span>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="wrap" id="access">
+        <div class="head">
+          <span class="label">Circles and Access</span>
+          <h2>Your map, compiled into Access</h2>
+          <p class="lede">
+            kitshn never checks a visitor itself. It writes your circles into Cloudflare Access, and Access checks
+            every visit at the edge.
+          </p>
+        </div>
+
+        <figure class="card compile reveal">
+          <div class="compile-map" aria-hidden="true">
+            <span class="compile-title">On your map</span>
+            <div class="mini-circle friends">
+              <span class="mini-name">Friends</span>
+              <span class="mini-who">👤 maya@gmail.com</span>
+              <span class="mini-who">📱 My phone</span>
+              <span class="mini-card"><i></i>Trip planner</span>
+            </div>
+            <div class="mini-circle everyone">
+              <span class="mini-name">Everyone</span>
+              <span class="mini-card"><i></i>My site</span>
+            </div>
+          </div>
+          <div class="compile-arrow" aria-hidden="true"><span>kitshn writes</span></div>
+          <ol class="compile-out">
+            <li class="obj policy">
+              <span class="sticker">policy</span>
+              <code>kitshn circle Friends</code>
+              <small>allow maya@gmail.com</small>
+            </li>
+            <li class="obj policy">
+              <span class="sticker">policy</span>
+              <code>kitshn circle Friends (devices and networks)</code>
+              <small>allow the token of My phone</small>
+            </li>
+            <li class="obj app">
+              <span class="sticker blue">application</span>
+              <code>kitshn Trip planner</code>
+              <small>trip.you.dev · both Friends policies</small>
+            </li>
+            <li class="obj app">
+              <span class="sticker ok">application</span>
+              <code>kitshn My site</code>
+              <small>you.dev · Bypass: anyone opens it, no login</small>
+            </li>
+          </ol>
+          <figcaption>
+            Each circle is one reusable policy for its people and one for its devices and networks. Each card with
+            an address is one Access application, with the policies of the circles that hold it.
+          </figcaption>
+        </figure>
+
+        <div class="facts">
+          <div class="card fact reveal">
+            <span class="fact-icon" aria-hidden="true">🪞</span>
+            <h3>kitshn is the source, Access the copy</h3>
+            <p>
+              A daily check repairs any difference. kitshn names everything it makes <code>kitshn …</code> and
+              never touches an Access object it did not make.
+            </p>
+          </div>
+          <div class="card fact reveal">
+            <span class="fact-icon" aria-hidden="true">✂️</span>
+            <h3>Taking access away is instant</h3>
+            <p>Take someone out of a circle or lower a level, and kitshn ends their open sessions at once.</p>
+          </div>
+          <div class="card fact reveal">
+            <span class="fact-icon" aria-hidden="true">🔁</span>
+            <h3>The tunnel checks again</h3>
+            <p>A machine's tunnel checks the Access token too, so a wrong DNS record cannot skip the login.</p>
+          </div>
+        </div>
+
+        <figure class="card order reveal">
+          <div class="order-row">
+            <span class="order-name">A new address</span>
+            <ol>
+              <li><b>1</b> Access application</li>
+              <li><b>2</b> DNS record</li>
+              <li><b>3</b> Route</li>
+            </ol>
+          </div>
+          <div class="order-row back">
+            <span class="order-name">A removal</span>
+            <ol>
+              <li><b>3</b> Route</li>
+              <li><b>2</b> DNS record</li>
+              <li><b>1</b> Access application</li>
+            </ol>
+          </div>
+          <figcaption>
+            The lock goes on first and comes off last, so an address is never open without its check.
+          </figcaption>
         </figure>
       </section>
 
-      <section class="wrap grid">
-        <div class="card">
-          <h3>kitshn Worker</h3>
-          <p>
-            Serves the map, checks Access tokens and GitHub OIDC tokens, and serves pages, files and the offline
-            page.
+      <section class="wrap" id="state">
+        <div class="head">
+          <span class="label">State</span>
+          <h2>Where everything lives</h2>
+          <p class="lede">
+            Your recipe is the only thing in Git. Who sees what lives in kitshn, and your apps' data never leaves your
+            machine.
           </p>
         </div>
-        <div class="card">
-          <h3>Durable Object</h3>
-          <p>
-            Holds all state in SQLite. Keeps the sockets of the daemons and of open maps. An alarm queue writes
-            changes to the Cloudflare API, at most 40 calls per run.
-          </p>
-        </div>
-        <div class="card">
-          <h3>Cloudflare Access</h3>
-          <p>
-            Logs people in with an email code, GitHub and a passkey. It checks the circles at the edge, so a
-            visit to an app never runs kitshn.
-          </p>
-        </div>
-        <div class="card">
-          <h3>Daemon</h3>
-          <p>
-            One binary per machine. It runs <code>cloudflared</code>, deploys Compose apps in rootless Docker,
-            checks local sites, and keeps 30 days of samples on its own disk.
-          </p>
-        </div>
-        <div class="card">
-          <h3>Recipe and CLI</h3>
-          <p>
-            <code>kitshn.config.ts</code> in the app repo. In GitHub Actions, <code>kitshn check</code> turns it
-            into JSON without running it, and <code>kitshn deploy</code> sends it.
-          </p>
-        </div>
-        <div class="card">
-          <h3>GitHub App</h3>
-          <p>
-            Removes a preview when its pull request closes, writes deployment statuses, and starts the waiting
-            run when you click Allow.
-          </p>
+        <div class="homes">
+          <div class="card home-col reveal">
+            <h3><span aria-hidden="true">☁️</span> On Cloudflare</h3>
+            <dl>
+              <dt>Durable Object SQLite</dt>
+              <dd>Circles, members, shares, card places and 90 days of history</dd>
+              <dd>App values, and secrets, encrypted</dd>
+              <dt>R2</dt>
+              <dd>Pages and files, backups of Compose apps, a daily copy of kitshn's state</dd>
+              <dt>Access, DNS, routes, tunnels</dt>
+              <dd>Compiled from the map. kitshn rebuilds them, so they hold nothing to lose.</dd>
+            </dl>
+          </div>
+          <div class="card home-col reveal">
+            <h3><span aria-hidden="true">🖥️</span> On your machine</h3>
+            <dl>
+              <dt>A file only the daemon user reads</dt>
+              <dd>The machine token and the tunnel token</dd>
+              <dt>The disk</dt>
+              <dd>Compose data and logs</dd>
+              <dd>30 days of CPU, memory and disk samples</dd>
+            </dl>
+          </div>
+          <div class="card home-col reveal">
+            <h3><span aria-hidden="true">🐙</span> In your repo</h3>
+            <dl>
+              <dt><code>kitshn.config.ts</code></dt>
+              <dd>The recipe: what to build, where it runs, and the circle it starts in. The only state in Git.</dd>
+            </dl>
+            <p class="note">
+              Circles and shares are never in Git, so a pull request cannot share your app with someone.
+            </p>
+          </div>
         </div>
       </section>
 
-      <section class="wrap">
-        <span class="label">Access</span>
-        <h2>Circles become Access policies</h2>
-        <figure class="card diagram">
-          <img src="/diagrams/circles.svg" alt="A card in the Friends circle gets an Access application with an allow policy for ana@example.com. A card in the Everyone circle gets a Bypass policy and opens with no login." width="910" height="330" />
-        </figure>
-        <div class="card pad" style="margin-top: 1.4rem">
-          <p>
-            Each circle becomes one reusable Access policy for its people, and one for its devices and networks.
-            Each card with an address becomes one Access application, with the policies of the circles that hold
-            it. A card in Everyone gets a Bypass policy.
-          </p>
-          <p>
-            kitshn is the source and Access is the copy. A daily check repairs differences, and kitshn never
-            touches an Access object that it did not make. A lower level takes effect at once: kitshn ends the
-            open sessions.
-          </p>
-          <p>
-            The tunnel of a machine checks the Access token too, so a wrong DNS record cannot skip the login.
+      <section class="wrap" id="budget">
+        <div class="head">
+          <span class="label">Budget</span>
+          <h2>It fits the free plan, with room to spare</h2>
+          <p class="lede">
+            Estimates for 5 machines, about 15 apps, about 50 pages, 2 people and a few guests. App traffic goes
+            through Access and tunnels, not through kitshn.
           </p>
         </div>
-      </section>
-
-      <section class="wrap">
-        <span class="label">Deploy</span>
-        <h2>A deploy, step by step</h2>
-        <figure class="card diagram">
-          <img src="/diagrams/deploy.svg" alt="A push runs GitHub Actions. Actions sends the recipe and its OIDC token to the kitshn Worker. The app goes to Cloudflare or to a machine, and its card gets Access from its circles." width="1010" height="290" />
-        </figure>
-        <ol class="steps" style="margin-top: 1.4rem">
-          <li class="card">
-            <p>
-              GitHub Actions reads <code>kitshn.config.ts</code> as data and sends it with the run's OIDC token.
-              kitshn accepts only repos of the GitHub accounts on its list.
-            </p>
-          </li>
-          <li class="card">
-            <p>
-              A repo that kitshn has never deployed waits for one click on Allow. After that, every push deploys.
-              Block cuts a repo off at once.
-            </p>
-          </li>
-          <li class="card">
-            <p>
-              A static site or Worker app: Actions uploads the files, and kitshn uploads the Worker through the
-              Cloudflare API. Static requests are free.
-            </p>
-          </li>
-          <li class="card">
-            <p>
-              A Compose app: kitshn picks the first online machine with the labels <code>deploy</code> and those
-              of the recipe. The daemon gets the source through R2, checks the Compose file, builds at low CPU
-              priority, and starts the app on a Unix socket.
-            </p>
-          </li>
-          <li class="card">
-            <p>
-              kitshn adds the Access application before the route, then the DNS record and the route. A removal
-              runs the same steps in reverse, so an address is never open without its check.
-            </p>
-          </li>
-        </ol>
-      </section>
-
-      <section class="wrap card pad">
-        <span class="label">State</span>
-        <h2>Where state lives</h2>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>State</th>
-                <th>Lives in</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>Circles, members, shares, card places, history</td>
-                <td>Durable Object SQLite. Never in Git.</td>
-              </tr>
-              <tr>
-                <td>The recipe</td>
-                <td>The app repo. It is the only state in Git.</td>
-              </tr>
-              <tr>
-                <td>App values and secrets</td>
-                <td>Durable Object SQLite, secrets encrypted. <code>KITSHN_*</code> GitHub values win.</td>
-              </tr>
-              <tr>
-                <td>Pages and files</td>
-                <td>R2</td>
-              </tr>
-              <tr>
-                <td>Access applications, tunnel routes, DNS records</td>
-                <td>Cloudflare, compiled from the map</td>
-              </tr>
-              <tr>
-                <td>Machine tokens and keys</td>
-                <td>A file on the machine that only the daemon user reads</td>
-              </tr>
-              <tr>
-                <td>Compose data and logs, sample history</td>
-                <td>The machine's disk</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="card budget reveal">
+          <ul class="meters">
+            <li class="meter">
+              <span class="meter-name">Service tokens<small>one per machine and device</small></span>
+              <span class="meter-bar" style="--v: 18%"><i></i></span>
+              <span class="meter-use"><b>about 9</b> of 50<small>18%</small></span>
+            </li>
+            <li class="meter">
+              <span class="meter-name">Worker scripts<small>new previews stop at 90</small></span>
+              <span class="meter-bar" style="--v: 15%; --stop: 90%"><i></i><s></s></span>
+              <span class="meter-use"><b>about 15</b> of 100<small>15%</small></span>
+            </li>
+            <li class="meter">
+              <span class="meter-name">Access seats<small>guest seats free up after a month</small></span>
+              <span class="meter-bar" style="--v: 14%"><i></i></span>
+              <span class="meter-use"><b>about 7</b> of 50 people<small>14%</small></span>
+            </li>
+            <li class="meter">
+              <span class="meter-name">Access applications<small>one per private address</small></span>
+              <span class="meter-bar" style="--v: 8%"><i></i></span>
+              <span class="meter-use"><b>about 40</b> of 500<small>8%</small></span>
+            </li>
+            <li class="meter">
+              <span class="meter-name">Durable Object requests<small>maps, daemons, alarms</small></span>
+              <span class="meter-bar" style="--v: 2.1%"><i></i></span>
+              <span class="meter-use"><b>about 2,100</b> of 100,000 a day<small>2%</small></span>
+            </li>
+            <li class="meter">
+              <span class="meter-name">Worker requests<small>the map, deploys, pages</small></span>
+              <span class="meter-bar" style="--v: 0.5%"><i></i></span>
+              <span class="meter-use"><b>about 500</b> of 100,000 a day<small>0.5%</small></span>
+            </li>
+          </ul>
+          <p class="budget-note">
+            The tightest limits are service tokens and Worker scripts, not traffic. A paid plan only raises limits; no
+            feature needs it.
+          </p>
         </div>
-      </section>
-
-      <section class="wrap card pad">
-        <span class="label">Budget</span>
-        <h2>It fits the free plan</h2>
-        <p>
-          The reference setup is 5 machines, about 15 apps, about 50 pages, 2 people and a few guests. Estimates
-          for it:
-        </p>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Limit</th>
-                <th>Free</th>
-                <th>kitshn uses</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>Worker requests</td>
-                <td>100,000 a day</td>
-                <td>about 500 a day</td>
-              </tr>
-              <tr>
-                <td>Durable Object requests</td>
-                <td>100,000 a day</td>
-                <td>about 4,200 a day</td>
-              </tr>
-              <tr>
-                <td>Access seats</td>
-                <td>50 people</td>
-                <td>about 7. Guest seats free up after a month.</td>
-              </tr>
-              <tr>
-                <td>Service tokens</td>
-                <td>50</td>
-                <td>about 9: one per machine and device</td>
-              </tr>
-              <tr>
-                <td>Worker scripts</td>
-                <td>100</td>
-                <td>about 15. New previews stop at 90.</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <p style="margin-top: 1rem">
-          App traffic goes through Access and tunnels, not through the kitshn Worker. A paid plan only raises
-          limits; no feature needs it.
-        </p>
       </section>
 
       <section class="wrap card pad">
@@ -257,7 +345,7 @@
         <p>
           <a href="https://github.com/Yarden-zamir/kitshn/blob/main/SPEC.md">SPEC.md</a> holds every numbered
           requirement. <a href="https://github.com/Yarden-zamir/kitshn/blob/main/docs/architecture.md">docs/architecture.md</a>
-          has the request paths and the full budget.
+          has every request path and the full budget.
         </p>
       </section>
     </main>

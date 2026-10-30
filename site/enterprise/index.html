@@ -1,0 +1,724 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>kitshn for enterprise: every internal app, one map of who gets in</title>
+    <meta
+      name="description"
+      content="kitshn deploys your company's sites, Workers and containers to your own Cloudflare account and servers. One map decides which teams, contractors, devices and AI agents can open or change each one, and Cloudflare Access enforces it."
+    />
+    <meta property="og:title" content="kitshn for enterprise" />
+    <meta property="og:url" content="https://kitshn.com/enterprise/" />
+    <meta property="og:image" content="https://kitshn.com/social-preview.png" />
+    <meta property="og:image:width" content="1280" />
+    <meta property="og:image:height" content="640" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/enterprise/ent.css" />
+    <script>
+      document.documentElement.classList.add("js");
+    </script>
+    <script src="/enterprise/ent.js" defer></script>
+  </head>
+  <body>
+    <header class="wrap top card">
+      <a class="brand" href="/"><img src="/favicon.svg" alt="" /> kitshn</a>
+      <nav>
+        <a href="/architecture/">How it works</a>
+        <a href="/enterprise/" aria-current="page">Enterprise</a>
+        <a href="https://github.com/Yarden-zamir/kitshn">GitHub</a>
+        <a class="btn primary" href="/install/">Install</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="wrap landing">
+        <div>
+          <span class="label">kitshn for enterprise</span>
+          <h1>Every internal app, one map of <span class="mark">who gets in.</span></h1>
+          <p class="lede">
+            kitshn deploys your company's sites, Workers and containers from GitHub to your own Cloudflare account
+            and servers. One map decides which teams, contractors, devices and AI agents can open each one, and
+            Cloudflare Access enforces it at the edge.
+          </p>
+          <div class="actions">
+            <a class="btn primary big" href="/install/">Set it up on your account</a>
+            <a class="btn big" href="#access">See who gets in</a>
+          </div>
+        </div>
+        <div class="picture">
+          <span class="sticker wait one">Try it: give a team access</span>
+          <figure class="card demo-frame">
+            <iframe
+              src="/demo/?map=company"
+              title="The kitshn map of a company, as a demo: drag an app into a team to give the team access"
+            ></iframe>
+          </figure>
+        </div>
+      </section>
+
+      <section class="wrap proof" aria-label="kitshn in four numbers">
+        <div class="card proof-item">
+          <b>0</b>
+          <span>open ports on your servers</span>
+        </div>
+        <div class="card proof-item">
+          <b>0</b>
+          <span>deploy secrets in your repos</span>
+        </div>
+        <div class="card proof-item">
+          <b>1</b>
+          <span>press pauses every share</span>
+        </div>
+        <div class="card proof-item">
+          <b>0</b>
+          <span>features that need a paid plan</span>
+        </div>
+      </section>
+
+      <nav class="wrap jump" aria-label="On this page">
+        <a href="#why">Why</a>
+        <a href="#access">Access</a>
+        <a href="#closed">Fails closed</a>
+        <a href="#deploys">Deploys</a>
+        <a href="#agents">AI agents</a>
+        <a href="#operate">Operate</a>
+        <a href="#machines">Machines</a>
+        <a href="#yours">Your account</a>
+        <a href="#limits">Limits</a>
+      </nav>
+
+      <section class="wrap" id="why">
+        <div class="head center">
+          <span class="label">Why</span>
+          <h2>The sprawl it replaces</h2>
+          <p class="lede">
+            Most companies grow internal tools one at a time, and each one brings its own login, its own deploy
+            keys and its own list of who may open it. kitshn puts all of them on one map.
+          </p>
+        </div>
+        <div class="versus">
+          <div class="card versus-col before reveal">
+            <span class="sticker">today</span>
+            <ul>
+              <li>A VPN or a shared password in front of each internal tool</li>
+              <li>Cloud tokens and deploy keys in the secrets of every repo</li>
+              <li>Servers with inbound ports and a firewall to keep in sync</li>
+              <li>An offboarding checklist that visits a dozen admin panels</li>
+              <li>Nobody can say who shared the dashboard, or when</li>
+              <li>Coding agents run with the keys of whoever started them</li>
+            </ul>
+          </div>
+          <div class="versus-arrow" aria-hidden="true">→</div>
+          <div class="card versus-col after reveal">
+            <span class="sticker ok">with kitshn</span>
+            <ul>
+              <li>Cloudflare Access at every address, from one map of circles</li>
+              <li>GitHub signs each run, so repos hold no deploy secret</li>
+              <li>Each machine dials out through its own tunnel, so no port opens</li>
+              <li>Take a person out of a circle, and their sessions end at once</li>
+              <li>Every share, move and deploy is a revision with who did it</li>
+              <li>Agents act as their machine, with rights that can ask a person first</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <div class="band">
+        <section class="wrap" id="access">
+          <div class="head">
+            <span class="label">Access</span>
+            <h2>Teams, not passwords</h2>
+            <p class="lede">
+              A circle is a group: emails, a company domain, an office network, devices, machines, or everyone. A
+              card inside a circle is shared with it. A circle can ask that a person match all its rules, and pass
+              a passkey check after the login.
+            </p>
+          </div>
+
+          <div class="gate card" id="gate">
+            <div class="gate-map" aria-hidden="true">
+              <div class="gate-circle eng">
+                <span class="gate-name">Engineering</span>
+                <span class="gate-match">all must match</span>
+              </div>
+              <div class="gate-circle con">
+                <span class="gate-name">Contractors</span>
+                <span class="gate-match">ends Nov 30</span>
+              </div>
+              <span class="gate-who g-domain">🏢 @acme.com</span>
+              <span class="gate-who g-net">🌐 10.0.0.0/8</span>
+              <span class="gate-who g-key">🔑 needs passkey</span>
+              <span class="gate-who g-lee">👤 lee@studio.io</span>
+              <div class="gate-card"><i></i>Internal docs<b class="blue"></b><b class="pink"></b></div>
+            </div>
+
+            <form class="gate-ask" onsubmit="return false">
+              <p class="gate-title">Who knocks on <code>docs.acme.com</code>?</p>
+              <fieldset>
+                <legend>Who</legend>
+                <label><input type="radio" name="who" value="dana" checked /> dana@acme.com</label>
+                <label><input type="radio" name="who" value="lee" /> lee@studio.io</label>
+                <label><input type="radio" name="who" value="sam" /> sam@gmail.com</label>
+              </fieldset>
+              <fieldset>
+                <legend>From</legend>
+                <label><input type="radio" name="net" value="office" checked /> The office</label>
+                <label><input type="radio" name="net" value="home" /> Home wifi</label>
+              </fieldset>
+              <fieldset>
+                <legend>Passkey</legend>
+                <label><input type="radio" name="key" value="yes" checked /> Touch ID</label>
+                <label><input type="radio" name="key" value="no" /> None</label>
+              </fieldset>
+              <fieldset>
+                <legend>Date</legend>
+                <label><input type="radio" name="day" value="now" checked /> Today</label>
+                <label><input type="radio" name="day" value="later" /> December 1</label>
+              </fieldset>
+            </form>
+
+            <div class="gate-out" aria-live="polite">
+              <p class="gate-verdict yes">Let in, at view</p>
+              <ul class="gate-why">
+                <li class="ok">Engineering: <code>@acme.com</code>, the office network and a passkey all match</li>
+                <li class="no">Contractors: dana@acme.com is not a member</li>
+              </ul>
+              <p class="gate-note">
+                Cloudflare Access decides this at its edge, from policies that kitshn wrote. The request never
+                reaches kitshn, and never reaches the app when the answer is no.
+              </p>
+            </div>
+          </div>
+
+          <div class="facts3">
+            <div class="card lift fact reveal">
+              <h3>Taking access away is instant</h3>
+              <p>
+                Lower a level or take someone out of a circle, and kitshn ends their open Access sessions on every
+                application that the circle reaches.
+              </p>
+            </div>
+            <div class="card lift fact reveal">
+              <h3>Shares that end by themselves</h3>
+              <p>
+                A share or a whole circle can have an end date, and a card can have an end time, such as one hour
+                for a demo. History names the expiry, and Undo brings it back.
+              </p>
+            </div>
+            <div class="card lift fact reveal">
+              <h3>Sign out everywhere</h3>
+              <p>
+                One button ends every Access session of every application that kitshn made. Guests free their seat
+                after a month away, and the Usage view warns at 40 of 50.
+              </p>
+            </div>
+            <div class="card lift fact reveal">
+              <h3>Devices and machines are members</h3>
+              <p>
+                A phone, a desktop app or a server proves itself with its own service token, so a circle can let
+                one machine reach another without a person.
+              </p>
+            </div>
+            <div class="card lift fact reveal">
+              <h3>Levels per resource</h3>
+              <p>
+                A machine has view, use and control. A circle's level goes on every card in it, a card can override
+                it, and the highest match wins.
+              </p>
+            </div>
+            <div class="card lift fact reveal">
+              <h3>Login pages in your look</h3>
+              <p>
+                No bare Cloudflare login: every application gets a kitshn page with the sign-in box under it, and a
+                closed card says so.
+              </p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section class="wrap" id="closed">
+        <div class="split ent-split">
+          <div>
+            <span class="label">Fails closed</span>
+            <h2>Every unknown is a no</h2>
+            <p>
+              A request that kitshn cannot decide gets no access, and the error says why. The design stacks locks so
+              that one mistake, in kitshn, in DNS or in a dashboard, does not open a door.
+            </p>
+            <p class="muted">
+              kitshn is the source and Access is the copy. Everything kitshn makes in Access has a name that starts
+              with <code>kitshn </code>, and it never changes or deletes anything else in your account.
+            </p>
+          </div>
+          <ol class="layers">
+            <li class="card reveal">
+              <b>Access at the edge</b>
+              <span>Each private address is an Access application with the policies of its circles.</span>
+            </li>
+            <li class="card reveal">
+              <b>The tunnel checks again</b>
+              <span>
+                <code>cloudflared</code> drops a request without a valid Access token, so a wrong DNS record cannot skip
+                the login.
+              </span>
+            </li>
+            <li class="card reveal">
+              <b>Lock on first, off last</b>
+              <span>A new address gets Access, then DNS, then its route. A removal runs the other way.</span>
+            </li>
+            <li class="card reveal">
+              <b>Lowering never waits</b>
+              <span>
+                A write that removes access retries on a backoff, and the card says
+                <em>Access not lowered yet</em> in red until it lands.
+              </span>
+            </li>
+            <li class="card reveal">
+              <b>Drift gets repaired</b>
+              <span>A daily compare finds what someone changed by hand and writes it back.</span>
+            </li>
+            <li class="card reveal">
+              <b>Nobody locks out the admin</b>
+              <span>
+                Every change, also an undo or a pause, is refused if it leaves the admin without a person who passed
+                a passkey.
+              </span>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <div class="band">
+        <section class="wrap" id="deploys">
+          <div class="head">
+            <span class="label">Deploys</span>
+            <h2>One pipeline, and a gate at every step</h2>
+            <p class="lede">
+              A recipe in each repo, <code>kitshn.config.ts</code>, says what the repo deploys. A push to
+              <code>main</code> deploys production, and each pull request gets its own preview that goes away when
+              it closes. On the way, a push passes these checks.
+            </p>
+          </div>
+          <ol class="pipe">
+            <li class="card reveal">
+              <span class="pipe-n">1</span>
+              <h3>Signed by GitHub</h3>
+              <p>The run sends its OIDC token. kitshn takes only the GitHub accounts on its list.</p>
+            </li>
+            <li class="card reveal">
+              <span class="pipe-n">2</span>
+              <h3>A repo you allowed</h3>
+              <p>
+                A new repo waits on the map for one click. Block stops it by its repo id, also after a rename.
+              </p>
+            </li>
+            <li class="card reveal">
+              <span class="pipe-n">3</span>
+              <h3>Read, never run</h3>
+              <p>The recipe is data. A lint refuses loops, conditions and calls, and kitshn never runs repo code.</p>
+            </li>
+            <li class="card reveal">
+              <span class="pipe-n">4</span>
+              <h3>A machine you offered</h3>
+              <p>A container lands only on a machine with the <code>deploy</code> label and the labels it asks for.</p>
+            </li>
+            <li class="card reveal">
+              <span class="pipe-n">5</span>
+              <h3>A Compose file that behaves</h3>
+              <p>
+                <code>privileged</code>, host ports and the Docker socket run only when you allow that repo on that
+                machine.
+              </p>
+            </li>
+            <li class="card reveal">
+              <span class="pipe-n">6</span>
+              <h3>Live, in its circle</h3>
+              <p>A route check, a GitHub deployment status, and the card starts in the circle the recipe names.</p>
+            </li>
+          </ol>
+
+          <div class="kinds ent-kinds">
+            <div class="card lift">
+              <span class="sticker ok">static</span>
+              <h3>Static sites</h3>
+              <dl>
+                <dt>Runs on</dt>
+                <dd>Workers static assets, where requests are free</dd>
+                <dt>Good for</dt>
+                <dd>Docs, dashboards, internal portals</dd>
+              </dl>
+            </div>
+            <div class="card lift">
+              <span class="sticker blue">worker</span>
+              <h3>Worker apps</h3>
+              <dl>
+                <dt>Runs on</dt>
+                <dd>A Cloudflare Worker with KV, Durable Objects and crons, its storage made per environment</dd>
+                <dt>Good for</dt>
+                <dd>Internal APIs and tools with state</dd>
+              </dl>
+            </div>
+            <div class="card lift">
+              <span class="sticker orange">compose</span>
+              <h3>Compose apps</h3>
+              <dl>
+                <dt>Runs on</dt>
+                <dd>Docker Compose on your servers, on Unix sockets behind a tunnel, with nightly backups</dd>
+                <dt>Good for</dt>
+                <dd>Databases, bots, anything in a container</dd>
+              </dl>
+            </div>
+          </div>
+
+          <ul class="ticks row ent-ticks">
+            <li>Roll back one card, or every card of one workflow run in reverse dependency order.</li>
+            <li>Secrets live encrypted in kitshn or in GitHub. The map shows "set" or "missing", never a value.</li>
+            <li>One repo can hold up to 10 apps, each deployed after the apps it needs.</li>
+          </ul>
+        </section>
+      </div>
+
+      <section class="wrap" id="agents">
+        <div class="head">
+          <span class="label">AI agents</span>
+          <h2>Let agents ship. <span class="mark">Keep the keys.</span></h2>
+          <p class="lede">
+            Coding agents on your machines act as their machine, never as a person. kitshn gives them an identity
+            and short, narrow credentials, and asks a person when you want it to. Agents keep their own tools:
+            <code>git</code>, <code>gh</code>, cloud CLIs.
+          </p>
+        </div>
+
+        <div class="agents">
+          <figure class="card rights reveal">
+            <div class="rights-head">
+              <span class="rights-chip">🖥️ build-01</span>
+              <span class="muted">in <b>Platform agents</b></span>
+            </div>
+            <ul>
+              <li><span>deploys</span><em class="mode mode-auto">automatic</em><small>if <code>t3.subagent = false</code></small></li>
+              <li><span>writes code</span><em class="mode mode-auto">automatic</em><small>on <code>acme/web-*</code></small></li>
+              <li><span>adds apps</span><em class="mode mode-ask">ask Platform leads</em></li>
+              <li><span>runs commands</span><em class="mode mode-ask">ask IT</em></li>
+              <li><span>publishes</span><em class="mode mode-ask">ask IT</em></li>
+              <li><span>gets passes</span><em class="mode mode-off">off</em></li>
+            </ul>
+            <figcaption>
+              Each right of a machine is off, automatic, or asks a circle. A right you never set asks the owner.
+              Conditions read labels that the agent's host vouches for, such as the thread or the project.
+            </figcaption>
+          </figure>
+
+          <figure class="card ask reveal" id="ask">
+            <div class="ask-top">
+              <span class="sticker wait">waiting</span>
+              <span class="muted">Inbox · expires in 24 h</span>
+            </div>
+            <p class="ask-what"><b>build-01</b> asks to <b>deploy</b> <code>billing-api</code></p>
+            <p class="ask-reason">“Fix the rounding of invoice totals. Tests pass.”</p>
+            <dl class="ask-labels">
+              <dt>t3.thread.title</dt>
+              <dd>Invoice rounding <span class="sticker ok">verified by t3</span></dd>
+              <dt>t3.project.name</dt>
+              <dd>billing <span class="sticker ok">verified by t3</span></dd>
+              <dt>team</dt>
+              <dd>finance <span class="sticker">claimed</span></dd>
+            </dl>
+            <div class="ask-actions">
+              <button class="btn primary" type="button" data-ask="approve">🔑 Approve with passkey</button>
+              <button class="btn" type="button" data-ask="deny">Deny</button>
+            </div>
+            <p class="ask-result" aria-live="polite" hidden></p>
+          </figure>
+        </div>
+
+        <div class="facts3">
+          <div class="card lift fact reveal">
+            <h3>GitHub tokens for one repo, one hour</h3>
+            <p>
+              kitshn hands out an App token for that repo only. Work shows as <code>kitshn[bot]</code>, and no right
+              ever gives Workflows, Secrets or Administration.
+            </p>
+          </div>
+          <div class="card lift fact reveal">
+            <h3>Bot pushes never deploy by themselves</h3>
+            <p>
+              A push of the kitshn App waits for a deploy ask, and a pull request waits for a person to press Deploy
+              on that commit.
+            </p>
+          </div>
+          <div class="card lift fact reveal">
+            <h3>Passes for your cloud</h3>
+            <p>
+              kitshn is an OpenID issuer. Turn passes on, and an agent gets a 5-minute ES256 pass that AWS or Google
+              Cloud trusts, with no cloud key on the machine.
+            </p>
+          </div>
+          <div class="card lift fact reveal">
+            <h3>Approvals with real proof</h3>
+            <p>
+              The approver circle gets a Web Push with Approve and Deny. Approve needs a passkey from the last 10
+              minutes, and a proposal takes one answer only.
+            </p>
+          </div>
+          <div class="card lift fact reveal">
+            <h3>Agents never raise access</h3>
+            <p>
+              An agent change that would share more becomes a proposal. A change that shares less applies at once.
+            </p>
+          </div>
+          <div class="card lift fact reveal">
+            <h3>Every ask is on the record</h3>
+            <p>
+              History names the machine, the thread, the action, the reason and the approver, and you search it by
+              label: <code>t3.project.name=billing</code>.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <div class="band">
+        <section class="wrap" id="operate">
+          <div class="head">
+            <span class="label">Operate</span>
+            <h2>Know who changed what, and stop it fast</h2>
+            <p class="lede">
+              The big red button sits under a flip-up lid in the toolbar. Lift it and press: every share closes at
+              once, except the admin and, if you want, your public sites. Try it.
+            </p>
+          </div>
+
+          <div class="pause card" id="pause">
+            <div class="pause-left">
+              <div class="pause-hazard">
+                <button class="pause-lid" type="button" aria-expanded="false" aria-controls="pause-press">
+                  Lift the lid
+                </button>
+                <button class="pause-cap" id="pause-press" type="button" disabled aria-label="Emergency pause">
+                  <span>PAUSE</span>
+                </button>
+                <span class="pause-stamp" aria-hidden="true">paused</span>
+              </div>
+              <label class="pause-lock"><input type="checkbox" id="pause-lockdown" /> Close public sites too</label>
+              <button class="btn pause-resume" type="button" hidden>🔑 Resume with passkey</button>
+              <p class="pause-note" aria-live="polite">Nothing is paused.</p>
+            </div>
+            <ul class="pause-list">
+              <li data-stays="always"><span>kitshn admin</span><small>IT</small><em>open</em></li>
+              <li data-stays="public"><span>Status page</span><small>Everyone</small><em>open</em></li>
+              <li><span>Internal docs</span><small>Engineering</small><em>open</em></li>
+              <li><span>Sales report</span><small>Sales</small><em>open</em></li>
+              <li><span>build-01, its agents</span><small>Platform agents</small><em>open</em></li>
+              <li data-paused="wait"><span>New deploys from GitHub</span><small>all repos</small><em>run</em></li>
+              <li data-paused="revoked"><span>GitHub tokens and open asks</span><small>all machines</small><em>live</em></li>
+            </ul>
+          </div>
+
+          <div class="tiles">
+            <div class="card lift tile reveal">
+              <span class="tile-icon" aria-hidden="true">🕰️</span>
+              <h3>History and Undo</h3>
+              <p>
+                Each share, move and deploy is one revision with who made it, kept 90 days. Undo takes back your own
+                newest change, and refuses when a later change depends on it.
+              </p>
+            </div>
+            <div class="card lift tile reveal">
+              <span class="tile-icon" aria-hidden="true">📈</span>
+              <h3>Uptime</h3>
+              <p>
+                kitshn checks each app every 2 minutes, puts a DOWN sticker on the map, and keeps a 24-hour strip in
+                the card panel.
+              </p>
+            </div>
+            <div class="card lift tile reveal">
+              <span class="tile-icon" aria-hidden="true">🔔</span>
+              <h3>Notifications</h3>
+              <p>
+                A failed deploy, a site down, a machine offline for 15 minutes, a limit at 80%, or a message from
+                the app itself, with Web Push, mute, snooze and quiet hours.
+              </p>
+            </div>
+            <div class="card lift tile reveal">
+              <span class="tile-icon" aria-hidden="true">📜</span>
+              <h3>Logs</h3>
+              <p>
+                Search and follow the logs of a container or a Worker from its card, and every deploy run with its
+                output. No log line is copied into kitshn.
+              </p>
+            </div>
+            <div class="card lift tile reveal">
+              <span class="tile-icon" aria-hidden="true">🛟</span>
+              <h3>Backups</h3>
+              <p>
+                Every night, restic copies each container app's volumes to R2, encrypted under a key that you keep
+                outside Cloudflare. Restore keeps a copy of now, as the way back.
+              </p>
+            </div>
+            <div class="card lift tile reveal">
+              <span class="tile-icon" aria-hidden="true">⏪</span>
+              <h3>Restore kitshn to a time</h3>
+              <p>
+                Rewind the whole map to any point of the last 30 days, with a fresh passkey. A daily state export
+                lands in R2, and you can download it any time.
+              </p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section class="wrap" id="machines">
+        <div class="split ent-split">
+          <div>
+            <span class="label">Machines</span>
+            <h2>A server joins with one code</h2>
+            <p>
+              "Add machine" on the map prints one command with a code that works once, for 10 minutes. The machine
+              downloads a daemon checked against the release's checksums, makes its own key pair and opens its
+              tunnel. Nobody copies a token by hand.
+            </p>
+            <ul class="ticks">
+              <li>One binary for Linux, macOS and Windows, with no Node.js on the machine.</li>
+              <li>Each connection starts with an Ed25519 challenge, and a key rotates in one click.</li>
+              <li>Labels and an order decide where each job runs. A running app never moves by itself.</li>
+              <li>A local dev server becomes a live site at its own address, behind the same circles.</li>
+              <li>When a machine is off, visitors get a friendly offline page, not an error.</li>
+            </ul>
+          </div>
+          <figure class="card term join reveal">
+            <div class="term-bar"><i></i><i></i><i></i><span>build-01</span></div>
+            <pre><code><b>$</b> curl -fsSL https://kit.acme.com/join | sh -s -- &lt;code&gt; https://kit.acme.com</code></pre>
+            <ol class="join-steps">
+              <li>downloads the daemon of kitshn's release and checks its SHA-256</li>
+              <li>makes an Ed25519 key pair and sends the public half with the code</li>
+              <li>stores the tunnel token in a file only its user reads</li>
+              <li>starts the tunnel and the daemon as user services</li>
+              <li><b>build-01</b> appears on the map, private, in the tray</li>
+            </ol>
+          </figure>
+        </div>
+      </section>
+
+      <div class="band">
+        <section class="wrap" id="yours">
+          <div class="head center">
+            <span class="label">Your account</span>
+            <h2>No vendor between you and your apps</h2>
+            <p class="lede">
+              kitshn is open source under the MIT license. It runs in your Cloudflare account and on your servers,
+              so your apps, your data and your list of who gets in stay with you.
+            </p>
+          </div>
+          <div class="yours">
+            <div class="card lift reveal">
+              <h3>☁️ One Worker, one Durable Object</h3>
+              <p>
+                All of kitshn's logic and state run in your account. App traffic goes through Access and tunnels,
+                not through kitshn.
+              </p>
+            </div>
+            <div class="card lift reveal">
+              <h3>🐙 The recipe is all that lives in Git</h3>
+              <p>
+                Circles and shares never go in a repo, so a pull request cannot share your app with someone.
+              </p>
+            </div>
+            <div class="card lift reveal">
+              <h3>📦 Take your state with you</h3>
+              <p>
+                Download the state export from the Safety panel. The bootstrap rebuilds kitshn from it, and the
+                export holds no secret.
+              </p>
+            </div>
+            <div class="card lift reveal">
+              <h3>💸 Fits the free plan</h3>
+              <p>
+                The reference setup uses a few percent of each daily Cloudflare limit, and the Usage view shows all
+                of them. A paid plan only raises limits.
+              </p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section class="wrap" id="limits">
+        <div class="split ent-split top-align">
+          <div>
+            <span class="label">Limits</span>
+            <h2>Read this before you roll it out</h2>
+            <p>
+              kitshn writes its limits down. Every requirement in the spec has a number, and every known limit says
+              when to revisit it. Here are the ones a company meets first.
+            </p>
+            <div class="numbers">
+              <div><b>342</b><span>numbered requirements</span></div>
+              <div><b>58</b><span>known limits, written down</span></div>
+              <div><b>~800</b><span>tests, many in workerd with real token checks</span></div>
+            </div>
+          </div>
+          <ul class="limits">
+            <li class="card reveal">
+              <b>GitHub user accounts only, for now</b>
+              <span>Deploys trust the accounts on kitshn's list. GitHub organizations are not on it yet.</span>
+            </li>
+            <li class="card reveal">
+              <b>50 people on Zero Trust Free</b>
+              <span>Access counts a seat per person who logs in. Guests free theirs after a month; a paid Zero Trust plan raises it.</span>
+            </li>
+            <li class="card reveal">
+              <b>One Durable Object</b>
+              <span>One instance holds all state and serializes writes. Plenty until about 10,000 cards on the map.</span>
+            </li>
+            <li class="card reveal">
+              <b>100 Worker scripts on the free plan</b>
+              <span>Each static or Worker environment is a script, so new previews stop at 90 and name the open ones.</span>
+            </li>
+            <li class="card reveal">
+              <b>Windows runs no containers yet</b>
+              <span>A Windows machine joins, serves live sites and runs agent calls, but not Compose apps.</span>
+            </li>
+            <li class="card reveal">
+              <b>Logs are for the admin</b>
+              <span>In this version, only the admin reads app logs. A circle with Everyone never gets them.</span>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="wrap">
+        <div class="card cta">
+          <div>
+            <span class="label" style="color: var(--ink)">Start</span>
+            <h2>Runs on your account, under your rules</h2>
+            <p class="lede">
+              You need a Cloudflare account with a domain, and Zero Trust turned on. One command sets up the rest,
+              and a second run changes only what is not right yet.
+            </p>
+            <div class="actions">
+              <a class="btn big" href="/install/">All install steps</a>
+              <a class="btn big" href="https://github.com/Yarden-zamir/kitshn/blob/main/SPEC.md">Read the spec</a>
+            </div>
+          </div>
+          <pre><code>curl -fsSL https://kit.yarden-zamir.com/install | \
+  CLOUDFLARE_API_TOKEN=... \
+  KITSHN_HOST=kit.acme.com \
+  KITSHN_OWNER_EMAILS=it@acme.com \
+  KITSHN_DEPLOY_OWNERS=acme-platform sh</code></pre>
+        </div>
+      </section>
+    </main>
+
+    <footer class="wrap card">
+      <a class="brand" href="/"><img src="/favicon.svg" alt="" /> kitshn</a>
+      <a href="https://github.com/Yarden-zamir/kitshn">Source on GitHub</a>
+      <a href="https://github.com/Yarden-zamir/kitshn/blob/main/SPEC.md">Spec</a>
+      <a href="https://github.com/Yarden-zamir/kitshn/blob/main/LICENSE">MIT license</a>
+      <span class="muted">This site deploys with kitshn.</span>
+    </footer>
+  </body>
+</html>

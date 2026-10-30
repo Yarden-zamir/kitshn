@@ -1,27 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 910 330" width="910" height="330" role="img" aria-label="Circles become Access policies: a card in the Friends circle gets an Access application that lets in ana@example.com; a card in Everyone opens with no login">
 <title>Circles become Access policies: a card in the Friends circle gets an Access application that lets in ana@example.com; a card in Everyone opens with no login</title>
 <style>
-  text { font-family: "Bricolage Grotesque", system-ui, sans-serif; font-size: 15px; fill: #000; }
+  text { font-family: "Bricolage Grotesque", system-ui, sans-serif; font-size: 15px; fill: #19191b; }
   .t { font-weight: 800; font-size: 16px; }
-  .s { font-size: 13px; fill: #3d3d5c; }
-  .m { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; fill: #3d3d5c; }
-  .box { fill: #fff; stroke: #000; stroke-width: 2; }
-  .shadow { fill: #000; }
-  .frame { fill: #f1f2ff; stroke: #000; stroke-width: 2; stroke-dasharray: 6 5; }
-  .yellow { fill: #ffe14d; } .green { fill: #7cff8a; } .pink { fill: #ff9eb0; } .blue { fill: #00b3ff; } .lilac { fill: #e4e7ff; }
-  .line { stroke: #000; stroke-width: 2.5; fill: none; }
+  .s { font-size: 13px; fill: #6b6b70; }
+  .m { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; fill: #6b6b70; }
+  .box { fill: #fff; stroke: #19191b; stroke-width: 2; }
+  .shadow { fill: #19191b; }
+  .frame { fill: #f4f4f2; stroke: #19191b; stroke-width: 2; stroke-dasharray: 6 5; }
+  .yellow { fill: #ffd23f; } .green { fill: #6ee7a0; } .pink { fill: #ff9fb2; } .blue { fill: #5cc8ff; } .lilac { fill: #ececea; }
+  .line { stroke: #19191b; stroke-width: 2.5; fill: none; }
   .dash { stroke-dasharray: 7 5; }
-  .head { fill: #000; }
-  .on-color { fill: #000; }
-  @media (prefers-color-scheme: dark) {
-    text { fill: #f3f0ff; } .s, .m { fill: #bdb6e6; }
-    .box { fill: #262147; stroke: #f3f0ff; } .shadow { fill: #b9a8ff; }
-    .frame { fill: #1d1938; stroke: #f3f0ff; }
-    .line { stroke: #f3f0ff; } .head { fill: #f3f0ff; }
-    .on-color, .yellow + text, text.on-color { fill: #000; }
-    .lilac { fill: #15122b; }
-    .box.yellow { fill: #ffe14d; } .box.green { fill: #7cff8a; } .box.pink { fill: #ff9eb0; } .box.blue { fill: #00b3ff; }
-  }
+  .head { fill: #19191b; }
+  .on-color { fill: #19191b; }
 </style>
 <defs>
   <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -30,7 +21,7 @@
 </defs>
 
 <circle class="lilac" cx="190" cy="170" r="140" style="stroke:#6c5ce7;stroke-width:3;fill-opacity:.9"/>
-<circle cx="330" cy="200" r="120" style="fill:#7cff8a;fill-opacity:.35;stroke:#1a9e2a;stroke-width:3"/>
+<circle cx="330" cy="200" r="120" style="fill:#6ee7a0;fill-opacity:.35;stroke:#1a9e2a;stroke-width:3"/>
 <text class="t" x="95" y="62">Friends</text>
 <text class="m" x="95" y="82">ana@example.com</text>
 <text class="t" x="365" y="112">Everyone</text>

@@ -169,6 +169,7 @@ import {
   toastPlace,
 } from "./layout.ts";
 import { actorLabel, undoneText } from "./revisions.ts";
+import { nextTheme, parseTheme, saveTheme, THEME_ICONS, THEME_KEY, themeTip, type Theme } from "./theme.ts";
 import {
   type Connection,
   applyEdits,
@@ -289,7 +290,11 @@ const routeFromHash = (): {
   };
 };
 
-export function App() {
+/**
+ * `panels: false` keeps every panel closed: the map of the kitshn.com demo (site-demo) is the map alone, so a press
+ * on a card never opens a panel over half of its small frame, nor fits the map again under the pointer (K-514).
+ */
+export function App(props: { readonly panels?: boolean } = {}) {
   const store = useStore();
   const [selection, setSelection] = useState<Selection>({ cards: new Set(), circle: null });
   const [hidden, setHidden] = useState<ReadonlySet<CardKind>>(new Set());
@@ -322,6 +327,12 @@ export function App() {
   const [progress, setProgress] = useState<string | null>(null);
   const [trayFilter, setTrayFilter] = useState("");
   const [previews, setPreviews] = useState(() => localStorage.getItem(PREVIEWS_KEY) === "on");
+  // K-535: light, dark or the device's own mode; main.tsx applied the stored one before the first paint.
+  const [theme, setTheme] = useState(() => parseTheme(localStorage.getItem(THEME_KEY)));
+  const chooseTheme = (next: Theme) => {
+    saveTheme(next);
+    setTheme(next);
+  };
   const [wantedPanel, setPanelWidth] = useStoredWidth("kitshn.panelWidth", PANEL_WIDTH);
   const [wantedTray, setTrayWidth] = useStoredWidth("kitshn.trayWidth", TRAY_WIDTH);
   const screenWidth = useScreenWidth();
@@ -1044,7 +1055,7 @@ export function App() {
   };
 
   const fullPage = route.tab !== "map";
-  const shownPanel: PanelKind | null = fullPage ? route.tab : panel;
+  const shownPanel: PanelKind | null = props.panels === false ? null : fullPage ? route.tab : panel;
   const large = fullPage || ((panel === "details" || panel === "safety") && detailsLarge);
   /** The panel floats over the map, so the map keeps its width and fit and pan leave its part free. */
   const floating = shownPanel !== null && !large;
@@ -1924,7 +1935,7 @@ export function App() {
             aria-haspopup="menu"
             aria-expanded={moreMenu !== null}
             aria-label="Menu"
-            data-tip="The tabs, the kinds to show, Fit and Previews."
+            data-tip="The tabs, the kinds to show, Fit, Previews and light or dark mode."
             onClick={(event) => setMoreMenu(event.currentTarget.getBoundingClientRect())}
           >
             ☰
@@ -1982,6 +1993,10 @@ export function App() {
                 </MenuItem>
               </>
             ) : null}
+            <MenuSep />
+            <MenuItem tip={themeTip(theme)} onSelect={() => chooseTheme(nextTheme(theme))}>
+              {THEME_ICONS[theme]} Mode: {theme === "system" ? "this device" : theme}
+            </MenuItem>
           </Menu>
         ) : null}
         {route.tab === "map" ? (
@@ -2069,6 +2084,17 @@ export function App() {
           </>
         ) : null}
         <span class="grow" />
+        {/* K-535: on a phone the mode sits in the menu, so the toolbar keeps to one row. */}
+        {wide ? (
+          <button
+            class="btn"
+            aria-label={`Mode: ${theme === "system" ? "this device" : theme}`}
+            data-tip={themeTip(theme)}
+            onClick={() => chooseTheme(nextTheme(theme))}
+          >
+            {THEME_ICONS[theme]}
+          </button>
+        ) : null}
         <button
           class="btn"
           aria-pressed={fullPage ? route.tab === "notifications" : panel === "notifications"}
@@ -2199,6 +2225,14 @@ export function App() {
             { label: "Open History", tip: TABS.history, run: () => openTab("history") },
             { label: "Open Usage", tip: TABS.usage, run: () => openTab("usage") },
             { label: "Open Notifications", tip: TABS.notifications, run: () => openTab("notifications") },
+            ...(["light", "dark", "system"] as const)
+              .filter((each) => each !== theme)
+              .map((each) => ({
+                label: each === "system" ? "Mode: follow this device" : `Mode: ${each}`,
+                keywords: "theme light dark mode colour color scheme appearance",
+                tip: `Show kitshn in ${each === "system" ? "the mode of this device" : `${each} mode`} on this device.`,
+                run: () => chooseTheme(each),
+              })),
             ...(pauseView
               ? [
                   { label: "Resume with passkey", tip: RESUME_TIP, run: startResume },

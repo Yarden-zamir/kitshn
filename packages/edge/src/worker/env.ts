@@ -57,7 +57,10 @@ export interface Env {
   readonly KITSHN_BACKUP_KEY?: string;
   /** Local development only: the email to act as. The Worker honours it only on localhost. */
   readonly DEV_IDENTITY?: string;
-  /** Local development only: seed sample cards. The Durable Object honours it only when the host is localhost. */
+  /**
+   * Local development only: seed sample cards, or with `teams` the map of a small company. The Durable Object
+   * honours it only when the host is localhost.
+   */
   readonly DEV_DEMO?: string;
 }
 

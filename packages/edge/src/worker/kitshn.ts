@@ -216,7 +216,7 @@ import {
   machineRightMode,
   machineRightOff,
 } from "../core/agent.ts";
-import { DEMO_MACHINES, DEMO_ICONS, demo, demoUsage } from "../core/demo.ts";
+import { DEMO_MACHINES, DEMO_ICONS, demo, demoUsage, teamsDemo } from "../core/demo.ts";
 import { type Usage, type UsageRow, usageLevel } from "../core/usage.ts";
 import {
   HOUR_MS,
@@ -1088,7 +1088,9 @@ export class Kitshn extends DurableObject<Env> {
     const initial = seed(emails, this.env.KITSHN_HOST, ownerDevices(this.env.OWNER_DEVICES));
     const extra =
       this.env.DEV_DEMO && this.env.KITSHN_HOST === "localhost"
-        ? demo()
+        ? this.env.DEV_DEMO === "teams"
+          ? teamsDemo(Date.now())
+          : demo()
         : { resources: [], places: [], circles: [] };
     this.ctx.storage.transactionSync(() => {
       for (const resource of [...initial.resources, ...extra.resources]) this.putResource(resource);

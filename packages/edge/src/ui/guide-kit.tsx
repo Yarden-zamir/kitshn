@@ -7,6 +7,7 @@ import type { MachineView } from "../core/protocol.ts";
 import { seed } from "../core/seed.ts";
 import { HEAD_LAYER } from "./layout.ts";
 import { CardView } from "./Map.tsx";
+import { applyTheme, type Theme } from "./theme.ts";
 
 /** What the two guide pages (`/neo-brutalism`, `/concepts`) share: fixtures, the scheme switch and their frames. */
 
@@ -64,53 +65,12 @@ export const machineView = (online: boolean, key: MachineKey | null): MachineVie
 };
 export const KEY: MachineKey = { kind: "public", publicKey: "demo", fingerprint: "SHA256:demo", since: NOW };
 
-/** The tokens of the page's own stylesheet: the light `:root` block and its dark override. */
-export function rootTokens() {
-  const light = new Map<string, string>();
-  const dark = new Map<string, string>();
-  const collect = (style: CSSStyleDeclaration, into: Map<string, string>) => {
-    for (let index = 0; index < style.length; index++) {
-      const name = style.item(index);
-      into.set(name, style.getPropertyValue(name).trim());
-    }
-  };
-  for (const sheet of document.styleSheets) {
-    let rules: CSSRuleList;
-    try {
-      rules = sheet.cssRules;
-    } catch {
-      continue; // The font stylesheet of another origin.
-    }
-    for (const rule of rules) {
-      if (rule instanceof CSSStyleRule && rule.selectorText === ":root") collect(rule.style, light);
-      if (rule instanceof CSSMediaRule && rule.conditionText.includes("prefers-color-scheme: dark"))
-        for (const inner of rule.cssRules)
-          if (inner instanceof CSSStyleRule && inner.selectorText === ":root") collect(inner.style, dark);
-    }
-  }
-  return { light, dark };
-}
-
-type Scheme = "system" | "light" | "dark";
-
-/** Sets the tokens of one scheme on the page itself, so both show without a change of the system setting. */
-function applyScheme(scheme: Scheme) {
-  const { light, dark } = rootTokens();
-  const root = document.documentElement.style;
-  // Only the names that the dark block changes differ between the two schemes.
-  for (const name of dark.keys()) {
-    const value = scheme === "dark" ? dark.get(name) : scheme === "light" ? light.get(name) : undefined;
-    if (value === undefined) root.removeProperty(name);
-    else root.setProperty(name, value);
-  }
-}
-
-function useScheme(): [Scheme, (scheme: Scheme) => void] {
-  const [scheme, setScheme] = useState<Scheme>("system");
+function useScheme(): [Theme, (scheme: Theme) => void] {
+  const [scheme, setScheme] = useState<Theme>("system");
   return [
     scheme,
     (next) => {
-      applyScheme(next);
+      applyTheme(next);
       setScheme(next);
     },
   ];

@@ -1,0 +1,9 @@
+node_modules/
+out/
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+# Generated audio (paid API output, regenerable from spec.json)
+public/mv/*/gen/

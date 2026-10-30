@@ -8,3 +8,4 @@ pnpm-lock.yaml
 packages/edge/public/install
 dist/
 packages/edge/public/join
+/site/demo/
