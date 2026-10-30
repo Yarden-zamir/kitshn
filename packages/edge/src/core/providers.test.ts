@@ -399,10 +399,19 @@ describe("live-site reach of a machine (K-1609)", () => {
     expect(siteReachOf({ ...base, circles: new Map([[share.id, twoTokens]]) }, "vps", 0)).toEqual([]);
     const publicShare: Circle = { ...share, members: [{ _tag: "everyone" }] };
     const publicState = { ...base, circles: new Map([[share.id, publicShare]]) };
-    expect(siteReachOf({ ...publicState, paused: "keep-public" }, "vps", 0)).toEqual([
-      { id: site.id, address: "proxy.example.com" },
-    ]);
+    expect(siteReachOf(publicState, "vps", 0)).toEqual([]);
+    expect(siteReachOf({ ...publicState, paused: "keep-public" }, "vps", 0)).toEqual([]);
     expect(siteReachOf({ ...publicState, paused: "lockdown" }, "vps", 0)).toEqual([]);
+    // Bypass takes precedence even when a different, private circle also admits this machine.
+    const everyone: Circle = { ...publicShare, id: "everyone" };
+    const mixed = {
+      ...base,
+      circles: new Map([
+        [share.id, share],
+        [everyone.id, everyone],
+      ]),
+    };
+    expect(siteReachOf(mixed, "vps", 0)).toEqual([]);
   });
 });
 

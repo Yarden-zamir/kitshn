@@ -340,13 +340,18 @@ export function siteReachOf(state: State, machineId: string, now: number): Array
       if (card.kind !== "site.live" || card.machine === null || card.machine === machineId || !address)
         return [];
       if (visitorLevel(state, card, visitor, now) === null) return [];
-      // Access refuses impossible "all" policies (such as two tokens), even when the raw members match.
-      const allowed = activeShares(state, card, now).some(({ circle }) => {
-        if (!circleMatches(circle, visitor, state.machines)) return false;
-        return [...circlePolicies(circle, state.machines).values()].some(
-          (policy) => policy.decision === "non_identity" || policy.decision === "bypass",
-        );
-      });
+      // A Bypass policy takes precedence over Service Auth. Never send the machine's credential to a public
+      // site, even if a separate private circle also admits the machine. Impossible "all" policies yield no policy.
+      let allowed = false;
+      for (const { circle } of activeShares(state, card, now)) {
+        const policies = [...circlePolicies(circle, state.machines).values()];
+        if (policies.some((policy) => policy.decision === "bypass")) return [];
+        if (
+          circleMatches(circle, visitor, state.machines) &&
+          policies.some((policy) => policy.decision === "non_identity")
+        )
+          allowed = true;
+      }
       return allowed ? [{ id: card.id, address }] : [];
     })
     .sort((a, b) => a.id.localeCompare(b.id));
