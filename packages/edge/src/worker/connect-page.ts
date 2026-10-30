@@ -10,7 +10,7 @@ export interface ConnectView {
     readonly doorHours: number;
     readonly reachable: boolean;
     readonly machineOnline: boolean;
-    /** K-2005: a relayed card listens on IPv4 only, so its doors need an IPv4 address. */
+    /** K-2004: a relayed card listens on IPv4 only, so its doors need an IPv4 address. */
     readonly needsIpv4: boolean;
   };
   /** K-2005: the card has an active share in Everyone, so its ports are open to every address and it has no doors. */
@@ -114,7 +114,7 @@ for (const door of data.doors) $("doors").append(item(door.address + ", until " 
 if (data.doors.length === 0) $("doors").append(item("None"));
 $("end").hidden = data.doors.length === 0;
 $("end").onclick = () => send({ action: "close" });
-// K-2005: all lookups at once, 8 s each; the open button waits for them, and "Try again" asks the missing ones again.
+// K-2004: all lookups at once, 8 s each; the open button waits for them, and "Try again" asks the missing ones again.
 async function check() {
   $("open-button").disabled = true;
   $("probe-note").replaceChildren("Checking your addresses…");

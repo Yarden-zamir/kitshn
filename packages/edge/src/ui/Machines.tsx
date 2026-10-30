@@ -905,7 +905,7 @@ export function MachinesView(props: {
       </p>
       <p
         class={props.accessApps >= 450 ? "error" : "muted"}
-        data-tip="Each web address and each private port route has one Access application; the account has at most 500 (K-402)."
+        data-tip="Each web address has one Access application; the account has at most 500 (K-402)."
       >
         Access applications: {props.accessApps} of 500
       </p>

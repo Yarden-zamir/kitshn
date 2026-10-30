@@ -358,12 +358,10 @@ export function PortDoors(props: { resource: Resource; onRemove: () => void }) {
   const doors = portCard.doors.filter((door) => door.endsAt > now);
   return (
     <div>
-      <div class="label" data-tip="Doors: the addresses that may reach the gated ports now (K-2004).">
-        Doors
+      <div class="label" data-tip="Route: how the players' packets reach the service (K-2010).">
+        Route
       </div>
-      <p class="help" data-tip="Route: how the players' packets reach the service (K-2010).">
-        {portCard.route}
-      </p>
+      <p class="help">{portCard.route}</p>
       {portCard.problems.map((problem) => (
         <p key={problem} class="error">
           {problem}
@@ -382,6 +380,9 @@ export function PortDoors(props: { resource: Resource; onRemove: () => void }) {
         Connect page <code>{portCard.connect}</code> · listening{" "}
         {portCard.listening.length > 0 ? portCard.listening.join(", ") : "nothing"}
       </p>
+      <div class="label" data-tip="Doors: the addresses that may reach the gated ports now (K-2005).">
+        Doors
+      </div>
       {doors.length === 0 ? (
         <p class="help">No door is open. A player opens one on the connect page.</p>
       ) : (

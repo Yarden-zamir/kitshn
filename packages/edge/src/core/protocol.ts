@@ -107,7 +107,7 @@ export type AccessState =
   | { readonly state: "failed"; readonly error: string };
 
 export interface Snapshot {
-  /** K-402, K-2013: the Access applications that kitshn made, against the account's limit of 500. */
+  /** K-402: the Access applications that kitshn made, against the account's limit of 500. */
   readonly accessApps: number;
   readonly circles: ReadonlyArray<Circle>;
   readonly resources: ReadonlyArray<Resource>;

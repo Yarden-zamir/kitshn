@@ -1,7 +1,7 @@
-// K-534: the PortCard step of the site wizard with a reason of K-2001, the door list of a port card with its Close
-// confirm, and the Remove ports confirm. The demo has no
-// daemon and no port card, so the scenario marks the first machine online with the capability `doors`, adds a port card
-// to the snapshots and answers `GET /api/ports` itself.
+// K-534: the Ports step of the site wizard with the relay route and a reason of K-2001, the route and doors of a port
+// card with its Close confirm, the Remove ports confirm, and the Access count of the Machines view. The demo has no
+// daemon and no port card, so the scenario marks the VPS online with the capability `doors`, the Mac
+// online without it, adds a port card to the snapshots and answers `GET /api/ports` itself.
 import { DESKTOP, type Scenario } from "../capture-views.ts";
 
 const servers = [
@@ -13,6 +13,7 @@ const now = Date.now();
 
 type View = { machine: { id: string }; online: boolean; status: Record<string, unknown> | null };
 type Snapshot = {
+  accessApps: number;
   machines: Array<View>;
   resources: Array<Record<string, unknown>>;
   places: Record<string, { x: number; y: number }>;
@@ -22,11 +23,25 @@ type Snapshot = {
 export default {
   views: [DESKTOP],
   run: async ({ page, shot }) => {
-    let first: string | null = null;
     let zone = "example.com";
     const able = (view: View) =>
-      (first ??= view.machine.id) === view.machine.id
+      view.machine.id !== "vps"
         ? {
+            ...view,
+            online: true,
+            servers,
+            status: {
+              version: "dev",
+              os: "darwin",
+              arch: "arm64",
+              hostname: "mac",
+              tunnel: "running",
+              tunnelLocations: "hfa02 ×4 (pinned)",
+              capabilities: [],
+              doorsProblem: "macOS has no doors",
+            },
+          }
+        : {
             ...view,
             online: true,
             servers,
@@ -39,8 +54,7 @@ export default {
               capabilities: ["doors"],
               listening: ["25565/tcp"],
             },
-          }
-        : view;
+          };
     await page.routeWebSocket(/\/api\/ws/, (socket) => {
       const server = socket.connectToServer();
       server.onMessage((message) => {
@@ -49,6 +63,7 @@ export default {
           const snapshot = data.snapshot;
           zone = snapshot.zone;
           snapshot.machines = snapshot.machines.map(able);
+          snapshot.accessApps = 37;
           snapshot.resources = [
             ...snapshot.resources,
             {
@@ -58,7 +73,7 @@ export default {
               addresses: [`minecraft.${zone}`],
               status: "running",
               group: null,
-              machine: first,
+              machine: "mac",
             },
           ];
           const vps = Object.values(snapshot.places)[0] ?? { x: 0, y: 0 };
@@ -68,21 +83,26 @@ export default {
         socket.send(JSON.stringify(data));
       });
     });
-    await page.route(/\/api\/portCards$/, (route) =>
+    await page.route(/\/api\/ports$/, (route) =>
       route.fulfill({
         json: [
           {
             card: "mc",
-            machine: first,
+            machine: "mac",
             name: "minecraft",
             ports: [{ port: 25565, proto: "tcp" }],
             doorMs: 12 * hour,
             srv: "minecraft",
-            relay: null,
-            join: `https://pages.${zone}/join/minecraft`,
+            relay: "vps",
+            connect: `https://pages.${zone}/connect/minecraft`,
             address: `minecraft.${zone}`,
             listening: ["25565/tcp"],
             problem: null,
+            route: "Players → VPS → Cloudflare hfa02 ×4 (pinned) → Mac",
+            problems: [],
+            unchecked: [
+              "Friends: its devices and machines do not get in on this route, because a door opens for a person",
+            ],
             doors: [
               {
                 card: "mc",
@@ -110,6 +130,7 @@ export default {
     await page.getByRole("button", { name: "Add" }).click();
     await page.getByRole("menuitem", { name: "Add a site" }).click();
     await page.getByRole("button", { name: "Ports", exact: true }).click();
+    await page.getByRole("radiogroup", { name: "Machine" }).getByRole("radio", { name: "Mac" }).click();
     await page.getByLabel("Ports").fill("25565, 41641/udp");
     await page.getByLabel("Name").fill("minecraft");
     await page.getByLabel("SRV service").fill("minecraft");
@@ -132,5 +153,10 @@ export default {
     await page.getByText(/^Remove the port card minecraft\?/).waitFor();
     await page.mouse.move(5, 500);
     await shot("remove-confirm");
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+
+    await page.goto(`${new URL(page.url()).origin}/#machines`);
+    await page.getByText("Access applications: 37 of 500").waitFor();
+    await shot("machines-access");
   },
 } satisfies Scenario;
