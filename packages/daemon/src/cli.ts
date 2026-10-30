@@ -79,7 +79,8 @@ kitshn provider forget <name>           drop a provider that does not run, as th
   unexpose: "kitshn unexpose <name>                  stop sharing it",
   servers:
     "kitshn servers [--json]                 the servers that listen on this machine, and what kitshn exposes (K-619)",
-  doors: `kitshn doors install --user <u>         as root: the helper that gates the ports of port cards, for the daemon user (K-2005)
+  doors: `kitshn doors install --user <u>         as root: the helper that gates the ports of port cards, for the daemon user (K-2006)
+                                        --public-address <IPv4>: the address of a cloud machine behind its provider's NAT (K-2003)
 kitshn doors uninstall                  as root: remove it and its firewall table`,
   skill: `kitshn skill install [--repo]           the skill for coding agents, global or in this repo (K-618)
 kitshn skill check                      exit 1 when a copy of the skill is from another release`,
