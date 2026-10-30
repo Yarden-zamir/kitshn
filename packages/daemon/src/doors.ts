@@ -192,6 +192,7 @@ export function helperInput(plan: DoorPlan, now: number): string {
 export class Relays {
   private readonly running = new Map<string, ChildProcess>();
   private wanted = new Set<string>();
+  private readonly started = new Map<string, number>();
 
   constructor(
     private readonly log: (line: string) => void,
@@ -199,6 +200,14 @@ export class Relays {
   ) {}
 
   /** K-2009: the relays end with the daemon; a service manager that kills only the daemon leaves no listener. */
+  /**
+   * K-2009: the relays that still run after 10 seconds, as `<hostname> <port>`. cloudflared exits at once on a busy port,
+   * so one of these holds the port.
+   */
+  serving(now: number): Array<string> {
+    return [...this.running.keys()].filter((key) => now - (this.started.get(key) ?? now) >= 10_000);
+  }
+
   stopAll() {
     this.wanted = new Set();
     for (const child of this.running.values()) child.kill();
@@ -234,6 +243,7 @@ export class Relays {
       stdio: "ignore",
     });
     this.running.set(key, child);
+    this.started.set(key, Date.now());
     this.log(`relay ${hostname} listens on ${port}`);
     child.on("exit", (code) => {
       if (this.running.get(key) !== child) return;
@@ -365,6 +375,8 @@ export function hostFirewallRules(saved: string, ports: ReadonlyArray<ServicePor
   let chain: { readonly line: string; readonly rules: Array<string> } | null = null;
   const names = (rule: string, { port, proto }: ServicePort) =>
     rule.includes(`${proto} dport`) &&
+    rule.includes(" accept") &&
+    !rule.includes("!=") &&
     rule.split(/[\s{},]+/).some((word) => {
       const [low = "", high = low] = word.split("-");
       return /^\d/.test(word) && Number(low) <= port && port <= Number(high);

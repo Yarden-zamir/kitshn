@@ -509,3 +509,74 @@ it("shows the steps of a new relayed card and no listening state for it (K-538, 
     expect(kitshn.portView(row, Date.now()).listening).toBeNull();
   });
 });
+
+it("shows a problem on a relayed card while the port machine's tunnel says not ready (K-632, K-2010)", async () => {
+  await withMachines(async (kitshn, sockets) => {
+    const made = await addPortCard(kitshn, { ...relayed, name: "cut" });
+    const id = made.body.id ?? "";
+    const problems = () => {
+      const [row] = kitshn.portRows("card_id = ?", id);
+      return (kitshn.portView(row, Date.now()) as unknown as { problems: Array<string> }).problems;
+    };
+    const set = (tunnelReady: boolean) => {
+      const socket = sockets["vps"];
+      if (!socket) throw new Error("no socket");
+      const attachment = socket.deserializeAttachment() as { status: object };
+      socket.serializeAttachment({
+        ...attachment,
+        status: { ...attachment.status, tunnelReady, tunnelLocations: "fra08 ×4" },
+      });
+    };
+    // The data center stays in the metrics after a cut, so only `/ready` tells.
+    set(false);
+    expect(problems()).toContain("vps: its tunnel has no connection");
+    set(true);
+    expect(problems()).toEqual([]);
+  });
+});
+
+it("finishes the relay steps only when the relay serves this card, and names an offline relay machine (K-538, K-2009)", async () => {
+  await withMachines(async (kitshn, sockets, _, state) => {
+    const made = await addPortCard(kitshn, { ...relayed, name: "served" });
+    const id = made.body.id ?? "";
+    const address = "served-relay.example.com";
+    const inner = kitshn as unknown as {
+      access: Map<string, object>;
+      relayProgress(
+        card: string,
+        progress: object,
+        now: number,
+      ): { retry: { reason: string } | null; outcome: { state: string } };
+      progressRows(): Map<string, { progress: object }>;
+    };
+    inner.access.set(`app:${id}:${address}`, { cfId: "app1" });
+    const sql = state.storage.sql;
+    sql.exec(
+      "INSERT OR REPLACE INTO tunnel_objects (machine_id, body, applied, error, retry_at) VALUES ('vps', '', ?, NULL, 0)",
+      address,
+    );
+    sql.exec(
+      "INSERT OR REPLACE INTO dns_objects (address, record_id, content, error) VALUES (?, 'r', 'c', NULL)",
+      address,
+    );
+    sql.exec(
+      "INSERT OR REPLACE INTO port_records (type, name, card_id, content, record_id, error, retry_at) VALUES ('A', 'served', ?, '1.2.3.4', 'r', NULL, 0)",
+      id,
+    );
+    const run = () => inner.relayProgress(id, inner.progressRows().get(id)?.progress ?? {}, Date.now());
+    const socket = sockets["relay1"];
+    if (!socket) throw new Error("no socket");
+    const attachment = socket.deserializeAttachment() as { status: object };
+    // Another program listens on the port, so the listening report says nothing about this card.
+    socket.serializeAttachment({ ...attachment, status: { ...attachment.status, listening: ["25565/tcp"] } });
+    expect(run().outcome.state).toBe("running");
+    expect(run().retry).toBeNull();
+    socket.serializeAttachment({
+      ...attachment,
+      status: { ...attachment.status, relays: [`${address} 25565`] },
+    });
+    expect(run().outcome.state).toBe("done");
+    socket.serializeAttachment({ ...attachment, status: null });
+    expect(run().retry?.reason).toContain("relay1 is offline");
+  });
+});

@@ -58,7 +58,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 /** K-2003, K-2007: the port card fields of a daemon status, checked; a bad field is left out. */
 export function portStatus(
   raw: Record<string, unknown>,
-): Pick<MachineStatus, "publicAddresses" | "doorsProblem" | "listening" | "hostFirewall"> {
+): Pick<MachineStatus, "publicAddresses" | "doorsProblem" | "listening" | "hostFirewall" | "relays"> {
   const address = (value: unknown, family: 4 | 6) => {
     if (typeof value !== "string" || value.length > 45) return null;
     const door = doorAddress(value);
@@ -73,6 +73,13 @@ export function portStatus(
       : {}),
     ...(typeof problem === "string" ? { doorsProblem: problem.slice(0, 200) } : {}),
     ...(typeof raw["hostFirewall"] === "string" ? { hostFirewall: raw["hostFirewall"].slice(0, 400) } : {}),
+    ...(Array.isArray(raw["relays"])
+      ? {
+          relays: raw["relays"]
+            .filter((item): item is string => typeof item === "string" && item.length <= 300)
+            .slice(0, 40),
+        }
+      : {}),
     ...(Array.isArray(listening)
       ? {
           listening: listening

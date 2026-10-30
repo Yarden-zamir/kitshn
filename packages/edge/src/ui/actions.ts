@@ -994,7 +994,7 @@ export function cardActions(ctx: ActionContext, h: ActionHandlers, resource: Res
             {
               id: "remove-port card",
               label: "Remove ports…",
-              tip: `Remove ${resource.name}: its doors close for everyone at once, its records go, and its ports stay closed. kitshn asks first; there is no Undo.`,
+              tip: `Remove ${resource.name}: its doors close for everyone at once, its records and shares go, and its ports stay closed. kitshn asks first; there is no Undo.`,
               danger: true as const,
               run: () => h.removePortCard(resource),
             },

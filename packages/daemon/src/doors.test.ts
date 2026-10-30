@@ -127,6 +127,17 @@ describe("the host firewall check and the declared address (K-2003)", () => {
       ).toEqual([]);
   });
 
+  it("counts only an accept rule as allowing the port", () => {
+    for (const rule of ["tcp dport 25565 drop", "tcp dport != 25565 accept"])
+      expect(
+        hostFirewallRules(
+          `---- nft\ntable inet filter {\n chain input {\n  type filter hook input priority filter; policy drop;\n  ${rule}\n }\n}`,
+          minecraft,
+        ),
+        rule,
+      ).toHaveLength(1);
+  });
+
   it("says that the check did not run when an old helper saved no rules", () => {
     expect(hostFirewallStatus(null, minecraft)).toContain("run `kitshn doors install`");
     expect(hostFirewallStatus(null, [])).toBeNull();

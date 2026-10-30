@@ -1243,8 +1243,8 @@ export class Kitshn extends DurableObject<Env> {
     if (!portCard?.relay || !address || !port)
       return failProgress(progress, "The relay stopped: its port card went.", now);
     const tunnel = this.tunnelRows().find((item) => item.machine_id === portCard.machine);
-    const [dns] = this.sql<{ error: string | null }>(
-      "SELECT error FROM dns_objects WHERE address = ?",
+    const [dns] = this.sql<{ error: string | null; retry_at: number }>(
+      "SELECT error, retry_at FROM dns_objects WHERE address = ?",
       address,
     );
     const [record] = this.sql<PortRecordRow>(
@@ -1252,7 +1252,7 @@ export class Kitshn extends DurableObject<Env> {
       cardId,
     );
     const relayMachine = this.state.machines.get(portCard.relay);
-    const listening = relayMachine ? (this.machineView(relayMachine).status?.listening ?? []) : [];
+    const relayStatus = relayMachine ? this.machineView(relayMachine).status : null;
     const step = !this.access.get(`app:${cardId}:${address}`)?.cfId
       ? 0
       : !tunnel?.applied.includes(address)
@@ -1261,7 +1261,7 @@ export class Kitshn extends DurableObject<Env> {
           ? 2
           : !record || record.error
             ? 3
-            : !listening.includes(portKey(port))
+            : !relayStatus?.relays?.includes(`${address} ${port.port}`)
               ? 4
               : 5;
     if (step === 5) return finishProgress(progress, now);
@@ -1276,11 +1276,16 @@ export class Kitshn extends DurableObject<Env> {
     } else if (step === 1) {
       retry = tunnel?.error ? { reason: tunnel.error, at: tunnel.retry_at } : this.alarmWait("tunnels", now);
     } else if (step === 2) {
-      retry = dns?.error ? { reason: dns.error, at: now } : this.alarmWait("DNS", now);
+      retry = dns?.error ? { reason: dns.error, at: dns.retry_at } : this.alarmWait("DNS", now);
     } else if (step === 3) {
       retry = record?.error
         ? { reason: record.error, at: record.retry_at }
         : this.alarmWait("port card DNS", now);
+    } else if (!relayStatus) {
+      retry = {
+        reason: `${relayMachine?.name ?? portCard.relay} is offline, so the relay waits for it.`,
+        at: now,
+      };
     }
     return withRetry(reachStep(progress, step, now), retry);
   }
@@ -5264,6 +5269,9 @@ export class Kitshn extends DurableObject<Env> {
         tunnel: ["starting", "running", "stopped"].includes(String(message.status.tunnel))
           ? message.status.tunnel
           : "stopped",
+        ...(typeof message.status.tunnelReady === "boolean"
+          ? { tunnelReady: message.status.tunnelReady }
+          : {}),
         ...(typeof message.status.tunnelLocations === "string"
           ? { tunnelLocations: message.status.tunnelLocations.slice(0, 120) }
           : {}),
@@ -14440,12 +14448,11 @@ export class Kitshn extends DurableObject<Env> {
     const problems = [
       this.doorsProblem(doorMachine(portCard)),
       doorStatus?.hostFirewall ? `${named(doorMachine(portCard))}: ${doorStatus.hostFirewall}` : null,
-      // K-632: a daemon reports data centers only while its tunnel has a connection.
       portCard.relay === null
         ? null
         : !portStatus
           ? `${named(portCard.machine)} is offline`
-          : !portStatus.tunnelLocations
+          : portStatus.tunnelReady === false
             ? `${named(portCard.machine)}: its tunnel has no connection`
             : null,
     ].filter((problem) => problem !== null);
