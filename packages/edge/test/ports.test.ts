@@ -260,7 +260,7 @@ it("makes the A and SRV records of a port card in one run (K-2008)", async () =>
   });
 });
 
-it("opens nothing for a relayed port card when no IPv4 address answered, because the relay listens on IPv4 only (K-2005)", async () => {
+it("opens nothing for a relayed port card when no IPv4 address answered, because the relay listens on IPv4 only (K-2004)", async () => {
   stubAccessCerts();
   const stub = await setup();
   await runInDurableObject(stub, (_, state) => {

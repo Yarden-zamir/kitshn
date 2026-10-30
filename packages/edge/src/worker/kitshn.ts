@@ -14279,7 +14279,7 @@ export class Kitshn extends DurableObject<Env> {
       const addresses = "error" in seen ? [] : [...new Set([seen.address, ...found])];
       error =
         ("error" in seen ? `kitshn sees your address as ${visitor.ip ?? "none"}: ${seen.error}` : null) ??
-        // K-2005: a relay listens on IPv4 only, so an IPv6-only open would open nothing that works.
+        // K-2004: a relay listens on IPv4 only, so an IPv6-only open would open nothing that works.
         (portCard.relay !== null && !addresses.some((address) => doorFamily(address) === 4)
           ? "This server needs IPv4, and no IPv4 address answered."
           : null) ??
