@@ -15,7 +15,11 @@ const machineOf = (id: string): Machine => ({
 });
 
 /** A daemon socket of a machine that passed its key check (K-1704); it keeps what kitshn sends. */
-const daemonSocket = (machineId: string, sent: Array<ServerToDaemon>) =>
+const daemonSocket = (
+  machineId: string,
+  sent: Array<ServerToDaemon>,
+  capabilities: ReadonlyArray<string> = ["protocol-2"],
+) =>
   ({
     readyState: WebSocket.OPEN,
     deserializeAttachment: () => ({
@@ -26,7 +30,7 @@ const daemonSocket = (machineId: string, sent: Array<ServerToDaemon>) =>
       check: "signed",
       answered: true,
       rotateBy: null,
-      status: null,
+      status: { capabilities },
       sample: null,
     }),
     serializeAttachment() {},
@@ -91,9 +95,13 @@ async function relay(
   stub: DurableObjectStub,
   steps: (say: (from: "mac" | "vps", message: object) => Promise<void>, instance: Instance) => Promise<void>,
   online: ReadonlyArray<string> = ["mac", "vps"],
+  targetCapabilities: ReadonlyArray<string> = ["protocol-2"],
 ) {
   const sent = { mac: [] as Array<ServerToDaemon>, vps: [] as Array<ServerToDaemon> };
-  const sockets = { mac: daemonSocket("mac", sent.mac), vps: daemonSocket("vps", sent.vps) };
+  const sockets = {
+    mac: daemonSocket("mac", sent.mac),
+    vps: daemonSocket("vps", sent.vps, targetCapabilities),
+  };
   await runInDurableObject(stub, async (raw) => {
     const instance = raw as unknown as Instance;
     // The tests hold no real hibernatable sockets, so the open socket of a machine is the fake one.
@@ -311,4 +319,18 @@ it("runs the t3.agents step of migration 42 once, by its own mark, so a later st
   await evictDurableObject(stub);
   expect((await machinesCircle()).members[0].rights).not.toHaveProperty("runsCommands");
   expect(await revisions()).toBe(1);
+});
+
+it("refuses a run at once on a daemon of protocol 1, which would ignore it and leave the caller waiting (K-722)", async () => {
+  const stub = await setup({ mode: "automatic" });
+  const sent = await relay(stub, (say) => say("mac", run("e8")), ["mac", "vps"], ["applied", "access"]);
+  expect(sent.vps).toEqual([]);
+  expect(sent.mac).toEqual([
+    expect.objectContaining({
+      frame: expect.objectContaining({
+        type: "exit",
+        reason: expect.stringMatching(/^refused: the daemon of vps is too old/),
+      }),
+    }),
+  ]);
 });
