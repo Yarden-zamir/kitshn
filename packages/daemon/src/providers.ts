@@ -228,6 +228,13 @@ export class Providers {
       this.refuse(name, error, now);
       return { ok: false, error };
     }
+    // K-704: one connection holds one provider, so `check`, `exec` and the events know which one it is.
+    const held = this.providerOf(caller.connection);
+    if (held !== null && held !== name)
+      return {
+        ok: false,
+        error: `this connection holds the provider ${held}; a second provider needs its own connection (K-704).`,
+      };
     const old = this.entries.get(name);
     const owner = this.owners.get(name);
     // Neither refusal marks the provider as refused: it belongs to another user, who still runs it (K-704).

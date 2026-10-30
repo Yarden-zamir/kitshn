@@ -108,6 +108,17 @@ export async function checkSession(
     }));
   } catch (error) {
     if (error instanceof errors.JWTExpired) return refused(key, "expired", "the Access token expired.");
+    // A key fetch that failed says nothing about the token, so a live session stays.
+    if (
+      error instanceof errors.JWKSTimeout ||
+      error instanceof errors.JWKSInvalid ||
+      !(error instanceof errors.JOSEError)
+    )
+      return refused(
+        key,
+        "unavailable",
+        `the daemon could not fetch the Access signing keys: ${error instanceof Error ? error.message : String(error)}`,
+      );
     return refused(
       key,
       "invalid",

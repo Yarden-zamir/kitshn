@@ -523,6 +523,11 @@ export class ProviderHub {
     }
   }
 
+  /** Sends one message to kitshn over the signed connection; false when there is none. */
+  toKitshn(message: DaemonMessage): boolean {
+    return this.options.toKitshn(message);
+  }
+
   private toSource(execId: string, frame: ExecFrame) {
     this.options.toKitshn({ type: "execFrame", execId, frame });
   }

@@ -109,6 +109,21 @@ describe("check (K-721)", () => {
     expect(await check(await jwt({ email: "a@b.c" }, { iss: "https://evil.example" }))).toMatchObject({
       refused: { code: "invalid" },
     });
+    // A token of another signer is invalid; keys that cannot be fetched say nothing about the token.
+    const stranger = await generateKeyPair("RS256");
+    const foreign = await new SignJWT({ email: "owner@example.com" })
+      .setProtectedHeader({ alg: "RS256", kid: "k" })
+      .setIssuer(`https://${TEAM}`)
+      .setAudience("aud-app")
+      .setExpirationTime(Math.floor(NOW / 1000) + 3600)
+      .sign(stranger.privateKey);
+    expect(await check({ "cf-access-jwt-assertion": foreign })).toMatchObject({
+      refused: { code: "invalid" },
+    });
+    const offline = () => () => Promise.reject(new TypeError("fetch failed"));
+    expect(await check(await jwt({ email: "owner@example.com" }), { keys: offline })).toMatchObject({
+      refused: { code: "unavailable" },
+    });
     expect(await check(await jwt({ common_name: "stranger.access" }))).toMatchObject({
       refused: { code: "unknown-subject" },
     });

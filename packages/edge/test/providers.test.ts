@@ -364,6 +364,73 @@ it("holds a job that waits for an idle machine while a provider is busy, and the
   });
 });
 
+it("records the forwarded tool calls of a machine on machines that it reaches, as its own and only on a signed connection (K-1610)", async () => {
+  const { stub, message, sql } = await setup();
+  await message("signed", [report([app])]);
+  // vps reaches the T3 card of mac: the card sits in a circle that holds the machine vps.
+  const mac: Machine = { ...machine, id: "mac", name: "mac", clientId: "mac.access" };
+  const macCard: Resource = {
+    id: "p-mac-app",
+    kind: "t3.app",
+    name: "T3 on mac",
+    addresses: [],
+    status: "running",
+    group: null,
+    machine: "mac",
+    provider: {
+      name: "t3",
+      localId: "app",
+      kindName: "T3 app",
+      levels: { view: "view", use: "use", control: "control" },
+      facts: [],
+      stickers: [],
+      lists: [],
+      settings: [],
+      site: null,
+    },
+  };
+  const links: Circle = {
+    id: "links",
+    name: "Links",
+    color: "#7CFF8A",
+    level: "use",
+    members: [{ _tag: "machine", machineId: "vps" }],
+    match: "any",
+    needsPasskey: false,
+    endsAt: null,
+    x: 7000,
+    y: 7000,
+    r: 200,
+  };
+  await sql("INSERT OR REPLACE INTO machines (id, body) VALUES ('mac', ?)", JSON.stringify(mac));
+  await sql("INSERT OR REPLACE INTO resources (id, body) VALUES (?, ?)", macCard.id, JSON.stringify(macCard));
+  await sql("INSERT OR REPLACE INTO circles (id, body) VALUES ('links', ?)", JSON.stringify(links));
+  await sql("INSERT OR REPLACE INTO places (id, x, y) VALUES (?, 7000, 7000)", macCard.id);
+  await sql("DELETE FROM link_events");
+  const call = { type: "linkCall", target: "mac", name: "read_file", status: 200 };
+  const raw = (check: "signed" | "token", body: object) =>
+    runInDurableObject(stub, (instance) =>
+      instance.webSocketMessage(daemonSocket(check), JSON.stringify(body)),
+    );
+  await raw("token", call);
+  // A machine that vps does not reach, and a command line instead of a tool name.
+  await raw("signed", { ...call, target: "other" });
+  await raw("signed", { ...call, name: "curl -H secret" });
+  await raw("signed", call);
+  await raw("signed", { ...call, status: 403 });
+  const rows = await runInDurableObject(stub, (_, state) =>
+    state.storage.sql
+      .exec("SELECT source, target, kind, name, outcome, exit_code FROM link_events")
+      .toArray(),
+  );
+  expect(rows).toEqual([
+    { source: "vps", target: "mac", kind: "tool", name: "read_file", outcome: "succeeded", exit_code: null },
+    { source: "vps", target: "mac", kind: "tool", name: "read_file", outcome: "refused", exit_code: null },
+  ]);
+  await sql("DELETE FROM circles WHERE id = 'links'");
+  await sql("DELETE FROM resources WHERE id = 'p-mac-app'");
+});
+
 it("keeps an address that another card holds, or a name of kitshn, off a provider card (K-705)", async () => {
   const { stub, message, card, sql, sites, check } = await setup();
   const withSite = report([{ ...app, site: { name: "t3-vps", port: 3773 } }]);

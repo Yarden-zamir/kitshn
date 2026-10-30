@@ -489,13 +489,19 @@ function bridgeEvent(text: string): Extract<Answer, { type: "exec-run" | "exec-c
  * pings the provider). K-722: the bridge runs the exec runs that the daemon gives it as its own user, the provider
  * user, so the provider never sees them.
  */
-function bridgeSession(write: (bytes: Uint8Array) => void, output: (bytes: Uint8Array) => void) {
+export function bridgeSession(write: (bytes: Uint8Array) => void, output: (bytes: Uint8Array) => void) {
   let pending = new Uint8Array(0);
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   const runs = new Map<string, ExecHandle>();
-  const frame = (execId: string, value: ExecFrame) =>
-    write(encoder.encode(line({ type: "exec-frame", execId, frame: value })));
+  // A frame goes out only between two whole lines of the provider, so it never splits one of them.
+  let midLine = false;
+  const waiting: Array<Uint8Array> = [];
+  const frame = (execId: string, value: ExecFrame) => {
+    const bytes = encoder.encode(line({ type: "exec-frame", execId, frame: value }));
+    if (midLine) waiting.push(bytes);
+    else write(bytes);
+  };
   const onEvent = (event: Extract<Answer, { type: "exec-run" | "exec-control" }>) => {
     if (event.type === "exec-run") {
       const { execId } = event.run;
@@ -527,7 +533,10 @@ function bridgeSession(write: (bytes: Uint8Array) => void, output: (bytes: Uint8
   };
   return {
     fromProvider(chunk: Uint8Array) {
-      if (chunk.length > 0) write(chunk);
+      if (chunk.length === 0) return;
+      write(chunk);
+      midLine = chunk[chunk.length - 1] !== NEWLINE;
+      if (!midLine) for (const bytes of waiting.splice(0)) write(bytes);
     },
     fromDaemon(chunk: Uint8Array) {
       const joined = new Uint8Array(pending.length + chunk.length);
@@ -544,6 +553,8 @@ function bridgeSession(write: (bytes: Uint8Array) => void, output: (bytes: Uint8
       }
       pending = joined.slice(start);
     },
+    /** The frames that wait for the end of the provider's line. */
+    queued: () => waiting.length,
     /** A bridge that ends kills its runs; the daemon ends them with "the relay was lost". */
     stop: () => {
       for (const run of runs.values()) run.kill("the bridge ended");

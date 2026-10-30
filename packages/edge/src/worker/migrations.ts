@@ -300,8 +300,8 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
     "ALTER TABLE handovers ADD COLUMN approved TEXT NOT NULL DEFAULT '[]'",
   ],
   // 42: provider protocol 2. The exec runs that kitshn relays (K-722), so an evicted Durable Object finds each run
-  // again, and the rev of the last set of each desired state (K-709). Its code step (AGENTS_MIGRATION) moves each
-  // `t3.agents` share to the `t3.app` card of the same machine.
+  // again, and the rev of the last set of each desired state (K-709). Its code step moves each `t3.agents` share to
+  // the `t3.app` card of the same machine, once, by its own mark in `meta`.
   [
     `CREATE TABLE exec_runs (exec_id TEXT PRIMARY KEY, source TEXT NOT NULL, target TEXT NOT NULL, provider TEXT,
       command TEXT NOT NULL, cwd TEXT, thread TEXT, proposal_id TEXT, state TEXT NOT NULL, started_at INTEGER NOT NULL)`,
@@ -311,7 +311,7 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
 
 /** K-819: the migration after which the Durable Object derives the repo ids of older deploy rows. */
 export const REPO_GATE_MIGRATION = 6;
-/** K-722: the migration after which the `t3.agents` kind is gone; its code step moves the shares. */
+/** K-722: the migration after which the `t3.agents` kind is gone; an import from before it runs the code step. */
 export const AGENTS_MIGRATION = 42;
 
 /**

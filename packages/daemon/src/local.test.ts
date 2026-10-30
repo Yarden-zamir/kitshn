@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { Request } from "@kitshn/local";
 import { describe, expect, it, vi } from "vitest";
 import {
+  bridgeSession,
   type Caller,
   type LocalOptions,
   askLocal,
@@ -321,7 +322,7 @@ describe("connection keys (K-704)", () => {
         closed: (key) => closed.push(key),
         handle: (request, caller) => {
           list.push(caller.connection);
-          return Promise.resolve({ id: request.id, type: "error", error: "test" });
+          return Promise.resolve({ id: "id" in request ? request.id : null, type: "error", error: "test" });
         },
       });
     const privatePath = join(mkdtempSync(join(tmpdir(), "kitshn-keys-")), "kitshn", "kitshn.sock");
@@ -343,5 +344,36 @@ describe("connection keys (K-704)", () => {
       first.stop();
       second.stop();
     }
+  });
+});
+
+describe("the bridge (K-704, K-722)", () => {
+  it("sends the frames of a run that it runs only between two whole lines of the provider", async () => {
+    const written: Array<string> = [];
+    const exited = Promise.withResolvers<void>();
+    const session = bridgeSession(
+      (bytes) => {
+        const text = new TextDecoder().decode(bytes);
+        written.push(text);
+        if (text.includes('"exit"')) exited.resolve();
+      },
+      () => {},
+    );
+    session.fromProvider(new TextEncoder().encode('{"id":"1","type":"upsert","provider":"t3",'));
+    const run = { execId: "e1", command: "echo hi", timeoutSeconds: 5, stdin: false };
+    session.fromDaemon(new TextEncoder().encode(`${JSON.stringify({ type: "exec-run", run })}\n`));
+    // The run ends while the provider is in the middle of its line, so its frames wait.
+    await vi.waitFor(() => expect(session.queued()).toBeGreaterThan(1));
+    expect(written).toHaveLength(1);
+    session.fromProvider(new TextEncoder().encode('"resources":[]}\n'));
+    await exited.promise;
+    const joined = written.join("");
+    expect(joined.startsWith('{"id":"1","type":"upsert","provider":"t3","resources":[]}\n')).toBe(true);
+    expect(
+      joined
+        .split("\n")
+        .filter(Boolean)
+        .every((text) => JSON.parse(text) !== null),
+    ).toBe(true);
   });
 });

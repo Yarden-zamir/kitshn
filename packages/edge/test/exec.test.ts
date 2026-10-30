@@ -38,6 +38,14 @@ type Instance = {
   webSocketMessage(socket: WebSocket, text: string): Promise<void>;
   openSocket(machineId: string): WebSocket | null;
   endExecRuns(machineId: string): void;
+  decide(id: string, decision: "approved" | "denied", by: object): Promise<{ ok: boolean; error?: string }>;
+};
+
+const owner = {
+  actor: { _tag: "person", email: "owner@example.com" },
+  visitor: { email: "owner@example.com", clientId: null, ip: null },
+  machineId: null,
+  reason: null,
 };
 
 /** mac's agent circle holds the machine card of vps at control, with "runs commands" as given. */
@@ -125,7 +133,7 @@ it("relays a run from A to B and back, and records one History event at its exit
     });
   });
   expect(sent.vps).toEqual([
-    { type: "execRun", provider: "t3", run: run("e1").run },
+    { type: "execRun", provider: null, run: run("e1").run },
     { type: "execFrame", execId: "e1", frame: { type: "credit", bytes: 2 } },
   ]);
   expect(sent.mac).toEqual([
@@ -199,4 +207,108 @@ it("asks the approver circle in ask mode, keeps the exec id, and refuses without
       }),
     }),
   ]);
+});
+
+it("closes the proposal of a run that its caller ended or lost, so a later approval starts nothing on B (K-722)", async () => {
+  const stub = await setup({ mode: "ask", circleId: "owner" });
+  const proposalOf = (sent: Array<ServerToDaemon>) =>
+    (sent.find((message) => message.type === "execState") as { proposalId: string }).proposalId;
+  const killed = await relay(stub, async (say) => {
+    await say("mac", run("e6"));
+    await say("mac", { type: "execFrame", execId: "e6", frame: { type: "close", what: "kill" } });
+  });
+  const lost = await relay(stub, async (say, instance) => {
+    await say("mac", run("e7"));
+    instance.endExecRuns("mac");
+  });
+  for (const sent of [killed, lost]) {
+    const approved = await relay(stub, async (_say, instance) => {
+      expect(await instance.decide(proposalOf(sent.mac), "approved", owner)).toMatchObject({ ok: false });
+    });
+    expect(approved.vps).toEqual([]);
+  }
+  const states = await runInDurableObject(stub, (_, state) =>
+    state.storage.sql.exec("SELECT state FROM proposals WHERE action = 'exec' ORDER BY created_at").toArray(),
+  );
+  expect(states.slice(-2)).toEqual([{ state: "denied" }, { state: "denied" }]);
+});
+
+it("runs the t3.agents step of migration 42 once, by its own mark, so a later start keeps an owner's Undo (K-722)", async () => {
+  const stub = env.KITSHN.getByName("kitshn-agents-migration");
+  const provider = (id: string, kind: string) => ({
+    id: `vps/t3/${id}`,
+    kind,
+    name: id,
+    addresses: [],
+    status: "running",
+    group: null,
+    machine: "vps",
+    provider: {
+      name: "t3",
+      localId: id,
+      kindName: kind,
+      levels: { view: "view", use: "use", control: "control" },
+      facts: [],
+      stickers: [],
+      lists: [],
+      settings: [],
+      site: null,
+    },
+  });
+  const circle = (rights: object): Circle => ({
+    id: "machines",
+    name: "Machines",
+    color: "#ffcc00",
+    level: "control",
+    members: [{ _tag: "machine", machineId: "mac", rights }],
+    match: "any",
+    needsPasskey: false,
+    endsAt: null,
+    x: 9000,
+    y: 9000,
+    r: 200,
+  });
+  const machinesCircle = () =>
+    runInDurableObject(stub, (_, state) =>
+      JSON.parse(
+        state.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = 'machines'").one().body,
+      ),
+    );
+  const revisions = () =>
+    runInDurableObject(
+      stub,
+      (_, state) =>
+        state.storage.sql
+          .exec<{ n: number }>(
+            "SELECT COUNT(*) AS n FROM revisions WHERE summary LIKE 'Moved the T3 agents%'",
+          )
+          .one().n,
+    );
+  await runInDurableObject(stub, (_, state) => {
+    const sql = state.storage.sql;
+    for (const id of ["mac", "vps"])
+      sql.exec("INSERT OR REPLACE INTO machines (id, body) VALUES (?, ?)", id, JSON.stringify(machineOf(id)));
+    for (const card of [provider("agents", "t3.agents"), provider("app", "t3.app")]) {
+      sql.exec("INSERT OR REPLACE INTO resources (id, body) VALUES (?, ?)", card.id, JSON.stringify(card));
+      sql.exec("INSERT OR REPLACE INTO places (id, x, y) VALUES (?, 9000, 9000)", card.id);
+    }
+    sql.exec(
+      "INSERT OR REPLACE INTO circles (id, body) VALUES ('machines', ?)",
+      JSON.stringify(circle({ readsCode: { mode: "automatic" } })),
+    );
+    sql.exec("DELETE FROM meta WHERE key = 'agents-migrated'");
+  });
+  await evictDurableObject(stub);
+  expect((await machinesCircle()).members[0].rights).toMatchObject({ runsCommands: { mode: "automatic" } });
+  expect(await revisions()).toBe(1);
+  // The owner takes the right back, as an Undo does; a second start must not set it again.
+  await runInDurableObject(stub, (_, state) =>
+    state.storage.sql.exec(
+      "UPDATE circles SET body = ? WHERE id = 'machines'",
+      JSON.stringify(circle({ readsCode: { mode: "automatic" } })),
+    ),
+  );
+  await evictDurableObject(stub);
+  expect((await machinesCircle()).members[0].rights).not.toHaveProperty("runsCommands");
+  expect(await revisions()).toBe(1);
 });

@@ -25,7 +25,6 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import {
-  ASK_ACTIONS,
   type Answer,
   type AskAction,
   HEALTH_INTERVAL_MS,
@@ -674,7 +673,8 @@ async function ghCommand(argv: ReadonlyArray<string>) {
  */
 async function agentCommand(argv: ReadonlyArray<string>) {
   const [action, ...rest] = argv;
-  if (!(ASK_ACTIONS as ReadonlyArray<string>).includes(action ?? ""))
+  // The actions with a help line; `exec` is no ask of an agent (K-722).
+  if (!Object.hasOwn(ASK_ACTION_HELP, action ?? ""))
     usage(
       `${action ? `kitshn agent does not know the action ${action}.` : "name the action."} The actions:\n${askActionsText()}`,
     );
@@ -703,7 +703,10 @@ async function agentCommand(argv: ReadonlyArray<string>) {
     } else if (word.startsWith("--"))
       usage(`kitshn agent does not know ${word}. It takes --reason, --label, --body and --audience.`);
     else if (target === "") target = word;
-    else usage(`kitshn agent takes one target, not also ${word}. ${ASK_ACTION_HELP[action as AskAction]}.`);
+    else
+      usage(
+        `kitshn agent takes one target, not also ${word}. ${ASK_ACTION_HELP[action as keyof typeof ASK_ACTION_HELP]}.`,
+      );
   }
   if (typeof daemonUid === "string") fail(daemonUid);
   const request: Request = {
@@ -2878,6 +2881,9 @@ async function runCommand() {
     reachOf: (provider: string) => registry().reachOf(provider),
     token: () => (joined ? { clientId: joined.clientId, clientSecret: joined.clientSecret } : null),
     log,
+    // K-1610: kitshn records each forwarded tool call; a call while kitshn is out of reach gets no event.
+    audit: ({ machineId, name, status }: { machineId: string; name: string; status: number }) =>
+      void hub().toKitshn({ type: "linkCall", target: machineId, name, status }),
   };
   const linkAdmits = (uid: number) => linkPeerAdmitted(uid, own, localUsersOf(readMachineFile()));
   const links = await serveLinks(linkSocket, {
@@ -3086,16 +3092,24 @@ const hub = (): ProviderHub =>
     save: (state) => void registry().setPushed(KITSHN_STATE_KEY, state),
   }));
 
-/** K-722: the sudo check of each exec user, kept 10 minutes when it works and 1 minute when it does not. */
-const sudoChecks = new Map<number, { readonly name: string | null; readonly at: number }>();
+/**
+ * K-722: the last sudo check of each exec user. A check runs in the background at most every 10 minutes, so a
+ * missing rule writes few lines to the auth log; until the first one ends, the rule counts as missing.
+ */
+const sudoChecks = new Map<number, { name: string | null; at: number; running: boolean }>();
 function execSudoFor(uid: number): string | null {
   const now = Date.now();
-  const kept = sudoChecks.get(uid);
-  if (kept && now - kept.at < (kept.name === null ? 60_000 : 600_000)) return kept.name;
+  const kept = sudoChecks.get(uid) ?? { name: null, at: 0, running: false };
+  sudoChecks.set(uid, kept);
   const user = platform === "linux" ? userNameOf(uid) : null;
-  const name = user !== null && execSudoReady(user) ? user : null;
-  sudoChecks.set(uid, { name, at: now });
-  return name;
+  if (user !== null && !kept.running && now - kept.at >= 600_000) {
+    kept.running = true;
+    void execSudoReady(user).then((ready) => {
+      Object.assign(kept, { name: ready ? user : null, at: Date.now(), running: false });
+      report();
+    });
+  }
+  return kept.name;
 }
 
 type Push = Extract<ServerToDaemon, { type: "grants" | "desired" | "settings" | "reach" | "access" }>;

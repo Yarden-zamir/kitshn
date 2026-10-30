@@ -138,6 +138,11 @@ describe("the providers of a machine (K-704, K-705)", () => {
     });
     // The first keeps working, and its status names the try; no "provider refused" for the running one.
     expect(registry.connectionOf("t3")).toBe(1);
+    // One connection holds one provider.
+    expect(registry.register(register([], { provider: "grok", kinds: [] }), caller(1))).toMatchObject({
+      ok: false,
+      error: /holds the provider t3/,
+    });
     expect(registry.refused()).toEqual([]);
     expect(registry.states()[0]?.refusal).toMatch(/env-2 tried to register/);
     expect(registry.register(register([thread("a")]), caller(3))).toMatchObject({ ok: true, replaced: 1 });

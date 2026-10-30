@@ -17,7 +17,6 @@ const request: Extract<Request, { type: "forward" }> = {
   method: "POST",
   path: "/agent/library",
   body: "eA==",
-  attestations: {},
 };
 
 const forwardAnswer = (status: number, body: object): Answer => ({

@@ -386,6 +386,8 @@ export const CHECK_REFUSALS = [
   "unknown-subject",
   "invalid",
   "stale",
+  /** The daemon could not fetch the Access signing keys: no new session, and no revocation of a live one. */
+  "unavailable",
 ] as const;
 export type CheckRefusal = (typeof CHECK_REFUSALS)[number];
 

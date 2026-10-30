@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { gone } from "./processes.testing.ts";
 import { EXEC_HELPER, execSudoersLine } from "./execSudo.ts";
 
 const helper = join(mkdtempSync(join(tmpdir(), "kitshn-exec-")), "exec");
@@ -35,10 +36,16 @@ describe("the exec helper of the sudo rule (K-722)", () => {
     expect((await run("~/missing", "true", home)).code).toBe(126);
   });
 
+  it("ends a process that the command left in the background when the command exits", async () => {
+    const ended = await run("/", "sleep 30 & echo $!; exit 0", tmpdir());
+    expect(ended.code).toBe(0);
+    expect(gone(Number(ended.output.trim()))).toBe(true);
+  });
+
   it("ends the whole command group on TERM, which sudo passes on", async () => {
     const ended = await run("/", "sleep 30 & echo $!; wait", tmpdir(), (pid) => process.kill(pid, "SIGTERM"));
     const child = Number(ended.output.trim());
     expect(ended.code).toBe(137);
-    expect(() => process.kill(child, 0)).toThrow();
+    expect(gone(child)).toBe(true);
   });
 });

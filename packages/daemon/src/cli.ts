@@ -1,5 +1,5 @@
 // The text of the `kitshn` commands of a machine, apart from the commands that print it, so tests can read it.
-import type { Answer, AskAction, Request } from "@kitshn/local";
+import type { Answer, AskAction, IdRequest } from "@kitshn/local";
 import { fail } from "kitshn/cli-error";
 import type { ServerReport } from "@kitshn/edge/sites";
 import {
@@ -13,8 +13,11 @@ import {
 } from "kitshn/agent";
 import type { SiteEntry } from "./sites.ts";
 
-/** C7 of the UX audit: one line for each action of `kitshn agent` (K-1711). */
-export const ASK_ACTION_HELP: Record<AskAction, string> = {
+/**
+ * C7 of the UX audit: one line for each action of `kitshn agent` (K-1711). `exec` is no ask of an agent: only the
+ * exec request of a provider starts a run on another machine (K-722).
+ */
+export const ASK_ACTION_HELP: Record<Exclude<AskAction, "exec">, string> = {
   state: `the cards, circles, rights and open asks of this machine; --body '{"all":true}' adds servers and link events`,
   apply: `move a card or change a share: --body '{"edits":[...]}'`,
   organize: "tidy the cards that you manage into a grid, as one Undo (K-532)",
@@ -213,7 +216,7 @@ export function unexposeRefusal(name: string | undefined, sites: ReadonlyArray<S
 
 /** One request to the daemon: `follow` keeps the connection for a later line, which `onLine` sees first (K-1722). */
 export type LocalAsk = (
-  request: Request,
+  request: IdRequest,
   follow?: (answer: Answer) => boolean,
   onLine?: (answer: Answer) => void,
 ) => Promise<Answer>;
@@ -232,7 +235,7 @@ const waitOf = (answer: Answer) =>
  */
 export async function forwardAndWait(
   ask: LocalAsk,
-  request: Extract<Request, { type: "forward" }>,
+  request: Extract<IdRequest, { type: "forward" }>,
   say: (line: string) => void,
   now: () => number,
 ): Promise<ForwardAnswer> {

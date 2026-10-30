@@ -1,14 +1,13 @@
 // K-722: exec on another machine through kitshn, and the data migration that ends the `t3.agents` kind. Pure, for
 // tests; the Durable Object relays the frames and keeps the runs.
 import { cardsControlledBy, machineRightMode } from "./agent.ts";
-import type { Change } from "./changes.ts";
+import { type Change, applyChanges } from "./changes.ts";
 import {
   type Circle,
   type Level,
   type MachineRight,
   type Member,
   type Point,
-  type RightMode,
   type ShareSetting,
   type State,
   circlesHolding,
@@ -33,6 +32,33 @@ export function mayExecOn(state: State, sourceId: string, targetId: string, now:
 }
 
 /**
+ * K-722: the provider on B whose exec user runs a command of A. kitshn picks it from the cards that A controls, so A
+ * never chooses the user on B: the provider of the provider cards on B that A controls, or none (B's own rule, the
+ * daemon user only on a machine without provider users) when A controls only B's machine card. Cards of two
+ * providers are ambiguous, so the run is refused.
+ */
+export function execProviderOn(
+  state: State,
+  sourceId: string,
+  targetId: string,
+  now: number,
+): { readonly provider: string | null } | { readonly refused: string } {
+  const source = state.machines.get(sourceId);
+  if (!source || !mayExecOn(state, sourceId, targetId, now)) return { refused: "no card" };
+  const managed = cardsControlledBy(state, { email: null, clientId: source.clientId, ip: null }, now);
+  const providers = new Set(
+    [...state.resources.values()].flatMap((card) =>
+      card.machine === targetId && card.provider && managed.has(card.id) ? [card.provider.name] : [],
+    ),
+  );
+  if (providers.size > 1)
+    return {
+      refused: `${source.name} controls cards of ${[...providers].sort().join(" and ")} on that machine, so the user that runs the command is not clear; share the card of one provider.`,
+    };
+  return { provider: [...providers][0] ?? null };
+}
+
+/**
  * K-721, K-722: the machines whose "runs commands" covers `targetId` at automatic with no label conditions, sorted.
  * `check` gives their tokens the `exec` right, so one rule covers exec and a terminal that another machine starts.
  */
@@ -46,9 +72,29 @@ export function execMachinesOf(state: State, targetId: string, now: number): Arr
     .sort();
 }
 
-/** K-1610: the audit names the command, never its arguments: its first word, at most 100 characters. */
+const NAME_START = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
+const NAME_CHARS = `${NAME_START}0123456789`;
+/** A shell assignment such as `GITHUB_TOKEN=x`: a variable name, then `=`. */
+const isAssignment = (word: string) => {
+  const equals = word.indexOf("=");
+  return (
+    equals > 0 &&
+    NAME_START.includes(word[0]!) &&
+    Array.from(word.slice(1, equals)).every((char) => NAME_CHARS.includes(char))
+  );
+};
+
+/**
+ * K-1610: the audit names the command, never its arguments: its first word after any leading `NAME=value`
+ * assignments, whose values can be secrets, at most 100 characters.
+ */
 export const commandName = (command: string) =>
-  (command.trim().split(/\s+/)[0] ?? "").slice(0, 100) || "(empty)";
+  (
+    command
+      .trim()
+      .split(/\s+/)
+      .find((word) => !isAssignment(word)) ?? ""
+  ).slice(0, 100) || "(empty)";
 
 /** K-722: how an exec run ended, for History. */
 export const execOutcome = (exit: { readonly exitCode: number | null; readonly reason: string | null }) =>
@@ -98,27 +144,38 @@ function pointIn(state: State, wanted: ReadonlySet<string>, start: Point): Point
 }
 
 /**
- * K-722, migration 42: each circle that holds a `t3.agents` card now holds the `t3.app` card of the same machine, at
- * the same level, so each link stays. Where that share was at `control` (the old `exec` level), each machine of the
- * circle gets "runs commands" at automatic, unless the owner set it to off. A card in a stack does not move: its
- * stack shares one point, so the migration names it in `unmet` for the owner.
+ * K-722, migration 42: each circle of machines only that holds a `t3.agents` card now holds the `t3.app` card of the
+ * same machine, at the same level, so each link stays. A circle that also holds people, devices, networks or
+ * Everyone gets nothing, because `t3.app` would give them T3 itself. Where the share was at `control` (the old
+ * `exec` level), a machine of the circle gets "runs commands" at automatic only when the right is unset there, and
+ * only when that covers no machine but the old targets; the right belongs to the source machine, not to one target.
+ * A card in a stack does not move, because its stack shares one point. `unmet` names each share and right that it
+ * left, for the owner.
  */
 export function migrateAgentShares(state: State): AgentsMigration {
   const places = new Map<string, Point>();
   const shareSettings = new Map<string, ShareSetting>();
-  const circles = new Map<string, Circle>();
   const unmet: Array<string> = [];
+  /** By source machine: the circles where its right would turn on, and the machines that it ran commands on. */
+  const rights = new Map<string, { circles: Set<string>; targets: Set<string> }>();
   const stacked = new Set([...state.stacks.values()].flatMap((stack) => stack.members));
+  const nameOf = (machineId: string) => state.machines.get(machineId)?.name ?? machineId;
   for (const agents of state.resources.values()) {
     if (agents.kind !== "t3.agents" || agents.machine === null) continue;
-    const holding = circlesHolding(state, agents.id);
+    const target = agents.machine;
+    const all = circlesHolding(state, agents.id);
+    const holding = all.filter((circle) => circle.members.every((member) => member._tag === "machine"));
+    for (const circle of all)
+      if (!holding.includes(circle))
+        unmet.push(
+          `${circle.name} holds more than machines, so the T3 app card of ${nameOf(target)} does not move into it; share it there by hand if its members need T3.`,
+        );
     if (holding.length === 0) continue;
     const app = [...state.resources.values()].find(
-      (card) => card.kind === "t3.app" && card.machine === agents.machine && card.provider?.name === "t3",
+      (card) => card.kind === "t3.app" && card.machine === target && card.provider?.name === "t3",
     );
-    const machineName = state.machines.get(agents.machine)?.name ?? agents.machine;
     if (!app) {
-      unmet.push(`${machineName} has no T3 app card, so its T3 agents shares end.`);
+      unmet.push(`${nameOf(target)} has no T3 app card, so its T3 agents shares end.`);
       continue;
     }
     const levelIn = (circle: Circle): Level =>
@@ -131,7 +188,7 @@ export function migrateAgentShares(state: State): AgentsMigration {
         : pointIn(state, wanted, state.places.get(app.id) ?? state.places.get(agents.id)!);
       if (!point) {
         unmet.push(
-          `The T3 app card of ${machineName} could not move into ${holding.map((circle) => circle.name).join(", ")}; share it there by hand.`,
+          `The T3 app card of ${nameOf(target)} could not move into ${holding.map((circle) => circle.name).join(", ")}; share it there by hand.`,
         );
         continue;
       }
@@ -146,34 +203,66 @@ export function migrateAgentShares(state: State): AgentsMigration {
           endsAt: state.shareSettings.get(shareKey(agents.id, circle.id))?.endsAt ?? null,
         });
       if (level !== "control") continue;
-      const current = circles.get(circle.id) ?? circle;
-      const next = {
-        ...current,
-        members: current.members.map((member): Member => {
-          if (member._tag !== "machine" || member.machineId === agents.machine) return member;
-          const mode: RightMode | undefined = member.rights?.runsCommands;
-          if (mode?.mode === "off" || mode?.mode === "automatic") return member;
-          return { ...member, rights: { ...member.rights, runsCommands: { mode: "automatic" } } };
-        }),
-      };
-      if (next.members.some((member, index) => member !== current.members[index]))
-        circles.set(circle.id, next);
+      for (const member of circle.members)
+        if (
+          member._tag === "machine" &&
+          member.machineId !== target &&
+          member.rights?.runsCommands === undefined
+        ) {
+          const entry = rights.get(member.machineId) ?? { circles: new Set(), targets: new Set() };
+          entry.circles.add(circle.id);
+          entry.targets.add(target);
+          rights.set(member.machineId, entry);
+        }
     }
+  }
+  const moved: ReadonlyArray<Change> = [
+    ...[...places].map(([id, after]): Change => ({
+      _tag: "place",
+      id,
+      before: state.places.get(id) ?? null,
+      after,
+    })),
+    ...[...shareSettings].map(([id, after]): Change => ({
+      _tag: "shareSetting",
+      id,
+      before: state.shareSettings.get(id) ?? null,
+      after,
+    })),
+  ];
+  const circles = new Map<string, Circle>();
+  for (const [source, { circles: ids, targets }] of rights) {
+    const withRight = (circle: Circle): Circle => ({
+      ...circle,
+      members: circle.members.map((member): Member =>
+        member._tag === "machine" && member.machineId === source
+          ? { ...member, rights: { ...member.rights, runsCommands: { mode: "automatic" } } }
+          : member,
+      ),
+    });
+    const changed = [...ids].map((id) => withRight(circles.get(id) ?? state.circles.get(id)!));
+    const after = applyChanges(state, [
+      ...moved,
+      ...changed.map((circle): Change => ({
+        _tag: "circle",
+        id: circle.id,
+        before: state.circles.get(circle.id) ?? null,
+        after: circle,
+      })),
+    ]);
+    const covered = [...after.machines.keys()].filter((machineId) => mayExecOn(after, source, machineId, 0));
+    const extra = covered.filter((machineId) => !targets.has(machineId));
+    if (extra.length > 0) {
+      unmet.push(
+        `"Runs commands" of ${nameOf(source)} stays unset: automatic would also cover ${extra.map(nameOf).join(", ")}. Set it by hand.`,
+      );
+      continue;
+    }
+    for (const circle of changed) circles.set(circle.id, circle);
   }
   return {
     changes: [
-      ...[...places].map(([id, after]): Change => ({
-        _tag: "place",
-        id,
-        before: state.places.get(id) ?? null,
-        after,
-      })),
-      ...[...shareSettings].map(([id, after]): Change => ({
-        _tag: "shareSetting",
-        id,
-        before: state.shareSettings.get(id) ?? null,
-        after,
-      })),
+      ...moved,
       ...[...circles].map(([id, after]): Change => ({
         _tag: "circle",
         id,
