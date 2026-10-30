@@ -133,7 +133,7 @@ import {
 } from "./actions.ts";
 import type { Rect } from "./popover.ts";
 import { AddSite } from "./Add.tsx";
-import { GameDoors, isGameCard } from "./Games.tsx";
+import { PortDoors, isPortCard } from "./Ports.tsx";
 import { AddRepoGroup, GitHubDefaultWay, RepoGroupPanel, matchedCards } from "./RepoGroups.tsx";
 import { Palette } from "./Palette.tsx";
 import {
@@ -1491,19 +1491,19 @@ export function App() {
     );
   };
 
-  /** K-534: the way out of a game card, from its menu, its panel and the palette; it has no Undo, so it asks. */
-  const removeGame = async (resource: Resource) => {
+  /** K-534: the way out of a port card, from its menu, its panel and the palette; it has no Undo, so it asks. */
+  const removePortCard = async (resource: Resource) => {
     if (
       !(await ask(
-        `Remove the game ${resource.name}? Its doors close for everyone at once and its records go. This has no Undo.`,
+        `Remove the port card ${resource.name}? Its doors close for everyone at once and its records go. This has no Undo.`,
       ))
     )
       return;
-    const result = await callApi<object>("DELETE", `/api/games/${encodeURIComponent(resource.id)}`);
+    const result = await callApi<object>("DELETE", `/api/ports/${encodeURIComponent(resource.id)}`);
     showToast(
       "error" in result
         ? { text: result.error, error: true, undo: null }
-        : { text: `Removed the game ${resource.name}.`, error: false, undo: null },
+        : { text: `Removed the port card ${resource.name}.`, error: false, undo: null },
     );
   };
 
@@ -1566,7 +1566,7 @@ export function App() {
         'input[aria-label="Stack name"]',
       ),
     removeApp: (resource) => void removeApp(resource),
-    removeGame: (resource) => void removeGame(resource),
+    removePortCard: (resource) => void removePortCard(resource),
     forgetProvider: (machineId, provider, card) => void forgetProvider(machineId, provider, card),
     takeAddress: (resource) => void takeAddress(resource),
     giveAddressBack: (resource) => void giveAddressBack(resource),
@@ -1746,6 +1746,7 @@ export function App() {
           ) : shownPanel === "machines" ? (
             <MachinesView
               machines={store.snapshot.machines}
+              accessApps={store.snapshot.accessApps}
               onAdd={() => setAddingMachine(true)}
               onToast={(text, error) => showToast({ text, error, undo: null })}
             />
@@ -1787,7 +1788,7 @@ export function App() {
               onPlace={placeInView}
               onReshare={(resource, circle, share, part) => void reshare(resource, circle, share, part)}
               onTime={handlers.setTime}
-              onRemoveGame={handlers.removeGame}
+              onRemovePortCard={handlers.removePortCard}
               onNewCircle={(ids) => void newCircleFor(ids)}
               onRemoveApp={(resource) => void removeApp(resource)}
               onRollback={(resource, mode) => setRollback({ card: resource, mode })}
@@ -2344,8 +2345,8 @@ function Panel(props: {
   onReshare: (resource: Resource, circle: Circle, share: boolean, part: StackPart) => void;
   /** K-212: a new end time, null for no end, or "now". */
   onTime: (resource: Resource, endsAt: number | null | "now") => void;
-  /** K-534: removes a game card after a confirm. */
-  onRemoveGame: (resource: Resource) => void;
+  /** K-534: removes a port card after a confirm. */
+  onRemovePortCard: (resource: Resource) => void;
   onNewCircle: (ids: ReadonlyArray<string>) => void;
   onRemoveApp: (resource: Resource) => void;
   onRollback: (resource: Resource, mode: "card" | "run") => void;
@@ -2432,7 +2433,7 @@ function Panel(props: {
         onPlace={props.onPlace}
         onReshare={props.onReshare}
         onTime={props.onTime}
-        onRemoveGame={props.onRemoveGame}
+        onRemovePortCard={props.onRemovePortCard}
         onNewCircle={props.onNewCircle}
         onRemoveApp={props.onRemoveApp}
         onRollback={props.onRollback}
@@ -2826,8 +2827,8 @@ function CardPanel(props: {
   onReshare: (resource: Resource, circle: Circle, share: boolean, part: StackPart) => void;
   /** K-212: a new end time, null for no end, or "now". */
   onTime: (resource: Resource, endsAt: number | null | "now") => void;
-  /** K-534: removes a game card after a confirm. */
-  onRemoveGame: (resource: Resource) => void;
+  /** K-534: removes a port card after a confirm. */
+  onRemovePortCard: (resource: Resource) => void;
   onNewCircle: (ids: ReadonlyArray<string>) => void;
   onRemoveApp: (resource: Resource) => void;
   onRollback: (resource: Resource, mode: "card" | "run") => void;
@@ -3274,8 +3275,8 @@ function CardPanel(props: {
         </ul>
       )}
       {state.places.has(resource.id) ? <ReachList state={state} selected={resource.id} /> : null}
-      {isGameCard(resource) ? (
-        <GameDoors resource={resource} onRemove={() => props.onRemoveGame(resource)} />
+      {isPortCard(resource) ? (
+        <PortDoors resource={resource} onRemove={() => props.onRemovePortCard(resource)} />
       ) : null}
       {state.places.has(resource.id) && resource.id !== ADMIN_RESOURCE_ID ? (
         <div class="field-row">

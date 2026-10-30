@@ -893,6 +893,8 @@ export function HealthGrid(props: {
 /** K-519: the Machines view, a table of status and health. */
 export function MachinesView(props: {
   machines: ReadonlyArray<MachineView>;
+  /** K-402: the Access applications that kitshn made; an account has at most 500. */
+  accessApps: number;
   onAdd: () => void;
   onToast: (text: string, error: boolean) => void;
 }) {
@@ -900,6 +902,12 @@ export function MachinesView(props: {
     <div class="table-view">
       <p class="muted">
         Each machine runs the kitshn daemon. Commands and jobs need control on the machine card.
+      </p>
+      <p
+        class={props.accessApps >= 450 ? "error" : "muted"}
+        data-tip="Each web address has one Access application; the account has at most 500 (K-402)."
+      >
+        Access applications: {props.accessApps} of 500
       </p>
       <button
         class="btn primary"

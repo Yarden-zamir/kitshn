@@ -323,18 +323,20 @@ export function tunnelServiceFile(
   cloudflared: string,
   tokenFile: string,
   env: Record<string, string | undefined> = process.env,
+  // K-632: the tunnel's own metrics port, where the daemon reads its data centers, and the edge pin when there is one.
+  tunnelArgs: ReadonlyArray<string> = [],
 ): string {
-  // K-622: a free metrics port of its own, and its own empty config next to the token, so the tunnel never shares
-  // a port or a `.cloudflared` config with another cloudflared on the PC.
+  // K-622: its own empty config next to the token, so the tunnel never shares a `.cloudflared` config with another
+  // cloudflared on the PC.
   if (platform === "win32")
     return windowsTask(
       env,
       "kitshn tunnel (cloudflared)",
       cloudflared,
-      `--no-autoupdate --config "${win32.join(win32.dirname(tokenFile), "cloudflared.yml")}" --metrics 127.0.0.1:0 tunnel run --token-file "${tokenFile}"`,
+      `--no-autoupdate --config "${win32.join(win32.dirname(tokenFile), "cloudflared.yml")}" tunnel ${tunnelArgs.join(" ")} run --token-file "${tokenFile}"`,
     );
   if (platform === "darwin") {
-    const args = [cloudflared, "--no-autoupdate", "tunnel", "run", "--token-file", tokenFile];
+    const args = [cloudflared, "--no-autoupdate", "tunnel", ...tunnelArgs, "run", "--token-file", tokenFile];
     return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -353,7 +355,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart="${cloudflared}" --no-autoupdate tunnel run --token-file "${tokenFile}"
+ExecStart="${cloudflared}" --no-autoupdate tunnel ${tunnelArgs.join(" ")} run --token-file "${tokenFile}"
 Restart=always
 RestartSec=5
 

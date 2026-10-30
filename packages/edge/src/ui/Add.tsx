@@ -5,7 +5,7 @@ import { RESERVED_SITE_NAMES } from "../core/library.ts";
 import type { Resource } from "../core/model.ts";
 import { type ServerReport, type SiteInput, parseSiteInput } from "../core/sites.ts";
 import { Radio, Switch } from "./controls.tsx";
-import { GameForm } from "./Games.tsx";
+import { PortForm } from "./Ports.tsx";
 import { LiveFrame } from "./Peek.tsx";
 import { callApi } from "./store.ts";
 
@@ -77,7 +77,7 @@ export function AddSite(props: {
   onClose: () => void;
   onDone: (text: string) => void;
 }) {
-  const [kind, setKind] = useState<"live" | "static" | "game">("live");
+  const [kind, setKind] = useState<"live" | "static" | "port">("live");
   const online = props.machines.filter((view) => view.online);
   const [text, setText] = useState(props.initial);
   const input = parseSiteInput(text);
@@ -153,15 +153,15 @@ export function AddSite(props: {
           </button>
           <button
             type="button"
-            aria-pressed={kind === "game"}
-            data-tip="Game: a game server of a machine, with ports that each player opens for their own address (K-2001)."
-            onClick={() => setKind("game")}
+            aria-pressed={kind === "port"}
+            data-tip="Ports: a service on a machine, such as a game server, with ports that each player opens for their own address (K-2001)."
+            onClick={() => setKind("port")}
           >
-            Game
+            Ports
           </button>
         </div>
-        {kind === "game" ? (
-          <GameForm
+        {kind === "port" ? (
+          <PortForm
             zone={props.zone}
             machines={props.machines}
             onClose={props.onClose}

@@ -25,11 +25,11 @@ import { NOTIFY_BODY_MAX } from "../core/notify.ts";
 import { escapeHtml } from "../core/html.ts";
 import { originDown, seenText } from "./live.ts";
 import { adminHosts, type Env } from "./env.ts";
-import { type JoinView, joinHeaders, joinPage } from "./join-page.ts";
+import { type ConnectView, connectHeaders, connectPage } from "./connect-page.ts";
 import { invitePage, invitePageHeaders } from "./invite-page.ts";
 import { deniedPage, helpPageHeaders, loginHelpPage, wantedAddress } from "./help-pages.ts";
 import type { ProviderClient } from "@kitshn/local";
-import { gameNameError } from "../core/game.ts";
+import { portNameError } from "../core/port.ts";
 import { readUsage } from "./usage.ts";
 import { zoneFor, zonesOf, zonesOrMain } from "./zones.ts";
 
@@ -145,7 +145,7 @@ async function content(request: Request, env: Env, kind: "page" | "file"): Promi
     );
     return new Response(null, { status: 302, headers });
   }
-  if (kind === "page" && url.pathname.startsWith("/join/")) return join(request, env, logins, url);
+  if (kind === "page" && url.pathname.startsWith("/connect/")) return connect(request, env, logins, url);
   if (request.method !== "GET" && request.method !== "HEAD") return text("Use GET.", 405);
   const [, segment = "", ...rest] = url.pathname.split("/");
   if (!isLibraryId(segment) && addressNameError(segment) !== null)
@@ -215,23 +215,23 @@ async function content(request: Request, env: Env, kind: "page" | "file"): Promi
   return new Response(object?.body ?? null, { headers });
 }
 
-/** What the Durable Object decides for one request of a join page (K-2003). */
-type GameAnswer = { readonly stale: boolean } & (
-  | ({ readonly decision: "allow" } & JoinView)
+/** What the Durable Object decides for one request of a connect page (K-2004). */
+type ConnectAnswer = { readonly stale: boolean } & (
+  | ({ readonly decision: "allow" } & ConnectView)
   | { readonly decision: "login" | "passkey" | "deny" | "missing" }
 );
 
-/** K-2003: the join page of a game card. GET shows it; a POST from the page opens or closes a door. */
-async function join(request: Request, env: Env, logins: ContentLogins, url: URL): Promise<Response> {
-  const name = url.pathname.slice("/join/".length);
-  if (gameNameError(name) !== null) return text("kitshn has no game here.", 404);
+/** K-2004: the connect page of a port card. GET shows it; a POST from the page opens or closes a door. */
+async function connect(request: Request, env: Env, logins: ContentLogins, url: URL): Promise<Response> {
+  const name = url.pathname.slice("/connect/".length);
+  if (portNameError(name) !== null) return text("kitshn has no port card here.", 404);
   const post = request.method === "POST";
   if (!post && request.method !== "GET") return text("Use GET or POST.", 405);
   let body: Record<string, unknown> = { action: "view" };
   if (post) {
     // The login cookies are SameSite=Lax; this check also keeps out a script of another site.
     if (request.headers.get("origin") !== url.origin)
-      return Response.json({ error: "A door changes only from its join page." }, { status: 403 });
+      return Response.json({ error: "A door changes only from its connect page." }, { status: 403 });
     const sent: unknown = await request.json().catch(() => null);
     if (
       typeof sent !== "object" ||
@@ -243,7 +243,7 @@ async function join(request: Request, env: Env, logins: ContentLogins, url: URL)
   }
   const { visitor, problem } = await contentVisitorOf(request, env, logins);
   const answer = (await (
-    await env.KITSHN.getByName("kitshn").fetch("https://kitshn.internal/internal/game", {
+    await env.KITSHN.getByName("kitshn").fetch("https://kitshn.internal/internal/connect", {
       method: "POST",
       body: JSON.stringify({
         name,
@@ -252,13 +252,13 @@ async function join(request: Request, env: Env, logins: ContentLogins, url: URL)
         addresses: Array.isArray(body["addresses"]) ? body["addresses"] : [],
       }),
     })
-  ).json()) as GameAnswer;
-  if (answer.decision === "missing") return text("kitshn has no game here.", 404);
+  ).json()) as ConnectAnswer;
+  if (answer.decision === "missing") return text("kitshn has no port card here.", 404);
   if (post)
     return answer.decision === "allow"
       ? Response.json({ error: answer.error })
       : Response.json(
-          { error: "You have no access to this game now. Open the page again." },
+          { error: "You have no access to this port card now. Open the page again." },
           { status: 401 },
         );
   const cameBack = cookieValues(request.headers.get("cookie"), RETURN_MARK)[0] ?? null;
@@ -273,9 +273,9 @@ async function join(request: Request, env: Env, logins: ContentLogins, url: URL)
       401,
     );
   if (answer.decision !== "allow")
-    return text(`${visitor.email ?? "You"} has no access to this game. Ask its owner to share it.`, 403);
+    return text(`${visitor.email ?? "You"} has no access to this port card. Ask its owner to share it.`, 403);
   const nonce = crypto.randomUUID().replaceAll("-", "");
-  return new Response(joinPage(answer, visitor.email ?? "", nonce), { headers: joinHeaders(nonce) });
+  return new Response(connectPage(answer, visitor.email ?? "", nonce), { headers: connectHeaders(nonce) });
 }
 
 interface OfflineInfo {

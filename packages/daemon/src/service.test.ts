@@ -96,11 +96,15 @@ describe("daemon service (K-601)", () => {
       "<string>--token-file</string><string>/d/t</string>",
     );
     // K-622: its own task, config and a free metrics port, so it never clashes with another cloudflared.
-    const task = tunnelServiceFile("win32", "C:\\k\\cloudflared.exe", "C:\\k\\tunnel-token", {
-      USERNAME: "ya",
-    });
+    const task = tunnelServiceFile(
+      "win32",
+      "C:\\k\\cloudflared.exe",
+      "C:\\k\\tunnel-token",
+      { USERNAME: "ya" },
+      ["--metrics", "127.0.0.1:49152"],
+    );
     expect(task).toContain("--config &quot;C:\\k\\cloudflared.yml&quot;");
-    expect(task).toContain("--metrics 127.0.0.1:0");
+    expect(task).toContain("tunnel --metrics 127.0.0.1:49152 run");
     expect(task).toContain("--token-file &quot;C:\\k\\tunnel-token&quot;");
     expect(tunnelCommands("win32", "C:\\t.xml", -1).start[0]?.argv).toContain("\\kitshn\\tunnel");
   });
