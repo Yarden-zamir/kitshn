@@ -156,13 +156,17 @@ import { lastHour, lastSamples } from "./samples.ts";
 import { pushKey } from "@kitshn/local";
 import { MAX_FORWARDS, forwardTarget, passedHeaders, readBounded } from "./forward.ts";
 import {
+  INPUT_RULES_PATH,
   Relays,
   applyDoors,
   doorsCommand,
   doorsProblem,
+  hostFirewallRules,
+  hostFirewallText,
   keptPlan,
   listening,
   publicAddresses,
+  refreshSeenV4,
   systemTool,
 } from "./doors.ts";
 import {
@@ -1972,6 +1976,7 @@ function report() {
       ...(tunnelLocations === null ? {} : { tunnelLocations }),
       publicAddresses: publicAddresses(),
       ...(doorState.problem === null ? {} : { doorsProblem: doorState.problem }),
+      ...(doorState.firewall === null ? {} : { hostFirewall: doorState.firewall }),
       listening: [...doorState.listening],
       refusedProviders: registry().refused(),
       offlineProviders: registry().offline(),
@@ -1995,9 +2000,10 @@ function report() {
 }
 
 /** K-2002, K-2006: whether this machine can gate ports, and which gated ports listen. */
-const doorState: { problem: string | null; listening: ReadonlySet<string> } = {
+const doorState: { problem: string | null; listening: ReadonlySet<string>; firewall: string | null } = {
   problem: "not checked yet",
   listening: new Set(),
+  firewall: null,
 };
 const doorsFile = () => join(paths.data, "doors.json");
 const relays = new Relays(log);
@@ -2033,18 +2039,34 @@ function startDoors() {
   checkListening();
   setInterval(checkListening, 30_000);
   if (platform !== "linux") return;
-  if (doorState.problem === null) applyKeptPlan();
-  // K-2005: each minute, a start problem is checked again (the network was not up yet, or sudo failed once), and
-  // the kept plan goes in again, because a \`flush ruleset\` (nftables.service, a reload) can delete the table at
-  // any time and the daemon user cannot list it. The apply is idempotent.
-  setInterval(() => {
-    if (doorState.problem === null) return applyKeptPlan(true);
+  // K-2005: each minute the problem is checked again (the network was not up yet, sudo failed once, or a declared
+  // address of K-2003 no longer matches), and the kept plan goes in again, because a \`flush ruleset\`
+  // (nftables.service, a reload) can delete the table and the daemon user cannot list it. The apply is idempotent.
+  const check = async (start: boolean) => {
+    await refreshSeenV4();
+    const before = doorState.problem;
     doorState.problem = doorsProblem(platform);
-    if (doorState.problem !== null) return;
-    applyKeptPlan();
-    report();
-  }, 60_000);
+    if (doorState.problem === null) applyKeptPlan(!start && before === null);
+    const firewall = hostFirewallText(
+      hostFirewallRules(readText(INPUT_RULES_PATH), keptPlan(doorsFile())?.ports ?? []),
+    );
+    if (start || doorState.problem !== before || firewall !== doorState.firewall) {
+      doorState.firewall = firewall;
+      report();
+    }
+  };
+  void check(true);
+  setInterval(() => void check(false), 60_000);
 }
+
+/** A file's text, or "" when it cannot be read. */
+const readText = (file: string) => {
+  try {
+    return readFileSync(file, "utf8");
+  } catch {
+    return "";
+  }
+};
 
 /** K-2005: the plan that this daemon wrote last goes into the table again before kitshn sends a new one. */
 function applyKeptPlan(quiet = false) {
@@ -3618,7 +3640,7 @@ switch (command) {
     console.log(args.includes("--json") ? versionJson(VERSION) : VERSION);
     break;
   case "doors":
-    doorsCommand(args[0], flag("--user"));
+    doorsCommand(args[0], flag("--user"), flag("--public-address"));
     break;
   case "exec":
     execCommand(args[0], flag("--user"), flag("--daemon-user"));

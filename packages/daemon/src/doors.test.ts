@@ -1,6 +1,17 @@
 import { spawnSync } from "node:child_process";
-import { expect, it } from "vitest";
-import { helperInput, listening, planOf, sudoersLine, systemTool, toolProblem } from "./doors.ts";
+import { describe, expect, it } from "vitest";
+import {
+  declaredProblem,
+  helperInput,
+  hostFirewallRules,
+  hostFirewallText,
+  listening,
+  planOf,
+  publicAddresses,
+  sudoersLine,
+  systemTool,
+  toolProblem,
+} from "./doors.ts";
 
 it("gives the root helper one line per port and per open door and port, without ended doors (K-2005)", () => {
   const plan = {
@@ -58,4 +69,51 @@ it("finds a system tool outside the PATH, and names a missing tool instead of an
     "visudo refused the sudoers line: >>> line 1: syntax error",
   );
   expect(toolProblem("visudo", spawnSync("/bin/sh", ["-c", "exit 0"], { encoding: "utf8" }))).toBeNull();
+});
+
+describe("the host firewall check and the declared address (K-2003)", () => {
+  const oracle = [
+    "-P INPUT ACCEPT",
+    "-A INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT",
+    "-A INPUT -p icmp -j ACCEPT",
+    "-A INPUT -i lo -j ACCEPT",
+    "-A INPUT -p tcp -m state --state NEW -m tcp --dport 22 -j ACCEPT",
+    "-A INPUT -j REJECT --reject-with icmp-host-prohibited",
+    "---- nft",
+  ].join("\n");
+  const minecraft = [{ port: 25565, proto: "tcp" as const }];
+
+  it("names the rule that rejects a new connection before the port could pass", () => {
+    expect(hostFirewallRules(oracle, minecraft)).toEqual([
+      "-A INPUT -j REJECT --reject-with icmp-host-prohibited",
+    ]);
+    // A rule that accepts the port first lets it pass.
+    const allowed = oracle.replace(
+      "-A INPUT -j REJECT",
+      "-A INPUT -p tcp -m tcp --dport 25560:25570 -j ACCEPT\n-A INPUT -j REJECT",
+    );
+    expect(hostFirewallRules(allowed, minecraft)).toEqual([]);
+    expect(hostFirewallText(hostFirewallRules(oracle, minecraft))).toContain("allow the port ports");
+  });
+
+  it("names a drop policy, and stays quiet behind a jump that it cannot read or with no firewall", () => {
+    expect(hostFirewallRules("-P INPUT DROP\n---- nft", minecraft)).toEqual(["-P INPUT DROP"]);
+    expect(hostFirewallRules("-P INPUT DROP\n-A INPUT -j ufw-before-input\n---- nft", minecraft)).toEqual([]);
+    expect(hostFirewallRules("-P INPUT ACCEPT\n---- nft", minecraft)).toEqual([]);
+    expect(
+      hostFirewallRules(
+        "---- nft\ntable inet filter {\n chain input {\n  type filter hook input priority filter; policy drop;",
+        minecraft,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("counts a declared address only while the internet sees the machine there", () => {
+    const none = {};
+    expect(publicAddresses(none, "203.0.113.9", "203.0.113.9").v4).toBe("203.0.113.9");
+    expect(publicAddresses(none, "203.0.113.9", "198.51.100.1").v4).toBeNull();
+    expect(declaredProblem("203.0.113.9", "198.51.100.1")).toContain("is not the address of the machine");
+    expect(declaredProblem("203.0.113.9", null)).toContain("did not answer");
+    expect(declaredProblem(null, "198.51.100.1")).toBeNull();
+  });
 });

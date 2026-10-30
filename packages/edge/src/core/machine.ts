@@ -81,6 +81,8 @@ export interface MachineStatus {
   readonly publicAddresses?: { readonly v4: string | null; readonly v6: string | null };
   /** K-2002: why the machine cannot gate gated ports; absent when it reports the capability `doors`. */
   readonly doorsProblem?: string;
+  /** K-2003: the host firewall rules that stop a new connection to the ports, named for the owner. */
+  readonly hostFirewall?: string;
   /** K-2006: the gated ports (`25565/tcp`) of the last door plan that something listens on. */
   readonly listening?: ReadonlyArray<string>;
   /** K-704: the providers whose last registration the daemon refused; only from a signed connection. */
