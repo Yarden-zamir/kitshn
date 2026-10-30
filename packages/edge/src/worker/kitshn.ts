@@ -305,7 +305,7 @@ import {
 } from "../core/library.ts";
 import { badgeState } from "../core/badge.ts";
 import { listedApps } from "../core/listing.ts";
-import { commandsFor, machineBusy, providerCards, providerPushes, reachOf } from "../core/providers.ts";
+import { commandsFor, machineBusy, providerCards, providerPushes } from "../core/providers.ts";
 import { healthCell, healthNotices } from "../core/health.ts";
 import { commandName, execMachinesOf, execOutcome, mayExecOn, migrateAgentShares } from "../core/exec.ts";
 import {
@@ -471,6 +471,7 @@ import {
   answerCheck,
   pickMachine,
   providerRefusals,
+  execPathsOf,
   rekeyDecision,
   socketStart,
 } from "./machines.ts";
@@ -5203,6 +5204,7 @@ export class Kitshn extends DurableObject<Env> {
               // The same shape as a refusal: the provider, since when, and why.
               offlineProviders: providerRefusals(message.status.offlineProviders),
               providerProblems: providerRefusals(message.status.providerProblems),
+              execPaths: execPathsOf(message.status.execPaths),
             }
           : {}),
       };
@@ -8171,7 +8173,7 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-722: the code step of migration 43. Each `t3.agents` share moves to the `t3.app` card of its machine, and an
+   * K-722: the code step of migration 42. Each `t3.agents` share moves to the `t3.app` card of its machine, and an
    * exec share turns on "runs commands" (`migrateAgentShares`), as one History revision that the owner can undo. A
    * share that it cannot move goes to the log and into the revision text, for the owner.
    */
@@ -8180,7 +8182,7 @@ export class Kitshn extends DurableObject<Env> {
     const { changes, unmet } = migrateAgentShares(this.state);
     if (changes.length === 0 && unmet.length === 0) return;
     this.persist(changes);
-    for (const line of unmet) console.error(`K-722 migration 43: ${line}`);
+    for (const line of unmet) console.error(`K-722 migration 42: ${line}`);
     this.insertRevision(
       { _tag: "kitshn", reason: "provider protocol 2 (K-722)" },
       `Moved the T3 agents shares to the T3 app cards (K-722)${unmet.length > 0 ? `. ${unmet.join(" ")}` : ""}`,

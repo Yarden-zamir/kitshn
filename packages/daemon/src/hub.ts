@@ -46,6 +46,8 @@ export interface HubOptions {
   readonly save: (state: KitshnState) => void;
   readonly now?: () => number;
   readonly keys?: CheckContext["keys"];
+  /** K-722: the user name to run as through the sudo rule of `kitshn exec install`, or null when the rule is missing. */
+  readonly execSudo: (uid: number) => string | null;
 }
 
 /** A run that a connection of this machine started (A). */
@@ -416,7 +418,7 @@ export class ProviderHub {
     const registry = this.options.registry();
     const execUser = provider === null ? null : registry.execUserOf(provider);
     const { ownUid } = this.options;
-    const local = (uid?: number) => {
+    const local = (as: { readonly uid?: number; readonly sudoUser?: string } = {}) => {
       const handle = startExec(
         {
           command: run.command,
@@ -424,7 +426,7 @@ export class ProviderHub {
           timeoutMs: run.timeoutSeconds * 1000,
           stdin: run.stdin,
           platform: this.options.platform,
-          ...(uid === undefined ? {} : { uid }),
+          ...as,
         },
         {
           output: (stream, data) =>
@@ -452,12 +454,20 @@ export class ProviderHub {
       );
     }
     if (execUser === ownUid) return local();
-    if (ownUid === 0) return local(execUser);
-    // A daemon that is not root cannot become another user; the bridge of that user runs the command.
+    if (ownUid === 0) return local({ uid: execUser });
+    // A daemon that is not root becomes the exec user through the rule of `kitshn exec install`; without the rule,
+    // the bridge of that user runs the command, so the provider must be connected.
+    const sudoUser = this.options.execSudo(execUser);
+    if (sudoUser !== null) return local({ sudoUser });
     const connection = provider === null ? null : registry.connectionOf(provider);
     const emit = connection === null ? undefined : this.emitters.get(connection);
     if (provider === null || connection === null || !emit)
-      return this.toSource(run.execId, exitFrame(`the provider ${provider} on this machine is offline.`));
+      return this.toSource(
+        run.execId,
+        exitFrame(
+          `the provider ${provider} on this machine is offline, and the daemon has no sudo rule to run as its exec user (kitshn exec install).`,
+        ),
+      );
     if (registry.ownerOf(provider) !== execUser)
       return this.toSource(
         run.execId,
@@ -467,6 +477,22 @@ export class ProviderHub {
       );
     this.incoming.set(run.execId, { kind: "bridge", connection, provider });
     emit({ type: "exec-run", run });
+  }
+
+  /**
+   * K-722: how a run on this machine would become each provider's exec user, for the machine card: `sudo` through
+   * the rule of `kitshn exec install`, or `bridge` when the rule is missing. Only providers whose exec user is not
+   * the daemon user, on a daemon that is not root.
+   */
+  execPaths(): Array<{ readonly provider: string; readonly uid: number; readonly via: "sudo" | "bridge" }> {
+    const { ownUid, platform } = this.options;
+    if (ownUid === 0 || platform === "win32") return [];
+    const registry = this.options.registry();
+    return registry.reports().flatMap((report) => {
+      const uid = registry.execUserOf(report.name);
+      if (uid === null || uid === ownUid) return [];
+      return [{ provider: report.name, uid, via: this.options.execSudo(uid) === null ? "bridge" : "sudo" }];
+    });
   }
 
   /** K-722, B: a frame of the bridge that runs a run as the provider user. */

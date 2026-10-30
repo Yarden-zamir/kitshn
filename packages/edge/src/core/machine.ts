@@ -85,6 +85,15 @@ export interface MachineStatus {
   readonly refusedProviders?: ReadonlyArray<ProviderRefusal>;
   /** K-704, K-515: the registered providers without a connection, since `at` and why; only from a signed connection. */
   readonly offlineProviders?: ReadonlyArray<ProviderRefusal>;
+  /**
+   * K-722: how exec of other machines becomes each provider's exec user: through the sudo rule of `kitshn exec
+   * install`, or through the provider's bridge when the rule is missing, so a broken provider blocks exec.
+   */
+  readonly execPaths?: ReadonlyArray<{
+    readonly provider: string;
+    readonly user: string;
+    readonly via: "sudo" | "bridge";
+  }>;
   /** K-704: the items that the last register or upsert of a provider dropped (`path: reason`); signed only. */
   readonly providerProblems?: ReadonlyArray<ProviderRefusal>;
 }

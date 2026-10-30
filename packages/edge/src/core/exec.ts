@@ -98,7 +98,7 @@ function pointIn(state: State, wanted: ReadonlySet<string>, start: Point): Point
 }
 
 /**
- * K-722, migration 43: each circle that holds a `t3.agents` card now holds the `t3.app` card of the same machine, at
+ * K-722, migration 42: each circle that holds a `t3.agents` card now holds the `t3.app` card of the same machine, at
  * the same level, so each link stays. Where that share was at `control` (the old `exec` level), each machine of the
  * circle gets "runs commands" at automatic, unless the owner set it to off. A card in a stack does not move: its
  * stack shares one point, so the migration names it in `unmet` for the owner.

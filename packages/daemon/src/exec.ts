@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import type { Readable, Writable } from "node:stream";
 import type { ExecFrame } from "@kitshn/local";
+import { execSudoArgv } from "./execSudo.ts";
 
 /** K-722: each run starts with this much output credit; the caller grants more with `exec-credit`. */
 export const OUTPUT_WINDOW = 1024 * 1024;
@@ -21,6 +22,8 @@ export interface ExecSpec {
   readonly stdin: boolean;
   /** A user id to run as; only a root daemon sets one other than its own. */
   readonly uid?: number;
+  /** A user to run as through the sudo rule of `kitshn exec install`, for a daemon that is not root. */
+  readonly sudoUser?: string;
   readonly platform: NodeJS.Platform;
 }
 
@@ -93,14 +96,16 @@ export function startExec(spec: ExecSpec, sink: ExecSink): ExecHandle {
     return { credit: () => {}, input: () => {}, closeStdin: () => {}, kill: () => {} };
   }
   const home = account?.home ?? homedir();
-  const [program, args] =
-    spec.platform === "win32"
-      ? ["powershell.exe", ["-NoProfile", "-Command", spec.command]]
-      : ["/bin/sh", ["-c", spec.command]];
+  const [program = "", ...args] = spec.sudoUser
+    ? execSudoArgv(spec.sudoUser, spec.cwd, spec.command)
+    : spec.platform === "win32"
+      ? ["powershell.exe", "-NoProfile", "-Command", spec.command]
+      : ["/bin/sh", "-c", spec.command];
   let child: ChildProcessByStdio<Writable, Readable, Readable>;
   try {
     child = spawn(program, args, {
-      cwd: folderOf(spec.cwd, home),
+      // The helper changes to the folder as the exec user, who may read folders that the daemon user cannot.
+      cwd: spec.sudoUser ? "/" : folderOf(spec.cwd, home),
       stdio: ["pipe", "pipe", "pipe"],
       ...(account
         ? {
@@ -141,12 +146,20 @@ export function startExec(spec: ExecSpec, sink: ExecSink): ExecHandle {
     end({ exitCode: null, signal: null, reason: `the run failed: ${error.message}` }),
   );
   child.on("close", (code, signal) =>
-    end({ exitCode: signal ? null : code, signal: signal ?? null, reason }),
+    // The helper ends a killed run with 137; the run still ended by the kill, not by itself.
+    end(
+      spec.sudoUser && reason !== null
+        ? { exitCode: null, signal: "SIGKILL", reason }
+        : { exitCode: signal ? null : code, signal: signal ?? null, reason },
+    ),
   );
   const kill = (why: string) => {
     if (ended) return;
     reason = why;
-    child.kill("SIGKILL");
+    if (!spec.sudoUser) return void child.kill("SIGKILL");
+    // sudo passes TERM on to the helper, which kills the group; sudo itself cannot pass on a KILL.
+    child.kill("SIGTERM");
+    setTimeout(() => child.kill("SIGKILL"), 5_000).unref();
   };
   const timer = setTimeout(
     () => kill(`timed out after ${Math.round(spec.timeoutMs / 1000)} s`),
