@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { dirname } from "node:path";
 import { describe, expect, it } from "vitest";
 import { gone } from "./processes.testing.ts";
 import { type ExecEnd, OUTPUT_WINDOW, FRAME_BYTES, startExec } from "./exec.ts";
@@ -59,6 +61,17 @@ describe("an exec run (K-722)", () => {
       signal: "SIGKILL",
       reason: "timed out after 0 s",
     });
+  });
+
+  it("finds the tools of the user's ~/.local/bin and the daemon's folder first, as a login shell does", async () => {
+    const path = run('printf %s "$PATH"');
+    await path.ended;
+    const parts = path.out
+      .map((frame) => frame.text)
+      .join("")
+      .split(":");
+    expect(parts.slice(0, 2)).toEqual([`${homedir()}/.local/bin`, dirname(process.execPath)]);
+    expect(new Set(parts).size).toBe(parts.length);
   });
 
   it("ends with its main process and ends what it left in the background, also at a timeout (C-13)", async () => {
