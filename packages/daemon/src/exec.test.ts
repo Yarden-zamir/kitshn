@@ -119,6 +119,18 @@ describe("an exec run (K-722)", () => {
     expect(await waiting.ended).toMatchObject({ exitCode: 0, reason: "killed by the caller" });
   });
 
+  it("ends a run that never starts with its reason: an unknown user id, and a spawn that throws", async () => {
+    expect(await run("true", { uid: 2_147_483_000 }).ended).toMatchObject({
+      exitCode: null,
+      reason: "this machine has no user id 2147483000.",
+    });
+    // A NUL byte in an argument makes spawn throw at once.
+    expect(await run("echo a\0b").ended).toMatchObject({
+      exitCode: null,
+      reason: expect.stringMatching(/^the run did not start/),
+    });
+  });
+
   it("writes stdin under credit, gives the credit back, and ends stdin on close", async () => {
     const cat = run("cat", { stdin: true });
     cat.handle.input(Buffer.from("hello"));
