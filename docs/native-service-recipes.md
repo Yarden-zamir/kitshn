@@ -1,7 +1,8 @@
 # Draft: recipes for native services
 
 Status: the draft schema can be checked, but both the CLI and Worker refuse deployment. It creates no service, card,
-route, artifact, or DNS record. The lifecycle and tests below must be implemented before enabling it.
+route, artifact, or DNS record. The daemon can render proposed user-service definitions, but does not install or run
+them. The lifecycle and tests below must be implemented before enabling it.
 
 ## Motivation
 

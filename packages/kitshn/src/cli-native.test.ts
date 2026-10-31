@@ -21,7 +21,7 @@ export default defineApps({
       writeFileSync(event, "{}");
       // No OIDC token is available. Any attempt to contact the Worker would report that instead.
       const child = spawnSync(
-        "bun",
+        process.execPath,
         [resolve("src/cli.ts"), "deploy", "--server", "http://127.0.0.1:9", "--dir", dir],
         {
           encoding: "utf8",
