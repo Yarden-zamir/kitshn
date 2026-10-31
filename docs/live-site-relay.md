@@ -13,7 +13,8 @@ services, not a Claude-specific feature.
 
 For the motivating case, A is a VPS and B is a Mac that runs an account-switching proxy. The source daemon offers its
 existing local link socket (a named pipe on Windows), and an adapter exposes a loopback HTTP address for software that
-cannot use a Unix socket. A local router chooses the Mac link when it is available and its own local proxy otherwise.
+cannot use a Unix socket. The local `status` answer names the current link socket for that caller; an adapter that uses
+it must verify the server on each actual link connection before sending credentials, including after a daemon restart. A local router chooses the Mac link when it is available and its own local proxy otherwise.
 The proxy is a private card in the map; the VPS machines join the circle that holds it. A site's `view` level grants
 access to the HTTP service, including its POST endpoints; it does **not** make those endpoints read-only. The service
 owner must protect management endpoints separately.

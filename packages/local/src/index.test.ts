@@ -9,6 +9,23 @@ describe("local socket framing (K-702)", () => {
     });
   });
 
+  it("reads the optional current link socket in a status answer without breaking older daemons", () => {
+    const status = {
+      version: "1",
+      machineId: "m",
+      fingerprint: null,
+      connection: "connected",
+      tunnel: "running",
+    };
+    expect(readAnswer(JSON.stringify({ id: "s", type: "status", status }))).toMatchObject({ status });
+    expect(
+      readAnswer(JSON.stringify({ id: "s", type: "status", status: { ...status, linkSocket: "pipe" } })),
+    ).toMatchObject({ status: { linkSocket: "pipe" } });
+    expect(
+      readAnswer(JSON.stringify({ id: "s", type: "status", status: { ...status, linkSocket: null } })),
+    ).toMatchObject({ status: { linkSocket: null } });
+  });
+
   it("turns a bad line into an error answer, with the id when the line has a valid one", () => {
     expect(readRequest("{")).toMatchObject({ ok: false, answer: { id: null, type: "error" } });
     expect(readRequest('{"id":"a","type":"pass"}')).toMatchObject({

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ReachedCard } from "@kitshn/local";
 import { describe, expect, it } from "vitest";
-import { linkPeerAdmitted, linkTarget, serveLinks } from "./link.ts";
+import { linkPeerAdmitted, linkSocketForPeer, linkTarget, serveLinks } from "./link.ts";
 
 const platform = process.platform === "darwin" ? "darwin" : "linux";
 const own = process.getuid!();
@@ -18,6 +18,15 @@ const card = (address: string | null): ReachedCard => ({
 });
 
 describe("the link proxy (K-1609)", () => {
+  it("names the current private or shared link for a checked local peer", () => {
+    expect(linkSocketForPeer(1000, 1000, "private", "shared")).toBe("private");
+    expect(linkSocketForPeer(1001, 1000, "private", "shared")).toBe("shared");
+    expect(linkSocketForPeer(1001, 1000, "private", null)).toBe("private");
+    expect(linkSocketForPeer(1000, 1000, null, "shared")).toBeNull();
+    expect(linkSocketForPeer(1001, 1000, null, "shared")).toBe("shared");
+    expect(linkSocketForPeer(-1, -1, "windows-pipe", null)).toBe("windows-pipe");
+  });
+
   it("admits the daemon user and the users of kitshn local-users, and no other user (K-701)", async () => {
     expect(linkPeerAdmitted(1000, 1000, [])).toBe(true);
     expect(linkPeerAdmitted(1001, 1000, [1001])).toBe(true);
