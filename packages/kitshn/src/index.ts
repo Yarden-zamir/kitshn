@@ -36,6 +36,18 @@ export interface ComposeApp {
   readonly file?: string;
 }
 
+/** A proposed native service. Deploy remains disabled until its machine lifecycle is implemented. */
+export interface NativeApp {
+  /** Machine labels, in addition to the owner's deployment permission. */
+  readonly runsOn?: ReadonlyArray<string>;
+  /** Executable within the build artifact; no shell and no path outside the artifact. */
+  readonly executable: string;
+  /** Literal arguments. `{data}` will name this service's persistent data folder. */
+  readonly args?: ReadonlyArray<string>;
+  /** Optional local HTTP service; absent means that the process is local-only. */
+  readonly site?: { readonly port: number };
+}
+
 /**
  * K-806: a Worker app. kitshn bundles `main` with esbuild and gives each environment its own name, addresses and
  * storage, so the recipe names none of them. A binding name is a JavaScript identifier, unique in the app.
@@ -79,12 +91,13 @@ interface Needs<Key extends string> {
   readonly apps?: ReadonlyArray<Key>;
 }
 
-/** K-801, K-804: a recipe has exactly one kind: `static`, `compose` or `worker`. `Key` is a key of the repo's apps. */
+/** K-801, K-804: a recipe has exactly one kind. `Key` is a key of the repo's apps. */
 export type Recipe<Key extends string = string> =
   | {
       readonly static: StaticApp;
       readonly compose?: never;
       readonly worker?: never;
+      readonly native?: never;
       readonly deploy: Deploy;
       readonly needs?: Needs<Key>;
     }
@@ -92,6 +105,7 @@ export type Recipe<Key extends string = string> =
       readonly compose: ComposeApp;
       readonly static?: never;
       readonly worker?: never;
+      readonly native?: never;
       readonly deploy: Deploy;
       readonly needs?: Needs<Key>;
     }
@@ -99,6 +113,15 @@ export type Recipe<Key extends string = string> =
       readonly worker: WorkerApp;
       readonly static?: never;
       readonly compose?: never;
+      readonly native?: never;
+      readonly deploy: Deploy;
+      readonly needs?: Needs<Key>;
+    }
+  | {
+      readonly native: NativeApp;
+      readonly static?: never;
+      readonly compose?: never;
+      readonly worker?: never;
       readonly deploy: Deploy;
       readonly needs?: Needs<Key>;
     };
