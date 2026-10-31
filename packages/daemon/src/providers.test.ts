@@ -1,273 +1,295 @@
-import type { ProviderReport, ProviderRequest } from "@kitshn/local";
-import { describe, expect, it } from "vitest";
-import { NEVER_CONNECTED, Providers, parseSaved } from "./providers.ts";
+import type { ProviderRequest } from "@kitshn/local";
 import { pushKey } from "@kitshn/local";
+import { describe, expect, it } from "vitest";
+import { NEVER_CONNECTED, type ProviderCaller, Providers, type SavedFile, parseSaved } from "./providers.ts";
 
-const kinds = [{ id: "t3.thread", name: "thread", levels: { view: "view", use: "send" } }] as const;
-const thread = (id: string) => ({ id, kind: "t3.thread", name: id, status: "running" }) as const;
+const kinds = [
+  { id: "t3.thread", name: "thread", levels: { view: "view", use: "send" } },
+  { id: "t3.app", name: "app", levels: { view: "view", use: "use", control: "control" } },
+] as const;
+const thread = (id: string, more: object = {}) => ({
+  id,
+  kind: "t3.thread",
+  name: id,
+  status: "running",
+  ...more,
+});
 const register = (
-  resources: ReadonlyArray<ReturnType<typeof thread>>,
-): ProviderRequest & { type: "register" } => ({
+  resources: ReadonlyArray<unknown>,
+  extra: Partial<Extract<ProviderRequest, { type: "register" }>> = {},
+): Extract<ProviderRequest, { type: "register" }> => ({
   id: "1",
   type: "register",
+  protocol: 2,
   provider: "t3",
+  instance: "env-1",
   kinds: [...kinds],
   commands: [],
   resources: [...resources],
+  ...extra,
+});
+const caller = (connection: number, more: Partial<ProviderCaller> = {}): ProviderCaller => ({
+  connection,
+  uid: 1000,
+  privileged: true,
+  takenSites: new Set(),
+  machineName: "vps",
+  ...more,
 });
 
-function providers() {
-  const saves: Array<ReadonlyArray<ProviderReport>> = [];
+function providers(startedAt?: number, saved: Partial<SavedFile> = {}) {
+  const files: Array<SavedFile> = [];
   let statusChanges = 0;
   const registry = new Providers(
-    { providers: [], pushed: {} },
-    (saved) => saves.push(saved.providers),
+    parseSaved({ providers: [], pushed: {}, ...saved }).saved,
+    (file) => files.push(file),
     () => statusChanges++,
+    startedAt,
   );
-  return { registry, saves, statusChanges: () => statusChanges };
+  return { registry, files, statusChanges: () => statusChanges };
 }
 
 describe("the providers of a machine (K-704, K-705)", () => {
-  it("saves a connected provider as online, and tells since when and why one is offline (K-704)", () => {
-    let saved: ReadonlyArray<ProviderReport> = [];
-    const registry = new Providers(
-      { providers: [], pushed: {} },
-      (value) => (saved = value.providers),
-      () => {},
-    );
-    // Only a provider that registered before counts as offline.
+  it("is online while a connection holds it, keeps no online flag in its file, and says since when one is offline", () => {
+    const { registry, files } = providers();
     expect(registry.offline()).toEqual([]);
-    registry.apply(register([thread("a")]), 1, new Set(), 1000, true);
-    expect([saved[0]?.online, registry.offline()]).toEqual([true, []]);
+    registry.register(register([thread("a")]), caller(1, { now: 100 }));
+    expect(registry.states()).toMatchObject([{ name: "t3", instance: "env-1", online: true, since: 100 }]);
+    expect(files.at(-1)?.providers[0]).not.toHaveProperty("online");
     registry.disconnect(1, 500);
-    expect([saved[0]?.online, registry.offline()]).toEqual([
-      false,
-      [{ provider: "t3", reason: "the connection closed", at: 500 }],
-    ]);
+    expect(registry.offline()).toEqual([{ provider: "t3", reason: "the connection closed", at: 500 }]);
     // After a daemon start, a kept provider is offline until it registers, and says that it never connected.
-    const restarted = new Providers(
-      { providers: saved, pushed: {} },
-      () => {},
-      () => {},
-      700,
-    );
+    const restarted = providers(700, files.at(-1)).registry;
     expect(restarted.offline()).toEqual([{ provider: "t3", reason: NEVER_CONNECTED, at: 700 }]);
-    restarted.apply(register([thread("a")]), 2, new Set(), 1000, true);
-    expect(restarted.offline()).toEqual([]);
+    expect(restarted.states()).toMatchObject([{ online: false, since: null }]);
+  });
+
+  it("refuses another protocol with a reason that names both, and a register without an instance (C-2)", () => {
+    const { registry } = providers();
+    expect(registry.register(register([], { protocol: 3 }), caller(1))).toMatchObject({
+      ok: false,
+      error: /protocol 2; this register says 3/,
+    });
+    const { instance: _instance, ...noInstance } = register([]);
+    expect(registry.register(noInstance, caller(1))).toMatchObject({
+      ok: false,
+      error: /names its instance/,
+    });
+    expect(registry.refused()[0]?.reason).toMatch(/instance/);
+  });
+
+  it("takes a register with one bad row or resource, drops only those, and names each path (C-3)", () => {
+    const { registry } = providers();
+    const list = (rows: Array<object>) => ({
+      id: "tasks",
+      title: "Tasks",
+      columns: [{ id: "n", title: "N" }],
+      rows,
+    });
+    const outcome = registry.register(
+      register([
+        thread("a", {
+          lists: [
+            list([
+              { id: "ok", cells: { n: "1" } },
+              { id: "x".repeat(201), cells: { n: "2" } },
+            ]),
+          ],
+        }),
+        thread("b", { parent: "gone" }),
+        { id: "bad id!", kind: "t3.thread", name: "x", status: "running" },
+      ]),
+      caller(1),
+    );
+    expect(outcome).toMatchObject({ ok: true });
+    expect(outcome.ok && outcome.problems.map((problem) => problem.path)).toEqual([
+      "resources[0].lists[0].rows[1]",
+      "resources[2]",
+      "resources[1]",
+    ]);
+    expect(
+      registry.reportOf("t3")?.resources.map((resource) => [resource.id, resource.lists?.[0]?.rows.length]),
+    ).toEqual([["a", 1]]);
+    expect(registry.states()[0]?.problems).toHaveLength(3);
+    // An upsert drops its bad resource the same way and keeps the rest.
+    expect(
+      registry.change(
+        {
+          id: "2",
+          type: "upsert",
+          provider: "t3",
+          resources: [thread("c", { parent: "nope" }), thread("d")],
+        },
+        caller(1),
+      ),
+    ).toMatchObject({
+      ok: true,
+      problems: [{ path: "resources[id=c]", reason: expect.stringContaining("parent nope") }],
+    });
+    expect(registry.reportOf("t3")?.resources.map((resource) => resource.id)).toEqual(["a", "d"]);
+  });
+
+  it("refuses a second instance while the first holds the provider, and lets the same instance take over (C-4, C-5)", () => {
+    const { registry } = providers();
+    registry.register(register([thread("a")]), caller(1));
+    expect(registry.register(register([thread("a")], { instance: "env-2" }), caller(2))).toMatchObject({
+      ok: false,
+      error: /connected as the instance env-1/,
+    });
+    // The first keeps working, and its status names the try; no "provider refused" for the running one.
+    expect(registry.connectionOf("t3")).toBe(1);
+    // One connection holds one provider.
+    expect(registry.register(register([], { provider: "grok", kinds: [] }), caller(1))).toMatchObject({
+      ok: false,
+      error: /holds the provider t3/,
+    });
+    expect(registry.refused()).toEqual([]);
+    expect(registry.states()[0]?.refusal).toMatch(/env-2 tried to register/);
+    expect(registry.register(register([thread("a")]), caller(3))).toMatchObject({ ok: true, replaced: 1 });
+    expect([registry.connectionOf("t3"), registry.providerOf(3), registry.providerOf(1)]).toEqual([
+      3,
+      "t3",
+      null,
+    ]);
+    expect(registry.change({ id: "2", type: "remove", provider: "t3", ids: ["a"] }, caller(1))).toMatchObject(
+      {
+        ok: false,
+        error: /register t3/,
+      },
+    );
+  });
+
+  it("refuses a whole register only for a broken shape, and keeps the refusal until one is accepted (K-704)", () => {
+    const { registry, statusChanges } = providers();
+    const bad = register([thread("a"), thread("a")]);
+    expect(registry.register(bad, caller(1))).toMatchObject({ ok: false });
+    const [first] = registry.refused();
+    expect(first).toMatchObject({ provider: "t3", reason: "t3: two resources have the same id." });
+    registry.register(bad, caller(1));
+    expect(registry.refused()).toEqual([first]);
+    expect(statusChanges()).toBe(1);
+    expect(registry.register(register([thread("a")]), caller(1))).toMatchObject({ ok: true });
+    expect(registry.refused()).toEqual([]);
   });
 
   it("binds a provider name to the user that registered it, refuses another user, and moves it with rebind (K-704)", () => {
-    let saved: unknown = null;
-    const registry = new Providers(
-      { providers: [], pushed: {} },
-      (value) => (saved = value),
-      () => {},
-    );
+    const { registry, files } = providers();
     const cards = register([thread("a"), thread("b")]);
-    expect(registry.apply(cards, 1, new Set(), 0, true)).toEqual({ ok: true, changed: true });
-    // Another user cannot take the name over, with a reason that names the way.
-    expect(registry.apply(cards, 2, new Set(), 1002, false)).toMatchObject({
+    expect(registry.register(cards, caller(1, { uid: 0 }))).toMatchObject({ ok: true });
+    expect(registry.register(cards, caller(2, { uid: 1002, privileged: false }))).toMatchObject({
       ok: false,
       error: /belongs to the user id 0.*providers rebind t3 --to-user/,
     });
     expect(registry.rebind("t3", 1002)).toBeNull();
-    // The old connection is offline, so its upserts need a register, which the bind now refuses.
-    expect(
-      registry.apply({ id: "2", type: "upsert", provider: "t3", resources: [] }, 1, new Set(), 0, true),
-    ).toMatchObject({
-      ok: false,
-    });
-    expect(registry.apply(cards, 3, new Set(), 0, true)).toMatchObject({
+    expect(registry.register(cards, caller(3, { uid: 0 }))).toMatchObject({
       ok: false,
       error: /belongs to the user id 1002/,
     });
-    // The new user registers the same cards: the same ids, so kitshn keeps their circles and grants.
-    // Only the online flag changes; the cards are the same.
-    expect(registry.apply(cards, 4, new Set(), 1002, false)).toEqual({ ok: true, changed: true });
-    expect(registry.reports()[0]?.resources.map((item) => item.id)).toEqual(["a", "b"]);
-    // The bind survives a restart.
-    const restarted = new Providers(
-      parseSaved(saved).saved,
-      () => {},
-      () => {},
-    );
-    expect(restarted.ownerOf("t3")).toBe(1002);
+    expect(registry.register(cards, caller(4, { uid: 1002, privileged: false }))).toMatchObject({ ok: true });
+    expect(registry.reportOf("t3")?.resources.map((item) => item.id)).toEqual(["a", "b"]);
+    expect(providers(0, files.at(-1)).registry.ownerOf("t3")).toBe(1002);
     expect(registry.rebind("other", 1002)).toMatch(/no provider other/);
-    // A refused takeover leaves the running provider as it is: no "provider refused" for its owner.
     expect(registry.refused()).toEqual([]);
   });
 
   it("lets only root or the daemon user claim a provider saved before providers had users (K-704)", () => {
-    const old = new Providers(
-      parseSaved({
-        providers: [{ name: "t3", online: false, kinds: [...kinds], commands: [], resources: [thread("a")] }],
-        pushed: {},
-      }).saved,
-      () => {},
-      () => {},
-    );
-    expect(old.apply(register([thread("a")]), 1, new Set(), 1002, false)).toMatchObject({
+    const { registry: old } = providers(0, {
+      providers: [{ name: "t3", kinds: [...kinds], commands: [], resources: [thread("a") as never] }],
+    });
+    expect(old.register(register([thread("a")]), caller(1, { uid: 1002, privileged: false }))).toMatchObject({
       ok: false,
       error: /saved before providers had users/,
     });
-    expect(old.ownerOf("t3")).toBeUndefined();
-    expect(old.apply(register([thread("a")]), 2, new Set(), 0, true)).toMatchObject({ ok: true });
+    expect(old.register(register([thread("a")]), caller(2, { uid: 0 }))).toMatchObject({ ok: true });
     expect(old.ownerOf("t3")).toBe(0);
-    // A new name binds to the provider user that registers it first.
-    expect(
-      old.apply(
-        { ...register([]), provider: "fresh", kinds: [{ ...kinds[0], id: "fresh.thread" }] },
-        3,
-        new Set(),
-        1002,
-        false,
-      ),
-    ).toMatchObject({ ok: true });
-    expect(old.ownerOf("fresh")).toBe(1002);
   });
 
-  it("lets only the registering connection change a provider, and a new register takes it over", () => {
+  it("names a site that the provider sends without a name, and keeps that name (K-705)", () => {
     const { registry } = providers();
-    expect(registry.apply(register([thread("a")]), 1, new Set(), 1000, true)).toEqual({
-      ok: true,
-      changed: true,
-    });
-    const upsert = { id: "2", type: "upsert", provider: "t3", resources: [thread("b")] } as const;
-    expect(registry.apply(upsert, 2, new Set(), 1000, true)).toMatchObject({
-      ok: false,
-      error: /register t3/,
-    });
-    expect(registry.apply(upsert, 1, new Set(), 1000, true)).toEqual({ ok: true, changed: true });
-    expect(
-      registry.apply({ id: "3", type: "remove", provider: "t3", ids: ["a"] }, 1, new Set(), 1000, true),
-    ).toEqual({
-      ok: true,
-      changed: true,
-    });
-    expect(registry.reports()[0]?.resources.map((resource) => resource.id)).toEqual(["b"]);
-    registry.apply(register([]), 2, new Set(), 1000, true);
-    expect(registry.connectionOf("t3")).toBe(2);
-    expect(registry.reports()[0]?.resources).toEqual([]);
+    const app = (id: string) => ({ id, kind: "t3.app", name: id, status: "running", site: { port: 3773 } });
+    registry.register(register([app("app")]), caller(1, { machineName: "Oracle VPS" }));
+    expect(registry.sites()).toEqual([
+      { name: "t3-oracle-vps", target: "http://localhost:3773", dev: false },
+    ]);
+    // A second site gets its own name; the first keeps its name, also when the machine is renamed.
+    registry.register(register([app("app"), app("dev")]), caller(1, { machineName: "renamed" }));
+    expect(registry.sites().map((site) => site.name)).toEqual(["t3-oracle-vps", "t3-renamed"]);
   });
 
-  it("refuses a change that breaks the rules and keeps the last good state", () => {
+  it("gives the saved desired state with its rev source, the reach and the served hosts to a register (K-709, K-1623)", () => {
     const { registry } = providers();
-    registry.apply(register([thread("a")]), 1, new Set(), 1000, true);
-    const bad = {
-      id: "2",
-      type: "upsert",
-      provider: "t3",
-      resources: [{ ...thread("x"), parent: "nope" }],
-    } as const;
-    expect(registry.apply(bad, 1, new Set(), 1000, true)).toMatchObject({
-      ok: false,
-      error: /unknown parent/,
+    registry.setPushed(pushKey.desired("t3", "t3.settings"), {
+      state: { shared: { theme: "dark" }, machine: null },
+      rev: "r1",
     });
-    expect(registry.reports()[0]?.resources.map((resource) => resource.id)).toEqual(["a"]);
-  });
-
-  it("keeps the last refused register for the machine status until one is accepted (K-704)", () => {
-    const { registry, statusChanges } = providers();
-    const bad = register([thread("a"), thread("a")]);
-    expect(registry.apply(bad, 1, new Set(), 1000, true)).toMatchObject({ ok: false });
-    const [first] = registry.refused();
-    expect(first).toMatchObject({ provider: "t3", reason: "t3: two resources have the same id." });
-    // A retry with the same reason keeps the start of the refusal and sends no new status.
-    registry.apply(bad, 1, new Set(), 1000, true);
-    expect(registry.refused()).toEqual([first]);
-    expect(statusChanges()).toBe(1);
-    expect(registry.apply(register([thread("a")]), 1, new Set(), 1000, true)).toEqual({
-      ok: true,
-      changed: true,
+    registry.setPushed(pushKey.access("t3"), {
+      teamDomain: "team",
+      audiences: ["aud"],
+      served: ["t3-vps.example.com"],
     });
-    expect(registry.refused()).toEqual([]);
-    expect(statusChanges()).toBe(2);
-  });
-
-  it("takes a provider offline when its connection closes, and saves it offline", () => {
-    const { registry, saves } = providers();
-    registry.apply(register([thread("a")]), 7, new Set(), 1000, true);
-    expect(saves.at(-1)?.[0]?.online).toBe(true);
-    expect(registry.disconnect(7)).toBe(true);
-    expect(saves.at(-1)?.[0]?.online).toBe(false);
-    expect(registry.reports()[0]).toMatchObject({ name: "t3", online: false });
-    expect(registry.connectionOf("t3")).toBeNull();
-    expect(registry.disconnect(7)).toBe(false);
-  });
-
-  it("serves its sites from localhost ports and stores grant tables only when they change (K-706)", () => {
-    const { registry } = providers();
-    const app = { ...thread("a"), site: { name: "t3-vps", port: 3773 } };
-    registry.apply({ ...register([]), resources: [app] }, 1, new Set(), 1000, true);
-    expect(registry.sites()).toEqual([{ name: "t3-vps", target: "http://localhost:3773", dev: false }]);
-    expect(registry.setPushed(pushKey.grants("t3"), { a: [] })).toBe(true);
-    expect(registry.setPushed(pushKey.grants("t3"), { a: [] })).toBe(false);
-    registry.setPushed(pushKey.desired("t3", "t3.settings"), { shared: { theme: "dark" }, machine: null });
-    // K-1608: the answer to register gives the saved state, from before kitshn answers; access is null until kitshn
-    // sends it (K-1623).
-    expect(registry.savedFor("t3")).toMatchObject({ access: null });
-    const access = { teamDomain: "team.cloudflareaccess.com", audiences: ["aud-app"], served: [] };
-    registry.setPushed(pushKey.access("t3"), access);
     expect(registry.savedFor("t3")).toEqual({
-      grants: { a: [] },
       desired: { "t3.settings": { shared: { theme: "dark" }, machine: null } },
       settings: {},
       reach: [],
-      access,
+      served: ["t3-vps.example.com"],
     });
+    expect(registry.setPushed(pushKey.grants("t3"), { a: [] })).toBe(true);
+    expect(registry.setPushed(pushKey.grants("t3"), { a: [] })).toBe(false);
+    expect(registry.grantsOf("t3")).toEqual({ a: [] });
   });
 
-  it("forgets only a provider that no connection holds (K-704)", () => {
-    const { registry, saves } = providers();
-    registry.apply(register([thread("a")]), 1, new Set(), 1000, true);
+  it("runs exec as the user that registered the provider, unless the owner set another (K-722)", () => {
+    const { registry } = providers();
+    registry.register(register([]), caller(1, { uid: 1002, privileged: false }));
+    expect([registry.execUserOf("t3"), [...registry.providerUsers()]]).toEqual([1002, [1002]]);
+    expect(registry.setExecUser("t3", 1003)).toBeNull();
+    expect(registry.states()[0]?.execUser).toBe(1003);
+    expect(registry.setExecUser("other", 1003)).toMatch(/no provider other/);
+  });
+
+  it("forgets only a provider that no connection holds, and starts empty from a broken file (K-704, K-006)", () => {
+    const { registry, files } = providers();
+    registry.register(register([thread("a")]), caller(1));
     expect(registry.forget("t3")).toMatch(/connected/);
     registry.disconnect(1);
     expect(registry.forget("t3")).toBeNull();
-    expect(registry.reports()).toEqual([]);
-    expect(saves.at(-1)).toEqual([]);
-    expect(registry.forget("t3")).toMatch(/no provider/);
+    expect(files.at(-1)?.providers).toEqual([]);
   });
 
   it("drops only the items of the file that do not decode, and names each (K-006)", () => {
-    // The file of a Windows daemon from before this fix: its owner -1 drops, and both providers still load.
+    // The file of a Windows daemon from before the Windows rule: its owner -1 drops, and the good provider loads.
     const windows = parseSaved({
       providers: [
-        { name: "t3", online: true, kinds: [...kinds], commands: [], resources: [thread("a")] },
+        { name: "t3", kinds: [...kinds], commands: [], resources: [thread("a")] },
         { name: "site" },
       ],
       pushed: { "grants:t3": {} },
       owners: { t3: -1, grok: 1001 },
+      execUsers: { t3: "t3" },
     });
     expect(windows.saved.providers.map((report) => [report.name, report.online])).toEqual([["t3", false]]);
     expect(windows.saved.owners).toEqual({ grok: 1001 });
+    expect(windows.saved.execUsers).toEqual({});
     expect(windows.saved.pushed).toEqual({ "grants:t3": {} });
     expect(windows.problems).toEqual([
       expect.stringMatching(/^providers\[1\] dropped/),
       "the owner of t3 dropped: -1 is no user id",
+      'the exec user of t3 dropped: "t3" is no user id',
     ]);
     expect(parseSaved("not an object").problems).toEqual(["the file holds no object, so no provider loads"]);
     expect(parseSaved(null)).toEqual({ saved: { providers: [], pushed: {} }, problems: [] });
   });
 
   it("binds no user on Windows, which has no user ids, and its saved file loads again whole (K-621, K-704)", () => {
-    let saved: unknown = null;
-    const registry = new Providers(
-      { providers: [], pushed: {} },
-      (value) => (saved = value),
-      () => {},
-    );
+    const { registry, files } = providers();
     // A Windows daemon is its own caller with the user id -1 (WINDOWS_UID).
-    expect(registry.apply(register([thread("a")]), 1, new Set(), -1, true)).toMatchObject({ ok: true });
-    expect(saved).toMatchObject({ owners: {} });
-    const restarted = parseSaved(JSON.parse(JSON.stringify(saved)));
+    expect(registry.register(register([thread("a")]), caller(1, { uid: -1 }))).toMatchObject({ ok: true });
+    expect(files.at(-1)?.owners).toEqual({});
+    const restarted = parseSaved(JSON.parse(JSON.stringify(files.at(-1))));
     expect(restarted.problems).toEqual([]);
     expect(restarted.saved.providers.map((report) => report.name)).toEqual(["t3"]);
     // The next start registers it again with no bind in the way.
-    const again = new Providers(
-      restarted.saved,
-      () => {},
-      () => {},
-    );
-    expect(again.apply(register([thread("a")]), 2, new Set(), -1, true)).toMatchObject({ ok: true });
+    const again = providers(0, files.at(-1)).registry;
+    expect(again.register(register([thread("a")]), caller(2, { uid: -1 }))).toMatchObject({ ok: true });
   });
 });

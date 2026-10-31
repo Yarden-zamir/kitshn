@@ -296,9 +296,10 @@ it("counts the pushes that a machine has not applied, and takes applied only for
       .map((row) => row.key),
   );
   expect(keys).toEqual(["grants:t3"]);
-  // Four pushes wait: the grant tables, with a stale hash, and the reach, the card settings and the Access audiences,
-  // with none. A daemon from before K-1623 never applies the access push, so its count leaves that one out.
-  expect(await queued(keyed, null)).toBe(4);
+  // Six pushes wait: the grant tables, with a stale hash, and the reach, the card settings, the Access audiences, the
+  // pause and the exec rights, with none. An older daemon never applies the pushes that it does not name.
+  expect(await queued(keyed, null)).toBe(6);
+  expect(await queued(keyed, status(["applied", "access", "protocol-2"]))).toBe(6);
   expect(await queued(keyed, status(["applied", "access"]))).toBe(4);
   expect(await queued(keyed, status(["applied"]))).toBe(3);
   await sql("INSERT OR REPLACE INTO machines (id, body) VALUES ('vps', ?)", JSON.stringify(machine));
@@ -363,7 +364,7 @@ it("holds a job that waits for an idle machine while a provider is busy, and the
   });
 });
 
-it("records only the calls that a machine reports on machines that it reaches, as its own and only on a signed connection (K-1610)", async () => {
+it("records the forwarded tool calls of a machine on machines that it reaches, as its own and only on a signed connection (K-1610)", async () => {
   const { stub, message, sql } = await setup();
   await message("signed", [report([app])]);
   // vps reaches the T3 card of mac: the card sits in a circle that holds the machine vps.
@@ -406,33 +407,25 @@ it("records only the calls that a machine reports on machines that it reaches, a
   await sql("INSERT OR REPLACE INTO circles (id, body) VALUES ('links', ?)", JSON.stringify(links));
   await sql("INSERT OR REPLACE INTO places (id, x, y) VALUES (?, 7000, 7000)", macCard.id);
   await sql("DELETE FROM link_events");
-  const audit = {
-    kind: "exec",
-    target: "mac",
-    thread: "thread-1",
-    name: "git",
-    cwd: "/home/kcw",
-    outcome: "succeeded",
-    exitCode: 0,
-    at: 0,
-  };
+  const call = { type: "linkCall", target: "mac", name: "read_file", status: 200 };
   const raw = (check: "signed" | "token", body: object) =>
     runInDurableObject(stub, (instance) =>
       instance.webSocketMessage(daemonSocket(check), JSON.stringify(body)),
     );
-  await raw("token", { type: "audit", audit });
-  await raw("signed", { type: "audit", audit: { ...audit, outcome: "maybe" } });
-  // A machine that vps does not reach, and a command line instead of a command name.
-  await raw("signed", { type: "audit", audit: { ...audit, target: "other" } });
-  await raw("signed", { type: "audit", audit: { ...audit, name: "curl -H secret" } });
-  await raw("signed", { type: "audit", audit });
+  await raw("token", call);
+  // A machine that vps does not reach, and a command line instead of a tool name.
+  await raw("signed", { ...call, target: "other" });
+  await raw("signed", { ...call, name: "curl -H secret" });
+  await raw("signed", call);
+  await raw("signed", { ...call, status: 403 });
   const rows = await runInDurableObject(stub, (_, state) =>
     state.storage.sql
       .exec("SELECT source, target, kind, name, outcome, exit_code FROM link_events")
       .toArray(),
   );
   expect(rows).toEqual([
-    { source: "vps", target: "mac", kind: "exec", name: "git", outcome: "succeeded", exit_code: 0 },
+    { source: "vps", target: "mac", kind: "tool", name: "read_file", outcome: "succeeded", exit_code: null },
+    { source: "vps", target: "mac", kind: "tool", name: "read_file", outcome: "refused", exit_code: null },
   ]);
   await sql("DELETE FROM circles WHERE id = 'links'");
   await sql("DELETE FROM resources WHERE id = 'p-mac-app'");

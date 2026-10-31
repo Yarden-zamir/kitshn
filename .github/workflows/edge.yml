@@ -8,12 +8,20 @@ on:
   push:
     branches: [main]
     paths: [packages/**, package.json, pnpm-lock.yaml, pnpm-workspace.yaml, tsconfig.base.json, .bun-version, .github/workflows/edge.yml]
+  # K-723: a prerelease of a PR head, for the CI of a provider in another repo. Its tag `pr-<n>-<sha12>` is never an
+  # `edge-<sha12>`, so no deploy, join or daemon update picks it up.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: The number of the PR whose head to build
+        required: true
+        type: number
 
 permissions:
   contents: read
 
 concurrency:
-  group: edge-${{ github.ref }}
+  group: edge-${{ inputs.pr && format('pr-{0}', inputs.pr) || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -22,6 +30,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.pr && format('refs/pull/{0}/head', inputs.pr) || '' }}
+      # The commit that this job builds: the PR head of a dispatch, else the pushed or tested commit.
+      - run: echo "KITSHN_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
@@ -41,6 +53,10 @@ jobs:
       - name: Peer user id self-test, compiled for linux-x64 (K-701)
         working-directory: packages/daemon
         run: bun build src/peer.selftest.ts --compile --outfile="$RUNNER_TEMP/selftest" && "$RUNNER_TEMP/selftest"
+      # K-722: a root daemon enters the folder of a run only as the exec user.
+      - name: Exec as another user, from root (K-722)
+        working-directory: packages/daemon
+        run: sudo "$(command -v bun)" --bun vitest run src/exec.root.test.ts
       # K-2005: the door helper with real traffic in network namespaces, the Docker DNAT path and a reboot included.
       - name: Door helper traffic test (K-2005)
         working-directory: packages/daemon
@@ -65,6 +81,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.pr && format('refs/pull/{0}/head', inputs.pr) || '' }}
+      # The commit that this job builds: the PR head of a dispatch, else the pushed or tested commit.
+      - run: echo "KITSHN_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
@@ -79,7 +99,7 @@ jobs:
         run: bun build src/peer.selftest.ts --compile --outfile="$RUNNER_TEMP/selftest" && "$RUNNER_TEMP/selftest"
 
   release:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     needs: [check, selftest-arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -87,6 +107,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.pr && format('refs/pull/{0}/head', inputs.pr) || '' }}
+      # The commit that this job builds: the PR head of a dispatch, else the pushed or tested commit.
+      - run: echo "KITSHN_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
@@ -106,38 +130,60 @@ jobs:
         run: |
           pnpm run build
           pnpm pack --out dist/kitshn.tgz
+      # K-723: the schemas of the local socket and the contract tests, for providers in other repos. No registry: a
+      # provider depends on the release asset of one edge-<version>.
+      - name: Pack @kitshn/local and the contract tests (K-723)
+        env:
+          PR: ${{ inputs.pr }}
+        run: |
+          version="0.0.0-${PR:+pr.$PR.}edge.${KITSHN_SHA:0:12}"
+          for package in local contract; do
+            (cd "packages/$package" && pnpm run build && npm pkg set version="$version" && pnpm pack --out "dist/$package.tgz")
+          done
       - uses: actions/download-artifact@v8
         with:
           name: kitshn-edge
       # K-617: one release per commit, edge-<version>, that nothing changes later, with SHA256SUMS. The
       # Worker names its version; join, update and deploy download from that release only. The rolling
       # "edge" release stays for the bootstrap of a new account.
-      - name: Publish edge-<version> and the rolling edge release
+      - name: Publish edge-<version> and the rolling edge release, or pr-<n>-<version>
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
         run: |
-          version="${GITHUB_SHA:0:12}"
+          version="${KITSHN_SHA:0:12}"
           # Not "assets/": the repo has a folder of that name.
           out="$RUNNER_TEMP/release"
           mkdir "$out"
           cp kitshn-edge.tar.gz packages/kitshn/dist/kitshn.mjs packages/kitshn/dist/kitshn.tgz "$out"/
+          cp packages/local/dist/local.tgz "$out/kitshn-local.tgz"
+          cp packages/contract/dist/contract.tgz "$out/kitshn-contract-tests.tgz"
           # Each daemon is a Bun binary with its runtime inside (85 to 105 MB); gzip takes it to about a third.
           for daemon in kitshn-linux-arm64 kitshn-linux-x64 kitshn-darwin-arm64 kitshn-darwin-x64 kitshn-windows-x64.exe; do
             gzip -9 -n -c "packages/daemon/dist/$daemon" > "$out/$daemon.gz"
           done
           (cd "$out" && sha256sum * > SHA256SUMS)
+          # K-723: a PR build gets its own prerelease and never touches edge-<version> or the rolling edge release.
+          if [ -n "$PR" ]; then
+            tag="pr-$PR-$version"
+            if ! gh release view "$tag" >/dev/null 2>&1; then
+              gh release create "$tag" "$out"/* --prerelease --latest=false --target "$KITSHN_SHA" \
+                --title "kitshn 2 PR #$PR at $version" --notes "Test build of PR #$PR at $KITSHN_SHA, for provider CI. Not for deploys or daemon updates."
+            fi
+            exit 0
+          fi
           # A rerun keeps the files that the first run published; a new build has other hashes.
           if ! gh release view "edge-$version" >/dev/null 2>&1; then
-            gh release create "edge-$version" "$out"/* --prerelease --latest=false --target "$GITHUB_SHA" \
-              --title "kitshn 2 $version" --notes "kitshn 2 Worker bundle, daemon and CLI from $GITHUB_SHA."
+            gh release create "edge-$version" "$out"/* --prerelease --latest=false --target "$KITSHN_SHA" \
+              --title "kitshn 2 $version" --notes "kitshn 2 Worker bundle, daemon and CLI from $KITSHN_SHA."
           fi
           if gh release view edge >/dev/null 2>&1; then
             gh release upload edge "$out"/* --clobber
-            gh release edit edge --target "$GITHUB_SHA" --notes "kitshn 2 Worker bundle, daemon and CLI from $GITHUB_SHA."
+            gh release edit edge --target "$KITSHN_SHA" --notes "kitshn 2 Worker bundle, daemon and CLI from $KITSHN_SHA."
           else
-            gh release create edge "$out"/* --prerelease --latest=false --target "$GITHUB_SHA" \
-              --title "kitshn 2 edge" --notes "kitshn 2 Worker bundle, daemon and CLI from $GITHUB_SHA."
+            gh release create edge "$out"/* --prerelease --latest=false --target "$KITSHN_SHA" \
+              --title "kitshn 2 edge" --notes "kitshn 2 Worker bundle, daemon and CLI from $KITSHN_SHA."
           fi
           # The rolling edge release must not keep the raw daemons of older releases.
           for daemon in kitshn-linux-arm64 kitshn-linux-x64 kitshn-darwin-arm64 kitshn-darwin-x64 kitshn-windows-x64.exe; do

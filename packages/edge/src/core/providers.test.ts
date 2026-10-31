@@ -244,6 +244,7 @@ describe("pushes to a machine (K-709, K-717, K-1608)", () => {
       teamDomain: "team.cloudflareaccess.com",
       audiencesOf: (cardId: string) => (cardId === app.id && aud ? [aud] : []),
       servedHost: (cardId: string) => (cardId === app.id ? served : null),
+      revOf: (kind: string) => (kind === "t3.settings" ? "r-7" : null),
     });
     const desired = new Map([
       [
@@ -279,7 +280,7 @@ describe("pushes to a machine (K-709, K-717, K-1608)", () => {
       },
     });
     // Another machine's part never reaches this one.
-    expect(pushes[4]).toMatchObject({ state: { shared: { theme: "dark" }, machine: null } });
+    expect(pushes[4]).toMatchObject({ state: { shared: { theme: "dark" }, machine: null }, rev: "r-7" });
     // A stored value that the kind no longer offers falls back to the default.
     const stale = providerPushes(
       value,

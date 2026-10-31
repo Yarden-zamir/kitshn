@@ -331,15 +331,6 @@ function MachineKeyRow(props: { view: MachineView; onToast: (text: string, error
         </button>
       </div>
       <WhyOff reason={rotateOff} />
-      {props.view.status?.attesters?.length ? (
-        <p
-          class="muted"
-          data-tip="Attesters: local services that vouch for the thread of an ask; only their labels count for rights (K-1751)."
-        >
-          Attesters:{" "}
-          {props.view.status.attesters.map((attester) => `${attester.prefix} ${attester.address}`).join(", ")}
-        </p>
-      ) : null}
       {rekey ? (
         <>
           <p>
@@ -557,6 +548,23 @@ export function MachinePanel(props: {
               <summary data-tip="The reason as the provider check wrote it.">Details</summary>
               <code>{refusal.reason}</code>
             </details>
+          ))
+        : null}
+      {view.online
+        ? (view.status?.execPaths ?? [])
+            .filter((entry) => entry.via === "bridge")
+            .map((entry) => (
+              <p key={`exec-${entry.provider}`} class="muted">
+                Exec as {entry.user} needs the {entry.provider} provider running: no sudo rule. Fix as root:{" "}
+                <code>kitshn exec install --user {entry.user} --daemon-user &lt;daemon user&gt;</code>
+              </p>
+            ))
+        : null}
+      {view.online
+        ? (view.status?.providerProblems ?? []).map((entry) => (
+            <p key={`problem-${entry.provider}-${entry.reason}`} class="muted">
+              Provider {entry.provider} dropped {entry.reason}
+            </p>
           ))
         : null}
       {view.sample ? (

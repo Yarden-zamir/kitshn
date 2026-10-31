@@ -160,7 +160,10 @@ export type ProviderPush =
       readonly provider: string;
       readonly kind: string;
       readonly state: DesiredParts;
+      readonly rev: string | null;
     }
+  | { readonly key: string; readonly type: "paused"; readonly paused: boolean }
+  | { readonly key: string; readonly type: "execRights"; readonly machines: ReadonlyArray<string> }
   | {
       readonly key: string;
       readonly type: "reach";
@@ -197,6 +200,8 @@ export function providerPushes(
     readonly audiencesOf: (cardId: string) => ReadonlyArray<string>;
     /** K-1623: the host that kitshn serves for this card now, or null. */
     readonly servedHost: (cardId: string) => string | null;
+    /** K-709: the rev of the last set of a desired state, or null. */
+    readonly revOf: (kind: string) => string | null;
   },
 ): Array<ProviderPush> {
   return regs.flatMap(({ name, kinds }) => {
@@ -246,6 +251,7 @@ export function providerPushes(
             shared: desired.get(kind.id)?.get("") ?? null,
             machine: desired.get(kind.id)?.get(machineId) ?? null,
           },
+          rev: access.revOf(kind.id),
         })),
     ];
   });

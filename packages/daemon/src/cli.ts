@@ -1,5 +1,5 @@
 // The text of the `kitshn` commands of a machine, apart from the commands that print it, so tests can read it.
-import type { Answer, AskAction, Request } from "@kitshn/local";
+import type { Answer, AskAction, IdRequest } from "@kitshn/local";
 import { fail } from "kitshn/cli-error";
 import type { ServerReport } from "@kitshn/edge/sites";
 import {
@@ -13,8 +13,11 @@ import {
 } from "kitshn/agent";
 import type { SiteEntry } from "./sites.ts";
 
-/** C7 of the UX audit: one line for each action of `kitshn agent` (K-1711). */
-export const ASK_ACTION_HELP: Record<AskAction, string> = {
+/**
+ * C7 of the UX audit: one line for each action of `kitshn agent` (K-1711). `exec` is no ask of an agent: only the
+ * exec request of a provider starts a run on another machine (K-722).
+ */
+export const ASK_ACTION_HELP: Record<Exclude<AskAction, "exec">, string> = {
   state: `the cards, circles, rights and open asks of this machine; --body '{"all":true}' adds servers and link events`,
   apply: `move a card or change a share: --body '{"edits":[...]}'`,
   organize: "tidy the cards that you manage into a grid, as one Undo (K-532)",
@@ -57,15 +60,12 @@ kitshn service uninstall                stop and remove the user service`,
   health:
     "kitshn health [--now] [--json]          the last check of the providers and links of this machine (K-630)",
   "local-users": `kitshn local-users list|add|remove <u>  who else may use the local socket, as the daemon user (K-701);
-                                        add <u> --provider also lets it run a provider and its attester`,
+                                        add <u> --provider also lets it run a provider`,
   providers: `kitshn providers rebind <name> --to-user <u>
-                                        move a provider and its attester to a provider user (K-704)`,
-  attester: `kitshn attester set --prefix <p.> --url <loopback url> --token-env <NAME>
-                                        register an attester of thread labels, as the daemon user or root (K-1751)`,
+                                        move a provider to a provider user (K-704)
+kitshn providers exec-user <name> <u>   the user that runs commands of other machines for that provider (K-722)`,
   provider: `kitshn provider                         join stdin and stdout to the local socket, for a provider (K-704)
 kitshn provider forget <name>           drop a provider that does not run, as the daemon user or root (K-704)`,
-  "link-check":
-    "kitshn link-check <socket or pipe>      exit 0 when this account's daemon serves that link proxy (K-1609)",
   agent: `kitshn agent <action> [target]          ask kitshn as this machine (K-1710): --reason, --label k=v, --body json;
                                         kitshn agent --help lists the actions`,
   "setup-git": "kitshn setup-git                        git asks kitshn first for github.com tokens (K-1763)",
@@ -81,6 +81,9 @@ kitshn provider forget <name>           drop a provider that does not run, as th
     "kitshn servers [--json]                 the servers that listen on this machine, and what kitshn exposes (K-619)",
   doors: `kitshn doors install --user <u>         as root: the helper that gates game ports, for the daemon user (K-2005)
 kitshn doors uninstall                  as root: remove it and its firewall table`,
+  exec: `kitshn exec install --user <u> --daemon-user <d>
+                                        as root: the daemon user runs exec of other machines as <u> (K-722)
+kitshn exec uninstall --user <u>        as root: remove that rule; exec as <u> then needs its provider's bridge`,
   skill: `kitshn skill install [--repo]           the skill for coding agents, global or in this repo (K-618)
 kitshn skill check                      exit 1 when a copy of the skill is from another release`,
   version: `kitshn version [--json]                 the version; --json: {"product":"kitshn","generation":2,"version"}`,
@@ -105,9 +108,7 @@ export function helpText(command: string | null, version: string): string {
     "health",
     "local-users",
     "providers",
-    "attester",
     "provider",
-    "link-check",
     "agent",
   ];
   const rest = (Object.keys(MACHINE_HELP) as Array<MachineCommand>).filter((name) => !order.includes(name));
@@ -215,7 +216,7 @@ export function unexposeRefusal(name: string | undefined, sites: ReadonlyArray<S
 
 /** One request to the daemon: `follow` keeps the connection for a later line, which `onLine` sees first (K-1722). */
 export type LocalAsk = (
-  request: Request,
+  request: IdRequest,
   follow?: (answer: Answer) => boolean,
   onLine?: (answer: Answer) => void,
 ) => Promise<Answer>;
@@ -234,7 +235,7 @@ const waitOf = (answer: Answer) =>
  */
 export async function forwardAndWait(
   ask: LocalAsk,
-  request: Extract<Request, { type: "forward" }>,
+  request: Extract<IdRequest, { type: "forward" }>,
   say: (line: string) => void,
   now: () => number,
 ): Promise<ForwardAnswer> {

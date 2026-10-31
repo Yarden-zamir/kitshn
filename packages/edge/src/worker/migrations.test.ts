@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { MIGRATIONS, migrate } from "./migrations.ts";
+import { AGENTS_MIGRATION, MIGRATIONS, migrate } from "./migrations.ts";
 
 const columns = (db: DatabaseSync, table: string) =>
   (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name);
@@ -14,6 +14,8 @@ describe("Durable Object migrations", () => {
     expect(columns(db, "providers")).toEqual(["machine_id", "name", "body"]);
     expect(columns(db, "desired_state")).toEqual(["kind", "machine_id", "body"]);
     expect(columns(db, "jobs")).toContain("when_idle");
+    // K-722: migration 42 makes the exec table; an import from before it runs the t3.agents step again.
+    expect(MIGRATIONS[AGENTS_MIGRATION - 1]?.join()).toContain("exec_runs");
     expect(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()).toEqual({
       value: String(MIGRATIONS.length),
     });

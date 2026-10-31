@@ -85,7 +85,7 @@ export function MachineRights(props: {
                 aria-label={`Conditions of ${MACHINE_RIGHT_NAMES[right]}`}
                 placeholder="t3.project.name=kitshn,riffle; t3.subagent=false"
                 value={formatConditions(mode.conditions)}
-                data-tip="Conditions: attested labels that each ask must have, as key=value,value; key=value. A condition on a label that no attester of the machine sets refuses every ask (K-1754)."
+                data-tip="Conditions: attested labels that each ask must have, as key=value,value; key=value. A condition on a label that no provider of the machine sets refuses every ask (K-1754)."
                 onChange={(event) => {
                   const parsed = parseConditions(event.currentTarget.value);
                   if (typeof parsed === "string") return;

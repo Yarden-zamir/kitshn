@@ -1,16 +1,14 @@
 // K-1609, K-711: the link proxy. A provider reaches the address of a card on another machine through this machine's
 // daemon, which adds the machine token. The provider never holds a Cloudflare credential. It serves a Unix socket in
 // the daemon's private folder and one in its shared folder for local users (K-701), or a named pipe on Windows (K-621).
-import { chmodSync, lstatSync, rmSync } from "node:fs";
+import { chmodSync, rmSync } from "node:fs";
 import { type IncomingMessage, type ServerResponse, createServer } from "node:http";
 import { type Socket, connect as connectTcp, createServer as createListener } from "node:net";
 import { Readable } from "node:stream";
 import { connect as connectTls } from "node:tls";
 import type { ReachedCard } from "@kitshn/local";
-import { dirname } from "node:path";
-import { type Platform, sharedSocketOf } from "./service.ts";
+import type { Platform } from "./service.ts";
 import { peerUid } from "./peer.ts";
-import { pipeServerProblem } from "./winpipe.ts";
 
 /** The Access service token of this machine (K-107). */
 export interface MachineToken {
@@ -66,7 +64,7 @@ export function linkHeaders(rawHeaders: ReadonlyArray<string>, token: MachineTok
     const name = rawHeaders[index]!;
     const value = rawHeaders[index + 1]!;
     const lower = name.toLowerCase();
-    if (lower.startsWith("cf-access-") || HOP_HEADERS.has(lower)) continue;
+    if (lower.startsWith("cf-access-") || lower === AUDIT_HEADER || HOP_HEADERS.has(lower)) continue;
     if (lower === "cookie") {
       const kept = withoutAccessCookie(value);
       if (kept) headers.push([name, kept]);
@@ -77,6 +75,22 @@ export function linkHeaders(rawHeaders: ReadonlyArray<string>, token: MachineTok
   headers.push(["CF-Access-Client-Id", token.clientId], ["CF-Access-Client-Secret", token.clientSecret]);
   return headers;
 }
+
+/**
+ * K-1610: the tool name of a forwarded call, which the provider sets for History (MM-1922). The proxy reads it and
+ * never passes it on.
+ */
+export const AUDIT_HEADER = "kitshn-audit-name";
+
+/** K-1610: a tool name for History: one word of at most 100 characters, else none. */
+export const auditName = (value: string | ReadonlyArray<string> | undefined): string | null =>
+  typeof value === "string" &&
+  value !== "" &&
+  value.length <= 100 &&
+  value.trim() === value &&
+  !value.includes(" ")
+    ? value
+    : null;
 
 /** Headers of one hop, which each side of the proxy sets for itself. */
 const HOP_HEADERS: ReadonlySet<string> = new Set([
@@ -96,6 +110,13 @@ interface LinkOptions {
   readonly log: (text: string) => void;
   /** `http` only in tests. */
   readonly scheme?: "https" | "http";
+  /** K-1610: each forwarded call, with its tool name or `METHOD:/path`, and its answer status (0 when the link failed). */
+  readonly audit?: (call: {
+    readonly provider: string;
+    readonly machineId: string;
+    readonly name: string;
+    readonly status: number;
+  }) => void;
   /**
    * K-701, K-1609: a Unix socket checks the user id of each peer and admits only the peers that `admits` names:
    * `private` has mode 0600 in the daemon's private folder, `shared` mode 0666 in its shared folder.
@@ -130,6 +151,14 @@ export function serveLinks(path: string, options: LinkOptions): Promise<{ readon
     const token = options.token();
     if (!token) return refuse(response, 503, "the daemon has no machine token.");
     const method = request.method ?? "GET";
+    const url = new URL(request.url ?? "/", "http://link");
+    const [, provider = "", machineId = "", ...rest] = url.pathname.split("/");
+    // A call without a valid tool name still goes to History, under its method and path, so leaving out the header
+    // never hides a call. The query stays out: it can carry arguments.
+    const name =
+      auditName(request.headers[AUDIT_HEADER]) ??
+      `${method}:/${rest.join("/")}`.replaceAll(" ", "").slice(0, 100);
+    const audit = (status: number) => options.audit?.({ provider, machineId, name, status });
     try {
       const answer = await fetch(found.target, {
         method,
@@ -148,10 +177,12 @@ export function serveLinks(path: string, options: LinkOptions): Promise<{ readon
       for (const cookie of answer.headers.getSetCookie())
         if (!setsAccessSession(cookie)) headers.push(["set-cookie", cookie]);
       response.writeHead(answer.status, headers.flat());
+      audit(answer.status);
       if (answer.body) for await (const chunk of answer.body) response.write(chunk);
       response.end();
     } catch (error) {
       options.log(`link: ${found.target.host} failed: ${String(error)}`);
+      if (!response.headersSent) audit(0);
       if (response.headersSent) response.destroy();
       else refuse(response, 502, "the link to the other machine failed.");
     }
@@ -258,31 +289,3 @@ function tunnelAnswer(upstream: Socket, client: Socket) {
   };
   upstream.on("data", onData);
 }
-
-/**
- * K-1609, K-621: why a provider must not use the link socket `path`, or null. On Windows, the pipe's server must run as
- * this account. Elsewhere, the socket must belong to the daemon user `daemonUid`, as the caller finds it for the main
- * socket (K-701): mode 0600 in its private folder, or 0666 in its shared folder. The proxy checks each peer on both.
- */
-export function linkSocketProblem(platform: Platform, path: string, daemonUid: number): string | null {
-  if (platform === "win32") {
-    const problem = pipeServerProblem(path);
-    return problem === "missing" ? `no link proxy serves ${path}.` : problem;
-  }
-  try {
-    const stat = lstatSync(path);
-    if (!stat.isSocket()) return `${path} is not a socket.`;
-    if (stat.uid !== daemonUid)
-      return `${path} belongs to the user id ${stat.uid}, not to the daemon user ${daemonUid}.`;
-    const mode = stat.mode & 0o777;
-    const shared = path === `${sharedLinkFolder(daemonUid)}/link.sock`;
-    if (mode !== (shared ? 0o666 : 0o600))
-      return `${path} has the mode ${mode.toString(8)}, not ${shared ? "666" : "600"}.`;
-    return null;
-  } catch {
-    return `no link proxy serves ${path}.`;
-  }
-}
-
-/** K-701: the shared folder of a daemon user, where the users of `kitshn local-users` find its sockets. */
-const sharedLinkFolder = (daemonUid: number) => dirname(sharedSocketOf(daemonUid));
