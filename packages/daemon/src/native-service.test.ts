@@ -17,6 +17,7 @@ describe("native user-service definitions", () => {
   it("renders a systemd user service without shell, variable, or specifier expansion", () => {
     const service = nativeServiceFile("linux", unix);
     expect(service.name).toBe("kitshn-app-app-proxy-1-prod.service");
+    expect(service.encoding).toBe("utf8");
     expect(service.content).toContain("WorkingDirectory=/home/u/release folder");
     expect(service.content).toContain(
       'ExecStart="/home/u/release/bin/proxy-gateway" "-config" "/home/u/proxy data/$$& %%n/gateway.json"',
@@ -48,6 +49,7 @@ describe("native user-service definitions", () => {
       workingDirectory: "/Users/u/release",
     });
     expect(service.name).toBe("com.kitshn.app.app-proxy-1-prod.plist");
+    expect(service.encoding).toBe("utf8");
     expect(service.content).toContain("<string>/Users/u/proxy &amp; &lt;data&gt;/gateway.json</string>");
     expect(service.content).toContain("<key>KeepAlive</key><true/>");
     if (process.platform === "darwin") {
@@ -76,6 +78,7 @@ describe("native user-service definitions", () => {
       windowsUser: "PC\\u",
     });
     expect(service.name).toBe("\\kitshn\\apps\\app-proxy-1-prod");
+    expect(service.encoding).toBe("utf16le-bom");
     expect(service.content).toContain("<UserId>PC\\u</UserId>");
     expect(service.content).toContain("<RunLevel>LeastPrivilege</RunLevel>");
     expect(service.content).toContain("<Command>C:\\Users\\u\\release folder\\proxy.exe</Command>");
@@ -84,6 +87,15 @@ describe("native user-service definitions", () => {
     );
     expect(service.content).not.toContain("powershell");
     expect(service.content).not.toContain("cmd.exe");
+    expect(
+      nativeServiceFile("win32", {
+        ...unix,
+        executable: "C:\\app\\proxy.exe",
+        data: "C:\\app\\data",
+        workingDirectory: "C:\\app",
+        windowsUser: "MicrosoftAccount\\user@example.com",
+      }).content,
+    ).toContain("MicrosoftAccount\\user@example.com");
   });
 
   it("refuses unsafe ids, control characters, relative paths, Windows network paths and system users", () => {
@@ -104,6 +116,15 @@ describe("native user-service definitions", () => {
       nativeServiceFile("win32", { ...windows, executable: "\\\\server\\share\\proxy.exe" }),
     ).toThrow();
     expect(() => nativeServiceFile("win32", { ...windows, args: ["%PATH%"] })).toThrow();
-    expect(() => nativeServiceFile("win32", { ...windows, windowsUser: "NT AUTHORITY\\SYSTEM" })).toThrow();
+    for (const executable of ["C:\\app\\proxy.cmd", "C:\\app\\proxy.BAT", "C:\\app\\proxy.exe "])
+      expect(() => nativeServiceFile("win32", { ...windows, executable })).toThrow();
+    for (const windowsUser of [
+      "NT AUTHORITY\\SYSTEM",
+      "NT AUTHORITY\\LOCAL SERVICE",
+      "NT SERVICE\\example",
+      "PC\\user ",
+      "SYSTEM",
+    ])
+      expect(() => nativeServiceFile("win32", { ...windows, windowsUser })).toThrow();
   });
 });

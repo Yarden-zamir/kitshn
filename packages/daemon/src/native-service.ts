@@ -15,6 +15,8 @@ export interface NativeServiceDefinition {
 export interface NativeServiceFile {
   readonly name: string;
   readonly content: string;
+  /** Windows XML needs UTF-16LE with a BOM; the other service files use UTF-8. */
+  readonly encoding: "utf8" | "utf16le-bom";
 }
 
 const xml = (text: string) =>
@@ -93,10 +95,11 @@ export function nativeServiceFile(
   if (
     platform === "win32" &&
     (![executable, data, workingDirectory].every((value) => /^[A-Za-z]:\\/.test(value)) ||
-      [executable, data, workingDirectory, ...args].some((value) => value.includes("%")))
+      [executable, data, workingDirectory, ...args].some((value) => value.includes("%")) ||
+      !/\.exe$/i.test(executable))
   )
     throw new Error(
-      "Windows service paths must be local drive paths and contain no environment placeholders",
+      "Windows service paths must be local drive paths, contain no environment placeholders, and use an .exe executable",
     );
   const expanded = args.map((arg) => arg.replaceAll("{data}", () => data));
   if (platform === "darwin") {
@@ -104,6 +107,7 @@ export function nativeServiceFile(
     const argv = [executable, ...expanded].map((arg) => `<string>${xml(arg)}</string>`).join("");
     return {
       name: `${label}.plist`,
+      encoding: "utf8",
       content: `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -120,6 +124,7 @@ export function nativeServiceFile(
     const argv = [executable, ...expanded].map((arg) => systemdQuote(arg, true)).join(" ");
     return {
       name: `kitshn-app-${id}.service`,
+      encoding: "utf8",
       content: `[Unit]
 Description=kitshn native service ${id}
 
@@ -135,17 +140,22 @@ WantedBy=default.target
     };
   }
   const user = definition.windowsUser;
+  const parts = user?.split("\\") ?? [];
+  const accountPart = (part: string | undefined) =>
+    part !== undefined && part !== "" && part === part.trim() && !/[\\/:*?"<>|%]/.test(part);
   if (
     !user ||
     user.length > 256 ||
     !plainText(user) ||
-    user.includes("%") ||
-    /^(system|localsystem|nt authority\\system|s-1-5-18)$/i.test(user)
+    parts.length !== 2 ||
+    !parts.every(accountPart) ||
+    /^(nt authority|nt service|builtin|window manager|font driver host)$/i.test(parts[0] ?? "")
   )
-    throw new Error("a non-system Windows service user is required");
+    throw new Error("an explicitly authorized DOMAIN\\user Windows account is required");
   const commandLine = expanded.map(windowsArgument).join(" ");
   return {
     name: `\\kitshn\\apps\\${id}`,
+    encoding: "utf16le-bom",
     content: `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>${xml(`kitshn native service ${id}`)}</Description></RegistrationInfo>

@@ -31,6 +31,10 @@ user, widen an existing allowance, or obtain secrets through an approval for ano
 repo state, machine identity, and the target at job delivery, not only at planning time. A removed or changed key,
 repo block, revoked allowance, or pause fails a queued deployment closed.
 
+On Windows, the renderer accepts a qualified account name and a direct `.exe`, and identifies the task XML as
+UTF-16LE with a BOM. The eventual installer must resolve the account to its SID and verify that SID is the explicitly
+authorized non-system user; a name check or a rendered task is not authorization.
+
 The process runs as the explicitly authorized, non-root user by default. A different user from the daemon requires a
 deliberate, local operating-system mechanism that the owner installed; the daemon must not silently become root or
 read that user's files to make the deployment work. On macOS use that user's launchd agent, on Linux its systemd user
