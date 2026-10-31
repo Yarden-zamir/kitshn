@@ -36,6 +36,12 @@ describe("the exec helper of the sudo rule (K-722)", () => {
     expect((await run("~/missing", "true", home)).code).toBe(126);
   });
 
+  it("finds the tools of the exec user's ~/.local/bin first, as a run without sudo does", async () => {
+    const home = mkdtempSync(join(tmpdir(), "kitshn-home-"));
+    const { output } = await run("/", 'printf %s "$PATH"', home);
+    expect(output.split(":")[0]).toBe(`${home}/.local/bin`);
+  });
+
   it("ends a process that the command left in the background when the command exits", async () => {
     const ended = await run("/", "sleep 30 & echo $!; exit 0", tmpdir());
     expect(ended.code).toBe(0);
