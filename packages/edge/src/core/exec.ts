@@ -202,11 +202,13 @@ export function migrateAgentShares(state: State): AgentsMigration {
     }
     for (const circle of holding) {
       const level = levelIn(circle);
-      // The app keeps its own level where a circle held both cards.
-      if (!appCircles.has(circle.id) && level !== circle.level)
+      // The app keeps its own share where a circle held both cards. Else it gets the level and the end date of the
+      // agents share; a share that ended at a date must not become permanent.
+      const endsAt = state.shareSettings.get(shareKey(agents.id, circle.id))?.endsAt ?? null;
+      if (!appCircles.has(circle.id) && (level !== circle.level || endsAt !== null))
         shareSettings.set(shareKey(app.id, circle.id), {
-          level,
-          endsAt: state.shareSettings.get(shareKey(agents.id, circle.id))?.endsAt ?? null,
+          level: level === circle.level ? null : level,
+          endsAt,
         });
       if (level !== "control") continue;
       for (const member of circle.members)

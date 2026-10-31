@@ -206,6 +206,24 @@ describe("the t3.agents migration (K-722, migration 42)", () => {
     expect(stacked.unmet).toEqual([expect.stringMatching(/share it there by hand/)]);
   });
 
+  it("keeps the end date of a T3 agents share also when its level is the circle level, so no share outlives it", () => {
+    const endsAt = 1_900_000_000_000;
+    const timed = world(mac({ mode: "off" }), ["vps/t3/agents"], {
+      circles: new Map([
+        ["machines", circle("machines", [mac({ mode: "off" })], { x: 0, r: 100 })],
+        ["owner", circle("owner", [{ _tag: "email", email: "owner@example.com" }], { x: 150, r: 100 })],
+      ]),
+      places: new Map([
+        ["vps", { x: 150, y: 0 }],
+        ["vps/t3/agents", { x: 0, y: 0 }],
+        ["vps/t3/app", { x: 200, y: 0 }],
+      ]),
+      shareSettings: new Map([[shareKey("vps/t3/agents", "machines"), { level: null, endsAt }]]),
+    });
+    const after = applyChanges(timed, migrateAgentShares(timed).changes);
+    expect(after.shareSettings.get(shareKey("vps/t3/app", "machines"))).toEqual({ level: null, endsAt });
+  });
+
   it("moves no share of a circle that holds more than machines, and sets no right that would cover another machine", () => {
     // A person in the circle would get T3 itself with the app card, so the card stays where it is.
     const people = world(mac(), ["vps/t3/agents"], {

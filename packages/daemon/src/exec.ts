@@ -93,6 +93,8 @@ export function startExec(spec: ExecSpec, sink: ExecSink): ExecHandle {
   const started = Date.now();
   let ended = false;
   let reason: string | null = null;
+  // Declared before any path that can end the run, so an early end never reads it before it exists.
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const end = (value: Omit<ExecEnd, "durationMs">) => {
     if (ended) return;
     ended = true;
@@ -233,10 +235,7 @@ export function startExec(spec: ExecSpec, sink: ExecSink): ExecHandle {
     setTimeout(() => child.kill("SIGKILL"), 5_000).unref();
   };
   // A run that exited but whose caller takes no more output ends at its timeout too, with what it sent.
-  const timer = setTimeout(
-    () => kill(`timed out after ${Math.round(spec.timeoutMs / 1000)} s`),
-    spec.timeoutMs,
-  );
+  timer = setTimeout(() => kill(`timed out after ${Math.round(spec.timeoutMs / 1000)} s`), spec.timeoutMs);
   return {
     credit: (bytes) => {
       credit += bytes;
