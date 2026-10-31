@@ -20,6 +20,16 @@ export interface MachineToken {
 const LINK_CONNECTIONS = 64;
 const LINK_FIRST_BYTE_MS = 30_000;
 
+/** The path a checked local peer can use; the server still checks every link connection independently. */
+export function linkSocketForPeer(
+  peer: number,
+  own: number,
+  privateSocket: string | null,
+  sharedSocket: string | null,
+): string | null {
+  return peer !== own && sharedSocket !== null ? sharedSocket : privateSocket;
+}
+
 /**
  * K-1609: where a request to `/<provider>/<machine id>/<path>` goes: the address of the card of the provider that the
  * path names, on that machine in this machine's reach. Every caller runs as the daemon user, so this is no boundary. Known limit: with two addressed kinds of one provider on one machine, the first

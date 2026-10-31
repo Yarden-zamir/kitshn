@@ -366,6 +366,8 @@ export const Status = Schema.Struct({
   /** `token-only`: kitshn has no key for this machine and reads only its status (K-1708). */
   connection: Schema.Literals(["connected", "token-only", "disconnected"]),
   tunnel: Schema.Literals(["starting", "running", "stopped"]),
+  /** K-1609: the current link socket for this caller, or null when it could not be served. */
+  linkSocket: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** K-1127: the address of kitshn, for the files of a new repo. */
   server: Schema.optionalKey(Schema.String),
   /** K-704: the providers whose last registration the daemon refused, until one is accepted. */

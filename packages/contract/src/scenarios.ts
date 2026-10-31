@@ -125,6 +125,9 @@ export const SCENARIOS: ReadonlyArray<Scenario> = [
       assert.equal(typeof answer.syncedAt, "number");
       assert.deepEqual([answer.pingMs, answer.graceMs], [PING_MS, GRACE_MS]);
       assert.deepEqual(answer.problems, []);
+      // A non-provider can discover the same current link without reserving a provider name.
+      assert.equal(typeof answer.linkSocket, "string");
+      assert.equal((await status(daemon)).linkSocket, answer.linkSocket);
     },
   },
   {

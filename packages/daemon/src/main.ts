@@ -139,7 +139,7 @@ import { keepBuild, keptId, keptTag, rollbackOverride, serviceImages, staleTags 
 import { TokenCache } from "./tokens.ts";
 import { Providers, parseSaved } from "./providers.ts";
 import { desiredProblem } from "@kitshn/local";
-import { linkPeerAdmitted, serveLinks } from "./link.ts";
+import { linkPeerAdmitted, linkSocketForPeer, serveLinks } from "./link.ts";
 import { lastHour, lastSamples } from "./samples.ts";
 import { pushKey } from "@kitshn/local";
 import { MAX_FORWARDS, forwardTarget, passedHeaders, readBounded } from "./forward.ts";
@@ -3311,6 +3311,12 @@ async function answerLocal(
         fingerprint: key ? await fingerprintOf(key.x) : null,
         connection: socket === null ? "disconnected" : challenge === null ? "token-only" : "connected",
         tunnel: tunnelState,
+        linkSocket: linkSocketForPeer(
+          caller.uid,
+          ownUid(),
+          linkServed ? linkSocket : null,
+          sharedLinkServed ? sharedLinkSocket : null,
+        ),
         providers: registry().states(),
         server: joined.server,
         refusedProviders: registry().refused(),
@@ -3440,8 +3446,12 @@ async function answerLocal(
       saved: registry().savedFor(request.provider),
       // K-1609, K-701: the daemon user gets the private socket, any other caller the shared one; without a shared
       // socket the private one, which only a listed root can open.
-      linkSocket:
-        caller.uid !== ownUid() && sharedLinkServed ? sharedLinkSocket : linkServed ? linkSocket : null,
+      linkSocket: linkSocketForPeer(
+        caller.uid,
+        ownUid(),
+        linkServed ? linkSocket : null,
+        sharedLinkServed ? sharedLinkSocket : null,
+      ),
       syncedAt: hub().state().syncedAt,
       pingMs,
       graceMs,
