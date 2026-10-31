@@ -1,6 +1,5 @@
 import { circlePolicies } from "./access.ts";
 import { type State, activeShares } from "./model.ts";
-import { circleMatches } from "./visitor.ts";
 
 /**
  * The machine a signed caller may reach for a live-site card, or null when the share no longer admits it.
@@ -26,9 +25,16 @@ export function siteRelayDestination(
     !state.machines.has(card.machine)
   )
     return null;
-  const visitor = { email: null, clientId: source.clientId, ip: null };
   const allowed = activeShares(state, card, now).some(({ circle }) => {
-    if (!circleMatches(circle, visitor, state.machines)) return false;
+    // A signed machine is its machine member, never a person, device token or source IP. In particular a
+    // device with a duplicate client id must not turn a device-only share into a machine grant.
+    const matches = (member: (typeof circle.members)[number]) =>
+      member._tag === "everyone" || (member._tag === "machine" && member.machineId === source.id);
+    if (
+      circle.members.length === 0 ||
+      (circle.match === "all" ? !circle.members.every(matches) : !circle.members.some(matches))
+    )
+      return false;
     // A circle can match the local model yet be impossible to enforce in Access (e.g. an all-of circle
     // containing a person and a service token). Never silently turn such a circle into a machine grant.
     return [...circlePolicies(circle, state.machines).values()].some(

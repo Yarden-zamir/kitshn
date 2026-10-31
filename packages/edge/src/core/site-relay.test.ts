@@ -60,6 +60,14 @@ describe("live-site relay authorization", () => {
     const state = world();
     expect(siteRelayDestination(state, "vps", "site", 0)).toBe("mac");
     expect(siteRelayDestination(state, "other", "site", 0)).toBeNull();
+    // A device rule is a different identity, even if an inconsistent import gives it this machine's client id.
+    const device: Member = {
+      _tag: "device",
+      tokenId: "device-token",
+      clientId: machine("vps").clientId,
+      name: "device",
+    };
+    expect(siteRelayDestination(world(circle([device])), "vps", "site", 0)).toBeNull();
     expect(siteRelayDestination(state, "unknown", "site", 0)).toBeNull();
     expect(siteRelayDestination(state, "mac", "site", 0)).toBeNull();
     expect(siteRelayDestination(state, "vps", "unknown", 0)).toBeNull();
@@ -121,20 +129,8 @@ describe("live-site relay authorization", () => {
         0,
       ),
     ).toBeNull();
-    // Even if inconsistent state gives two machines one client id, an all-of circle with two
-    // service tokens cannot compile to an Access policy and must not admit the relay.
-    const alias = { ...machine("alias"), clientId: machine("vps").clientId };
-    const duplicateIdentity = world(
-      circle([vps, { _tag: "machine", machineId: "alias" }], { match: "all" }),
-      {
-        machines: new Map([
-          ["vps", machine("vps")],
-          ["mac", machine("mac")],
-          ["alias", alias],
-        ]),
-      },
-    );
-    expect(siteRelayDestination(duplicateIdentity, "vps", "site", 0)).toBeNull();
+    // A duplicate source member makes both rules match, but the all-of policy cannot enforce two tokens.
+    expect(siteRelayDestination(world(circle([vps, vps], { match: "all" })), "vps", "site", 0)).toBeNull();
   });
 });
 
