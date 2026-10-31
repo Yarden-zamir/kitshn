@@ -117,6 +117,39 @@ describe("Compose recipes (K-804, K-812)", () => {
   });
 });
 
+describe("draft native-service recipes", () => {
+  const deploy = [{ on: "push", branch: "main", name: "prod" }];
+  it("reads a literal service and optional loopback site", () => {
+    const native = {
+      runsOn: ["proxy-mac"],
+      executable: "bin/proxy-gateway",
+      args: ["-config", "{data}/gateway.json"],
+      site: { port: 18318 },
+    };
+    expect(decodeRecipe({ native, deploy })).toEqual({ native, deploy });
+    const source = `import { defineApp } from "kitshn";
+      export default defineApp({ native: { executable: "bin/proxy-gateway", site: { port: 18318 } },
+        deploy: [{ on: "push", name: "prod" }] });`;
+    expect(decodeRecipe(readRecipe(source))).toMatchObject({ native: { site: { port: 18318 } } });
+  });
+
+  it("refuses external executables, control characters, invalid ports and multiple kinds", () => {
+    for (const executable of ["", "/bin/sh", "../bin/sh", "bin/../secret", "C:\\bin\\app.exe", "bin//app"])
+      expect(() => decodeRecipe({ native: { executable }, deploy })).toThrow();
+    for (const port of [0, -1, 65536, 1.5])
+      expect(() => decodeRecipe({ native: { executable: "bin/app", site: { port } }, deploy })).toThrow();
+    expect(() =>
+      decodeRecipe({ native: { executable: "bin/app", args: ["bad\u0000arg"] }, deploy }),
+    ).toThrow();
+    expect(() =>
+      decodeRecipe({ native: { executable: "bin/app", args: ["bad\u0085arg"] }, deploy }),
+    ).toThrow();
+    expect(() =>
+      decodeRecipe({ native: { executable: "bin/app" }, static: { output: "site" }, deploy }),
+    ).toThrow();
+  });
+});
+
 describe("several addresses (K-817)", () => {
   const push = { name: "push", branch: "main", pr: null, action: null } as const;
   const withAddress = (address: string | ReadonlyArray<string>, on: "push" | "pull_request" = "push") =>

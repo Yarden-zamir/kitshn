@@ -8587,6 +8587,10 @@ export class Kitshn extends DurableObject<Env> {
         { status: 400 },
       );
     }
+    // A client can call the Worker without the CLI. Never misclassify a native app as a static site or make
+    // any resources until the native machine-side permission and lifecycle checks are in place.
+    if ("native" in recipe)
+      return Response.json({ error: "Native service deployment is not implemented yet." }, { status: 501 });
     const event = eventOf(deployer, input["event"]);
     if (typeof event === "string") return Response.json({ error: event }, { status: 400 });
     // K-1767: a push or a pull request of the kitshn App never deploys by itself. A push waits for a deploy ask, which

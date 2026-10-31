@@ -369,6 +369,29 @@ const shown = (card: string) =>
 
 afterEach(() => vi.restoreAllMocks());
 
+it("refuses a native service plan before creating any deploy, card or Cloudflare object", async () => {
+  const cf = fakeCloudflare();
+  const app = repo("9191", "native-service-draft");
+  await allow(app);
+  const result = await step(app, "/deploy/plan", {
+    recipe: {
+      native: { runsOn: ["proxy-mac"], executable: "bin/proxy-gateway", site: { port: 18318 } },
+      deploy: [{ on: "push", branch: "main", name: "prod" }],
+    },
+    event: {},
+  });
+  expect(result.status).toBe(501);
+  expect(result.body["error"]).toContain("not implemented");
+  expect(cf.uploads).toEqual([]);
+  expect(cf.served(app.address)).toEqual([]);
+  await runInDurableObject(env.KITSHN.getByName("kitshn"), (_instance, durable) => {
+    expect(durable.storage.sql.exec("SELECT id FROM deploys WHERE repo_id = ?", app.id).toArray()).toEqual(
+      [],
+    );
+    expect(durable.storage.sql.exec("SELECT id FROM resources WHERE id = ?", app.card).toArray()).toEqual([]);
+  });
+});
+
 describe("Worker deploys (K-806, K-909)", () => {
   it("shows the steps of a deploy onto its card, a 503 as a retry, and a failed step with its reason (K-538)", async () => {
     fakeCloudflare();

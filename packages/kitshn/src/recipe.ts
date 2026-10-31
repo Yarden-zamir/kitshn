@@ -3,6 +3,7 @@ import { DEFAULT_APP, RESERVED_SITE_NAMES } from "./names.ts";
 import type {
   ComposeApp as PublicComposeApp,
   DeployEntry as PublicDeployEntry,
+  NativeApp as PublicNativeApp,
   Recipe as PublicRecipe,
   StaticApp as PublicStaticApp,
   WorkerApp as PublicWorkerApp,
@@ -64,6 +65,47 @@ export const ComposeApp = Schema.Struct({
   runsOn: Schema.optionalKey(Schema.Array(Schema.String).check(Schema.isMaxLength(10))),
   /** K-818: a path inside the repo; the daemon checks it again after symlinks. */
   file: Schema.optionalKey(RepoPath),
+});
+
+/** Native services are schema-only until their guarded machine lifecycle is implemented. */
+const NativePath = Schema.String.check(
+  Schema.isMaxLength(256),
+  Schema.isPattern(/^[A-Za-z0-9._/-]+$/),
+  Schema.makeFilter((path) =>
+    path.split("/").some((part) => part === "" || part === "." || part === "..")
+      ? "the executable must be a relative path inside the artifact"
+      : undefined,
+  ),
+);
+export const NativeApp = Schema.Struct({
+  runsOn: Schema.optionalKey(Schema.Array(Schema.String).check(Schema.isMaxLength(10))),
+  executable: NativePath,
+  args: Schema.optionalKey(
+    Schema.Array(
+      Schema.String.check(
+        Schema.isMaxLength(1024),
+        Schema.makeFilter((arg) =>
+          [...arg].some((char) => {
+            const code = char.codePointAt(0) ?? 0;
+            return code < 32 || (code >= 127 && code <= 159);
+          })
+            ? "an argument cannot contain control characters"
+            : undefined,
+        ),
+      ),
+    ).check(Schema.isMaxLength(32)),
+  ),
+  site: Schema.optionalKey(
+    Schema.Struct({
+      port: Schema.Number.check(
+        Schema.makeFilter((port) =>
+          Number.isInteger(port) && port >= 1 && port <= 65535
+            ? undefined
+            : "the port must be an integer from 1 to 65535",
+        ),
+      ),
+    }),
+  ),
 });
 
 /** K-806: a binding or class name, a JavaScript identifier. */
@@ -142,6 +184,7 @@ export const Recipe = Schema.Union([
   Schema.Struct({ static: StaticApp, deploy, needs }),
   Schema.Struct({ compose: ComposeApp, deploy, needs }),
   Schema.Struct({ worker: WorkerApp, deploy, needs }),
+  Schema.Struct({ native: NativeApp, deploy, needs }),
 ]);
 export type Recipe = typeof Recipe.Type;
 
@@ -210,26 +253,42 @@ export type PublicTypesMatch = [
   Assert<Same<typeof StaticApp.Type, PublicStaticApp>>,
   Assert<Same<typeof ComposeApp.Type, PublicComposeApp>>,
   Assert<Same<typeof WorkerApp.Type, PublicWorkerApp>>,
+  Assert<Same<typeof NativeApp.Type, PublicNativeApp>>,
   Assert<Same<Keys<Recipe>, Keys<PublicRecipe>>>,
-  Assert<Same<Extract<Recipe, { static: unknown }>, Kind<PublicRecipe, "static", "compose" | "worker">>>,
-  Assert<Same<Extract<Recipe, { compose: unknown }>, Kind<PublicRecipe, "compose", "static" | "worker">>>,
-  Assert<Same<Extract<Recipe, { worker: unknown }>, Kind<PublicRecipe, "worker", "static" | "compose">>>,
+  Assert<
+    Same<Extract<Recipe, { static: unknown }>, Kind<PublicRecipe, "static", "compose" | "worker" | "native">>
+  >,
+  Assert<
+    Same<Extract<Recipe, { compose: unknown }>, Kind<PublicRecipe, "compose", "static" | "worker" | "native">>
+  >,
+  Assert<
+    Same<Extract<Recipe, { worker: unknown }>, Kind<PublicRecipe, "worker", "static" | "compose" | "native">>
+  >,
+  Assert<
+    Same<Extract<Recipe, { native: unknown }>, Kind<PublicRecipe, "native", "static" | "compose" | "worker">>
+  >,
   Assert<
     Same<
-      Pick<Extract<PublicRecipe, { static: PublicStaticApp }>, "compose" | "worker">,
-      { readonly compose?: never; readonly worker?: never }
+      Pick<Extract<PublicRecipe, { static: PublicStaticApp }>, "compose" | "worker" | "native">,
+      { readonly compose?: never; readonly worker?: never; readonly native?: never }
     >
   >,
   Assert<
     Same<
-      Pick<Extract<PublicRecipe, { compose: PublicComposeApp }>, "static" | "worker">,
-      { readonly static?: never; readonly worker?: never }
+      Pick<Extract<PublicRecipe, { compose: PublicComposeApp }>, "static" | "worker" | "native">,
+      { readonly static?: never; readonly worker?: never; readonly native?: never }
     >
   >,
   Assert<
     Same<
-      Pick<Extract<PublicRecipe, { worker: PublicWorkerApp }>, "static" | "compose">,
-      { readonly static?: never; readonly compose?: never }
+      Pick<Extract<PublicRecipe, { worker: PublicWorkerApp }>, "static" | "compose" | "native">,
+      { readonly static?: never; readonly compose?: never; readonly native?: never }
+    >
+  >,
+  Assert<
+    Same<
+      Pick<Extract<PublicRecipe, { native: PublicNativeApp }>, "static" | "compose" | "worker">,
+      { readonly static?: never; readonly compose?: never; readonly worker?: never }
     >
   >,
 ];

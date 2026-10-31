@@ -50,6 +50,7 @@ The daemon carries the skill of its release (K-618). The line under the front ma
 
    - One app: `export default defineApp({ ... })`. Several: `defineApps`, up to 10, keys like `web` (K-804).
    - Kinds, one per app: `static` (`build`, `output`, K-805), `compose` (`runsOn` machine labels, `file`, K-812, K-818) or `worker` (`main`, `compatibilityDate`, `kv`, `durableObjects`, `crons`, `vars`, `assets`, K-806).
+   - A planned `native` service recipe can be checked (K-823), but deployment is not implemented and both the CLI and Worker refuse it. Do not claim that a checked native recipe installed a service.
    - `deploy`: the first matching entry wins (K-807). `pr-{pr}` gives each pull request a preview (K-901).
    - `address`: the default is `<repo>[-<key>][-<env>].<zone>`. A push entry may list up to 5; the first must be under the kitshn zone (K-817).
    - `startsIn`: the circle of a new card. Without it, the card waits private in the tray. After the first deploy, the map decides (K-518).

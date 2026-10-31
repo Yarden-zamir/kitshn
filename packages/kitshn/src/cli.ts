@@ -104,6 +104,8 @@ async function deploy(server: string, dir: string) {
     const missing = closing ? [] : missingNeeds(recipe, results);
     const run: { deployId: string | null } = { deployId: null };
     try {
+      // Refuse even when a dependency failed: the skipped-app reporting path also calls /deploy/plan.
+      if ("native" in recipe) throw new CliError("native service deployment is not implemented yet.");
       if (missing.length > 0) {
         const reason = `not deployed, because it needs ${missing.join(", ")}, which did not deploy (K-820).`;
         await call(server, "/deploy/plan", { recipe, key, event, skip: reason });
@@ -140,6 +142,9 @@ async function deployApp(
   artifact: Artifact | null,
   run: { deployId: string | null },
 ) {
+  // The recipe is readable for review, but the machine-side lifecycle is not built yet. Refuse before planning
+  // anything so this draft cannot be mistaken for a static deploy or create a card or DNS record.
+  if ("native" in recipe) return fail("native service deployment is not implemented yet.");
   const plan = await call<{
     deployId: string | null;
     plan: { kind: string; reason?: string; address?: string; environment?: string };
