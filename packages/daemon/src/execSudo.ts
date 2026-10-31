@@ -21,6 +21,9 @@ case "$1" in
   "~/"*) cd "$HOME/\${1#"~/"}" || exit 126 ;;
   *) cd "$1" || exit 126 ;;
 esac
+# sudo sets PATH to its secure_path, so the user's own tools come first, as in a run without sudo.
+PATH="$HOME/.local/bin:$PATH"
+export PATH
 # The trap comes first, so a TERM right after the start still ends the group. Known limit: a TERM between the
 # start and child=$! leaves the group; revisit if runs are killed in their first milliseconds in use.
 child=
