@@ -349,6 +349,7 @@ it("pushes live-site reach only to a supporting signed daemon, including without
       hostname: "vps",
       tunnel: "running",
       capabilities,
+      ...(capabilities.includes("site-link-guard") ? { siteGuardSocket: "/tmp/guard.sock" } : {}),
     });
     const sendStatus = (capabilities: Array<string>) =>
       instance.webSocketMessage(pair[1], JSON.stringify({ type: "status", status: status(capabilities) }));
@@ -398,6 +399,74 @@ it("pushes live-site reach only to a supporting signed daemon, including without
       );
       expect(pair[1].deserializeAttachment()).toMatchObject({ siteGuardAckHash: guard.hash });
       expect(internals.queuedFor(keyed, status(["applied", "site-links", "site-link-guard"]))).toBe(0);
+      // Capability loss immediately invalidates the guard, even before a new one returns.
+      await sendStatus(["applied", "site-links"]);
+      expect(pair[1].deserializeAttachment()).toMatchObject({ siteGuardAckHash: null });
+      await instance.webSocketMessage(
+        pair[1],
+        JSON.stringify({ type: "applied", key: guard.key, hash: guard.hash }),
+      );
+      expect(pair[1].deserializeAttachment()).toMatchObject({ siteGuardAckHash: null });
+      await sendStatus(["applied", "site-links", "site-link-guard"]);
+      const returnedGuard = internals.pushesOf("vps").find((item) => item.key === guard.key)!;
+      expect(returnedGuard.hash).not.toBe(guard.hash);
+      expect(pair[1].deserializeAttachment()).toMatchObject({
+        siteGuardSentHash: returnedGuard.hash,
+        siteGuardAckHash: null,
+      });
+      // A delayed acknowledgement of the original push must not settle the replacement.
+      await instance.webSocketMessage(
+        pair[1],
+        JSON.stringify({ type: "applied", key: guard.key, hash: guard.hash }),
+      );
+      expect(pair[1].deserializeAttachment()).toMatchObject({ siteGuardAckHash: null });
+      await instance.webSocketMessage(
+        pair[1],
+        JSON.stringify({ type: "applied", key: returnedGuard.key, hash: returnedGuard.hash }),
+      );
+      expect(pair[1].deserializeAttachment()).toMatchObject({ siteGuardAckHash: returnedGuard.hash });
+      // A new guard socket on the same connection has a distinct acknowledgement too.
+      await instance.webSocketMessage(
+        pair[1],
+        JSON.stringify({
+          type: "status",
+          status: {
+            ...status(["applied", "site-links", "site-link-guard"]),
+            siteGuardSocket: "/tmp/guard-next.sock",
+          },
+        }),
+      );
+      const changedGuard = internals.pushesOf("vps").find((item) => item.key === guard.key)!;
+      expect(changedGuard.hash).not.toBe(returnedGuard.hash);
+      expect(pair[1].deserializeAttachment()).toMatchObject({
+        siteGuardSentHash: changedGuard.hash,
+        siteGuardAckHash: null,
+      });
+      await instance.webSocketMessage(
+        pair[1],
+        JSON.stringify({ type: "applied", key: returnedGuard.key, hash: returnedGuard.hash }),
+      );
+      expect(pair[1].deserializeAttachment()).toMatchObject({ siteGuardAckHash: null });
+      await instance.webSocketMessage(
+        pair[1],
+        JSON.stringify({ type: "applied", key: changedGuard.key, hash: changedGuard.hash }),
+      );
+      expect(pair[1].deserializeAttachment()).toMatchObject({ siteGuardAckHash: changedGuard.hash });
+      // A retransmission of identical grants must not accept the earlier transmission's acknowledgement.
+      internals.sentGrants.delete("vps/site:guard");
+      internals.pushGrants();
+      const resentGuard = internals.pushesOf("vps").find((item) => item.key === guard.key)!;
+      expect(resentGuard.hash).not.toBe(changedGuard.hash);
+      await instance.webSocketMessage(
+        pair[1],
+        JSON.stringify({ type: "applied", key: changedGuard.key, hash: changedGuard.hash }),
+      );
+      expect(pair[1].deserializeAttachment()).toMatchObject({ siteGuardAckHash: null });
+      await instance.webSocketMessage(
+        pair[1],
+        JSON.stringify({ type: "applied", key: resentGuard.key, hash: resentGuard.hash }),
+      );
+      expect(pair[1].deserializeAttachment()).toMatchObject({ siteGuardAckHash: resentGuard.hash });
       // A newer connection's guard acknowledgement cannot be supplied by the replaced connection.
       const next = new WebSocketPair();
       state.acceptWebSocket(next[1], ["vps", "machines"]);
@@ -409,20 +478,22 @@ it("pushes live-site reach only to a supporting signed daemon, including without
         next[1],
         JSON.stringify({ type: "status", status: status(["applied", "site-links", "site-link-guard"]) }),
       );
+      const nextGuard = internals.pushesOf("vps").find((item) => item.key === guard.key)!;
+      expect(nextGuard.hash).not.toBe(resentGuard.hash);
       expect(next[1].deserializeAttachment()).toMatchObject({
-        siteGuardSentHash: guard.hash,
+        siteGuardSentHash: nextGuard.hash,
         siteGuardAckHash: null,
       });
       await instance.webSocketMessage(
         pair[1],
-        JSON.stringify({ type: "applied", key: guard.key, hash: guard.hash }),
+        JSON.stringify({ type: "applied", key: resentGuard.key, hash: resentGuard.hash }),
       );
       expect(next[1].deserializeAttachment()).toMatchObject({ siteGuardAckHash: null });
       await instance.webSocketMessage(
         next[1],
-        JSON.stringify({ type: "applied", key: guard.key, hash: guard.hash }),
+        JSON.stringify({ type: "applied", key: nextGuard.key, hash: nextGuard.hash }),
       );
-      expect(next[1].deserializeAttachment()).toMatchObject({ siteGuardAckHash: guard.hash });
+      expect(next[1].deserializeAttachment()).toMatchObject({ siteGuardAckHash: nextGuard.hash });
       next[1].close(1000, "new connection test over");
       next[0].close(1000, "new connection test over");
       // A connection with the Access token alone may report status, but gets no reach push.

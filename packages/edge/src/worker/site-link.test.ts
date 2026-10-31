@@ -136,7 +136,8 @@ describe("Cloudflare ownership inspection", () => {
         }),
       });
     });
-    const input = { host, locallyHeld: false, ownDns: null, ownApps: new Map<string, string>() };
+    let locallyHeld = false;
+    const input = { host, local: () => ({ locallyHeld, ownDns: null, ownApps: new Map<string, string>() }) };
     expect(await inspectSiteLinkHost("token", "account", "zone", input)).toBeNull();
     expect(paths).toHaveLength(4);
     expect(
@@ -149,9 +150,38 @@ describe("Cloudflare ownership inspection", () => {
     routes = [{ pattern: "*.example.com/*" }];
     expect(await inspectSiteLinkHost("token", "account", "zone", input)).toContain("Worker route");
     paths.length = 0;
-    expect(await inspectSiteLinkHost("token", "account", "zone", { ...input, locallyHeld: true })).toContain(
-      "already belongs",
-    );
+    locallyHeld = true;
+    expect(await inspectSiteLinkHost("token", "account", "zone", input)).toContain("already belongs");
     expect(paths).toEqual([]);
+  });
+
+  it("refuses an inventory if a local owner or link object changes while Cloudflare answers", async () => {
+    const paused = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    let local = {
+      locallyHeld: false,
+      ownDns: null as { id: string; content: string } | null,
+      ownApps: new Map<string, string>(),
+    };
+    let calls = 0;
+    vi.stubGlobal("fetch", async (url: string) => {
+      if (++calls === 1) {
+        paused.resolve();
+        await resume.promise;
+      }
+      return Response.json({
+        success: true,
+        result: [],
+        ...(url.includes("/workers/routes")
+          ? {}
+          : { result_info: { page: 1, count: 0, per_page: 1000, total_pages: 0 } }),
+      });
+    });
+    const inspecting = inspectSiteLinkHost("token", "account", "zone", { host, local: () => local });
+    await paused.promise;
+    // An old redirect or another card started holding the name during the network calls.
+    local = { ...local, locallyHeld: true };
+    resume.resolve();
+    expect(await inspecting).toContain("changed during inspection");
   });
 });

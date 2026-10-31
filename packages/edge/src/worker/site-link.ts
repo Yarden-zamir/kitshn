@@ -120,15 +120,28 @@ export function siteLinkHostRefusal(input: SiteLinkInventory): string | null {
   return null;
 }
 
-/** Fetch all Cloudflare owners of a candidate host. A failed or incomplete listing refuses the host. */
+type SiteLinkLocalState = Pick<SiteLinkInventory, "locallyHeld" | "ownDns" | "ownApps">;
+
+/** Stable comparison of the local ownership claims around asynchronous Cloudflare calls. */
+function localFingerprint(state: SiteLinkLocalState): string {
+  return JSON.stringify({
+    locallyHeld: state.locallyHeld,
+    ownDns: state.ownDns,
+    ownApps: [...state.ownApps].sort(([a], [b]) => a.localeCompare(b)),
+  });
+}
+
+/** Fetch all Cloudflare owners of a candidate host. A failed, changing or incomplete listing refuses the host. */
 export async function inspectSiteLinkHost(
   token: string,
   accountId: string,
   zoneId: string,
-  input: Pick<SiteLinkInventory, "host" | "locallyHeld" | "ownDns" | "ownApps">,
+  input: { readonly host: string; readonly local: () => SiteLinkLocalState },
 ): Promise<string | null> {
-  if (input.locallyHeld) return "the hostname already belongs to another kitshn address";
   try {
+    const initial = input.local();
+    if (initial.locallyHeld) return "the hostname already belongs to another kitshn address";
+    const fingerprint = localFingerprint(initial);
     const account = `/accounts/${accountId}`;
     const zone = `/zones/${zoneId}`;
     const [dns, domains, routes, apps] = await Promise.all([
@@ -145,7 +158,12 @@ export async function inspectSiteLinkHost(
       cloudflareCompleteList<NonNullable<SiteLinkInventory["apps"]>[number]>(token, `${account}/access/apps`),
     ]);
     if (!Array.isArray(routes)) return "Cloudflare's hostname inventory is incomplete";
-    return siteLinkHostRefusal({ ...input, dns, domains, routes, apps });
+    // A deploy, redirect, local site or link object can change while Cloudflare is answering. Do not use an
+    // inventory obtained for the earlier local owner; a later reconciliation can inspect the new one.
+    const current = input.local();
+    if (localFingerprint(current) !== fingerprint)
+      return "kitshn's hostname ownership changed during inspection";
+    return siteLinkHostRefusal({ host: input.host, ...current, dns, domains, routes, apps });
   } catch {
     return "Cloudflare's hostname inventory could not be verified";
   }

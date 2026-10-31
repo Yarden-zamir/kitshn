@@ -529,8 +529,10 @@ type Attachment =
       readonly servers?: ReadonlyArray<ServerReport>;
       /** K-630: the last health check of this connection; an older daemon sends none. */
       readonly health?: HealthReport;
+      /** The nonce of the last guard push on this connection; renewed for every transmission. */
+      readonly siteGuardGeneration?: string;
       /** K-1609: the guard push sent and acknowledged on this exact signed connection. */
-      readonly siteGuardSentHash?: string;
+      readonly siteGuardSentHash?: string | null;
       readonly siteGuardAckHash?: string | null;
     };
 
@@ -3953,7 +3955,9 @@ export class Kitshn extends DurableObject<Env> {
       const socket = this.openSocket(machineId);
       const attachment = socket ? attachmentOf(socket) : null;
       if (!socket || attachment?.kind !== "machine" || attachment.check !== "signed") continue;
-      for (const { key, hash, push } of pushes) {
+      for (const item of pushes) {
+        const { key, push } = item;
+        let { hash } = item;
         // The first push follows the signed handshake, before status names this capability.
         if (
           (push.type === "siteReach" || push.type === "siteGuard") &&
@@ -3964,13 +3968,22 @@ export class Kitshn extends DurableObject<Env> {
         )
           continue;
         if (this.sentGrants.get(`${machineId}/${key}`) === hash) continue;
-        this.sentGrants.set(`${machineId}/${key}`, hash);
         if (push.type === "siteGuard") {
           const current = attachmentOf(socket);
           if (current?.kind !== "machine" || current.check !== "signed") continue;
-          // A previous connection's acknowledgement, or an acknowledgement of older grants, cannot enable a link.
-          saveMachine(socket, { ...current, siteGuardSentHash: hash, siteGuardAckHash: null });
+          // A fresh nonce for every transmission also distinguishes A -> B -> A from the first A. A late
+          // acknowledgement cannot prove that the daemon applied the replacement push, even on the same socket.
+          const generation = crypto.randomUUID().replaceAll("-", "");
+          hash = `${hash.split(".", 1)[0]}.${generation}`;
+          saveMachine(socket, {
+            ...current,
+            siteGuardGeneration: generation,
+            siteGuardSentHash: hash,
+            siteGuardAckHash: null,
+          });
+          this.pushHashes.get(machineId)?.set(key, hash);
         }
+        this.sentGrants.set(`${machineId}/${key}`, hash);
         const { key: _key, ...message } = push;
         send(socket, { ...message, hash } as ServerToDaemon);
       }
@@ -4026,7 +4039,12 @@ export class Kitshn extends DurableObject<Env> {
         ])
         .map((push) => {
           const text = JSON.stringify(push);
-          return { key: push.key, hash: `${fnv(text)}${fnv(text, 0x050c5d1f)}`, push };
+          const contentHash = `${fnv(text)}${fnv(text, 0x050c5d1f)}`;
+          const socket = push.type === "siteGuard" ? this.openSocket(machineId) : null;
+          const attachment = socket ? attachmentOf(socket) : null;
+          const generation = attachment?.kind === "machine" ? attachment.siteGuardGeneration : undefined;
+          const hash = generation ? `${contentHash}.${generation}` : contentHash;
+          return { key: push.key, hash, push };
         })
     );
   }
@@ -5319,6 +5337,23 @@ export class Kitshn extends DurableObject<Env> {
           // These grants live only for this connection, so an acknowledgement from the previous one is stale.
           if (this.applied.delete(`${machine.id}/${key}`))
             this.sql("DELETE FROM applied_state WHERE machine_id = ? AND key = ?", machine.id, key);
+          this.sentGrants.delete(`${machine.id}/${key}`);
+          fresh = true;
+        }
+        const hadGuard = attachment.status?.capabilities?.includes(SITE_GUARD_CAPABILITY) === true;
+        const hasGuard = status.capabilities?.includes(SITE_GUARD_CAPABILITY) === true;
+        if (hadGuard !== hasGuard || status.siteGuardSocket !== attachment.status?.siteGuardSocket) {
+          // Losing the capability or replacing its local socket invalidates its acknowledgement immediately.
+          const current = attachmentOf(socket);
+          if (current?.kind === "machine")
+            saveMachine(socket, { ...current, siteGuardSentHash: null, siteGuardAckHash: null });
+          this.sentGrants.delete(`${machine.id}/${SITE_GUARD_KEY}`);
+          if (this.applied.delete(`${machine.id}/${SITE_GUARD_KEY}`))
+            this.sql(
+              "DELETE FROM applied_state WHERE machine_id = ? AND key = ?",
+              machine.id,
+              SITE_GUARD_KEY,
+            );
           fresh = true;
         }
         if (fresh) this.pushGrants();
@@ -5413,6 +5448,8 @@ export class Kitshn extends DurableObject<Env> {
         const current = this.pushesOf(machine.id).find((item) => item.key === SITE_GUARD_KEY)?.hash;
         if (
           attachment.check !== "signed" ||
+          !attachment.status?.capabilities?.includes(SITE_GUARD_CAPABILITY) ||
+          !attachment.status.siteGuardSocket ||
           this.openSocket(machine.id) !== socket ||
           attachment.siteGuardSentHash !== message.hash ||
           current !== message.hash
