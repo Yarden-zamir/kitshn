@@ -1,0 +1,388 @@
+/* The try-it map on the home page (try.js), in the look of this site: ink edges and short hard shadows. Only the home
+   page loads this file; it builds on the tokens of /style.css, and the circles match the Sharing section. */
+/* The first screen of the home page: the words and the map, centred in the window, and the setup strip under them, with
+   all of it in view on a computer. A short window shrinks the headline; a very tall one stops growing the hero. */
+.landing.first {
+  --strip: 6.2rem;
+  min-height: min(calc(100svh - 4.5rem - var(--strip)), 52rem);
+  margin-block: 0;
+  padding-block: 1.4rem;
+}
+.landing.first h1 {
+  font-size: clamp(2.2rem, min(5.5vw, 8.4svh), 4.2rem);
+}
+.landing.first .lede {
+  font-size: clamp(1rem, 2.3svh, 1.3rem);
+}
+.landing.first .actions {
+  margin-top: 1rem;
+}
+/* The demo keeps its proportions and follows the height of the window. */
+.landing.first .picture {
+  width: min(100%, calc((100svh - 4.5rem - var(--strip) - 3rem) * 640 / 516));
+  justify-self: end;
+}
+.setup {
+  margin-block: 0 3rem;
+}
+.cta.solo {
+  grid-template-columns: 1fr auto;
+  background: #ff7a6b;
+  gap: 1rem 2rem;
+  padding: 0.6rem 1.2rem;
+}
+.cta.solo h2 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+.cta.solo .actions {
+  margin: 0;
+}
+@media (max-width: 860px) {
+  .landing.first {
+    min-height: 0;
+    padding-block: 2rem;
+  }
+  .landing.first h1 {
+    font-size: clamp(2.2rem, 5.5vw, 4.2rem);
+  }
+  .landing.first .lede {
+    font-size: 1.15rem;
+  }
+  .landing.first .picture {
+    width: 100%;
+  }
+  .cta.solo {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 1rem 1.1rem;
+  }
+}
+
+.try {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  background-color: var(--canvas);
+  background-image: radial-gradient(var(--dots) 1.2px, transparent 1.2px);
+  background-size: 16px 16px;
+}
+.try-stage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+.try-said {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.try-circle {
+  position: absolute;
+  pointer-events: none;
+  border: var(--bw) solid var(--ink);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--c) 22%, transparent);
+  box-shadow: inset 0 0 0 5px var(--c);
+  transition: box-shadow 160ms ease;
+}
+.try-circle.over {
+  box-shadow:
+    inset 0 0 0 5px var(--c),
+    0 0 0 5px var(--accent);
+}
+.try-name {
+  position: absolute;
+  left: 50%;
+  top: -0.85rem;
+  transform: translateX(-50%);
+  padding: 0.05rem 0.7rem;
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 800;
+  white-space: nowrap;
+  color: var(--ink);
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--pill);
+  box-shadow: 2px 2px 0 0 var(--ink);
+}
+.try-name.held {
+  cursor: grabbing;
+}
+/* The dot sits on the edge at 45 degrees. Its hit area is larger than its picture, for a finger. */
+.try-grip {
+  position: absolute;
+  left: 85.36%;
+  top: 85.36%;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  padding: 0;
+  cursor: nwse-resize;
+  pointer-events: auto;
+  touch-action: none;
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: 50%;
+  box-shadow: 2px 2px 0 0 var(--ink);
+  transition:
+    transform 160ms var(--spring),
+    background 120ms;
+}
+.try-grip::after {
+  content: "";
+  position: absolute;
+  inset: -11px;
+  border-radius: 50%;
+}
+.try-grip:hover,
+.try-grip.held {
+  transform: scale(1.2);
+  background: var(--accent);
+}
+
+/* A site: a browser's top bar, a picture of the site, and its name. Grey until someone else can open it. */
+.try-card {
+  position: absolute;
+  z-index: 2;
+  width: 132px;
+  margin: -50px 0 0 -66px;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: 10px;
+  box-shadow: 3px 3px 0 0 var(--ink);
+  transition:
+    transform 160ms var(--spring),
+    box-shadow 160ms var(--spring);
+}
+/* A server is a short rack; the margin keeps its place at its centre. */
+.try-card.machine {
+  margin-top: -31px;
+}
+.try-card:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 0 var(--ink);
+}
+.try-card.held {
+  z-index: 3;
+  cursor: grabbing;
+  transform: translate(-3px, -4px) rotate(-2deg) scale(1.04);
+  box-shadow: 8px 9px 0 0 var(--ink);
+}
+.try-bar {
+  display: flex;
+  gap: 3px;
+  height: 13px;
+  padding: 4px 6px;
+  background: var(--raised);
+  border-bottom: var(--bw) solid var(--ink);
+}
+.try-bar i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+.try-pic {
+  display: block;
+  width: 100%;
+  height: auto;
+  filter: grayscale(1);
+  transition: filter 240ms ease;
+}
+.try-card.shared .try-pic {
+  filter: none;
+}
+.try-title {
+  display: block;
+  padding: 3px 8px 4px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.3;
+  white-space: nowrap;
+  border-top: var(--bw) solid var(--ink);
+}
+.glide .try-card,
+.glide .try-circle {
+  transition:
+    left 300ms var(--spring),
+    top 300ms var(--spring),
+    width 300ms var(--spring),
+    height 300ms var(--spring);
+}
+
+.try-cursor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 6;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 240ms;
+}
+.try-cursor.on {
+  opacity: 1;
+}
+
+/* Add site: the button in the corner, and the small form under it. */
+.try-new {
+  position: absolute;
+  z-index: 3;
+  top: 0.6rem;
+  right: 0.6rem;
+  padding: 3px 12px;
+  font-size: 0.8rem;
+}
+.try-new.down,
+.try-form .btn.down {
+  transform: translate(2px, 2px);
+  box-shadow: none;
+}
+.try-new[hidden],
+.try-form[hidden] {
+  display: none;
+}
+.try-form {
+  position: absolute;
+  z-index: 4;
+  top: 3rem;
+  right: 0.6rem;
+  display: flex;
+  align-items: end;
+  gap: 0.5rem;
+  padding: 0.6rem 0.7rem;
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.try-form label {
+  display: grid;
+  gap: 0.15rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+.try-form input {
+  width: 10rem;
+  padding: 3px 8px;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--square);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.try-form .btn {
+  padding: 3px 12px;
+  font-size: 0.85rem;
+}
+.try-card.born {
+  animation: try-born 340ms var(--spring);
+}
+@keyframes try-born {
+  from {
+    opacity: 0;
+    scale: 0.6;
+  }
+}
+
+/* The bar that says what changed. It slides up from the bottom of the map and leaves by itself. */
+.try-toast {
+  position: absolute;
+  z-index: 4;
+  left: 50%;
+  bottom: 0.7rem;
+  width: max-content;
+  max-width: calc(100% - 1.4rem);
+  padding: 0.3rem 0.85rem;
+  pointer-events: none;
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.35;
+  text-align: center;
+  background: var(--accent);
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--pill);
+  box-shadow: 3px 3px 0 0 var(--ink);
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, calc(100% + 1rem));
+  transition:
+    transform 320ms var(--spring),
+    opacity 200ms ease,
+    visibility 0s 320ms;
+}
+.try-toast.on {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%);
+  transition:
+    transform 320ms var(--spring),
+    opacity 200ms ease;
+}
+.try-toast p {
+  margin: 0;
+}
+
+/* A site that would become public asks first. */
+.try-ask {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: #19191b33;
+}
+.try-ask-box {
+  max-width: 24rem;
+  padding: 1rem 1.1rem;
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-up);
+}
+.try-ask-box p {
+  font-weight: 700;
+}
+.try-ask-box div {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .try-card,
+  .try-grip,
+  .try-pic,
+  .try-circle,
+  .try-toast,
+  .try-toast.on,
+  .glide .try-card,
+  .glide .try-circle {
+    transition: none;
+  }
+  .try-card.held {
+    transform: none;
+  }
+  .try-card.born {
+    animation: none;
+  }
+}

@@ -3,8 +3,9 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
     <title>Install kitshn</title>
-    <meta name="description" content="Set up kitshn on your Cloudflare account, join a machine, and deploy your first app." />
+    <meta name="description" content="Set up kitshn on your Cloudflare account, deploy your first app and join a machine, step by step." />
     <meta property="og:title" content="Install kitshn" />
     <meta property="og:url" content="https://kitshn.com/install/" />
     <meta property="og:image" content="https://kitshn.com/social-preview.png" />
@@ -12,96 +13,99 @@
     <meta property="og:image:height" content="640" />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/style.css?v=2026-10-31-19" />
+    <link rel="stylesheet" href="/install/install.css?v=2026-10-31-19" />
+    <script src="/install/install.js?v=2026-10-31-19" defer></script>
   </head>
   <body>
     <header class="wrap top card">
       <a class="brand" href="/"><img src="/favicon.svg" alt="" /> kitshn</a>
       <nav>
-        <a class="btn" href="/">Home</a>
-        <a class="btn" href="/install/" aria-current="page">Install</a>
-        <a class="btn" href="/architecture/">How it works</a>
-        <a class="btn" href="https://github.com/Yarden-zamir/kitshn">GitHub</a>
+        <a href="/architecture/">How it works</a>
+        <a href="/enterprise/">Enterprise</a>
+        <a href="https://github.com/Yarden-zamir/kitshn">GitHub</a>
+        <a class="btn primary" href="/install/" aria-current="page">Install</a>
       </nav>
     </header>
 
     <main>
-      <section class="wrap card hero">
-        <span class="sticker ok">Free plan</span>
-        <h1>Install kitshn</h1>
-        <p>
-          kitshn runs on your own Cloudflare account, on the free plan. You set it up once, then every repo
-          deploys with a push.
+      <section class="wrap install-hero">
+        <h1>Install <span class="mark">kitshn</span></h1>
+        <p class="lede">
+          kitshn runs on your own Cloudflare account, on the free plan. Set it up once, and every repo deploys with a
+          push. Tick each step as you finish it.
         </p>
       </section>
 
-      <section class="wrap card pad">
-        <span class="label">Before you start</span>
-        <h2>What you need</h2>
-        <ul>
-          <li>A Cloudflare account, and a domain on it. The free plan is enough.</li>
-          <li>A GitHub account. Its repos deploy; other accounts cannot.</li>
-          <li><code>curl</code>, <code>sh</code> and <code>jq</code> on the computer where you run the setup.</li>
-          <li>
-            For Compose apps only: a Linux or macOS machine with Docker. Static sites and Worker apps need no
-            machine.
-          </li>
+      <div class="wrap progress" id="progress">
+        <span class="progress-text" aria-live="polite">0 of 12 done</span>
+        <span class="progress-bar"><i></i></span>
+        <button type="button" class="progress-reset">Start over</button>
+      </div>
+
+      <section class="wrap" id="need">
+        <div class="install-head"><h2>What you need</h2></div>
+        <ul class="card needs">
+          <li><label class="tick"><input type="checkbox" data-step="n-cf" /><span>A free <a href="https://dash.cloudflare.com/sign-up">Cloudflare account</a></span></label></li>
+          <li><label class="tick"><input type="checkbox" data-step="n-domain" /><span>A <a href="https://developers.cloudflare.com/fundamentals/manage-domains/add-site/">domain on that account</a></span></label></li>
+          <li><label class="tick"><input type="checkbox" data-step="n-gh" /><span>A <a href="https://github.com/signup">GitHub account</a>. Its repos deploy; other accounts cannot.</span></label></li>
+          <li><label class="tick"><input type="checkbox" data-step="n-tools" /><span><code>curl</code>, <code>sh</code> and <a href="https://jqlang.org/download/"><code>jq</code></a> on the computer where you run the setup</span></label></li>
+          <li><label class="tick"><input type="checkbox" data-step="n-docker" data-optional /><span>Only for Compose apps: a Linux or macOS machine with <a href="https://docs.docker.com/get-started/get-docker/">Docker</a>. Static sites and Worker apps need no machine.</span></label></li>
         </ul>
       </section>
 
-      <section class="wrap">
-        <span class="label">Set up</span>
-        <h2>Set up kitshn</h2>
-        <ol class="steps">
-          <li class="card">
-            <h3>Make a Cloudflare API token</h3>
-            <p>
-              Open the
-              <a
-                href="https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_routes%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_r2%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22access%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22access_acct%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22dns%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22account_analytics%22%2C%22type%22%3A%22read%22%7D%5D&accountId=%2A&zoneId=all&name=kitshn"
-                >token page with the permissions filled in</a
-              >, then create the token. When a permission is missing later, the setup names it and prints this
-              link.
-            </p>
+      <section class="wrap" id="setup">
+        <div class="install-head"><span class="label">Part 1</span><h2>Set up kitshn</h2></div>
+        <ol class="flowsteps">
+          <li class="card step" data-card="token">
+            <div class="step-main">
+              <h3>Make a Cloudflare API token</h3>
+              <p>Open the <a href="https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_routes%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_r2%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22access%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22access_acct%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22dns%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22account_analytics%22%2C%22type%22%3A%22read%22%7D%5D&accountId=%2A&zoneId=all&name=kitshn">token page with the permissions filled in</a>, then click <strong>Create Token</strong> and copy it. If a permission is missing later, the setup names it and prints this link.</p>
+              <label class="tick done"><input type="checkbox" data-step="token" /><span>Mark this step done</span></label>
+            </div>
+            <figure class="see"><figcaption>What you should see</figcaption><div class="see-box"><div class="see-app"><b>Token created</b><span class="see-secret">••••••••••••••••••••</span><span class="see-btn">Copy</span></div></div></figure>
           </li>
-          <li class="card">
-            <h3>Turn on Zero Trust</h3>
-            <p>
-              kitshn uses Cloudflare Access for every login. Open Zero Trust in the Cloudflare dashboard once and
-              pick the free plan. The setup stops with the link when this step is missing.
-            </p>
+          <li class="card step" data-card="zerotrust">
+            <div class="step-main">
+              <h3>Turn on Zero Trust</h3>
+              <p>kitshn uses Cloudflare Access for every login. Open <a href="https://one.dash.cloudflare.com/">Zero Trust in the Cloudflare dashboard</a> once and pick the free plan. The setup stops with this link if you skip this step.</p>
+              <label class="tick done"><input type="checkbox" data-step="zerotrust" /><span>Mark this step done</span></label>
+            </div>
+            <figure class="see"><figcaption>What you should see</figcaption><div class="see-box"><div class="see-app"><b>Zero Trust</b><span class="see-row"><span>Plan</span><i class="ok">Free</i></span></div></div></figure>
           </li>
-          <li class="card">
-            <h3>Run the setup</h3>
-            <p>Pick the admin address, for example <code>kit.example.com</code> on your domain:</p>
-            <pre><code>curl -fsSL https://kit.yarden-zamir.com/install | \
+          <li class="card step" data-card="setup">
+            <div class="step-main">
+              <h3>Run the setup</h3>
+              <p>Pick the admin address on your domain, such as <code>kit.example.com</code>. Replace the values below, then run the command.</p>
+              <div class="code"><button type="button" class="copy">Copy</button><pre><code>curl -fsSL https://kit.yarden-zamir.com/install | \
   CLOUDFLARE_API_TOKEN=... \
   KITSHN_HOST=kit.example.com \
   KITSHN_OWNER_EMAILS=you@example.com \
-  KITSHN_DEPLOY_OWNERS=your-github-name sh</code></pre>
-            <p>
-              It makes the Worker, its database, the R2 bucket, the Access applications and the Owner circle.
-              Run it again at any time: it changes only what is not right, and prints each change.
-            </p>
+  KITSHN_DEPLOY_OWNERS=your-github-name sh</code></pre></div>
+              <p>It creates the Worker, its database, the R2 bucket, the Access applications and the Owner circle. You can run it again at any time: it changes only what is not right, and prints each change.</p>
+              <label class="tick done"><input type="checkbox" data-step="setup" /><span>Mark this step done</span></label>
+            </div>
+            <figure class="see"><figcaption>What you should see</figcaption><div class="see-box"><div class="see-term"><p><b>✓</b> Worker</p><p><b>✓</b> R2 bucket</p><p><b>✓</b> Access applications</p><p><b>✓</b> Owner circle</p><p>Admin: https://kit.example.com</p><p>Passkey: register link</p></div></div></figure>
           </li>
-          <li class="card">
-            <h3>Add your passkey and open the map</h3>
-            <p>
-              At the end, the setup prints the admin address and a link to register your passkey. Register it,
-              then open <code>https://kit.example.com</code>. You log in with an email code and the passkey.
-            </p>
+          <li class="card step" data-card="passkey">
+            <div class="step-main">
+              <h3>Add your passkey and open the map</h3>
+              <p>At the end, the setup prints the admin address and a link to register your passkey. Register it, then open <code>https://kit.example.com</code>. You log in with an email code and the passkey.</p>
+              <label class="tick done"><input type="checkbox" data-step="passkey" /><span>Mark this step done</span></label>
+            </div>
+            <figure class="see"><figcaption>What you should see</figcaption><div class="see-box"><div class="see-map"><span class="see-circle owner"><em>Owner</em></span></div></div></figure>
           </li>
         </ol>
       </section>
 
-      <section class="wrap">
-        <span class="label">Deploy</span>
-        <h2>Deploy your first app</h2>
-        <ol class="steps">
-          <li class="card">
-            <h3>Add a recipe</h3>
-            <p>Put <code>kitshn.config.ts</code> at the root of the repo. A static site:</p>
-            <pre><code>import { defineApp } from "kitshn";
+      <section class="wrap" id="deploy">
+        <div class="install-head"><span class="label">Part 2</span><h2>Deploy your first app</h2></div>
+        <ol class="flowsteps">
+          <li class="card step" data-card="recipe">
+            <div class="step-main">
+              <h3>Add a recipe</h3>
+              <p>Put <code>kitshn.config.ts</code> at the root of your repo. This one deploys a static site. See the <a href="https://github.com/Yarden-zamir/kitshn/blob/main/packages/kitshn/skill/SKILL.md">recipe guide</a> for Compose and Worker apps.</p>
+              <div class="code"><button type="button" class="copy">Copy</button><pre><code>import { defineApp } from "kitshn";
 
 export default defineApp({
   static: { build: "npm ci &amp;&amp; npm run build", output: "dist" },
@@ -109,17 +113,16 @@ export default defineApp({
     { on: "push", branch: "main", name: "prod", startsIn: "Everyone" },
     { on: "pull_request", name: "pr-{pr}", ephemeral: true },
   ],
-});</code></pre>
-            <p>
-              Use <code>compose: { runsOn: ["docker"] }</code> for a Compose app, or <code>worker: { ... }</code>
-              for a Worker app. kitshn reads the recipe as data and never runs it, so it holds no loops and no
-              function calls.
-            </p>
+});</code></pre></div>
+              <label class="tick done"><input type="checkbox" data-step="recipe" /><span>Mark this step done</span></label>
+            </div>
+            <figure class="see"><figcaption>What you should see</figcaption><div class="see-box"><div class="see-tree"><p>your-repo/</p><p class="in on">kitshn.config.ts</p><p class="in">package.json</p><p class="in">src/</p></div></div></figure>
           </li>
-          <li class="card">
-            <h3>Add the workflow</h3>
-            <p>Put this in <code>.github/workflows/kitshn.yml</code>. It is the same for every app:</p>
-            <pre><code>on:
+          <li class="card step" data-card="workflow">
+            <div class="step-main">
+              <h3>Add the workflow</h3>
+              <p>Put this in <code>.github/workflows/kitshn.yml</code>. It is the same for every app, and the repo needs no secret: <a href="https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect">GitHub signs each run</a>, and kitshn checks the signature.</p>
+              <div class="code"><button type="button" class="copy">Copy</button><pre><code>on:
   push:
   pull_request:
     types: [opened, synchronize, reopened, closed]
@@ -132,116 +135,88 @@ jobs:
     uses: Yarden-zamir/kitshn/.github/workflows/kitshn2-deploy.yml@main
     with:
       server: https://kit.example.com
-    secrets: inherit</code></pre>
-            <p>The repo needs no secret. GitHub signs each run, and kitshn checks the signature.</p>
+    secrets: inherit</code></pre></div>
+              <label class="tick done"><input type="checkbox" data-step="workflow" /><span>Mark this step done</span></label>
+            </div>
+            <figure class="see"><figcaption>What you should see</figcaption><div class="see-box"><div class="see-tree"><p>your-repo/</p><p class="in">.github/</p><p class="in2">workflows/</p><p class="in3 on">kitshn.yml</p><p class="in">kitshn.config.ts</p></div></div></figure>
           </li>
-          <li class="card">
-            <h3>Push, then Allow</h3>
-            <p>
-              The first push of a new repo waits. The map shows "1 repo waiting": click <strong>Allow</strong>,
-              and the deploy starts. Every later push deploys at once.
-            </p>
+          <li class="card step" data-card="allow">
+            <div class="step-main">
+              <h3>Push, then click Allow</h3>
+              <p>The first push of a new repo waits. Open your map, where it shows "1 repo waiting", and click <strong>Allow</strong>. The deploy starts, and every later push deploys at once.</p>
+              <div class="code"><button type="button" class="copy">Copy</button><pre><code>git add . &amp;&amp; git commit -m "Deploy with kitshn" &amp;&amp; git push</code></pre></div>
+              <label class="tick done"><input type="checkbox" data-step="allow" /><span>Mark this step done</span></label>
+            </div>
+            <figure class="see"><figcaption>What you should see</figcaption><div class="see-box"><div class="see-app"><b>1 repo waiting</b><span class="see-row"><span>you/your-repo</span><span class="see-btn yes">Allow</span></span></div></div></figure>
           </li>
-          <li class="card">
-            <h3>Share it</h3>
-            <p>
-              The new card starts in the <code>startsIn</code> circle, or in the tray, private. Drag it into a
-              circle to share it. Its address is <code>&lt;repo&gt;.&lt;your domain&gt;</code>.
-            </p>
-          </li>
-        </ol>
-      </section>
-
-      <section class="wrap">
-        <span class="label">Machines</span>
-        <h2>Add a machine</h2>
-        <ol class="steps">
-          <li class="card">
-            <h3>Get a join command</h3>
-            <p>
-              On the map, click <strong>+</strong>, then <strong>Add a machine</strong>. kitshn shows a command
-              with a one-time code that ends after 10 minutes.
-            </p>
-          </li>
-          <li class="card">
-            <h3>Run it on the machine</h3>
-            <pre><code>curl -fsSL https://kit.example.com/join | sh -s -- &lt;code&gt; https://kit.example.com</code></pre>
-            <p>
-              It installs the daemon and its tunnel as services of your user. The machine needs no Node.js and
-              opens no port.
-            </p>
-          </li>
-          <li class="card">
-            <h3>Give it labels</h3>
-            <p>
-              In the machine panel, add the label <code>deploy</code> so that apps may run there, and labels such
-              as <code>docker</code> that recipes ask for in <code>runsOn</code>.
-            </p>
+          <li class="card step" data-card="share">
+            <div class="step-main">
+              <h3>Share it</h3>
+              <p>The new card starts in the <code>startsIn</code> circle, or in the tray, private. Drag it into a circle to share it. Its address is <code>&lt;repo&gt;.&lt;your domain&gt;</code>.</p>
+              <label class="tick done"><input type="checkbox" data-step="share" /><span>Mark this step done</span></label>
+            </div>
+            <figure class="see"><figcaption>What you should see</figcaption><div class="see-box"><div class="see-map"><span class="see-circle everyone"><em>Everyone</em><span class="see-card">your-repo</span></span></div></div></figure>
           </li>
         </ol>
       </section>
 
-      <section class="wrap grid">
-        <div class="card">
-          <span class="sticker">Previews</span>
-          <h3>Pull request previews</h3>
-          <p>
-            A <code>pull_request</code> entry gives each pull request its own address,
-            <code>&lt;repo&gt;-pr-&lt;n&gt;.&lt;your domain&gt;</code>. It starts private, and goes away when
-            the pull request closes.
-          </p>
-        </div>
-        <div class="card">
-          <span class="sticker ok">Secrets</span>
-          <h3>Values and secrets</h3>
-          <p>
-            A GitHub secret or variable named <code>KITSHN_&lt;NAME&gt;</code> reaches the app as
-            <code>&lt;NAME&gt;</code>. A secret only for production goes in the GitHub Environment
-            <code>prod</code>.
-          </p>
-        </div>
-        <div class="card">
-          <span class="sticker blue">Domains</span>
-          <h3>More addresses</h3>
-          <p>
-            A push entry can list up to 5 addresses. The first one is under your kitshn domain. Others may use
-            further domains that you add with <code>KITSHN_ZONES</code> in the setup.
-          </p>
-        </div>
-        <div class="card">
-          <span class="sticker wait">Live</span>
-          <h3>Share a dev server</h3>
-          <p>
-            <code>kitshn expose 5173 --name demo --dev</code> shares a dev server of a machine at
-            <code>demo.&lt;your domain&gt;</code>, behind its circles. When the machine is off, visitors get the
-            offline page.
-          </p>
-        </div>
-        <div class="card">
-          <span class="sticker blue">Rebuild</span>
-          <h3>Rebuild from an export</h3>
-          <p>
-            "Download state export" in the Safety panel saves your map, cards, circles and settings, with no secret.
-            To rebuild an empty kitshn on the same Cloudflare account, run the setup with
-            <code>KITSHN_IMPORT=kitshn-state.json</code>.
-          </p>
-        </div>
+      <section class="wrap" id="machine">
+        <div class="install-head"><span class="label">Part 3, optional</span><h2>Add a machine</h2><p>Only needed for Compose apps and for sharing dev servers.</p></div>
+        <ol class="flowsteps">
+          <li class="card step" data-card="joincode">
+            <div class="step-main">
+              <h3>Get a join command</h3>
+              <p>On your map, click <strong>+</strong>, then <strong>Add a machine</strong>. kitshn shows a command with a one-time code that ends after 10 minutes.</p>
+              <label class="tick done"><input type="checkbox" data-step="joincode" data-optional /><span>Mark this step done</span></label>
+            </div>
+            <figure class="see"><figcaption>What you should see</figcaption><div class="see-box"><div class="see-app"><b>Add a machine</b><span class="see-secret">curl … | sh -s -- &lt;code&gt;</span><span class="see-note">Ends in 10 minutes</span></div></div></figure>
+          </li>
+          <li class="card step" data-card="join">
+            <div class="step-main">
+              <h3>Run it on the machine</h3>
+              <p>Copy the command from the map, or use this one with your code. It installs the daemon and its tunnel as services of your user. The machine needs no Node.js and opens no port.</p>
+              <div class="code"><button type="button" class="copy">Copy</button><pre><code>curl -fsSL https://kit.example.com/join | sh -s -- &lt;code> https://kit.example.com</code></pre></div>
+              <label class="tick done"><input type="checkbox" data-step="join" data-optional /><span>Mark this step done</span></label>
+            </div>
+            <figure class="see"><figcaption>What you should see</figcaption><div class="see-box"><div class="see-term"><p><b>✓</b> daemon installed</p><p><b>✓</b> tunnel started</p><p><b>✓</b> machine on your map</p></div></div></figure>
+          </li>
+          <li class="card step" data-card="labels">
+            <div class="step-main">
+              <h3>Give it labels</h3>
+              <p>In the machine panel, add the label <code>deploy</code> so that apps may run there, and labels such as <code>docker</code> that recipes ask for in <code>runsOn</code>.</p>
+              <label class="tick done"><input type="checkbox" data-step="labels" data-optional /><span>Mark this step done</span></label>
+            </div>
+            <figure class="see"><figcaption>What you should see</figcaption><div class="see-box"><div class="see-app"><b>build-01</b><span class="see-row"><i class="ok">deploy</i><i class="ok">docker</i></span></div></div></figure>
+          </li>
+        </ol>
       </section>
 
-      <section class="wrap card pad">
-        <span class="label">KitSHn 1</span>
-        <h2>Move an app from KitSHn 1</h2>
-        <p>
-          KitSHn 1 deployed over SSH to one VPS with Caddy. kitshn replaces it. To move an app, replace
-          <code>.kitshn.yaml</code> with <code>kitshn.config.ts</code>, and point the workflow at
-          <code>kitshn2-deploy.yml</code>. A <code>compose.yml</code> of KitSHn 1 keeps working, within the safety checks that kitshn runs on Compose files.
-        </p>
-        <p>
-          The first deploy on the same machine takes over the KitSHn 1 data once, and keeps the old copy for a
-          rollback. Then move the DNS record of the address to kitshn. The
-          <a href="https://github.com/Yarden-zamir/kitshn/blob/main/docs/migration.md">migration notes</a> have
-          the details.
-        </p>
+      <section class="wrap" id="more">
+        <div class="install-head"><span class="label">When you need them</span><h2>More options</h2></div>
+        <div class="extras">
+          <div class="card">
+            <h3>Pull request previews</h3>
+            <p>A <code>pull_request</code> entry gives each pull request its own address, <code>&lt;repo&gt;-pr-&lt;n&gt;.&lt;your domain&gt;</code>. It starts private, and goes away when the pull request closes.</p>
+          </div>
+          <div class="card">
+            <h3>Values and secrets</h3>
+            <p>A <a href="https://docs.github.com/en/actions/security-guides/using-secrets-in-github-actions">GitHub secret</a> or <a href="https://docs.github.com/en/actions/learn-github-actions/variables">variable</a> named <code>KITSHN_&lt;NAME&gt;</code> reaches the app as <code>&lt;NAME&gt;</code>. A secret only for production goes in the <a href="https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment">GitHub Environment</a> <code>prod</code>.</p>
+          </div>
+          <div class="card">
+            <h3>More addresses</h3>
+            <p>A push entry can list up to 5 addresses. The first one is under your kitshn domain. Others may use further domains that you add with <code>KITSHN_ZONES</code> in the setup.</p>
+          </div>
+          <div class="card">
+            <h3>Share a dev server</h3>
+            <p>Share a dev server of a machine at <code>demo.&lt;your domain&gt;</code>, behind its circles.</p>
+            <div class="code"><button type="button" class="copy">Copy</button><pre><code>kitshn expose 5173 --name demo --dev</code></pre></div>
+          </div>
+          <div class="card">
+            <h3>Rebuild from an export</h3>
+            <p>"Download state export" in the Safety panel saves your map, cards, circles and settings, with no secret. Run the setup with this value to rebuild an empty kitshn on the same account.</p>
+            <div class="code"><button type="button" class="copy">Copy</button><pre><code>KITSHN_IMPORT=kitshn-state.json</code></pre></div>
+          </div>
+        </div>
       </section>
     </main>
 
@@ -249,7 +224,6 @@ jobs:
       <a href="https://github.com/Yarden-zamir/kitshn">Source on GitHub</a>
       <a href="https://github.com/Yarden-zamir/kitshn/blob/main/SPEC.md">Spec</a>
       <a href="https://github.com/Yarden-zamir/kitshn/blob/main/LICENSE">MIT license</a>
-      <a href="https://kitshn-legacy.yarden-zamir.com">KitSHn 1</a>
     </footer>
   </body>
 </html>

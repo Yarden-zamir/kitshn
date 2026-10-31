@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>kitshn for enterprise: one access policy for every internal app</title>
+    <meta
+      name="description"
+      content="kitshn replaces per-app logins, VPNs, inbound ports and long-lived deploy keys with one control plane in your own Cloudflare account. Identity-aware access, keyless deploys and a full change history, with no kitshn service in the data path."
+    />
+    <meta property="og:title" content="kitshn for enterprise: one access policy for every internal app" />
+    <meta property="og:url" content="https://kitshn.com/enterprise/" />
+    <meta property="og:image" content="https://kitshn.com/social-preview.png" />
+    <meta property="og:image:width" content="1280" />
+    <meta property="og:image:height" content="640" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/style.css?v=2026-10-31-14" />
+    <link rel="stylesheet" href="/try.css?v=2026-10-31-14" />
+    <link rel="stylesheet" href="/enterprise/ent.css?v=2026-10-31-14" />
+    <script src="/try.js?v=2026-10-31-14" defer></script>
+    <script src="/enterprise/ent.js?v=2026-10-31-14" defer></script>
+  </head>
+  <body>
+    <header class="wrap top card">
+      <a class="brand" href="/"><img src="/favicon.svg" alt="" /> kitshn</a>
+      <nav>
+        <a href="/architecture/">How it works</a>
+        <a href="/enterprise/" aria-current="page">Enterprise</a>
+        <a href="https://github.com/Yarden-zamir/kitshn">GitHub</a>
+        <a class="btn primary" href="/install/">Install</a>
+      </nav>
+    </header>
+
+    <main>
+      <div class="ent-hero">
+        <section class="wrap landing first">
+          <div>
+            <h1>One access policy for <span class="mark">every internal app.</span></h1>
+            <p class="lede">
+              kitshn is a self-hosted control plane that deploys your sites, Workers and containers from GitHub, and
+              compiles one map of teams, contractors, devices and agents into Cloudflare Access. Every address is
+              identity-aware. No repo holds a deploy secret. No server opens an inbound port.
+            </p>
+            <div class="actions">
+              <a class="btn primary big" href="/install/">Deploy on your account</a>
+              <a class="btn big" href="#security">Review the security model</a>
+            </div>
+          </div>
+          <div class="picture">
+            <span class="sticker wait one">Try it: give a team access</span>
+            <figure class="card try" id="try" data-map="company" aria-label="A small map to try: drag an app into a team to give the team access"></figure>
+          </div>
+        </section>
+        <section class="wrap setup">
+          <div class="card cta solo">
+            <h2>Deploy it on your own account</h2>
+            <div class="actions">
+              <a class="btn primary big" href="/install/">See all install steps</a>
+              <button
+                class="btn primary big"
+                type="button"
+                data-copy="Install kitshn for me. The steps are at https://kitshn.com/install/.&#10;First, ask me for my Cloudflare API token, the admin address on my domain, my email and my GitHub name.&#10;Then run this command with those values:&#10;curl -fsSL https://kit.yarden-zamir.com/install | CLOUDFLARE_API_TOKEN=... KITSHN_HOST=kit.example.com KITSHN_OWNER_EMAILS=you@example.com KITSHN_DEPLOY_OWNERS=your-github-name sh"
+              >
+                Copy install command for AI agent
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section class="wrap stats" aria-label="kitshn in brief">
+        <dl class="card">
+          <div><dt>inbound ports on your servers</dt><dd>0</dd></div>
+          <div><dt>deploy secrets in your repos</dt><dd>0</dd></div>
+          <div><dt>kitshn servers in your data path</dt><dd>0</dd></div>
+          <div><dt>licensed, and running in your account</dt><dd>MIT</dd></div>
+        </dl>
+      </section>
+
+      <section class="wrap" id="risk">
+        <div class="head center">
+          <span class="label">The problem</span>
+          <h2>The cost of <span class="mark">unmanaged internal tooling</span></h2>
+          <p class="lede">
+            Internal tools rarely fail one at a time. They accumulate: each brings its own login, deploy credentials and
+            list of who may open it, until nobody can state your access posture with confidence.
+          </p>
+        </div>
+        <ul class="risk-grid">
+          <li class="risk-card">
+            <div class="risk-today"><span class="sticker">Today</span><h3>VPNs and shared passwords in front of tools</h3></div>
+            <p class="risk-exposure">Network location stands in for identity. A compromised laptop or a leaked password reaches everything behind it.</p>
+            <div class="risk-fix"><span class="sticker ok">With kitshn</span><p>Each address is its own Access application, evaluated per request against identity, network and passkey.</p></div>
+          </li>
+          <li class="risk-card">
+            <div class="risk-today"><span class="sticker">Today</span><h3>Long-lived cloud tokens in repo secrets</h3></div>
+            <p class="risk-exposure">One compromised workflow or dependency can exfiltrate credentials that work until someone rotates them.</p>
+            <div class="risk-fix"><span class="sticker ok">With kitshn</span><p>Workflows authenticate with short-lived GitHub OIDC tokens. Repos hold no deploy secret to steal.</p></div>
+          </li>
+          <li class="risk-card">
+            <div class="risk-today"><span class="sticker">Today</span><h3>Inbound ports and firewall rules</h3></div>
+            <p class="risk-exposure">Every open port is attack surface, and rules drift from what anyone intended.</p>
+            <div class="risk-fix"><span class="sticker ok">With kitshn</span><p>Machines dial out through their own tunnel. Nothing listens on the public internet.</p></div>
+          </li>
+          <li class="risk-card">
+            <div class="risk-today"><span class="sticker">Today</span><h3>Offboarding by checklist</h3></div>
+            <p class="risk-exposure">Access outlives employment. Sessions stay valid until a dozen admin panels are all updated.</p>
+            <div class="risk-fix"><span class="sticker ok">With kitshn</span><p>Remove a person from a circle, and their sessions end on every application the circle reaches.</p></div>
+          </li>
+          <li class="risk-card">
+            <div class="risk-today"><span class="sticker">Today</span><h3>No record of who shared what</h3></div>
+            <p class="risk-exposure">An auditor's question becomes a manual investigation across tools, with incomplete answers.</p>
+            <div class="risk-fix"><span class="sticker ok">With kitshn</span><p>Each share, move and deploy is a revision with its actor and time, kept 90 days.</p></div>
+          </li>
+          <li class="risk-card">
+            <div class="risk-today"><span class="sticker">Today</span><h3>Coding agents running on personal credentials</h3></div>
+            <p class="risk-exposure">Agents inherit the keys of whoever started them, so a prompt injection acts with that person's reach.</p>
+            <div class="risk-fix"><span class="sticker ok">With kitshn</span><p>Agents act as their machine, with scoped rights and short-lived credentials. Sensitive actions wait for a person.</p></div>
+          </li>
+        </ul>
+      </section>
+
+      <div class="band">
+        <section class="wrap" id="security">
+          <div class="head">
+            <span class="label">Security</span>
+            <h2>A <span class="mark">fail-closed</span> security model</h2>
+            <p class="lede">
+              kitshn fails closed. A request it cannot decide gets no access, and the controls are layered so that one
+              mistake in kitshn, DNS or a dashboard does not open a door.
+            </p>
+          </div>
+
+          <figure class="ent-path" aria-label="The path of a request to a private app">
+            <ol>
+              <li class="card"><span class="path-icon" aria-hidden="true">🧑‍💻</span><b>Client</b><span>Person, device or service token</span></li>
+              <li class="card check"><span class="path-icon" aria-hidden="true">🚪</span><b>Access at the edge</b><span>Identity, network, passkey and circle. Denied here, a request never reaches your infrastructure.</span></li>
+              <li class="card check"><span class="path-icon" aria-hidden="true">🚇</span><b>Tunnel validation</b><span><code>cloudflared</code> drops any request without a valid Access token, so a wrong DNS record cannot skip the login.</span></li>
+              <li class="card"><span class="path-icon" aria-hidden="true">🔌</span><b>Unix socket</b><span>The app listens on a socket on the machine, not on a port.</span></li>
+            </ol>
+          </figure>
+
+          <div class="tiles">
+            <div class="card lift tile">
+              <span class="tile-icon" aria-hidden="true">🔒</span>
+              <h3>Ordered changes</h3>
+              <p>A new address gets its Access application, then DNS, then its route. A removal runs in reverse, so an address is never reachable without its check.</p>
+            </div>
+            <div class="card lift tile">
+              <span class="tile-icon" aria-hidden="true">⚡</span>
+              <h3>Revocation does not wait</h3>
+              <p>A write that removes access retries on a backoff, and the card shows <em>Access not lowered yet</em> in red until it lands.</p>
+            </div>
+            <div class="card lift tile">
+              <span class="tile-icon" aria-hidden="true">🪞</span>
+              <h3>Drift repair</h3>
+              <p>kitshn is the source and Access the copy. A daily compare finds what someone changed by hand and writes it back.</p>
+            </div>
+            <div class="card lift tile">
+              <span class="tile-icon" aria-hidden="true">🛡️</span>
+              <h3>Admin lockout guard</h3>
+              <p>Every change, including an undo or a pause, is refused if it leaves the admin without a person who passed a passkey.</p>
+            </div>
+            <div class="card lift tile">
+              <span class="tile-icon" aria-hidden="true">🧯</span>
+              <h3>Bounded blast radius</h3>
+              <p>Everything kitshn creates in Access is named <code>kitshn …</code>. It never changes or deletes anything else in your account.</p>
+            </div>
+            <div class="card lift tile">
+              <span class="tile-icon" aria-hidden="true">🔑</span>
+              <h3>Machine identity</h3>
+              <p>A join code works once, for 10 minutes. Each connection starts with an Ed25519 challenge, and a key rotates in one click.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section class="wrap" id="evaluate">
+        <div class="head">
+          <span class="label">Access</span>
+          <h2>How a request is <span class="mark">evaluated</span></h2>
+          <p class="lede">
+            A request passes when it meets every rule of at least one circle that holds the app. Change the request to
+            trace how <code>docs.acme.com</code> decides.
+          </p>
+        </div>
+
+        <div class="card trace" id="gate">
+          <form onsubmit="return false">
+            <fieldset>
+              <legend>Identity</legend>
+              <label><input type="radio" name="who" value="dana" checked /> dana@acme.com</label>
+              <label><input type="radio" name="who" value="lee" /> lee@studio.io</label>
+              <label><input type="radio" name="who" value="sam" /> sam@gmail.com</label>
+            </fieldset>
+            <fieldset>
+              <legend>Network</legend>
+              <label><input type="radio" name="net" value="office" checked /> 10.0.0.0/8</label>
+              <label><input type="radio" name="net" value="home" /> Outside</label>
+            </fieldset>
+            <fieldset>
+              <legend>Passkey</legend>
+              <label><input type="radio" name="key" value="yes" checked /> Passed</label>
+              <label><input type="radio" name="key" value="no" /> None</label>
+            </fieldset>
+            <fieldset>
+              <legend>Date</legend>
+              <label><input type="radio" name="day" value="now" checked /> Before Nov 30</label>
+              <label><input type="radio" name="day" value="later" /> After Nov 30</label>
+            </fieldset>
+          </form>
+
+          <div class="trace-flow" aria-live="polite">
+            <div class="trace-start"><span>Request</span><b>docs.acme.com</b></div>
+            <div class="trace-lanes">
+              <div class="lane" data-lane="eng">
+                <div class="lane-name"><b>Engineering</b><small>every rule must match</small></div>
+                <ol>
+                  <li data-rule="domain">@acme.com</li>
+                  <li data-rule="net">10.0.0.0/8</li>
+                  <li data-rule="key">Passkey</li>
+                </ol>
+              </div>
+              <div class="lane" data-lane="con">
+                <div class="lane-name"><b>Contractors</b><small>ends Nov 30</small></div>
+                <ol>
+                  <li data-rule="member">lee@studio.io</li>
+                  <li data-rule="date">Before Nov 30</li>
+                </ol>
+              </div>
+            </div>
+            <div class="trace-end"><span>Decision</span><p class="gate-verdict yes">Allow</p></div>
+          </div>
+          <p class="trace-note">
+            Evaluated by Cloudflare Access at the edge, from policies kitshn wrote. The request never reaches kitshn.
+          </p>
+        </div>
+      </section>
+
+      <div class="band">
+        <section class="wrap" id="privacy">
+          <div class="head">
+            <span class="label">Privacy</span>
+            <h2>Privacy: your data stays in your account</h2>
+            <p class="lede">
+              There is no kitshn cloud. The control plane is one Worker and one Durable Object in your own Cloudflare
+              account, so kitshn the project never holds your access lists, your traffic or your data. Your only platform
+              dependency is your existing Cloudflare relationship, and application traffic does not pass through the
+              control plane.
+            </p>
+          </div>
+          <div class="card table-card">
+            <div class="table-scroll">
+              <table class="ent-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Data</th>
+                    <th scope="col">Where it lives</th>
+                    <th scope="col">Control</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row">Access lists, shares, history</th>
+                    <td>Durable Object SQLite, in your account</td>
+                    <td>Exportable at any time. The export holds no secret.</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">App secrets</th>
+                    <td>Encrypted in kitshn or in GitHub</td>
+                    <td>The map shows "set" or "missing", never a value.</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Application data and logs</th>
+                    <td>On your servers</td>
+                    <td>No log line is copied into kitshn. Logs are read from the card, at the source.</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Backups</th>
+                    <td>R2, in your account</td>
+                    <td>Nightly restic backups, encrypted under a key you keep outside Cloudflare.</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Machine and tunnel tokens</th>
+                    <td>A file only the daemon user reads</td>
+                    <td>Never held in the Durable Object at rest.</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Access configuration</th>
+                    <td>Never in Git</td>
+                    <td>A pull request cannot grant anyone access to an app.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section class="wrap" id="deploys">
+        <div class="head">
+          <span class="label">Deploys</span>
+          <h2>A keyless pipeline, with a gate at every stage</h2>
+          <p class="lede">
+            A declarative <code>kitshn.config.ts</code> in each repo defines up to 10 apps. A push to
+            <code>main</code> deploys production, and each pull request gets an ephemeral preview. Repo code never runs
+            inside kitshn.
+          </p>
+        </div>
+        <ol class="pipe">
+          <li class="card"><span class="pipe-n">1</span><h3>Authenticate</h3><p>The run presents a GitHub OIDC token. Only allowlisted accounts pass.</p></li>
+          <li class="card"><span class="pipe-n">2</span><h3>Authorize</h3><p>A new repo waits for one approval. A block holds by repo id, also after a rename.</p></li>
+          <li class="card"><span class="pipe-n">3</span><h3>Parse</h3><p>The recipe is data. A lint refuses loops, conditions and calls.</p></li>
+          <li class="card"><span class="pipe-n">4</span><h3>Place</h3><p>Containers land only on machines with the <code>deploy</code> label and the labels they ask for.</p></li>
+          <li class="card"><span class="pipe-n">5</span><h3>Restrict</h3><p><code>privileged</code>, host ports and the Docker socket need an explicit allowance per repo and machine.</p></li>
+          <li class="card"><span class="pipe-n">6</span><h3>Release</h3><p>A route check and a GitHub deployment status, and the card starts in the circle the recipe names.</p></li>
+        </ol>
+        <figure class="card ent-code">
+          <figcaption><span>kitshn.config.ts</span><span class="sticker ok">check ✓</span></figcaption>
+          <pre><code><span class="c-kw">export default</span> defineApps({
+  <span class="c-key">docs</span>: {
+    static: { build: <span class="c-str">"npm run build"</span>, output: <span class="c-str">"dist"</span> },
+    deploy: [
+      { on: <span class="c-str">"push"</span>, branch: <span class="c-str">"main"</span>, name: <span class="c-str">"prod"</span>, startsIn: <span class="c-str">"Engineering"</span> },
+      { on: <span class="c-str">"pull_request"</span>, name: <span class="c-str">"pr-{pr}"</span>, ephemeral: <span class="c-kw">true</span> },
+    ],
+  },
+  <span class="c-key">billing</span>: {
+    compose: { runsOn: [<span class="c-str">"prod"</span>], file: <span class="c-str">"compose.yaml"</span> },
+    deploy: [{ on: <span class="c-str">"push"</span>, branch: <span class="c-str">"main"</span>, name: <span class="c-str">"prod"</span> }],
+  },
+});</code></pre>
+        </figure>
+      </section>
+
+      <div class="ent-dark">
+        <section class="wrap" id="agents">
+          <div class="head center">
+            <span class="label">AI agents</span>
+            <h2>Built <span class="mark">agent-first</span></h2>
+            <p class="lede">
+              Your coding agents can ship on their own. Every machine that joins gets the <code>kitshn</code> command and
+              a skill that teaches it, so an agent can publish, set addresses and read logs without setup, and without
+              anyone handing it a key.
+            </p>
+          </div>
+
+          <div class="agents">
+            <figure class="term hs-term agent-term">
+              <div class="term-bar"><i></i><i></i><i></i><span>your coding agent on build-01</span></div>
+              <pre><code><b>$</b> kitshn publish q3-report.html --circle Sales</code></pre>
+              <p><b>✓</b> Published and shared with Sales</p>
+              <pre><code><b>$</b> kitshn time q3-report 4h</code></pre>
+              <p><b>✓</b> The share ends by itself in 4 hours</p>
+              <pre><code><b>$</b> kitshn logs billing-api timeout --since 1h --json</code></pre>
+              <p><b>✓</b> One JSON object, ready for the agent to read</p>
+            </figure>
+
+            <figure class="card ask" id="ask">
+              <div class="ask-top">
+                <span class="sticker wait">waiting</span>
+                <span class="muted">Inbox · expires in 24 h</span>
+              </div>
+              <p class="ask-what"><b>build-01</b> asks to <b>deploy</b> <code>billing-api</code></p>
+              <p class="ask-reason">“Fix the rounding of invoice totals. Tests pass.”</p>
+              <dl class="ask-labels">
+                <dt>t3.thread.title</dt>
+                <dd>Invoice rounding <span class="sticker ok">verified by t3</span></dd>
+                <dt>t3.project.name</dt>
+                <dd>billing <span class="sticker ok">verified by t3</span></dd>
+                <dt>team</dt>
+                <dd>finance <span class="sticker">claimed</span></dd>
+              </dl>
+              <div class="ask-actions">
+                <button class="btn primary" type="button" data-ask="approve">🔑 Approve with passkey</button>
+                <button class="btn" type="button" data-ask="deny">Deny</button>
+              </div>
+              <p class="ask-result" aria-live="polite" hidden></p>
+            </figure>
+          </div>
+
+          <div class="facts3">
+            <div class="card lift fact"><h3>A skill out of the box</h3><p>Joining a machine installs the kitshn skill, so agents know the commands and the rules from their first run.</p></div>
+            <div class="card lift fact"><h3>Output made for agents</h3><p>Commands take <code>--json</code> and print one object on stdout, so an agent never parses a screen.</p></div>
+            <div class="card lift fact"><h3>No keys to hand over</h3><p>Agents act as their machine. There is no token to paste into a prompt or leave in a repo.</p></div>
+            <div class="card lift fact"><h3>Rights you set per machine</h3><p>Each right is off, automatic, or asks a named circle first. A right you never set asks the owner.</p></div>
+            <div class="card lift fact"><h3>Short-lived credentials</h3><p>GitHub tokens last one hour for one repo, and cloud passes last 5 minutes, so nothing is worth stealing for long.</p></div>
+            <div class="card lift fact"><h3>Every action on the record</h3><p>History names the machine, thread, action, reason and approver, searchable by label.</p></div>
+          </div>
+        </section>
+      </div>
+
+      <section class="wrap">
+        <div class="card ent-end">
+          <div>
+            <h2>Evaluate it on your own account</h2>
+            <p class="lede">Read the spec, then run it. A second run of the setup changes only what is not right yet.</p>
+          </div>
+          <div class="actions">
+            <a class="btn big" href="https://github.com/Yarden-zamir/kitshn/blob/main/SPEC.md">Read the spec</a>
+            <a class="btn primary big" href="/install/">See all install steps</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="wrap card">
+      <a class="brand" href="/"><img src="/favicon.svg" alt="" /> kitshn</a>
+      <a href="https://github.com/Yarden-zamir/kitshn">Source on GitHub</a>
+      <a href="https://github.com/Yarden-zamir/kitshn/blob/main/SPEC.md">Spec</a>
+      <a href="https://github.com/Yarden-zamir/kitshn/blob/main/LICENSE">MIT license</a>
+      <span class="muted">This site deploys with kitshn.</span>
+    </footer>
+  </body>
+</html>

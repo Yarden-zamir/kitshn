@@ -1,0 +1,381 @@
+/* The install page: a checklist. Only this page loads this file; it builds on the tokens and pieces of /style.css. */
+.install-hero {
+  margin-block: 3rem 1.6rem;
+}
+.install-head {
+  margin-bottom: 1.2rem;
+}
+.install-head p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+}
+section[id] {
+  scroll-margin-top: 9rem;
+}
+
+/* The bar follows the page, under the header. */
+.progress {
+  position: sticky;
+  top: 4.9rem;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 0.9rem;
+  background: var(--surface);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.progress-text {
+  flex: none;
+  font-weight: 800;
+}
+.progress-bar {
+  flex: 1;
+  height: 0.9rem;
+  overflow: hidden;
+  background: var(--raised);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--pill);
+}
+.progress-bar i {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: var(--green);
+  transition: width 240ms ease;
+}
+.progress-reset {
+  flex: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--muted);
+  text-decoration: underline;
+  background: none;
+  border: 0;
+}
+
+.tick {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  cursor: pointer;
+}
+.tick input {
+  flex: none;
+  width: 1.3rem;
+  height: 1.3rem;
+  margin: 0.15rem 0 0;
+  accent-color: #2fbf71;
+  cursor: pointer;
+}
+/* Done is a button of the site: an ink edge and a hard shadow, up on hover and flat when pressed. */
+.tick.done {
+  align-items: center;
+  width: fit-content;
+  margin-top: 0.9rem;
+  padding: 6px 16px 6px 12px;
+  font-weight: 700;
+  background: var(--accent);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--square);
+  box-shadow: 2px 2px 0 0 var(--shadow-ink);
+  transition:
+    transform 160ms var(--spring),
+    box-shadow 160ms var(--spring),
+    background 160ms ease;
+}
+.tick.done:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 0 var(--shadow-ink);
+}
+.tick.done:active {
+  transform: translate(2px, 2px);
+  box-shadow: none;
+}
+.tick.done:has(input:focus-visible) {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.tick.done input {
+  margin: 0;
+}
+.is-done > .step-main .tick.done {
+  background: var(--green);
+}
+.needs {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 1.1rem 1.3rem;
+  list-style: none;
+}
+.needs .is-done span {
+  color: var(--muted);
+}
+
+.flowsteps {
+  display: grid;
+  gap: 1.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+#deploy .flowsteps {
+  counter-reset: step 4;
+}
+#machine .flowsteps {
+  counter-reset: step 8;
+}
+.step {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 17rem;
+  gap: 1.6rem;
+  align-items: start;
+  padding: 1.1rem 1.3rem 1.2rem;
+  counter-increment: step;
+}
+.step.is-done {
+  background: color-mix(in srgb, var(--green) 12%, var(--surface));
+}
+.step h3 {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  font-size: 1.25rem;
+}
+.step h3::before {
+  content: counter(step);
+  flex: none;
+  display: grid;
+  place-content: center;
+  width: 2rem;
+  height: 2rem;
+  font-size: 1rem;
+  background: var(--accent);
+  border: var(--bw) solid var(--border);
+  border-radius: 50%;
+}
+.step p {
+  margin: 0.5rem 0;
+}
+
+/* A code block, and its copy button. */
+.code {
+  position: relative;
+  min-width: 0;
+  margin: 0.6rem 0;
+}
+.code pre {
+  margin: 0;
+  padding-right: 5rem;
+}
+.copy {
+  position: absolute;
+  z-index: 1;
+  top: 0.5rem;
+  right: 0.5rem;
+  padding: 0.05rem 0.7rem;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--ink);
+  background: var(--accent);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--square);
+}
+
+/* The small picture of each step. */
+.see {
+  min-width: 0;
+  margin: 0;
+}
+.see figcaption {
+  padding: 0 0 0.3rem;
+  font-size: 0.8rem;
+  font-weight: 800;
+  background: none;
+  border: 0;
+}
+.see-box {
+  overflow: hidden;
+  font-size: 0.85rem;
+  background: var(--canvas);
+  background-image: radial-gradient(var(--dots) 1.2px, transparent 1.2px);
+  background-size: 12px 12px;
+  border: var(--bw) solid var(--border);
+  border-radius: 10px;
+}
+.see-app {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.7rem;
+  padding: 0.6rem 0.7rem;
+  background: var(--surface);
+  border: var(--bw) solid var(--border);
+  border-radius: 8px;
+  box-shadow: 2px 2px 0 0 var(--ink);
+}
+.see-secret {
+  padding: 0.1rem 0.4rem;
+  overflow: hidden;
+  font: 0.75rem var(--mono);
+  white-space: nowrap;
+  background: var(--raised);
+  border-radius: var(--square);
+}
+.see-note {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.see-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.4rem;
+}
+.see-row i {
+  padding: 0 0.5rem;
+  font-size: 0.75rem;
+  font-style: normal;
+  font-weight: 800;
+  background: var(--green);
+  border: 1.5px solid var(--ink);
+  border-radius: var(--pill);
+}
+.see-btn {
+  justify-self: start;
+  padding: 0 0.6rem;
+  font-size: 0.78rem;
+  font-weight: 800;
+  background: var(--surface);
+  border: 1.5px solid var(--ink);
+  border-radius: var(--square);
+}
+.see-btn.yes {
+  background: var(--accent);
+}
+.see-term {
+  padding: 0.6rem 0.7rem;
+  font: 0.72rem/1.5 var(--mono);
+  color: var(--code-ink);
+  background: var(--code-bg);
+}
+.see-term p {
+  margin: 0;
+}
+.see-term b {
+  color: var(--green);
+}
+.see-tree {
+  padding: 0.6rem 0.8rem;
+  font: 0.78rem/1.6 var(--mono);
+  background: var(--surface);
+}
+.see-tree p {
+  margin: 0;
+}
+.see-tree .in {
+  padding-left: 1em;
+}
+.see-tree .in2 {
+  padding-left: 2em;
+}
+.see-tree .in3 {
+  padding-left: 3em;
+}
+.see-tree .on {
+  font-weight: 800;
+  background: var(--tint);
+}
+.see-map {
+  display: grid;
+  place-items: center;
+  padding: 1.3rem 0.5rem 0.7rem;
+}
+.see-circle {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 7rem;
+  height: 7rem;
+  border: var(--bw) solid var(--ink);
+  border-radius: 50%;
+}
+.see-circle.owner {
+  background: color-mix(in srgb, #c4b5fd 30%, transparent);
+  box-shadow: inset 0 0 0 4px #c4b5fd;
+}
+.see-circle.everyone {
+  background: color-mix(in srgb, var(--green) 26%, transparent);
+  box-shadow: inset 0 0 0 4px var(--green);
+}
+.see-circle em {
+  position: absolute;
+  top: -0.7rem;
+  padding: 0 0.5rem;
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 800;
+  background: var(--surface);
+  border: 1.5px solid var(--ink);
+  border-radius: var(--pill);
+}
+.see-card {
+  padding: 0.15rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 800;
+  background: var(--surface);
+  border: 1.5px solid var(--ink);
+  border-radius: 7px;
+  box-shadow: 2px 2px 0 0 var(--ink);
+}
+
+.extras {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.2rem;
+}
+.extras .card {
+  min-width: 0;
+  padding: 1.1rem 1.2rem 0.8rem;
+}
+.extras p {
+  color: var(--muted);
+}
+@media (max-width: 960px) {
+  .step {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.9rem;
+  }
+  .see {
+    max-width: 22rem;
+  }
+  .extras {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 560px) {
+  .progress {
+    flex-wrap: wrap;
+    gap: 0.3rem 0.8rem;
+  }
+  .progress-bar {
+    order: 3;
+    flex-basis: 100%;
+  }
+  .progress-text {
+    flex: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .progress-bar i,
+  .tick.done {
+    transition: none;
+  }
+}

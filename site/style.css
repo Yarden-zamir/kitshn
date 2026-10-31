@@ -1,46 +1,39 @@
 @import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=JetBrains+Mono:wght@400;600&display=swap");
 
+/* The kitshn site in the logo colours: graphite ink and one yolk yellow, on white. A soft neo-brutalism: thin ink
+   edges and short hard shadows, round corners, and a lift on hover. Light only for now. */
 :root {
   color-scheme: light;
-  --canvas: #e4e7ff;
-  --dots: #00000026;
+  --canvas: #fbfbf9;
+  --dots: #19191b14;
   --surface: #ffffff;
-  --raised: #f1f2ff;
-  --code-bg: #ffffff;
-  --ink: #000000;
-  --muted: #3d3d5c;
-  --border: #000000;
-  --shadow-ink: #000000;
-  --accent: #6c5ce7;
-  --accent-fg: #ffffff;
-  --select: #ffe14d;
-  --select-fg: #000000;
-  --info: #00b3ff;
-  --warning: #ffb347;
-  --green: #7cff8a;
-  --yellow: #ffe14d;
-  --pink: #ff9eb0;
-  --radius: 0.25rem;
-  --bw: 2px;
-  --shadow: 4px 4px 0 0 var(--shadow-ink);
+  --raised: #f4f4f2;
+  --tint: #fff7d1;
+  --code-bg: #19191b;
+  --code-ink: #f4f4ef;
+  --ink: #19191b;
+  --muted: #6b6b70;
+  --border: #19191b;
+  --hairline: #19191b1f;
+  --shadow-ink: #19191b;
+  --accent: #ffd23f;
+  --accent-fg: #19191b;
+  --select: #ffd23f;
+  --select-fg: #19191b;
+  --info: #5cc8ff;
+  --warning: #ffad4d;
+  --green: #6ee7a0;
+  --yellow: #ffd23f;
+  --pink: #ff9fb2;
+  --radius: 14px;
+  --pill: 999px;
+  --square: 4px;
+  --bw: 1.5px;
+  --shadow: 3px 3px 0 0 var(--shadow-ink);
+  --shadow-up: 5px 5px 0 0 var(--shadow-ink);
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --sans: "Bricolage Grotesque", system-ui, sans-serif;
   --mono: "JetBrainsMono Nerd Font Mono", "JetBrains Mono", monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --canvas: #15122b;
-    --dots: #f3f0ff22;
-    --surface: #262147;
-    --raised: #1d1938;
-    --code-bg: #1d1938;
-    --ink: #f3f0ff;
-    --muted: #bdb6e6;
-    --border: #f3f0ff;
-    --shadow-ink: #b9a8ff;
-    --select: #6c5ce7;
-    --select-fg: #ffffff;
-  }
 }
 
 * {
@@ -48,6 +41,8 @@
 }
 html {
   font-size: 18px;
+  scroll-behavior: smooth;
+  overflow-x: clip;
 }
 body {
   margin: 0;
@@ -55,21 +50,21 @@ body {
   color: var(--ink);
   background-color: var(--canvas);
   background-image: radial-gradient(var(--dots) 1.2px, transparent 1.2px);
-  background-size: 16px 16px;
+  background-size: 18px 18px;
 }
 h1,
 h2,
 h3 {
   font-weight: 800;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
   margin: 0 0 0.5rem;
-  line-height: 1.15;
+  line-height: 1.1;
 }
 h1 {
-  font-size: 3rem;
+  font-size: clamp(2.4rem, 5.5vw, 4.2rem);
 }
 h2 {
-  font-size: 1.8rem;
+  font-size: clamp(1.6rem, 3vw, 2.3rem);
 }
 h3 {
   font-size: 1.2rem;
@@ -78,53 +73,127 @@ p {
   margin: 0 0 0.8rem;
 }
 a {
-  color: var(--accent);
+  color: var(--ink);
   font-weight: 600;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 3px;
+  text-underline-offset: 3px;
 }
-@media (prefers-color-scheme: dark) {
-  a {
-    color: #b9a8ff;
-  }
+a:hover {
+  text-decoration-color: var(--ink);
 }
 code,
 pre {
   font-family: var(--mono);
   font-size: 0.85em;
 }
+/* A yellow marker band behind inline code, no box. */
 :not(pre) > code {
   background: linear-gradient(transparent 35%, var(--select) 35%, var(--select) 88%, transparent 88%);
+  color: var(--select-fg);
   padding: 0 2px;
+  overflow-wrap: anywhere;
 }
 pre {
   margin: 0 0 1rem;
-  padding: 10px 12px;
+  padding: 14px 16px;
   overflow-x: auto;
+  color: var(--code-ink);
   background: var(--code-bg);
   border: var(--bw) solid var(--border);
   border-radius: var(--radius);
-  box-shadow: 3px 3px 0 0 var(--shadow-ink);
+  box-shadow: var(--shadow);
 }
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--ink);
   outline-offset: 2px;
+  box-shadow: 0 0 0 6px #ffd23f99;
 }
 img {
   max-width: 100%;
   height: auto;
   display: block;
 }
+ul {
+  padding-left: 1.2rem;
+}
 
 .wrap {
-  width: min(64rem, calc(100% - 2rem));
+  width: min(78rem, calc(100% - 1.5rem));
   margin-inline: auto;
 }
+@media (max-width: 760px) {
+  .wrap {
+    width: calc(100% - 1rem);
+  }
+}
+
+.card {
+  background: var(--surface);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+section {
+  margin-block: 4.5rem;
+}
+.pad {
+  padding: 1.4rem 1.5rem;
+}
+.label {
+  display: block;
+  margin-bottom: 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.muted {
+  color: var(--muted);
+}
+/* The highlight keeps its words together, except on a very small phone, where it would run off the page. */
+.mark {
+  white-space: nowrap;
+  background: linear-gradient(transparent 58%, var(--accent) 58%, var(--accent) 92%, transparent 92%);
+  padding: 0 0.08em;
+}
+@media (max-width: 400px) {
+  .mark {
+    white-space: normal;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+}
+.lede {
+  font-size: 1.2rem;
+  color: var(--muted);
+  max-width: 40rem;
+}
+.head {
+  max-width: 44rem;
+  margin-bottom: 1.8rem;
+}
+.head.center {
+  margin-inline: auto;
+  text-align: center;
+}
+.head.center .lede {
+  margin-inline: auto;
+}
+
+/* The header: brand on the left, links and the main action on the right. */
 .top {
+  position: sticky;
+  top: 0.6rem;
+  z-index: 10;
   display: flex;
   align-items: center;
   gap: 1rem;
   flex-wrap: wrap;
-  margin: 1rem auto 0;
-  padding: 0.5rem 0.9rem;
+  margin: 0.6rem auto 0;
+  padding: 0.45rem 0.6rem 0.45rem 0.8rem;
+  border-radius: var(--square);
 }
 .top .brand {
   display: flex;
@@ -142,60 +211,50 @@ img {
 }
 .top nav {
   display: flex;
-  gap: 0.4rem;
+  align-items: center;
+  gap: 0.2rem;
   flex-wrap: wrap;
 }
-
-.card {
-  background: var(--surface);
-  border: var(--bw) solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
+.top nav a:not(.btn) {
+  padding: 4px 10px;
+  border-radius: var(--square);
+  text-decoration: none;
 }
-section {
-  margin-block: 3rem;
+.top nav a:not(.btn):hover,
+.top nav a:not(.btn)[aria-current="page"] {
+  background: var(--raised);
 }
-.pad {
-  padding: 1.4rem 1.6rem;
+.top nav .btn {
+  margin-left: 0.3rem;
 }
-.label {
-  display: block;
-  margin-bottom: 0.3rem;
-  font-size: 0.7rem;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.muted {
-  color: var(--muted);
-}
-
-.hero {
-  position: relative;
-  padding: 2.4rem 2rem;
-}
-.hero p {
-  font-size: 1.25rem;
-  max-width: 40rem;
-}
-.hero .sticker {
-  position: absolute;
-  top: -0.8rem;
-  right: 1.5rem;
-}
-.actions {
-  display: flex;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-  margin-top: 1.2rem;
+/* On a phone the header keeps the brand and Install on one row; the first screen links to the rest. */
+@media (max-width: 640px) {
+  .top {
+    gap: 0.5rem;
+    padding-left: 0.6rem;
+  }
+  .top .brand {
+    font-size: 1.1rem;
+  }
+  .top .brand img {
+    width: 1.7rem;
+    height: 1.7rem;
+  }
+  .top nav a:not(.btn) {
+    display: none;
+  }
+  .top nav .btn {
+    margin-left: 0;
+    padding: 4px 10px;
+    font-size: 0.9rem;
+  }
 }
 
 .btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 12px;
+  padding: 6px 16px;
   cursor: pointer;
   font: inherit;
   font-weight: 700;
@@ -203,22 +262,27 @@ section {
   text-decoration: none;
   background: var(--surface);
   border: var(--bw) solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--square);
+  box-shadow: 2px 2px 0 0 var(--shadow-ink);
   transition:
-    transform 80ms,
-    box-shadow 80ms;
+    transform 160ms var(--spring),
+    box-shadow 160ms var(--spring);
 }
 .btn:hover {
   transform: translate(-1px, -1px);
   box-shadow: 3px 3px 0 0 var(--shadow-ink);
 }
 .btn:active {
-  transform: translate(3px, 3px);
+  transform: translate(2px, 2px);
   box-shadow: none;
 }
 .btn.primary {
   background: var(--accent);
   color: var(--accent-fg);
+}
+.btn.big {
+  padding: 10px 22px;
+  font-size: 1.05rem;
 }
 .btn[aria-current="page"] {
   background: var(--select);
@@ -227,19 +291,18 @@ section {
 
 .sticker {
   display: inline-block;
-  padding: 0 6px;
+  padding: 1px 8px;
   line-height: 1.5;
   white-space: nowrap;
-  font-size: 0.65rem;
+  font-size: 0.66rem;
   font-weight: 800;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: #000000;
+  color: var(--ink);
   background: var(--pink);
-  border: var(--bw) solid var(--shadow-ink);
-  border-radius: 4px;
-  box-shadow: 2px 2px 0 0 var(--shadow-ink);
-  transform: rotate(var(--tilt, -3deg));
+  border: var(--bw) solid var(--border);
+  border-radius: var(--pill);
+  transform: rotate(var(--tilt, -2deg));
 }
 .sticker.ok {
   background: var(--green);
@@ -254,37 +317,774 @@ section {
   background: var(--warning);
 }
 
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  margin-top: 1.4rem;
+}
+
+/* The first screen of a page. On the home page it splits into words and a picture of the map. */
+.hero {
+  position: relative;
+  padding: 2rem 1.6rem;
+}
+.hero p {
+  font-size: 1.2rem;
+  max-width: 40rem;
+}
+.hero > .sticker {
+  position: absolute;
+  top: -0.7rem;
+  right: 1.5rem;
+}
+.landing {
+  display: grid;
+  grid-template-columns: 1.05fr 1fr;
+  gap: 2.5rem;
+  align-items: center;
+  margin-top: 3.5rem;
+}
+.landing h1 {
+  margin-bottom: 1rem;
+}
+.landing .lede {
+  font-size: 1.3rem;
+}
+.landing .picture {
+  position: relative;
+}
+.landing .picture .sticker {
+  position: absolute;
+  z-index: 1;
+  font-size: 0.75rem;
+}
+.landing .picture .sticker.one {
+  top: -0.8rem;
+  left: 1.5rem;
+}
+@media (max-width: 860px) {
+  .landing {
+    grid-template-columns: 1fr;
+    margin-top: 2rem;
+  }
+}
+
+/* Three numbered steps. */
+.how {
+  display: grid;
+  gap: 1.2rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  counter-reset: how;
+}
+.how li {
+  counter-increment: how;
+  padding: 1.3rem 1.4rem 1rem;
+}
+.how li::before {
+  content: counter(how);
+  display: grid;
+  place-content: center;
+  width: 2.4rem;
+  height: 2.4rem;
+  margin-bottom: 0.8rem;
+  font-weight: 800;
+  font-size: 1.1rem;
+  background: var(--accent);
+  border: var(--bw) solid var(--border);
+  border-radius: 50%;
+}
+
+/* How it works on the home page: three frames that play on one loop of 12 s, a third per step: an
+   AI tool writes the site, the code is pasted on a map and dragged to Everyone, and the site opens. The frame that plays
+   lifts. Every part below keys its moves to the same cycle. */
+.flow {
+  --cycle: 12s;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.flow-step {
+  min-width: 0;
+}
+.flow-pic {
+  position: relative;
+  height: 14rem;
+  overflow: hidden;
+  margin-bottom: 1.1rem;
+  background-color: var(--canvas);
+  background-image: radial-gradient(var(--dots) 1.2px, transparent 1.2px);
+  background-size: 14px 14px;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  animation: flow-on var(--cycle) infinite;
+}
+.flow-step:nth-child(2) .flow-pic {
+  animation-delay: calc(var(--cycle) / -3 * 2);
+}
+.flow-step:nth-child(3) .flow-pic {
+  animation-delay: calc(var(--cycle) / -3);
+}
+@keyframes flow-on {
+  0%,
+  31% {
+    transform: translate(-3px, -3px);
+    box-shadow: 6px 6px 0 0 var(--shadow-ink);
+  }
+  35%,
+  97% {
+    transform: none;
+    box-shadow: var(--shadow);
+  }
+}
+.flow-n {
+  display: inline-grid;
+  place-content: center;
+  width: 2rem;
+  height: 2rem;
+  margin-right: 0.5rem;
+  font-weight: 800;
+  background: var(--accent);
+  border: var(--bw) solid var(--border);
+  border-radius: 50%;
+  vertical-align: middle;
+}
+.flow-step h3 {
+  display: inline;
+  vertical-align: middle;
+}
+.flow-step p {
+  margin-top: 0.6rem;
+  color: var(--muted);
+}
+
+/* The dark terminal of the join command on /enterprise/. */
+.term {
+  padding: 0 1rem;
+  font: 0.82rem/1.5 var(--mono);
+  color: var(--code-ink);
+  background: var(--code-bg);
+}
+.term-bar {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  margin: 0 -1rem 0.9rem;
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid #ffffff22;
+}
+.term-bar i {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: #ffffff33;
+}
+.term-bar i:first-child {
+  background: var(--accent);
+}
+.term-bar span {
+  margin-left: 0.5rem;
+  color: #a3a3aa;
+  font-size: 0.75rem;
+}
+
+/* 1: you ask an AI tool for a site, it writes the code, and you copy it. */
+.ai {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  background-image: none;
+}
+.ai-ask {
+  flex: none;
+  align-self: flex-end;
+  margin: 0.6rem 0.7rem !important;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--ink) !important;
+  white-space: nowrap;
+  background: var(--tint);
+  border: var(--bw) solid var(--ink);
+  border-radius: 12px 12px 2px 12px;
+  animation: ai-ask var(--cycle) infinite;
+}
+.ai-code {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--code-bg);
+  border-top: var(--bw) solid var(--ink);
+  animation: ai-code var(--cycle) infinite;
+}
+.ai-file {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.35rem 0.6rem;
+  font: 0.72rem var(--mono);
+  color: #a3a3aa;
+  border-bottom: 1px solid #ffffff22;
+}
+.ai-copy {
+  position: relative;
+  display: grid;
+  padding: 0.02rem 0.55rem;
+  font: 800 0.7rem var(--sans);
+  color: var(--ink);
+  background: var(--accent);
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--pill);
+}
+.ai-copy span {
+  grid-area: 1 / 1;
+  text-align: center;
+}
+.ai-copy span:first-child {
+  animation: ai-copy-a var(--cycle) infinite;
+}
+.ai-copy span:last-child {
+  opacity: 0;
+  animation: ai-copy-b var(--cycle) infinite;
+}
+.ai-lines {
+  display: grid;
+  align-content: start;
+  gap: 0.4rem;
+  padding: 0.7rem 0.8rem;
+}
+.ai-lines i {
+  display: block;
+  width: var(--w);
+  height: 0.5rem;
+  border-radius: 3px;
+  background: var(--c, #f4f4ef);
+  transform-origin: left;
+  animation: ai-line var(--cycle) infinite;
+}
+.ai-lines i:nth-child(2) {
+  margin-left: 1rem;
+  animation-delay: 0.1s;
+}
+.ai-lines i:nth-child(3) {
+  margin-left: 1rem;
+  animation-delay: 0.2s;
+}
+.ai-lines i:nth-child(4) {
+  margin-left: 2rem;
+  animation-delay: 0.3s;
+}
+.ai-lines i:nth-child(5) {
+  margin-left: 1rem;
+  animation-delay: 0.4s;
+}
+.ai-lines i:nth-child(6) {
+  animation-delay: 0.5s;
+}
+@keyframes ai-ask {
+  0%,
+  1% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  4%,
+  97% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes ai-code {
+  0%,
+  6% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  9%,
+  97% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes ai-line {
+  0%,
+  8% {
+    transform: scaleX(0);
+  }
+  15%,
+  100% {
+    transform: scaleX(1);
+  }
+}
+@keyframes ai-copy-a {
+  0%,
+  23% {
+    opacity: 1;
+  }
+  24%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes ai-copy-b {
+  0%,
+  23% {
+    opacity: 0;
+  }
+  24%,
+  97% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* 2: the code lands on the map as a private site, grey, and the drag into Everyone turns it to colour. */
+.map {
+  container-type: inline-size;
+}
+.map-circle {
+  position: absolute;
+  right: 1.2rem;
+  top: 50%;
+  width: 10.5rem;
+  height: 10.5rem;
+  margin-top: -4.8rem;
+  border: var(--bw) solid var(--ink);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--green) 22%, transparent);
+  box-shadow: inset 0 0 0 5px var(--green);
+  animation: map-ring var(--cycle) infinite;
+}
+.map-circle span {
+  position: absolute;
+  left: 50%;
+  top: -0.85rem;
+  transform: translateX(-50%);
+  padding: 0.05rem 0.7rem;
+  font-size: 0.8rem;
+  font-weight: 800;
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--pill);
+  box-shadow: 2px 2px 0 0 var(--ink);
+}
+.map-paste {
+  position: absolute;
+  left: 1rem;
+  top: 1rem;
+  padding: 0.1rem 0.7rem;
+  font-size: 0.8rem;
+  font-weight: 800;
+  background: var(--accent);
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--pill);
+  box-shadow: 2px 2px 0 0 var(--ink);
+  animation: map-paste var(--cycle) infinite;
+}
+.map-card {
+  --to-x: calc(100cqw - 10.95rem);
+  position: absolute;
+  z-index: 1;
+  left: 1rem;
+  top: calc(50% - 2.5rem);
+  width: 6.8rem;
+  overflow: hidden;
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: 10px;
+  box-shadow: 3px 3px 0 0 var(--ink);
+  animation: map-drag var(--cycle) infinite;
+}
+.map-card svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  animation: map-colour var(--cycle) infinite;
+}
+.map-card b {
+  display: block;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.72rem;
+  border-top: var(--bw) solid var(--ink);
+}
+.map-toast {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  bottom: 0.7rem;
+  max-width: calc(100% - 1rem);
+  padding: 0.15rem 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 800;
+  white-space: nowrap;
+  background: var(--accent);
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--pill);
+  box-shadow: 2px 2px 0 0 var(--ink);
+  opacity: 0;
+  animation: map-toast var(--cycle) infinite;
+}
+@keyframes map-paste {
+  0%,
+  34% {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  36%,
+  43% {
+    opacity: 1;
+    transform: none;
+  }
+  46%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes map-drag {
+  0%,
+  37% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  40%,
+  45% {
+    opacity: 1;
+    transform: none;
+    box-shadow: 3px 3px 0 0 var(--ink);
+  }
+  47% {
+    opacity: 1;
+    transform: translate(3px, -4px) rotate(-3deg) scale(1.05);
+    box-shadow: 7px 8px 0 0 var(--ink);
+  }
+  56% {
+    opacity: 1;
+    transform: translate(var(--to-x), -0.4rem) rotate(3deg) scale(1.05);
+    box-shadow: 7px 8px 0 0 var(--ink);
+  }
+  59%,
+  97% {
+    opacity: 1;
+    transform: translate(var(--to-x), 0);
+    box-shadow: 3px 3px 0 0 var(--ink);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--to-x), 0);
+  }
+}
+@keyframes map-colour {
+  0%,
+  56% {
+    filter: grayscale(1);
+  }
+  59%,
+  100% {
+    filter: none;
+  }
+}
+@keyframes map-ring {
+  0%,
+  50% {
+    box-shadow: inset 0 0 0 5px var(--green);
+  }
+  53%,
+  59% {
+    box-shadow:
+      inset 0 0 0 5px var(--green),
+      0 0 0 5px var(--accent);
+  }
+  63%,
+  100% {
+    box-shadow: inset 0 0 0 5px var(--green);
+  }
+}
+@keyframes map-toast {
+  0%,
+  58% {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+  61%,
+  97% {
+    opacity: 1;
+    transform: translateX(-50%);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-50%);
+  }
+}
+
+/* 3: a browser types the address, the page loads, and the site is there for anyone. */
+.stage {
+  display: grid;
+}
+.web {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+.web-bar {
+  flex: none;
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  padding: 0.35rem 0.55rem;
+  background: var(--raised);
+  border-bottom: var(--bw) solid var(--ink);
+}
+.web-bar i {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--ink);
+}
+.web-url {
+  flex: 1;
+  min-width: 0;
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.6rem;
+  overflow: hidden;
+  font: 0.72rem var(--mono);
+  white-space: nowrap;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--pill);
+}
+.web-url span {
+  display: inline-block;
+  width: 17ch;
+  overflow: hidden;
+  vertical-align: bottom;
+  animation: web-type var(--cycle) steps(17) infinite;
+}
+.web-load {
+  flex: none;
+  width: 0;
+  height: 3px;
+  background: var(--accent);
+  animation: web-load var(--cycle) infinite;
+}
+.web-page {
+  flex: 1;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 0.1rem;
+  min-height: 0;
+  padding: 0.4rem 1rem;
+  text-align: center;
+  background: var(--tint);
+  animation: web-page var(--cycle) infinite;
+}
+.web-page b {
+  font-size: 1.15rem;
+  line-height: 1.2;
+}
+.web-page small {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.web-me {
+  width: 2.1rem;
+  height: 2.1rem;
+  margin-bottom: 0.1rem;
+  border: var(--bw) solid var(--ink);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 38%, var(--ink) 0 22%, transparent 23%),
+    radial-gradient(circle at 50% 105%, var(--ink) 0 42%, transparent 43%), var(--pink);
+}
+.web-work {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.4rem;
+  width: min(100%, 18rem);
+  margin-top: 0.4rem;
+}
+.web-work i {
+  height: 1.5rem;
+  border: var(--bw) solid var(--ink);
+  border-radius: 6px;
+  background: var(--info);
+}
+.web-work i:nth-child(2) {
+  background: var(--pink);
+}
+.web-work i:nth-child(3) {
+  background: var(--green);
+}
+.web-work i:nth-child(4) {
+  background: var(--accent);
+}
+@keyframes web-type {
+  0%,
+  65% {
+    width: 0;
+  }
+  73%,
+  100% {
+    width: 17ch;
+  }
+}
+@keyframes web-load {
+  0%,
+  73% {
+    width: 0;
+    opacity: 1;
+  }
+  80% {
+    width: 100%;
+    opacity: 1;
+  }
+  83%,
+  100% {
+    width: 100%;
+    opacity: 0;
+  }
+}
+@keyframes web-page {
+  0%,
+  79% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  83%,
+  97% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (max-width: 860px) {
+  .flow {
+    grid-template-columns: 1fr;
+    gap: 1.8rem;
+  }
+}
+
+/* Without motion the frames show their end: the code copied, the site in Everyone, the site open. */
+@media (prefers-reduced-motion: reduce) {
+  .flow *,
+  .flow-pic {
+    animation: none !important;
+  }
+  .ai-copy span:first-child,
+  .map-paste {
+    opacity: 0;
+  }
+  .ai-copy span:last-child,
+  .map-toast {
+    opacity: 1;
+  }
+  .map-card {
+    transform: translate(var(--to-x), 0);
+  }
+  .map-toast {
+    transform: translateX(-50%);
+  }
+  .web-load {
+    opacity: 0;
+  }
+}
+
 .grid {
   display: grid;
   gap: 1.2rem;
-  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(17rem, 100%), 1fr));
 }
 .grid > .card {
-  padding: 1rem 1.2rem;
+  min-width: 0;
+  padding: 1.2rem 1.3rem;
+}
+.grid > .card .sticker {
+  margin-bottom: 0.6rem;
 }
 .grid > .card:nth-child(3n + 2) .sticker {
   --tilt: 2deg;
 }
 .grid > .card:nth-child(3n) .sticker {
-  --tilt: -1.5deg;
+  --tilt: -1deg;
+}
+.lift {
+  transition:
+    transform 160ms var(--spring),
+    box-shadow 160ms var(--spring);
+}
+.lift:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: var(--shadow-up);
 }
 
 .split {
   display: grid;
-  gap: 1.6rem;
+  gap: 2.5rem;
   grid-template-columns: 1fr 1fr;
   align-items: center;
 }
 .split.narrow-pic {
   grid-template-columns: 2fr 1fr;
 }
+.split p {
+  font-size: 1.05rem;
+}
+.split ul.ticks {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0;
+}
+.ticks li {
+  position: relative;
+  padding-left: 1.8rem;
+  margin-bottom: 0.4rem;
+}
+.ticks li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  top: 0.15rem;
+  width: 1.2rem;
+  height: 1.2rem;
+  display: grid;
+  place-content: center;
+  font-size: 0.7rem;
+  font-weight: 800;
+  background: var(--green);
+  border: var(--bw) solid var(--border);
+  border-radius: 50%;
+}
 @media (max-width: 760px) {
-  h1 {
-    font-size: 2.2rem;
-  }
   .split,
   .split.narrow-pic {
     grid-template-columns: 1fr;
+    gap: 1.4rem;
+  }
+  .split > figure {
+    order: -1;
   }
 }
 figure {
@@ -295,44 +1095,1071 @@ figure.shot {
   padding: 0;
 }
 figcaption {
-  padding: 0.5rem 0.8rem;
+  padding: 0.55rem 0.9rem;
   border-top: var(--bw) solid var(--border);
   font-size: 0.85rem;
   color: var(--muted);
+  background: var(--raised);
 }
 .diagram {
-  padding: 1rem;
+  padding: 1.2rem;
 }
 .diagram img {
   margin: 0 auto;
 }
 
+/* A soft yellow band that runs the full width. */
+.band {
+  margin-block: 4.5rem;
+  padding-block: 4rem;
+  background: var(--tint);
+  border-block: var(--bw) solid var(--border);
+}
+.band > section {
+  margin-block: 0;
+}
+
+/* Projects on the home page: one file on the left, kitshn in the middle, and each part of the project where it runs: in
+   the cloud or on your computer (projects.js draws the wires and sends a dot along them). */
+.flowmap {
+  position: relative;
+  display: grid;
+  grid-template-columns: 26rem 6rem minmax(0, 1fr);
+  gap: 3.4rem;
+  align-items: center;
+}
+.flowmap > :not(svg) {
+  position: relative;
+  z-index: 1;
+}
+.fm-wires {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.fm-wire {
+  --on: var(--info);
+  fill: none;
+  stroke: #19191b2e;
+  stroke-width: 2;
+  stroke-linecap: round;
+  transition: stroke 240ms ease;
+}
+.fm-wire.computer {
+  --on: var(--warning);
+}
+.fm-wire.on {
+  stroke: var(--on);
+  stroke-width: 3;
+}
+.fm-dot {
+  fill: var(--info);
+  stroke: var(--ink);
+  stroke-width: 2;
+  opacity: 0;
+}
+.fm-dot.computer {
+  fill: var(--warning);
+}
+.fm-file {
+  margin: 0;
+  overflow: hidden;
+  background: var(--code-bg);
+}
+.fm-file-name {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.5rem 0.8rem;
+  color: var(--code-ink);
+  border-bottom: 1px solid #ffffff22;
+}
+.fm-file-name img {
+  width: 1.4rem;
+  height: 1.4rem;
+}
+.fm-file-name span {
+  margin-left: auto;
+  font: 0.72rem var(--mono);
+  color: #a3a3aa;
+}
+.fm-file pre {
+  margin: 0;
+  padding: 0;
+  overflow-x: auto;
+  font-size: 0.66rem;
+  line-height: 1.55;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.fm-open {
+  padding: 0.6rem 0.8rem 0.2rem !important;
+}
+.fm-close {
+  padding: 0.2rem 0.8rem 0.6rem !important;
+}
+.fm-file ul {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.fm-file li {
+  padding: 0.1rem 0.8rem;
+  border-left: 3px solid var(--info);
+  transition: background 240ms ease;
+}
+.fm-file li.home {
+  border-left-color: var(--warning);
+}
+.fm-file li.live {
+  background: #ffffff1a;
+}
+.c-kw {
+  color: #c4b5fd;
+}
+.c-str {
+  color: var(--green);
+}
+.c-key {
+  font-weight: 700;
+  color: #ffffff;
+}
+.c-kind {
+  padding: 0 0.3em;
+  font-weight: 700;
+  color: var(--ink);
+  border-radius: 4px;
+}
+.k-static,
+.k-worker {
+  background: var(--info);
+}
+.k-compose {
+  background: var(--warning);
+}
+.fm-hub {
+  display: grid;
+  justify-items: center;
+  gap: 0.3rem;
+  padding: 0.8rem 0.4rem;
+  text-align: center;
+  background: var(--accent);
+}
+.fm-hub img {
+  width: 2.4rem;
+  height: 2.4rem;
+}
+.fm-hub b {
+  font-size: 0.95rem;
+  line-height: 1.1;
+}
+.fm-hub small {
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.fm-dest {
+  display: grid;
+  min-width: 0;
+}
+.fm-zone {
+  padding: 0.8rem 1rem 1rem;
+}
+.fm-zone.cloud {
+  background: color-mix(in srgb, var(--info) 22%, var(--surface));
+}
+.fm-zone.computer {
+  background: color-mix(in srgb, var(--warning) 24%, var(--surface));
+}
+.fm-zone h3 {
+  margin-bottom: 0.6rem;
+  font-size: 1.05rem;
+}
+.fm-parts {
+  display: grid;
+  gap: 0.55rem;
+}
+.fm-part {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.8rem;
+  min-height: 3.2rem;
+  padding: 0.4rem 0.8rem;
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: 10px;
+  box-shadow: 2px 2px 0 0 var(--ink);
+}
+.fm-part b {
+  display: block;
+  font-size: 0.95rem;
+  line-height: 1.2;
+}
+.fm-part small {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.fm-part .sticker {
+  --tilt: 0deg;
+  flex: none;
+  opacity: 0;
+  transform: scale(0.7);
+  transition:
+    opacity 160ms ease,
+    transform 220ms var(--spring);
+}
+.fm-part.live .sticker {
+  opacity: 1;
+  transform: none;
+}
+/* The tunnel between your computer and the cloud: the computer dials out, so no port opens. */
+.fm-tunnel {
+  position: relative;
+  height: 3rem;
+  margin-inline: auto;
+  width: 0.9rem;
+  background: repeating-linear-gradient(180deg, var(--accent) 0 8px, var(--surface) 8px 12px);
+  background-size: 100% 24px;
+  border-inline: var(--bw) solid var(--ink);
+  animation: fm-tunnel 900ms linear infinite;
+}
+.fm-tunnel span {
+  position: absolute;
+  left: 1.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.78rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+@keyframes fm-tunnel {
+  to {
+    background-position: 0 24px;
+  }
+}
+.fm-note {
+  margin: 1.4rem 0 0;
+  font-weight: 700;
+}
+/* On a phone the long lines of the recipe scroll together, inside its box. */
+@media (max-width: 640px) {
+  .fm-file ul {
+    overflow-x: auto;
+  }
+  .fm-file li {
+    width: max-content;
+    min-width: 100%;
+  }
+  .fm-file li pre {
+    overflow: visible;
+  }
+}
+@media (max-width: 1100px) {
+  .flowmap {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2.2rem;
+    padding-left: 1.1rem;
+  }
+  .fm-hub {
+    justify-self: center;
+    width: 7rem;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fm-tunnel {
+    animation: none;
+  }
+  .fm-wire,
+  .fm-file li,
+  .fm-part .sticker {
+    transition: none;
+  }
+}
+
+/* Self-hosting on the home page: one loop of 9 s in two acts, which the steps under it follow. The machine opens the
+   tunnel from its side, and a visitor comes in through it. Below
+   it, the join command and the facts a tinkerer asks for. A narrow scene stacks, and its wires turn with it. */
+.hs {
+  --cycle: 9s;
+}
+.hs-scene {
+  margin: 0;
+  overflow: hidden;
+  container: hs / inline-size;
+}
+.hs-map {
+  display: grid;
+  grid-template-columns: 1fr 3rem 1.1fr 8rem 1.5fr;
+  align-items: center;
+  padding: 2.4rem 1.6rem;
+  background-color: var(--canvas);
+  background-image: radial-gradient(var(--dots) 1.2px, transparent 1.2px);
+  background-size: 16px 16px;
+}
+.hs-node {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-items: center;
+  gap: 0.2rem;
+  min-width: 0;
+  min-height: 8.5rem;
+  align-content: center;
+  padding: 0.8rem 0.6rem;
+  text-align: center;
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: 12px;
+  box-shadow: 3px 3px 0 0 var(--ink);
+}
+.hs-node > i {
+  font-size: 1.7rem;
+  font-style: normal;
+  line-height: 1.1;
+}
+.hs-node > b {
+  font-size: 0.95rem;
+}
+.hs-node > small {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.hs-cloud {
+  background: var(--tint);
+}
+.hs-chip {
+  padding: 0.02rem 0.55rem;
+  font-size: 0.7rem;
+  font-weight: 800;
+  white-space: nowrap;
+  background: var(--green);
+  border: 1.5px solid var(--ink);
+  border-radius: var(--pill);
+  animation: hs-chip var(--cycle) infinite;
+}
+.hs-apps {
+  display: grid;
+  gap: 0.25rem;
+  width: 100%;
+  margin-top: 0.3rem;
+}
+.hs-apps span {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.12rem 0.5rem;
+  overflow: hidden;
+  font: 0.72rem var(--mono);
+  white-space: nowrap;
+  text-align: left;
+  background: var(--raised);
+  border-radius: 6px;
+}
+.hs-apps span:first-child {
+  animation: hs-app var(--cycle) infinite;
+}
+.hs-apps i {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+/* A wire holds a track that runs along it. Turning the track is all a stacked scene needs. */
+.hs-wire {
+  position: relative;
+  align-self: stretch;
+}
+.hs-track {
+  position: absolute;
+  left: -2px;
+  right: -2px;
+  top: 50%;
+  height: 0.9rem;
+  margin-top: -0.45rem;
+}
+.hs-track::before {
+  content: "";
+  position: absolute;
+  inset: 50% 0 auto;
+  height: 3px;
+  margin-top: -1.5px;
+  background: var(--ink);
+}
+.hs-track b {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  z-index: 1;
+  width: 0.7rem;
+  height: 0.7rem;
+  margin: -0.35rem 0 0 -0.35rem;
+  background: var(--accent);
+  border: 1.5px solid var(--ink);
+  border-radius: 50%;
+  opacity: 0;
+}
+.hs-in b {
+  animation: hs-in var(--cycle) infinite;
+}
+.hs-tunnel .hs-track::before {
+  inset: 0;
+  height: auto;
+  margin: 0;
+  background: repeating-linear-gradient(90deg, var(--accent) 0 8px, var(--surface) 8px 12px);
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--pill);
+  animation: hs-tube var(--cycle) infinite;
+}
+.hs-tunnel b {
+  animation: hs-dial var(--cycle) infinite;
+}
+.hs-tunnel b + b {
+  animation-name: hs-through;
+}
+.hs-tube-name {
+  position: absolute;
+  left: 40%;
+  top: calc(50% + 1rem);
+  transform: translateX(-50%);
+  font-size: 0.75rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+/* The router: a wall that the tunnel passes, with its ports shut. */
+.hs-wall {
+  position: absolute;
+  z-index: 2;
+  right: 0.9rem;
+  top: calc(50% - 2.6rem);
+  width: 0.9rem;
+  height: 5.2rem;
+  border: var(--bw) solid var(--ink);
+  border-radius: 4px;
+  background: repeating-linear-gradient(0deg, transparent 0 9px, var(--ink) 9px 11px), var(--warning);
+}
+.hs-wall span {
+  position: absolute;
+  left: 50%;
+  top: -1.7rem;
+  transform: translateX(-50%);
+  padding: 0 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 800;
+  white-space: nowrap;
+  background: var(--surface);
+  border: 1.5px solid var(--ink);
+  border-radius: var(--pill);
+}
+
+.hs-steps {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin: 1.2rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.hs-steps li {
+  display: flex;
+  gap: 0.7rem;
+  align-items: flex-start;
+  padding: 0.7rem 0.8rem;
+  border: var(--bw) solid transparent;
+  border-radius: var(--radius);
+}
+.hs-steps li:nth-child(1) {
+  animation: hs-step-1 var(--cycle) infinite;
+}
+.hs-steps li:nth-child(2) {
+  animation: hs-step-2 var(--cycle) infinite;
+}
+.hs-steps .flow-n {
+  flex: none;
+  margin: 0;
+}
+.hs-steps h3 {
+  margin-bottom: 0.15rem;
+  font-size: 1.05rem;
+}
+.hs-steps p {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--muted);
+}
+
+/* For the tinkerers: the command that joins a machine, and the plain facts. */
+.hs-geek {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 2.4rem;
+  align-items: center;
+  margin-top: 2.4rem;
+}
+.hs-term {
+  margin: 0;
+  padding-bottom: 0.9rem;
+  min-width: 0;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.hs-term pre {
+  margin: 0 0 0.7rem;
+  padding: 0;
+  overflow: visible;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: none;
+  border: 0;
+  box-shadow: none;
+}
+.hs-term pre b {
+  color: var(--accent);
+}
+.hs-term p {
+  margin: 0;
+  color: #c9c9cf;
+}
+.hs-term p b {
+  color: var(--green);
+}
+.hs-geek h3 {
+  margin-bottom: 0.7rem;
+}
+.hs-facts {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@keyframes hs-dial {
+  0%,
+  2% {
+    left: 100%;
+    opacity: 0;
+  }
+  4% {
+    left: 100%;
+    opacity: 1;
+  }
+  20% {
+    left: 0;
+    opacity: 1;
+  }
+  22%,
+  100% {
+    left: 0;
+    opacity: 0;
+  }
+}
+@keyframes hs-tube {
+  0%,
+  17% {
+    opacity: 0.25;
+  }
+  21%,
+  96% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.25;
+  }
+}
+@keyframes hs-in {
+  0%,
+  33% {
+    left: 0;
+    opacity: 0;
+  }
+  34% {
+    left: 0;
+    opacity: 1;
+  }
+  41% {
+    left: 100%;
+    opacity: 1;
+  }
+  42%,
+  100% {
+    left: 100%;
+    opacity: 0;
+  }
+}
+@keyframes hs-through {
+  0%,
+  45% {
+    left: 0;
+    opacity: 0;
+  }
+  46% {
+    left: 0;
+    opacity: 1;
+  }
+  55% {
+    left: 100%;
+    opacity: 1;
+  }
+  56%,
+  100% {
+    left: 100%;
+    opacity: 0;
+  }
+}
+@keyframes hs-chip {
+  0%,
+  41% {
+    opacity: 0;
+    transform: scale(0.7);
+  }
+  43%,
+  96% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes hs-app {
+  0%,
+  55% {
+    background: var(--raised);
+  }
+  57%,
+  96% {
+    background: var(--green);
+  }
+  100% {
+    background: var(--raised);
+  }
+}
+@keyframes hs-step-1 {
+  0%,
+  31% {
+    background: var(--surface);
+    border-color: var(--ink);
+    box-shadow: var(--shadow);
+  }
+  33%,
+  98% {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+  }
+}
+@keyframes hs-step-2 {
+  0%,
+  31% {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+  }
+  33%,
+  98% {
+    background: var(--surface);
+    border-color: var(--ink);
+    box-shadow: var(--shadow);
+  }
+  100% {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+  }
+}
+
+@container hs (max-width: 44rem) {
+  .hs-map {
+    grid-template-columns: minmax(0, 20rem);
+    justify-content: center;
+    padding: 1.4rem 1rem;
+  }
+  .hs-node {
+    min-height: 0;
+  }
+  .hs-wire {
+    height: 3rem;
+  }
+  .hs-wire.hs-tunnel {
+    height: 7rem;
+  }
+  .hs-track {
+    left: 50%;
+    right: auto;
+    top: -2px;
+    width: calc(100% + 0px);
+    margin: 0;
+  }
+  .hs-track {
+    width: var(--long);
+    transform: rotate(90deg);
+    transform-origin: 0 0;
+    margin-left: 0.45rem;
+  }
+  .hs-in {
+    --long: 3.2rem;
+  }
+  .hs-tunnel {
+    --long: 7.2rem;
+  }
+  .hs-tube-name {
+    left: calc(50% + 1.1rem);
+    top: 25%;
+    transform: none;
+  }
+  .hs-wall {
+    left: calc(50% - 3rem);
+    right: auto;
+    top: 4.6rem;
+    width: 6rem;
+    height: 0.9rem;
+    background: repeating-linear-gradient(90deg, transparent 0 9px, var(--ink) 9px 11px), var(--warning);
+  }
+  .hs-wall span {
+    left: calc(100% + 0.5rem);
+    top: 50%;
+    transform: translateY(-50%);
+  }
+}
+@media (max-width: 860px) {
+  .hs-steps,
+  .hs-geek {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* Without motion the scene shows the tunnel open, and the steps stay plain. */
+@media (prefers-reduced-motion: reduce) {
+  .hs *,
+  .hs-steps li {
+    animation: none !important;
+  }
+  .hs-chip {
+    opacity: 1;
+  }
+}
+
+/* Safety on the home page: two checklists, of an update and of a visitor. Their checks tick one by one on a loop of 8 s
+   and end with the green line. Without motion every check shows ticked. */
+.safe {
+  --cycle: 8s;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.6rem;
+  align-items: stretch;
+}
+.safe figure {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.safe-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 1rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  background: var(--raised);
+  border-bottom: var(--bw) solid var(--border);
+}
+.safe-more {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem 2rem;
+  margin-top: 1.6rem;
+  padding: 1.1rem 1.4rem;
+  background: var(--tint);
+}
+.safe-more h3 {
+  margin-bottom: 0.2rem;
+}
+.safe-more p {
+  margin: 0;
+  color: var(--muted);
+}
+.safe-run {
+  animation: safe-run var(--cycle) infinite;
+}
+.safe-steps {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0.8rem 1rem 0.4rem;
+  list-style: none;
+}
+.safe-steps li {
+  display: flex;
+  gap: 0.8rem;
+  align-items: flex-start;
+  padding: 0.5rem 0;
+}
+.safe-steps li + li {
+  border-top: var(--bw) dashed var(--hairline);
+}
+.safe-steps i {
+  flex: none;
+  display: grid;
+  place-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-top: 0.1rem;
+  font-style: normal;
+  font-weight: 800;
+  font-size: 0.8rem;
+  background: var(--surface);
+  border: var(--bw) solid var(--ink);
+  border-radius: 50%;
+}
+.safe-steps i::before {
+  content: "✓";
+  opacity: 0;
+}
+.safe-steps li div {
+  display: grid;
+  gap: 0.1rem;
+}
+.safe-steps b {
+  font-size: 0.95rem;
+}
+.safe-steps span {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.safe-steps li:nth-child(1) i {
+  animation: safe-tick-1 var(--cycle) infinite;
+}
+.safe-steps li:nth-child(1) i::before {
+  animation: safe-mark-1 var(--cycle) infinite;
+}
+.safe-steps li:nth-child(2) i {
+  animation: safe-tick-2 var(--cycle) infinite;
+}
+.safe-steps li:nth-child(2) i::before {
+  animation: safe-mark-2 var(--cycle) infinite;
+}
+.safe-steps li:nth-child(3) i {
+  animation: safe-tick-3 var(--cycle) infinite;
+}
+.safe-steps li:nth-child(3) i::before {
+  animation: safe-mark-3 var(--cycle) infinite;
+}
+.safe-steps li:nth-child(4) i {
+  animation: safe-tick-4 var(--cycle) infinite;
+}
+.safe-steps li:nth-child(4) i::before {
+  animation: safe-mark-4 var(--cycle) infinite;
+}
+.safe-live {
+  margin: auto 1rem 1rem;
+  padding: 0.55rem 0.8rem;
+  font-weight: 800;
+  text-align: center;
+  background: var(--green);
+  border: var(--bw) solid var(--ink);
+  border-radius: 10px;
+  box-shadow: 3px 3px 0 0 var(--ink);
+  animation: safe-live var(--cycle) infinite;
+}
+/* Check n ticks at about (n × 15 + 5) % of the cycle; the site goes live at 75 %, and all of it resets at the end. */
+@keyframes safe-tick-1 {
+  0%,
+  19% {
+    background: var(--surface);
+  }
+  20%,
+  97% {
+    background: var(--green);
+  }
+}
+@keyframes safe-mark-1 {
+  0%,
+  19% {
+    opacity: 0;
+  }
+  20%,
+  97% {
+    opacity: 1;
+  }
+}
+@keyframes safe-tick-2 {
+  0%,
+  34% {
+    background: var(--surface);
+  }
+  35%,
+  97% {
+    background: var(--green);
+  }
+}
+@keyframes safe-mark-2 {
+  0%,
+  34% {
+    opacity: 0;
+  }
+  35%,
+  97% {
+    opacity: 1;
+  }
+}
+@keyframes safe-tick-3 {
+  0%,
+  49% {
+    background: var(--surface);
+  }
+  50%,
+  97% {
+    background: var(--green);
+  }
+}
+@keyframes safe-mark-3 {
+  0%,
+  49% {
+    opacity: 0;
+  }
+  50%,
+  97% {
+    opacity: 1;
+  }
+}
+@keyframes safe-tick-4 {
+  0%,
+  64% {
+    background: var(--surface);
+  }
+  65%,
+  97% {
+    background: var(--green);
+  }
+}
+@keyframes safe-mark-4 {
+  0%,
+  64% {
+    opacity: 0;
+  }
+  65%,
+  97% {
+    opacity: 1;
+  }
+}
+@keyframes safe-live {
+  0%,
+  74% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  78%,
+  97% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes safe-run {
+  0%,
+  74% {
+    background: var(--yellow);
+  }
+  78%,
+  97% {
+    background: var(--green);
+  }
+}
+@media (max-width: 860px) {
+  .safe {
+    grid-template-columns: 1fr;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .safe *,
+  .safe *::before {
+    animation: none !important;
+  }
+  .safe-steps i {
+    background: var(--green);
+  }
+  .safe-steps i::before {
+    opacity: 1;
+  }
+}
+
+/* The three kinds of apps. */
+.kinds {
+  display: grid;
+  gap: 1.2rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+}
+.kinds .card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 1.3rem 1.4rem;
+}
+.kinds .sticker {
+  align-self: flex-start;
+  margin-bottom: 0.5rem;
+}
+.kinds dl {
+  margin: 0.6rem 0 0;
+  padding-top: 0.8rem;
+  border-top: var(--bw) dashed var(--hairline);
+  font-size: 0.92rem;
+}
+.kinds dt {
+  font-weight: 800;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.kinds dd {
+  margin: 0 0 0.5rem;
+}
+
 .apps {
   display: grid;
   gap: 1rem;
-  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(15rem, 100%), 1fr));
   row-gap: 1.6rem;
   padding: 0;
   margin: 0;
   list-style: none;
 }
 .apps li a {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0.7rem;
-  padding: 0.8rem 0.9rem;
+  padding: 1.1rem 0.9rem 0.8rem;
   color: var(--ink);
   text-decoration: none;
   transition:
-    transform 80ms,
-    box-shadow 80ms;
+    transform 160ms var(--spring),
+    box-shadow 160ms var(--spring);
 }
 .apps li a:hover {
-  transform: translate(-1px, -1px);
-  box-shadow: 5px 5px 0 0 var(--shadow-ink);
+  transform: translate(-2px, -2px);
+  box-shadow: var(--shadow-up);
 }
 .apps li a:active {
-  transform: translate(3px, 3px);
+  transform: translate(2px, 2px);
   box-shadow: none;
 }
 .apps .icon {
@@ -341,8 +2168,8 @@ figcaption {
   height: 2.2rem;
   padding: 3px;
   background: var(--raised);
-  border: var(--bw) solid var(--border);
-  border-radius: 4px;
+  border: var(--bw) solid var(--hairline);
+  border-radius: 8px;
   object-fit: contain;
 }
 .apps .name {
@@ -360,11 +2187,7 @@ figcaption {
   --tilt: 2deg;
 }
 .apps li:nth-child(3n) .sticker {
-  --tilt: -1.5deg;
-}
-.apps li a {
-  position: relative;
-  padding-top: 1.1rem;
+  --tilt: -1deg;
 }
 .apps li a > span:not(.sticker) {
   min-width: 0;
@@ -373,6 +2196,74 @@ figcaption {
   position: absolute;
   top: -0.7rem;
   right: 0.7rem;
+}
+
+/* The way to kitshn for enterprise: a quiet grey card, so it reads apart from the rest. */
+.teams {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr auto;
+  gap: 1.5rem 2rem;
+  align-items: center;
+  padding: 2rem;
+  background: #c8c8c3;
+}
+.teams > * {
+  min-width: 0;
+}
+.teams .label,
+.teams .lede {
+  color: var(--ink);
+}
+.teams .lede {
+  margin: 0;
+}
+.teams ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.teams li {
+  padding: 0.5rem 0;
+  font-weight: 600;
+  border-top: var(--bw) solid #19191b33;
+}
+.teams li:first-child {
+  border-top: 0;
+}
+@media (max-width: 960px) {
+  .teams {
+    grid-template-columns: 1fr;
+    padding: 1.6rem 1.2rem;
+  }
+  .teams .btn {
+    justify-self: start;
+  }
+}
+
+/* The last call to action. */
+.cta {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+  gap: 2rem;
+  align-items: center;
+  padding: 2.2rem 2rem;
+  background: var(--accent);
+}
+.cta > * {
+  min-width: 0;
+}
+.cta pre {
+  margin: 0;
+  box-shadow: none;
+}
+.cta .lede {
+  color: var(--ink);
+}
+@media (max-width: 860px) {
+  .cta {
+    grid-template-columns: 1fr;
+    padding: 1.6rem 1.2rem;
+  }
 }
 
 ol.steps {
@@ -384,14 +2275,15 @@ ol.steps {
   gap: 1.2rem;
 }
 ol.steps > li {
+  min-width: 0;
   counter-increment: step;
   position: relative;
-  padding: 1.1rem 1.3rem 0.4rem 3.6rem;
+  padding: 1.1rem 1.3rem 0.4rem 3.8rem;
 }
 ol.steps > li::before {
   content: counter(step);
   position: absolute;
-  left: 0.9rem;
+  left: 1rem;
   top: 1rem;
   width: 2rem;
   height: 2rem;
@@ -401,7 +2293,7 @@ ol.steps > li::before {
   background: var(--select);
   color: var(--select-fg);
   border: var(--bw) solid var(--border);
-  border-radius: 4px;
+  border-radius: 50%;
 }
 
 table {
@@ -413,23 +2305,53 @@ th,
 td {
   text-align: left;
   vertical-align: top;
-  padding: 0.5rem 0.7rem;
-  border: var(--bw) solid var(--border);
+  padding: 0.55rem 0.8rem;
+  border-bottom: var(--bw) solid var(--hairline);
 }
 th {
   background: var(--raised);
   font-weight: 800;
+  border-bottom-color: var(--border);
 }
 .table-wrap {
   overflow-x: auto;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius);
   box-shadow: var(--shadow);
 }
 
 footer {
-  margin: 3rem auto 2rem;
-  padding: 1rem 1.2rem;
+  margin: 4rem auto 1.5rem;
+  padding: 1rem 1.3rem;
   display: flex;
-  gap: 1rem;
+  align-items: center;
+  gap: 1rem 1.4rem;
   flex-wrap: wrap;
   font-size: 0.9rem;
+}
+footer .brand {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-right: auto;
+  font-weight: 800;
+  text-decoration: none;
+}
+footer .brand img {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+/* A picture keeps its own size in a split, so a narrow one leaves no empty frame. */
+.split > figure.shot {
+  justify-self: center;
+  width: fit-content;
+}
+.ticks.row {
+  display: grid;
+  gap: 0.6rem 1.6rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+  list-style: none;
+  padding: 0;
+  margin: 1.4rem 0 0;
 }
