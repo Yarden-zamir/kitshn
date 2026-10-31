@@ -248,7 +248,6 @@ import {
 } from "../core/notify.ts";
 import { readUsage } from "./usage.ts";
 import {
-  FAILING_FOR_MS,
   UPTIME_FETCHES_PER_RUN,
   UPTIME_KEEP_MS,
   UPTIME_IDLE_MS,
@@ -14655,10 +14654,10 @@ export class Kitshn extends DurableObject<Env> {
     if (targets.length === 0 || slot === this.uptimeSlot) return { fetches: 0, changed: false };
     this.uptimeSlot = slot;
     const online = this.onlineMachines();
-    const probes = new Map<string, { up: boolean; failingFor: number }>();
+    const probes = new Map<string, boolean>();
     for (const card of targets) {
       const site = this.liveSites.get(card.id);
-      if (site) probes.set(card.id, { up: site.up && online.has(site.machineId), failingFor: 0 });
+      if (site) probes.set(card.id, site.up && online.has(site.machineId));
     }
     const fetched =
       fetchBudget === 0
@@ -14686,12 +14685,12 @@ export class Kitshn extends DurableObject<Env> {
         return { card: card.id, up: ups.every(Boolean), fetches: card.addresses.length };
       }),
     );
-    for (const { card, up } of answers) probes.set(card, { up, failingFor: FAILING_FOR_MS });
+    for (const { card, up } of answers) probes.set(card, up);
     let changed = false;
     this.ctx.storage.transactionSync(() => {
       for (const [card, probe] of probes) {
         const before = this.uptime.get(card) ?? UP;
-        const after = nextUptime(before, probe.up, now, probe.failingFor);
+        const after = nextUptime(before, probe, now);
         if (after === before) continue;
         if (stored(after)) {
           this.uptime.set(card, after);
@@ -14711,7 +14710,7 @@ export class Kitshn extends DurableObject<Env> {
         this.sql(
           "INSERT OR REPLACE INTO uptime_changes (card_id, at, up) VALUES (?, ?, ?)",
           card,
-          now,
+          after.since,
           after.up ? 1 : 0,
         );
       }

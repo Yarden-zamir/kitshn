@@ -2,7 +2,7 @@
 
 export interface Uptime {
   readonly up: boolean;
-  /** When an up card first failed in a row of failures, or null; a daemon site never has one. */
+  /** When an up card first failed in a row of failures, or null. */
   readonly failingSince: number | null;
   /** When `up` last changed; 0 for a card that kitshn never saw down. */
   readonly since: number;
@@ -20,10 +20,11 @@ export const UP: Uptime = { up: true, failingSince: null, since: 0 };
 export const stored = (uptime: Uptime) => !uptime.up || uptime.failingSince !== null;
 
 /**
- * K-1125: a fetched card goes down when it still fails at least one turn after its first failure. kitshn counts by
- * time, not by alarm runs, so two runs close together after a wake never make a card down.
+ * K-1125: a card goes down when it still fails 5 minutes after its first failure, so a short error, a deploy of
+ * kitshn or a daemon that reconnects never makes it down. kitshn counts by time, not by alarm runs. Known limit: a
+ * card that comes back and fails again between two turns counts as one failure. Revisit if that hides real outages.
  */
-export const FAILING_FOR_MS = 2 * 60_000;
+export const DOWN_AFTER_MS = 5 * 60_000;
 /** K-1126: fetches per alarm run, inside the 50 subrequests of one run (K-406). */
 export const UPTIME_FETCHES_PER_RUN = 8;
 /** K-1126: the length of one turn; an alarm in the same turn fetches nothing. */
@@ -37,17 +38,17 @@ export const UPTIME_KEEP_MS = 30 * 24 * 60 * 60_000;
 export const probeUp = (status: number | null) => status !== null && status < 500;
 
 /**
- * The next state of a card after one probe. `failingFor` is 0 for a daemon site, whose daemon already checks every
- * 10 seconds (K-1107). It returns the same object when nothing changes, so the caller writes no row.
+ * The next state of a card after one probe, the same rule for every card kind. A card that goes down is down since
+ * its first failure. It returns the same object when nothing changes, so the caller writes no row.
  */
-export function nextUptime(before: Uptime, probe: boolean, now: number, failingFor: number): Uptime {
+export function nextUptime(before: Uptime, probe: boolean, now: number): Uptime {
   if (probe)
     return before.up && before.failingSince === null
       ? before
       : { up: true, failingSince: null, since: before.up ? before.since : now };
   if (!before.up) return before;
   const first = before.failingSince ?? now;
-  if (now - first >= failingFor) return { up: false, failingSince: null, since: now };
+  if (now - first >= DOWN_AFTER_MS) return { up: false, failingSince: null, since: first };
   return before.failingSince === null ? { ...before, failingSince: now } : before;
 }
 
