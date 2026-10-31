@@ -4,6 +4,7 @@
 import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { dirname } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import type { ExecFrame } from "@kitshn/local";
 import { execSudoArgv } from "./execSudo.ts";
@@ -85,6 +86,16 @@ const folderOf = (cwd: string | undefined, home: string) =>
  */
 const IN_FOLDER = 'cd -- "$1" || exit 126; exec /bin/sh -c "$2"';
 
+/**
+ * K-722: the user's `~/.local/bin` and the daemon's own folder come first, so `kitshn`, `t3` and `claude` resolve as
+ * in a login shell. Known limit: no profile runs, so tools that only a profile adds (nvm, for example) stay missing;
+ * revisit if agents need them.
+ */
+export const runPath = (home: string, daemonPath: string, path: string | undefined) =>
+  [...new Set([`${home}/.local/bin`, dirname(daemonPath), ...(path ?? "/usr/bin:/bin").split(":")])].join(
+    ":",
+  );
+
 /** K-722: how long a run that exited may still deliver output that its pipes hold, before it ends anyway. */
 export const DRAIN_MS = 2_000;
 
@@ -136,7 +147,7 @@ export function startExec(spec: ExecSpec, sink: ExecSink): ExecHandle {
       env: windows
         ? process.env
         : {
-            PATH: process.env["PATH"] ?? "/usr/bin:/bin",
+            PATH: runPath(home, process.execPath, process.env["PATH"]),
             HOME: home,
             USER: user,
             LOGNAME: user,
