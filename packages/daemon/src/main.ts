@@ -1880,7 +1880,8 @@ function report() {
       capabilities:
         platform === "win32"
           ? // K-622: "task-restart": this daemon starts its task again from outside the task's run.
-            ["update", "update-gz", "provider", "access", "health", "task-restart"]
+            // K-1608, K-721: pushes, `applied` and the exec relay are the same on every platform.
+            ["update", "update-gz", "provider", "applied", "access", "health", "protocol-2", "task-restart"]
           : [
               "update",
               "update-gz",
