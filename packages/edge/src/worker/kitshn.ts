@@ -6669,6 +6669,8 @@ export class Kitshn extends DurableObject<Env> {
       const version = this.env.KITSHN_VERSION;
       if (!isRelease(version) || this.meta("daemon_rollout_seen_version") === version) return;
       this.autoUpdate();
+      // Map sockets can survive the deployment too. Show the new release and any rollout it started (K-628).
+      this.broadcast();
       this.setMeta("daemon_rollout_seen_version", version);
     } catch (error) {
       // A rollout error must not stop the rest of kitshn from waking; no marker means a later wake retries.

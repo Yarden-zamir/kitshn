@@ -216,6 +216,75 @@ it("starts the rollout after a release wake when a signed daemon socket kept its
   });
 });
 
+it("tells an already-open map when a release wake starts an update (K-628)", async () => {
+  const stub = await setup();
+  const received: Array<unknown> = [];
+  const sockets = await runInDurableObject(stub, (instance, state) => {
+    const kitshn = instance as unknown as {
+      env: { KITSHN_VERSION: string };
+      setPresence(machineId: string, online: boolean): void;
+      resumeAutoUpdatesAfterWake(): void;
+    };
+    kitshn.env = { ...kitshn.env, KITSHN_VERSION: NEW };
+    const daemon = new WebSocketPair();
+    state.acceptWebSocket(daemon[1], [machine.id, "machines"]);
+    daemon[0].accept();
+    daemon[1].serializeAttachment({
+      kind: "machine",
+      machineId: machine.id,
+      since: Date.now(),
+      challenge: "",
+      check: "signed",
+      answered: true,
+      rotateBy: null,
+      status: behindStatus.status,
+      sample: null,
+    });
+    kitshn.setPresence(machine.id, true);
+    const map = new WebSocketPair();
+    state.acceptWebSocket(map[1], ["map"]);
+    map[0].accept();
+    map[0].addEventListener("message", (event) => {
+      received.push(JSON.parse(String(event.data)));
+    });
+    map[1].serializeAttachment({
+      kind: "map",
+      caller: {
+        visitor: { email: "owner@example.com", clientId: null, ip: null },
+        actor: { _tag: "person", email: "owner@example.com" },
+      },
+    });
+    state.storage.sql.exec(
+      "INSERT OR REPLACE INTO meta (key, value) VALUES ('daemon_rollout_seen_version', ?)",
+      OLD,
+    );
+    kitshn.resumeAutoUpdatesAfterWake();
+    kitshn.resumeAutoUpdatesAfterWake();
+    return [daemon[1], map[1]];
+  });
+  try {
+    await vi.waitFor(() =>
+      expect(received).toContainEqual(
+        expect.objectContaining({
+          type: "snapshot",
+          snapshot: expect.objectContaining({
+            jobs: expect.arrayContaining([
+              expect.objectContaining({
+                machineId: machine.id,
+                state: "sent",
+                command: { kind: "update", version: NEW },
+              }),
+            ]),
+          }),
+        }),
+      ),
+    );
+    expect(received).toHaveLength(1);
+  } finally {
+    await runInDurableObject(stub, () => sockets.forEach((socket) => socket.close(1000, "test over")));
+  }
+});
+
 it("lets a BEHIND daemon wait while a provider is busy, with no job that holds the rollout, and updates it once idle (K-627)", async () => {
   await withDaemon(async ({ daemon, jobs, rollout }) => {
     await daemon({ type: "providers", providers: [busyReport(true)] });
