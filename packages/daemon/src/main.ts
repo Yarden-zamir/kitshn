@@ -9,10 +9,6 @@ import {
   signText,
   forwardText,
   FORWARD_HEADERS,
-  SITE_LINKS_CAPABILITY,
-  SITE_REACH_KEY,
-  SITE_GUARD_CAPABILITY,
-  SITE_GUARD_KEY,
   type Command,
   type DaemonMessage,
   type LiveSiteReport,
@@ -45,7 +41,7 @@ import { type Notify, accessEnv, withAppEnv } from "./appEnv.ts";
 import { HELPER_IMAGE, backup, finishRestores, restore, unpauseMarked } from "./backup.ts";
 import { keyPlan } from "./keys.ts";
 import { dropAttested, labelPrefixes } from "./attest.ts";
-import { IDENTITY_HEADERS, accessKeys } from "./check.ts";
+import { IDENTITY_HEADERS } from "./check.ts";
 import { execCommand, execSudoReady } from "./execSudo.ts";
 import { GRACE_MS, PING_MS as PROVIDER_PING_MS, ProviderHub, kitshnStateOf } from "./hub.ts";
 import {
@@ -143,8 +139,7 @@ import { keepBuild, keptId, keptTag, rollbackOverride, serviceImages, staleTags 
 import { TokenCache } from "./tokens.ts";
 import { Providers, parseSaved } from "./providers.ts";
 import { desiredProblem } from "@kitshn/local";
-import { SiteReach, linkPeerAdmitted, serveLinks } from "./link.ts";
-import { SiteGuardReach, serveSiteGuard } from "./site-guard.ts";
+import { linkPeerAdmitted, serveLinks } from "./link.ts";
 import { lastHour, lastSamples } from "./samples.ts";
 import { pushKey } from "@kitshn/local";
 import { MAX_FORWARDS, forwardTarget, passedHeaders, readBounded } from "./forward.ts";
@@ -1876,16 +1871,6 @@ function runJob(
 
 let tunnelState: "starting" | "running" | "stopped" = "stopped";
 let socket: WebSocket | null = null;
-// K-1609: a signed connection owns this reach; never persist it or give it to a provider.
-const siteReach = new SiteReach();
-// The pushed grants contain no origin: the target is resolved from this daemon's registry on each request.
-const siteGuardReach = new SiteGuardReach((name) => {
-  const provider = registry()
-    .sites()
-    .find((site) => site.name === name);
-  return provider ?? readSites()?.find((site) => site.name === name) ?? null;
-});
-let siteGuardSocket: string | null = null;
 
 function report() {
   const message: DaemonMessage = {
@@ -1895,16 +1880,7 @@ function report() {
       capabilities:
         platform === "win32"
           ? // K-622: "task-restart": this daemon starts its task again from outside the task's run.
-            [
-              "update",
-              "update-gz",
-              "provider",
-              "applied",
-              "access",
-              "health",
-              "task-restart",
-              SITE_LINKS_CAPABILITY,
-            ]
+            ["update", "update-gz", "provider", "access", "health", "task-restart"]
           : [
               "update",
               "update-gz",
@@ -1924,11 +1900,8 @@ function report() {
               "health",
               // K-721: this daemon speaks provider protocol 2 and applies the pause and exec rights pushes.
               "protocol-2",
-              SITE_LINKS_CAPABILITY,
-              ...(siteGuardSocket === null ? [] : [SITE_GUARD_CAPABILITY]),
               ...(doorState.problem === null ? ["doors"] : []),
             ],
-      ...(siteGuardSocket === null ? {} : { siteGuardSocket }),
       ...(keptBytes === undefined ? {} : { keptBytes }),
       version: VERSION,
       os: `${osPlatform()} ${release()}`,
@@ -2458,8 +2431,6 @@ function connect(config: JoinSecrets) {
       log(`connected to kitshn ${how}`);
       // K-1762: a new connection can follow a reset or a lost right that the daemon did not hear of.
       keptTokens.drop(null);
-      siteReach.connect(ws);
-      siteGuardReach.connect(ws);
       socket = ws;
       delay = 1000;
       stopped = false;
@@ -2515,14 +2486,6 @@ function connect(config: JoinSecrets) {
         // K-1608: the daemon saves each push, gives it to the provider, and tells kitshn that it applied it.
         applyPush(message);
         sendOn(ws, { type: "applied", key: pushKeyOf(message), hash: message.hash });
-      } else if (message.type === "siteReach" && socket === ws && siteReach.apply(ws, message.cards)) {
-        sendOn(ws, { type: "applied", key: SITE_REACH_KEY, hash: message.hash });
-      } else if (
-        message.type === "siteGuard" &&
-        socket === ws &&
-        siteGuardReach.apply(ws, message.teamDomain, message.grants)
-      ) {
-        sendOn(ws, { type: "applied", key: SITE_GUARD_KEY, hash: message.hash });
       } else if (message.type === "paused") {
         hub().fromKitshnState({ paused: message.paused });
         sendOn(ws, { type: "applied", key: pushKey.paused(), hash: message.hash });
@@ -2618,8 +2581,6 @@ function connect(config: JoinSecrets) {
       // K-1805: kitshn forgets the tails of a closed connection.
       if (socket === ws) stopTails();
       if (socket === ws) {
-        siteReach.disconnect(ws);
-        siteGuardReach.disconnect(ws);
         socket = null;
         // K-722: the runs of both sides end with the relay.
         hub().kitshnLost();
@@ -2791,8 +2752,6 @@ let lastSites = "";
 
 /** K-1107: tries each site every 10 seconds and reports the list only when it changes. */
 async function checkSites() {
-  // A changed local destination must end requests using the previous target.
-  siteGuardReach.refresh();
   // A broken file must not look like "no sites": that would remove every card and its shares on the map.
   const sites = readSites();
   if (sites === null) {
@@ -2914,24 +2873,6 @@ async function runCommand() {
   };
   const local = await listenLocal(paths.socket, { ...socketOptions, access: "private" });
   process.on("exit", local.stop);
-  if (platform !== "win32") {
-    const guardPath = join(dirname(paths.socket), "site-guard.sock");
-    const guard = await serveSiteGuard(guardPath, {
-      get teamDomain() {
-        return siteGuardReach.teamDomain();
-      },
-      site: (id) => siteGuardReach.site(id),
-      onChange: (listener) => siteGuardReach.onChange(listener),
-      keys: accessKeys,
-    }).catch((error: unknown) => {
-      log(`no site-link guard: ${error instanceof Error ? error.message : String(error)}`);
-      return null;
-    });
-    if (guard) {
-      siteGuardSocket = guardPath;
-      process.on("exit", guard.stop);
-    }
-  }
   // K-704: the daemon pings each provider connection and drops a quiet one.
   process.on("exit", hub().start());
   // K-722: a stop or an update of the daemon ends its runs; on Linux systemd ends them with the cgroup anyway.
@@ -2940,7 +2881,6 @@ async function runCommand() {
   // K-1609, K-621: a start without the link proxy still serves the rest; the answer to register then names none.
   const linkOptions = {
     reachOf: (provider: string) => registry().reachOf(provider),
-    siteReach: () => siteReach.current(),
     token: () => (joined ? { clientId: joined.clientId, clientSecret: joined.clientSecret } : null),
     log,
     // K-1610: kitshn records each forwarded tool call; a call while kitshn is out of reach gets no event.

@@ -11,9 +11,8 @@ import {
   type ReachedCard,
   pushKey,
 } from "@kitshn/local";
-import { circleMatches, visitorLevel } from "./visitor.ts";
-import { circlePolicies } from "./access.ts";
-import { type Machine, type ReachedSite, type SiteGuardClient, type SiteGuardGrant } from "./machine.ts";
+import { visitorLevel } from "./visitor.ts";
+import type { Machine } from "./machine.ts";
 import {
   type Member,
   type Resource,
@@ -165,13 +164,6 @@ export type ProviderPush =
     }
   | { readonly key: string; readonly type: "paused"; readonly paused: boolean }
   | { readonly key: string; readonly type: "execRights"; readonly machines: ReadonlyArray<string> }
-  | { readonly key: string; readonly type: "siteReach"; readonly cards: ReadonlyArray<ReachedSite> }
-  | {
-      readonly key: string;
-      readonly type: "siteGuard";
-      readonly teamDomain: string;
-      readonly grants: ReadonlyArray<SiteGuardGrant>;
-    }
   | {
       readonly key: string;
       readonly type: "reach";
@@ -333,73 +325,4 @@ export function reachOf(state: State, machineId: string, provider: string, now: 
           },
         ];
   });
-}
-
-/** K-1609: live sites on other machines that Access admits this machine to, independent of providers. */
-export function siteReachOf(state: State, machineId: string, now: number): Array<ReachedSite> {
-  const machine = state.machines.get(machineId);
-  if (!machine) return [];
-  const visitor = { email: null, clientId: machine.clientId, ip: null };
-  return [...state.resources.values()]
-    .flatMap((card): Array<ReachedSite> => {
-      const address = card.addresses[0];
-      if (card.kind !== "site.live" || card.machine === null || card.machine === machineId || !address)
-        return [];
-      if (visitorLevel(state, card, visitor, now) === null) return [];
-      // A Bypass policy takes precedence over Service Auth. Never send the machine's credential to a public
-      // site, even if a separate private circle also admits the machine. Impossible "all" policies yield no policy.
-      let allowed = false;
-      for (const { circle } of activeShares(state, card, now)) {
-        const policies = [...circlePolicies(circle, state.machines).values()];
-        if (policies.some((policy) => policy.decision === "bypass")) return [];
-        if (
-          circleMatches(circle, visitor, state.machines) &&
-          policies.some((policy) => policy.decision === "non_identity")
-        )
-          allowed = true;
-      }
-      return allowed ? [{ id: card.id, address }] : [];
-    })
-    .sort((a, b) => a.id.localeCompare(b.id));
-}
-
-/** K-1609: the machine tokens that the destination guard may admit, with the end of each caller's last share. */
-export function siteGuardClientsOf(
-  state: State,
-  destination: string,
-  now: number,
-): Map<string, Array<SiteGuardClient>> {
-  const result = new Map<string, Array<SiteGuardClient>>();
-  if (!state.machines.has(destination)) return result;
-  for (const caller of state.machines.values()) {
-    if (caller.id === destination) continue;
-    const visitor = { email: null, clientId: caller.clientId, ip: null };
-    for (const reached of siteReachOf(state, caller.id, now)) {
-      const card = state.resources.get(reached.id);
-      if (!card || card.machine !== destination) continue;
-      const ends = activeShares(state, card, now)
-        .filter(({ circle }) => {
-          const policies = [...circlePolicies(circle, state.machines).values()];
-          return (
-            circleMatches(circle, visitor, state.machines) &&
-            policies.some((p) => p.decision === "non_identity")
-          );
-        })
-        .map(({ circle }) =>
-          Math.min(
-            circle.endsAt ?? Infinity,
-            state.shareSettings.get(shareKey(card.id, circle.id))?.endsAt ?? Infinity,
-            state.ends.get(card.id) ?? Infinity,
-          ),
-        );
-      // siteReachOf already checked that one matching non-identity policy exists. Fail closed if that changes.
-      if (ends.length === 0) continue;
-      const until = Math.max(...ends);
-      const clients = result.get(card.id) ?? [];
-      clients.push({ clientId: caller.clientId, until: Number.isFinite(until) ? until : null });
-      result.set(card.id, clients);
-    }
-  }
-  for (const clients of result.values()) clients.sort((a, b) => a.clientId.localeCompare(b.clientId));
-  return result;
 }

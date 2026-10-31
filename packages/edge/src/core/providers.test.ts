@@ -1,9 +1,8 @@
 import type { ProviderReport } from "@kitshn/local";
 import { describe, expect, it } from "vitest";
-import { type Machine, reservedSiteLinkHost, siteLinkDomain, siteLinkHost } from "./machine.ts";
+import type { Machine } from "./machine.ts";
 import { type Circle, OWNER_CIRCLE_ID, type Resource, type State, levelForKind, shareKey } from "./model.ts";
 import { applyChanges, forgetProviderChanges, invert, ruleViolation } from "./changes.ts";
-import { circlePolicies, desiredAccess } from "./access.ts";
 import {
   commandsFor,
   grantTables,
@@ -12,8 +11,6 @@ import {
   providerCards,
   providerPushes,
   siteAudiences,
-  siteGuardClientsOf,
-  siteReachOf,
   reachOf,
 } from "./providers.ts";
 
@@ -323,160 +320,6 @@ describe("reach of a machine (K-1609)", () => {
     // A machine never reaches its own cards, and a pause closes every link (K-1504).
     expect(reachOf(value, "vps", "t3", 0)).toEqual([]);
     expect(reachOf({ ...value, paused: "keep-public" }, "mac", "t3", 0)).toEqual([]);
-  });
-});
-
-describe("live-site reach of a machine (K-1609)", () => {
-  const mac: Machine = {
-    ...machine,
-    id: "mac",
-    name: "Mac",
-    clientId: "mac.access",
-    serviceTokenId: "mac-token",
-  };
-  const site: Resource = {
-    id: "live-mac-proxy",
-    kind: "site.live",
-    name: "proxy",
-    addresses: ["proxy.example.com"],
-    status: "running",
-    group: null,
-    machine: "mac",
-  };
-  const share = circle("links", [{ _tag: "machine", machineId: "vps" }], { level: "view" });
-  const value = () => {
-    const base = state([share]);
-    return {
-      ...base,
-      machines: new Map([...base.machines, [mac.id, mac]]),
-      resources: new Map([...base.resources, [site.id, site]]),
-      places: new Map([...base.places, [site.id, { x: 0, y: 0 }]]),
-    };
-  };
-
-  it("uses ordinary view-only circles and their non-identity Access policy, with no provider registration", () => {
-    const base = value();
-    expect(circlePolicies(share, base.machines).get("policy:links:tokens")).toMatchObject({
-      decision: "non_identity",
-      include: [{ service_token: { token_id: "t" } }],
-    });
-    expect(siteReachOf(base, "vps", 0)).toEqual([{ id: site.id, address: "proxy.example.com" }]);
-    expect(siteReachOf(base, "mac", 0)).toEqual([]);
-    expect(siteReachOf(base, "unknown", 0)).toEqual([]);
-    const noAddress = { ...site, addresses: [] };
-    expect(siteReachOf({ ...base, resources: new Map([[site.id, noAddress]]) }, "vps", 0)).toEqual([]);
-    const unrelated = { ...site, kind: "page" as const };
-    expect(siteReachOf({ ...base, resources: new Map([[site.id, unrelated]]) }, "vps", 0)).toEqual([]);
-    const otherMember = { ...share, members: [{ _tag: "machine" as const, machineId: "mac" }] };
-    expect(siteReachOf({ ...base, circles: new Map([[share.id, otherMember]]) }, "vps", 0)).toEqual([]);
-  });
-
-  it("follows expiry, pause, and all-must-match without widening a private share", () => {
-    const base = value();
-    expect(siteReachOf({ ...base, paused: "keep-public" }, "vps", 0)).toEqual([]);
-    expect(siteReachOf({ ...base, paused: "lockdown" }, "vps", 0)).toEqual([]);
-    expect(siteReachOf({ ...base, ends: new Map([[site.id, 10]]) }, "vps", 10)).toEqual([]);
-    expect(
-      siteReachOf(
-        { ...base, shareSettings: new Map([[shareKey(site.id, share.id), { level: null, endsAt: 10 }]]) },
-        "vps",
-        10,
-      ),
-    ).toEqual([]);
-    const expired = { ...share, endsAt: 10 };
-    expect(siteReachOf({ ...base, circles: new Map([[share.id, expired]]) }, "vps", 10)).toEqual([]);
-    const strict: Circle = {
-      ...share,
-      match: "all",
-      members: [...share.members, { _tag: "email", email: "x@y.z" }],
-    };
-    expect(siteReachOf({ ...base, circles: new Map([[share.id, strict]]) }, "vps", 0)).toEqual([]);
-    // Both members have the same client id, but Access refuses an all-must-match policy with two tokens.
-    const twoTokens: Circle = {
-      ...share,
-      match: "all",
-      members: [...share.members, { _tag: "device", tokenId: "t", clientId: "vps.access", name: "same" }],
-    };
-    expect(siteReachOf({ ...base, circles: new Map([[share.id, twoTokens]]) }, "vps", 0)).toEqual([]);
-    const publicShare: Circle = { ...share, members: [{ _tag: "everyone" }] };
-    const publicState = { ...base, circles: new Map([[share.id, publicShare]]) };
-    expect(siteReachOf(publicState, "vps", 0)).toEqual([]);
-    expect(siteReachOf({ ...publicState, paused: "keep-public" }, "vps", 0)).toEqual([]);
-    expect(siteReachOf({ ...publicState, paused: "lockdown" }, "vps", 0)).toEqual([]);
-    // Bypass takes precedence even when a different, private circle also admits this machine.
-    const everyone: Circle = { ...publicShare, id: "everyone" };
-    const mixed = {
-      ...base,
-      circles: new Map([
-        [share.id, share],
-        [everyone.id, everyone],
-      ]),
-    };
-    expect(siteReachOf(mixed, "vps", 0)).toEqual([]);
-  });
-
-  it("gives the destination each caller's latest valid expiry across matching shares", () => {
-    const base = value();
-    expect(siteGuardClientsOf(base, "mac", 0).get(site.id)).toEqual([
-      { clientId: "vps.access", until: null },
-    ]);
-    const early = { ...share, endsAt: 10 };
-    const later = { ...share, id: "later", endsAt: 30 };
-    const bounded = {
-      ...base,
-      circles: new Map([
-        [early.id, early],
-        [later.id, later],
-      ]),
-      shareSettings: new Map([[shareKey(site.id, later.id), { level: null, endsAt: 20 }]]),
-      ends: new Map([[site.id, 25]]),
-    };
-    expect(siteGuardClientsOf(bounded, "mac", 0).get(site.id)).toEqual([
-      { clientId: "vps.access", until: 20 },
-    ]);
-    expect(siteGuardClientsOf(bounded, "mac", 20).size).toBe(0);
-    expect(siteGuardClientsOf({ ...base, paused: "lockdown" }, "mac", 0).size).toBe(0);
-    expect(siteGuardClientsOf(base, "unknown", 0).size).toBe(0);
-  });
-
-  it("scopes a reserved link application to the site's own non-identity policies", () => {
-    const base = value();
-    const host = siteLinkHost("mac", "example.com")!;
-    const domain = siteLinkDomain(host, site.id)!;
-    const linkHosts = new Map([[site.id, host]]);
-    const access = desiredAccess(base, 0, [], [], null, null, linkHosts);
-    expect(host).toBe("kitshn-link-mac.example.com");
-    expect(domain).toBe("kitshn-link-mac.example.com/site/live-mac-proxy/*");
-    expect(access.apps.get(`app:${site.id}:${domain}`)).toMatchObject({
-      domain,
-      policyKeys: ["policy:links:tokens"],
-      path_cookie_attribute: true,
-    });
-    expect(desiredAccess(base, 0).apps.has(`app:${site.id}:${domain}`)).toBe(false);
-    expect(
-      desiredAccess({ ...base, paused: "lockdown" }, 0, [], [], null, null, linkHosts).apps.has(
-        `app:${site.id}:${domain}`,
-      ),
-    ).toBe(false);
-    const everyone = { ...share, id: "everyone", members: [{ _tag: "everyone" as const }] };
-    const publicState = {
-      ...base,
-      circles: new Map([
-        [share.id, share],
-        [everyone.id, everyone],
-      ]),
-    };
-    expect(
-      desiredAccess(publicState, 0, [], [], null, null, linkHosts).apps.has(`app:${site.id}:${domain}`),
-    ).toBe(false);
-    expect(reservedSiteLinkHost("kitshn-link-mac.example.com", "example.com")).toBe(true);
-    expect(reservedSiteLinkHost("KITSHN-LINK-MAC.EXAMPLE.COM", "example.com")).toBe(true);
-    expect(reservedSiteLinkHost("kitshn-link-mac.other.com", "example.com")).toBe(false);
-    expect(reservedSiteLinkHost("x.kitshn-link-mac.example.com", "example.com")).toBe(false);
-    expect(reservedSiteLinkHost("a-kitshn-link-mac.example.com", "example.com")).toBe(false);
-    expect(siteLinkHost("bad/id", "example.com")).toBeNull();
-    expect(siteLinkHost("x".repeat(52), "example.com")).toBeNull();
-    expect(siteLinkDomain(host, "bad/id")).toBeNull();
   });
 });
 

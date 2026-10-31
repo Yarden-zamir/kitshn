@@ -15,60 +15,6 @@ import type {
 } from "@kitshn/local";
 import type { ServerReport } from "./sites.ts";
 import type { DoorPlan } from "./game.ts";
-/** K-1609: daemon-only live-site reach, never sent to a provider. */
-export interface ReachedSite {
-  readonly id: string;
-  readonly address: string;
-}
-
-/** A destination guard enforces each caller's last possible expiry locally, even between pushes. */
-export interface SiteGuardClient {
-  readonly clientId: string;
-  /** Milliseconds since epoch; null means that no matching share has an expiry. */
-  readonly until: number | null;
-}
-
-/** A card's link-path audience and current machine grants, pushed only to its destination daemon. */
-export interface SiteGuardGrant {
-  readonly id: string;
-  readonly name: string;
-  readonly host: string;
-  readonly audience: string;
-  readonly clients: ReadonlyArray<SiteGuardClient>;
-}
-
-/** K-1609: the push and capability for the daemon's live-site link route. */
-export const SITE_REACH_KEY = "site:reach";
-export const SITE_LINKS_CAPABILITY = "site-links";
-export const SITE_GUARD_KEY = "site:guard";
-export const SITE_GUARD_CAPABILITY = "site-link-guard";
-
-/** Only this namespace below the kitshn zone can be used for destination link hosts. */
-export function reservedSiteLinkHost(address: string, zone: string): boolean {
-  const suffix = `.${zone.toLowerCase()}`;
-  const lower = address.toLowerCase();
-  if (!lower.endsWith(suffix)) return false;
-  const label = lower.slice(0, -suffix.length);
-  return !label.includes(".") && label.startsWith("kitshn-link-");
-}
-
-/** The reserved host is one DNS label under the kitshn zone, so the zone's certificate covers it. */
-export function siteLinkHost(machineId: string, zone: string): string | null {
-  const label = `kitshn-link-${machineId}`;
-  if (
-    label.length > 63 ||
-    !/^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(label) ||
-    !/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(zone)
-  )
-    return null;
-  return `${label}.${zone}`;
-}
-
-/** Access scopes a separate application to each site's path on that host. */
-export function siteLinkDomain(host: string, cardId: string): string | null {
-  return /^[a-z0-9][a-z0-9-]{0,62}$/.test(cardId) ? `${host}/site/${cardId}/*` : null;
-}
-
 /** A joined machine (K-602). Its resource card has the same id and the kind `machine`. */
 export interface Machine {
   readonly id: string;
@@ -127,8 +73,6 @@ export interface MachineStatus {
   readonly tunnel: "starting" | "running" | "stopped";
   /** Job kinds that this daemon knows beyond shell, diagnostics and restart. Old daemons send none. */
   readonly capabilities?: ReadonlyArray<string>;
-  /** Private Unix socket on which this daemon guards the reserved link host, when it is serving one. */
-  readonly siteGuardSocket?: string;
   /** K-821: the bytes of the images that the daemon keeps for rollbacks, at most; shared layers count once per image. */
   readonly keptBytes?: number;
   /** K-2002: the public addresses on the machine's interfaces, for the records of its game cards. */
@@ -456,15 +400,6 @@ export type ServerToDaemon =
       readonly type: "reach";
       readonly provider: string;
       readonly cards: ReadonlyArray<ReachedCard>;
-      readonly hash: string;
-    }
-  /** K-1609: the live-site cards on other machines that this machine's token opens. */
-  | { readonly type: "siteReach"; readonly cards: ReadonlyArray<ReachedSite>; readonly hash: string }
-  /** The destination's current path audiences and machine grants, on its signed connection only. */
-  | {
-      readonly type: "siteGuard";
-      readonly teamDomain: string;
-      readonly grants: ReadonlyArray<SiteGuardGrant>;
       readonly hash: string;
     }
   /** K-1623: the Access audiences of one provider's site hosts on this machine. */

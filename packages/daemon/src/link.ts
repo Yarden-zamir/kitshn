@@ -1,67 +1,19 @@
 // K-1609, K-711: the link proxy. A provider reaches the address of a card on another machine through this machine's
 // daemon, which adds the machine token. The provider never holds a Cloudflare credential. It serves a Unix socket in
 // the daemon's private folder and one in its shared folder for local users (K-701), or a named pipe on Windows (K-621).
-import { once } from "node:events";
 import { chmodSync, rmSync } from "node:fs";
 import { type IncomingMessage, type ServerResponse, createServer } from "node:http";
 import { type Socket, connect as connectTcp, createServer as createListener } from "node:net";
-import { Readable, type Writable } from "node:stream";
+import { Readable } from "node:stream";
 import { connect as connectTls } from "node:tls";
 import type { ReachedCard } from "@kitshn/local";
-import type { ReachedSite } from "@kitshn/edge/machine";
 import type { Platform } from "./service.ts";
 import { peerUid } from "./peer.ts";
-import { pinnedSiteAddress } from "./site-link-address.ts";
 
 /** The Access service token of this machine (K-107). */
 export interface MachineToken {
   readonly clientId: string;
   readonly clientSecret: string;
-}
-
-/** K-1609: a live-site reach belongs to exactly one kitshn connection and is never persisted. */
-export class SiteReach {
-  private owner: object | null = null;
-  private sites: ReadonlyArray<ReachedSite> = [];
-
-  connect(owner: object) {
-    this.owner = owner;
-    this.sites = [];
-  }
-
-  apply(owner: object, sites: unknown): boolean {
-    if (this.owner !== owner) return false;
-    // A malformed push from the current connection must not leave an older reach in force.
-    this.sites = [];
-    if (!Array.isArray(sites) || sites.length > 512) return false;
-    const ids = new Set<string>();
-    for (const item of sites) {
-      if (typeof item !== "object" || item === null || Array.isArray(item)) return false;
-      const site = item as Record<string, unknown>;
-      if (
-        typeof site["id"] !== "string" ||
-        !/^[a-z0-9][a-z0-9-]{0,62}$/.test(site["id"]) ||
-        ids.has(site["id"]) ||
-        typeof site["address"] !== "string" ||
-        site["address"].length > 253 ||
-        !/^kitshn-link-[a-z0-9-]+\.[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(site["address"])
-      )
-        return false;
-      ids.add(site["id"]);
-    }
-    this.sites = sites as Array<ReachedSite>;
-    return true;
-  }
-
-  disconnect(owner: object) {
-    if (this.owner !== owner) return;
-    this.owner = null;
-    this.sites = [];
-  }
-
-  current(): ReadonlyArray<ReachedSite> {
-    return this.sites;
-  }
 }
 
 /** K-621: at most this many connections at once, and a connection that sends nothing in this time closes. */
@@ -77,26 +29,17 @@ export function linkTarget(
   reachOf: (provider: string) => ReadonlyArray<ReachedCard>,
   url: URL,
   scheme: "https" | "http" = "https",
-  sites: ReadonlyArray<ReachedSite> = [],
 ): { readonly target: URL } | { readonly error: string; readonly status: number } {
   const [, provider = "", machineId = "", ...rest] = url.pathname.split("/");
-  // `site` is reserved, and the second part is a card id rather than a caller-supplied host.
-  const address =
-    provider === "site"
-      ? sites.find((card) => card.id === machineId)?.address
-      : reachOf(provider).find((card) => card.machineId === machineId && card.address !== null)?.address;
+  const address = reachOf(provider).find(
+    (card) => card.machineId === machineId && card.address !== null,
+  )?.address;
   if (!address)
     return {
-      error:
-        provider === "site"
-          ? `this machine reaches no live site ${machineId} (K-1609).`
-          : `the provider ${provider} of this machine reaches no address of the machine ${machineId} (K-1609).`,
+      error: `the provider ${provider} of this machine reaches no address of the machine ${machineId} (K-1609).`,
       status: 403,
     };
-  // The reserved site path selects the per-card Access application and destination guard.
-  // Provider links keep their existing path; site links retain the card prefix end to end.
-  const path = provider === "site" ? `site/${machineId}/${rest.join("/")}` : rest.join("/");
-  const target = new URL(`${scheme}://${address}/${path}${url.search}`);
+  const target = new URL(`${scheme}://${address}/${rest.join("/")}${url.search}`);
   // A path cannot change the host: the proxy reaches only the card's own address.
   if (target.host !== address) return { error: `${url.pathname} leaves ${address}.`, status: 400 };
   return { target };
@@ -161,22 +104,8 @@ const HOP_HEADERS: ReadonlySet<string> = new Set([
 /** Whether a `Set-Cookie` value sets the Access session, which never comes back through the proxy. */
 const setsAccessSession = (cookie: string) => cookie.trimStart().startsWith("CF_Authorization=");
 
-/** K-1609: wait for a slow client before reading more of an upstream response. */
-export async function forwardBody(
-  body: AsyncIterable<Uint8Array>,
-  response: Writable,
-  signal: AbortSignal,
-): Promise<void> {
-  for await (const chunk of body) if (!response.write(chunk)) await once(response, "drain", { signal });
-  response.end();
-}
-
 interface LinkOptions {
   readonly reachOf: (provider: string) => ReadonlyArray<ReachedCard>;
-  /** K-1609: the signed connection owns this in-memory list, independent of providers. */
-  readonly siteReach?: () => ReadonlyArray<ReachedSite>;
-  /** Tests may hold DNS resolution open to exercise revocation races. */
-  readonly pinSite?: typeof pinnedSiteAddress;
   readonly token: () => MachineToken | null;
   readonly log: (text: string) => void;
   /** `http` only in tests. */
@@ -217,12 +146,7 @@ export function serveLinks(path: string, options: LinkOptions): Promise<{ readon
   };
   const server = createServer((request, response) => void forward(request, response));
   const forward = async (request: IncomingMessage, response: ServerResponse) => {
-    const found = linkTarget(
-      options.reachOf,
-      new URL(request.url ?? "/", "http://link"),
-      scheme,
-      options.siteReach?.(),
-    );
+    const found = linkTarget(options.reachOf, new URL(request.url ?? "/", "http://link"), scheme);
     if ("error" in found) return refuse(response, found.status, found.error);
     const token = options.token();
     if (!token) return refuse(response, 503, "the daemon has no machine token.");
@@ -234,98 +158,48 @@ export function serveLinks(path: string, options: LinkOptions): Promise<{ readon
     const name =
       auditName(request.headers[AUDIT_HEADER]) ??
       `${method}:/${rest.join("/")}`.replaceAll(" ", "").slice(0, 100);
-    const audit = (status: number) => {
-      if (provider !== "site") options.audit?.({ provider, machineId, name, status });
-    };
-    const controller = new AbortController();
-    // An origin may answer before it consumes the upload, so request abort does not by itself mean the client left.
-    const cancel = () => {
-      if (!response.writableFinished) controller.abort();
-    };
-    response.once("close", cancel);
+    const audit = (status: number) => options.audit?.({ provider, machineId, name, status });
     try {
-      const pinned =
-        provider === "site" && scheme === "https"
-          ? await (options.pinSite ?? pinnedSiteAddress)(found.target)
-          : null;
-      // DNS is asynchronous: do not use a grant that was withdrawn or redirected while it was in flight.
-      if (
-        provider === "site" &&
-        !options.siteReach?.().some((site) => site.id === machineId && site.address === found.target.host)
-      )
-        return refuse(response, 403, "the site link is no longer in reach.");
-      const headers = linkHeaders(request.rawHeaders, token);
-      if (pinned) headers.push(["Host", found.target.host]);
-      const answer = await fetch(pinned?.dial ?? found.target, {
+      const answer = await fetch(found.target, {
         method,
-        headers,
-        ...(pinned ? { tls: { serverName: pinned.serverName } } : {}),
+        headers: linkHeaders(request.rawHeaders, token),
         redirect: "manual",
-        signal: controller.signal,
         // The bytes go on as B sends them, so a compressed answer keeps its own encoding header.
         decompress: false,
         ...(method === "GET" || method === "HEAD"
           ? {}
           : { body: Readable.toWeb(request) as ReadableStream, duplex: "half" }),
       } as RequestInit);
-      const answerHeaders: Array<[string, string]> = [];
+      const headers: Array<[string, string]> = [];
       for (const [name, value] of answer.headers)
         if (name.toLowerCase() !== "set-cookie" && !HOP_HEADERS.has(name.toLowerCase()))
-          answerHeaders.push([name, value]);
+          headers.push([name, value]);
       for (const cookie of answer.headers.getSetCookie())
-        if (!setsAccessSession(cookie)) answerHeaders.push(["set-cookie", cookie]);
-      response.writeHead(answer.status, answerHeaders.flat());
+        if (!setsAccessSession(cookie)) headers.push(["set-cookie", cookie]);
+      response.writeHead(answer.status, headers.flat());
       audit(answer.status);
-      if (answer.body) await forwardBody(answer.body, response, controller.signal);
-      else response.end();
+      if (answer.body) for await (const chunk of answer.body) response.write(chunk);
+      response.end();
     } catch (error) {
-      if (!controller.signal.aborted) {
-        options.log(`link: ${found.target.host} failed: ${String(error)}`);
-        if (!response.headersSent) audit(0);
-        if (response.headersSent) response.destroy();
-        else refuse(response, 502, "the link to the other machine failed.");
-      }
-    } finally {
-      response.off("close", cancel);
+      options.log(`link: ${found.target.host} failed: ${String(error)}`);
+      if (!response.headersSent) audit(0);
+      if (response.headersSent) response.destroy();
+      else refuse(response, 502, "the link to the other machine failed.");
     }
   };
   server.on("upgrade", (request: IncomingMessage, client: Socket, head: Buffer) => {
-    void upgrade(request, client, head);
-  });
-  const upgrade = async (request: IncomingMessage, client: Socket, head: Buffer) => {
-    const found = linkTarget(
-      options.reachOf,
-      new URL(request.url ?? "/", "http://link"),
-      scheme,
-      options.siteReach?.(),
-    );
+    const found = linkTarget(options.reachOf, new URL(request.url ?? "/", "http://link"), scheme);
     const token = options.token();
     if ("error" in found || !token) {
       client.end(`HTTP/1.1 ${"error" in found ? found.status : 503} Refused\r\nConnection: close\r\n\r\n`);
       return;
     }
     const { target } = found;
-    const isSite = new URL(request.url ?? "/", "http://link").pathname.split("/")[1] === "site";
-    let host = target.hostname;
-    try {
-      if (isSite && scheme === "https")
-        host = (await (options.pinSite ?? pinnedSiteAddress)(target)).dial.hostname.replace(/^\[|\]$/g, "");
-    } catch (error) {
-      options.log(`link: ${target.host} failed: ${String(error)}`);
-      client.end("HTTP/1.1 502 Refused\r\nConnection: close\r\n\r\n");
-      return;
-    }
-    if (client.destroyed) return;
-    const cardId = new URL(request.url ?? "/", "http://link").pathname.split("/")[2];
-    if (isSite && !options.siteReach?.().some((site) => site.id === cardId && site.address === target.host)) {
-      client.end("HTTP/1.1 403 Refused\r\nConnection: close\r\n\r\n");
-      return;
-    }
     const port = Number(target.port || (scheme === "https" ? 443 : 80));
     const upstream =
       scheme === "https"
-        ? connectTls({ host, port, servername: target.hostname })
-        : connectTcp({ host, port });
+        ? connectTls({ host: target.hostname, port, servername: target.hostname })
+        : connectTcp({ host: target.hostname, port });
     const ready = scheme === "https" ? "secureConnect" : "connect";
     upstream.once(ready, () => {
       const lines = [
@@ -350,7 +224,7 @@ export function serveLinks(path: string, options: LinkOptions): Promise<{ readon
     client.on("error", close);
     client.on("close", () => upstream.destroy());
     upstream.on("close", () => client.destroy());
-  };
+  });
   const listener = createListener((socket) => {
     const peers = options.peers;
     if (peers) {

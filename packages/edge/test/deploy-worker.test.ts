@@ -446,33 +446,6 @@ describe("Worker deploys (K-806, K-909)", () => {
     expect(cloudflare.scripts.get(app.script)?.crons).toEqual(["*/30 * * * *"]);
   });
 
-  it("keeps a pre-existing reserved address but does not let Undo reclaim it after removal", async () => {
-    fakeCloudflare();
-    const app = repo("4301", "legacy-link-address");
-    await allow(app);
-    expect((await deploy(app)).status).toBe(200);
-    const reserved = "kitshn-link-mac.example.com";
-    const stub = env.KITSHN.getByName("kitshn");
-    // Simulate a site that already had this name before the namespace was reserved.
-    await runInDurableObject(stub, (_, durable) => {
-      const row = durable.storage.sql
-        .exec<{ body: string }>("SELECT body FROM resources WHERE id = ?", app.card)
-        .one();
-      const card = JSON.parse(row.body) as Resource;
-      durable.storage.sql.exec(
-        "UPDATE resources SET body = ? WHERE id = ?",
-        JSON.stringify({ ...card, addresses: [reserved] }),
-        app.card,
-      );
-    });
-    await evictDurableObject(stub);
-    const removed = await admin(`/api/apps/${app.card}`, "DELETE");
-    expect(removed.status, JSON.stringify(removed.body)).toBe(200);
-    const undone = await admin("/api/undo", "POST", { revision: removed.body["revision"] });
-    expect(undone.status).toBe(409);
-    expect(String(undone.body["error"])).toContain("reserved for a kitshn machine link");
-  });
-
   it("removes an app whose first upload failed, so it has no script", async () => {
     const cloudflare = fakeCloudflare();
     const app = repo("46", "broken");

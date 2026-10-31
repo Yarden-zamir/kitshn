@@ -305,23 +305,7 @@ import {
 } from "../core/library.ts";
 import { badgeState } from "../core/badge.ts";
 import { listedApps } from "../core/listing.ts";
-import {
-  commandsFor,
-  machineBusy,
-  providerCards,
-  providerPushes,
-  reachOf,
-  siteGuardClientsOf,
-} from "../core/providers.ts";
-import {
-  SITE_GUARD_CAPABILITY,
-  SITE_GUARD_KEY,
-  SITE_LINKS_CAPABILITY,
-  SITE_REACH_KEY,
-  reservedSiteLinkHost,
-  siteLinkDomain,
-  siteLinkHost,
-} from "../core/machine.ts";
+import { commandsFor, machineBusy, providerCards, providerPushes, reachOf } from "../core/providers.ts";
 import { healthCell, healthNotices } from "../core/health.ts";
 import {
   commandName,
@@ -389,7 +373,6 @@ import {
   type AccessStore,
   type Api,
   accessStates,
-  appliesBypass,
   CALLS_PER_RUN,
   fillAudiences,
   hasAccessWork,
@@ -529,11 +512,6 @@ type Attachment =
       readonly servers?: ReadonlyArray<ServerReport>;
       /** K-630: the last health check of this connection; an older daemon sends none. */
       readonly health?: HealthReport;
-      /** The nonce of the last guard push on this connection; renewed for every transmission. */
-      readonly siteGuardGeneration?: string;
-      /** K-1609: the guard push sent and acknowledged on this exact signed connection. */
-      readonly siteGuardSentHash?: string | null;
-      readonly siteGuardAckHash?: string | null;
     };
 
 /** K-1805: a Compose tail runs on the daemon; K-1807: a Worker tail is a Cloudflare tail of the script. */
@@ -3949,40 +3927,16 @@ export class Kitshn extends DurableObject<Env> {
   /** K-706: sends each provider of each signed connection its grant tables when they changed since the last send. */
   private pushGrants(now = Date.now()) {
     this.pushHashes.clear();
-    for (const machineId of this.state.machines.keys()) {
+    for (const machineId of this.providerRegs.keys()) {
       const pushes = this.pushesOf(machineId, now);
       this.pushHashes.set(machineId, new Map(pushes.map(({ key, hash }) => [key, hash])));
-      const socket = this.openSocket(machineId);
-      const attachment = socket ? attachmentOf(socket) : null;
-      if (!socket || attachment?.kind !== "machine" || attachment.check !== "signed") continue;
-      for (const item of pushes) {
-        const { key, push } = item;
-        let { hash } = item;
-        // The first push follows the signed handshake, before status names this capability.
-        if (
-          (push.type === "siteReach" || push.type === "siteGuard") &&
-          (attachment?.kind !== "machine" ||
-            !attachment.status?.capabilities?.includes(
-              push.type === "siteReach" ? SITE_LINKS_CAPABILITY : SITE_GUARD_CAPABILITY,
-            ))
-        )
-          continue;
+      const socket = this.ctx.getWebSockets(machineId).find((item) => {
+        const attachment = attachmentOf(item);
+        return attachment?.kind === "machine" && attachment.check === "signed";
+      });
+      if (!socket) continue;
+      for (const { key, hash, push } of pushes) {
         if (this.sentGrants.get(`${machineId}/${key}`) === hash) continue;
-        if (push.type === "siteGuard") {
-          const current = attachmentOf(socket);
-          if (current?.kind !== "machine" || current.check !== "signed") continue;
-          // A fresh nonce for every transmission also distinguishes A -> B -> A from the first A. A late
-          // acknowledgement cannot prove that the daemon applied the replacement push, even on the same socket.
-          const generation = crypto.randomUUID().replaceAll("-", "");
-          hash = `${hash.split(".", 1)[0]}.${generation}`;
-          saveMachine(socket, {
-            ...current,
-            siteGuardGeneration: generation,
-            siteGuardSentHash: hash,
-            siteGuardAckHash: null,
-          });
-          this.pushHashes.get(machineId)?.set(key, hash);
-        }
         this.sentGrants.set(`${machineId}/${key}`, hash);
         const { key: _key, ...message } = push;
         send(socket, { ...message, hash } as ServerToDaemon);
@@ -3992,86 +3946,43 @@ export class Kitshn extends DurableObject<Env> {
 
   /** K-1608: every push that the providers of a machine get now, each with the hash of its content. */
   private pushesOf(machineId: string, now = Date.now()) {
-    return (
-      providerPushes(
-        this.state,
-        machineId,
-        this.providerRegs.get(machineId) ?? [],
-        this.desiredState,
-        this.cardSettings,
-        now,
-        {
-          teamDomain: this.env.ACCESS_TEAM_DOMAIN,
-          // An application lives until the sync deletes it, so its audience stays until then, also after a give-back.
-          servedHost: (cardId) => {
-            const site = this.liveSites.get(cardId);
-            const handover = this.handoverOf(cardId);
-            return site?.state === "ok" && (handover === null || (handover.switched && !handover.returning))
-              ? site.address
-              : null;
-          },
-          audiencesOf: (cardId) => this.audiencesOf(cardId),
-          revOf: (kind) => this.desiredRevs.get(kind) ?? null,
+    return providerPushes(
+      this.state,
+      machineId,
+      this.providerRegs.get(machineId) ?? [],
+      this.desiredState,
+      this.cardSettings,
+      now,
+      {
+        teamDomain: this.env.ACCESS_TEAM_DOMAIN,
+        // An application lives until the sync deletes it, so its audience stays until then, also after a give-back.
+        servedHost: (cardId) => {
+          const site = this.liveSites.get(cardId);
+          const handover = this.handoverOf(cardId);
+          return site?.state === "ok" && (handover === null || (handover.switched && !handover.returning))
+            ? site.address
+            : null;
         },
-      )
-        .concat(
-          (this.providerRegs.get(machineId) ?? []).length === 0
-            ? []
-            : [
-                { key: pushKey.paused(), type: "paused", paused: this.state.paused !== null },
-                {
-                  key: pushKey.execRights(),
-                  type: "execRights",
-                  machines: execMachinesOf(this.state, machineId, now),
-                },
-              ],
-        )
-        // No caller may send its reusable machine credential to an ordinary live-site hostname. Keep reach empty
-        // until the reserved link host, Access application, DNS and destination guard are all confirmed ready.
-        .concat([{ key: SITE_REACH_KEY, type: "siteReach", cards: [] }])
-        .concat([
-          {
-            key: SITE_GUARD_KEY,
-            type: "siteGuard",
-            teamDomain: this.env.ACCESS_TEAM_DOMAIN,
-            grants: this.guardGrantsOf(machineId, now),
-          },
-        ])
-        .map((push) => {
-          const text = JSON.stringify(push);
-          const contentHash = `${fnv(text)}${fnv(text, 0x050c5d1f)}`;
-          const socket = push.type === "siteGuard" ? this.openSocket(machineId) : null;
-          const attachment = socket ? attachmentOf(socket) : null;
-          const generation = attachment?.kind === "machine" ? attachment.siteGuardGeneration : undefined;
-          const hash = generation ? `${contentHash}.${generation}` : contentHash;
-          return { key: push.key, hash, push };
-        })
-    );
-  }
-
-  /** The destination gets only known path audiences and locally enforced machine grants. */
-  private guardGrantsOf(machineId: string, now: number) {
-    const socket = this.openSocket(machineId);
-    const attachment = socket ? attachmentOf(socket) : null;
-    if (
-      attachment?.kind !== "machine" ||
-      attachment.check !== "signed" ||
-      !attachment.status?.capabilities?.includes(SITE_GUARD_CAPABILITY) ||
-      !attachment.status.siteGuardSocket
+        audiencesOf: (cardId) => this.audiencesOf(cardId),
+        revOf: (kind) => this.desiredRevs.get(kind) ?? null,
+      },
     )
-      return [];
-    const host = siteLinkHost(machineId, this.env.KITSHN_ZONE);
-    if (!host) return [];
-    const wanted = this.desired(now).apps;
-    return [...siteGuardClientsOf(this.state, machineId, now)].flatMap(([id, clients]) => {
-      const site = this.liveSites.get(id);
-      const domain = siteLinkDomain(host, id);
-      if (!site || site.state !== "ok" || !domain) return [];
-      const key = `app:${id}:${domain}`;
-      const app = this.access.get(key);
-      if (!wanted.has(key) || !app?.cfId || !app.aud || appliesBypass(app, this.access) !== false) return [];
-      return [{ id, name: site.name, host: site.address, audience: app.aud, clients }];
-    });
+      .concat(
+        (this.providerRegs.get(machineId) ?? []).length === 0
+          ? []
+          : [
+              { key: pushKey.paused(), type: "paused", paused: this.state.paused !== null },
+              {
+                key: pushKey.execRights(),
+                type: "execRights",
+                machines: execMachinesOf(this.state, machineId, now),
+              },
+            ],
+      )
+      .map((push) => {
+        const text = JSON.stringify(push);
+        return { key: push.key, hash: `${fnv(text)}${fnv(text, 0x050c5d1f)}`, push };
+      });
   }
 
   /** K-603: the AUD tags of kitshn's Access applications of a card that exist in Cloudflare. */
@@ -4180,24 +4091,20 @@ export class Kitshn extends DurableObject<Env> {
   private queuedFor(machine: Machine, status: MachineStatus | null): number | null {
     // A machine without a key gets no pushes (K-1708), so nothing waits for it.
     if (machine.key?.kind !== "public") return 0;
+    const pushes = this.hashesOf(machine.id);
+    if (pushes.size === 0) return 0;
+    // An online daemon that does not name `applied` never answers it, so its count is unknown.
+    if (status !== null && !status.capabilities?.includes("applied")) return null;
     // A daemon from before K-1623 never applies the access push, so its count leaves that push out.
     const access = status === null || status.capabilities?.includes("access") === true;
     // K-721: only a daemon of provider protocol 2 applies the pushes of the pause and the exec rights.
     const v2 = status === null || status.capabilities?.includes("protocol-2") === true;
-    // Until this connection reports support, do not count a push that an old daemon cannot apply.
-    const siteLinks = status?.capabilities?.includes(SITE_LINKS_CAPABILITY) === true;
-    const siteGuard = status?.capabilities?.includes(SITE_GUARD_CAPABILITY) === true;
-    const pushes = [...this.hashesOf(machine.id)].filter(
-      ([key]) =>
+    return [...pushes].filter(
+      ([key, hash]) =>
         (access || !key.startsWith("access:")) &&
         (v2 || !key.startsWith("kitshn:")) &&
-        (siteLinks || key !== SITE_REACH_KEY) &&
-        (siteGuard || key !== SITE_GUARD_KEY),
-    );
-    if (pushes.length === 0) return 0;
-    // An online daemon that does not name `applied` never answers it, so its count is unknown.
-    if (status !== null && !status.capabilities?.includes("applied")) return null;
-    return pushes.filter(([key, hash]) => this.applied.get(`${machine.id}/${key}`) !== hash).length;
+        this.applied.get(`${machine.id}/${key}`) !== hash,
+    ).length;
   }
 
   /** K-1608: the hash of each push of a machine, from the last `pushGrants`, or counted now after a restart. */
@@ -5312,52 +5219,10 @@ export class Kitshn extends DurableObject<Env> {
               offlineProviders: providerRefusals(message.status.offlineProviders),
               providerProblems: providerRefusals(message.status.providerProblems),
               execPaths: execPathsOf(message.status.execPaths),
-              ...(typeof message.status.siteGuardSocket === "string" &&
-              message.status.siteGuardSocket.startsWith("/") &&
-              message.status.siteGuardSocket.length <= 200 &&
-              !/[\r\n\0]/.test(message.status.siteGuardSocket)
-                ? { siteGuardSocket: message.status.siteGuardSocket }
-                : {}),
             }
           : {}),
       };
       saveMachine(socket, { ...attachment, status });
-      // A supporting daemon gets its first site reach only after it reports the capability.
-      if (attachment.check === "signed") {
-        let fresh = false;
-        for (const [capability, key] of [
-          [SITE_LINKS_CAPABILITY, SITE_REACH_KEY],
-          [SITE_GUARD_CAPABILITY, SITE_GUARD_KEY],
-        ] as const) {
-          if (
-            !status.capabilities?.includes(capability) ||
-            attachment.status?.capabilities?.includes(capability)
-          )
-            continue;
-          // These grants live only for this connection, so an acknowledgement from the previous one is stale.
-          if (this.applied.delete(`${machine.id}/${key}`))
-            this.sql("DELETE FROM applied_state WHERE machine_id = ? AND key = ?", machine.id, key);
-          this.sentGrants.delete(`${machine.id}/${key}`);
-          fresh = true;
-        }
-        const hadGuard = attachment.status?.capabilities?.includes(SITE_GUARD_CAPABILITY) === true;
-        const hasGuard = status.capabilities?.includes(SITE_GUARD_CAPABILITY) === true;
-        if (hadGuard !== hasGuard || status.siteGuardSocket !== attachment.status?.siteGuardSocket) {
-          // Losing the capability or replacing its local socket invalidates its acknowledgement immediately.
-          const current = attachmentOf(socket);
-          if (current?.kind === "machine")
-            saveMachine(socket, { ...current, siteGuardSentHash: null, siteGuardAckHash: null });
-          this.sentGrants.delete(`${machine.id}/${SITE_GUARD_KEY}`);
-          if (this.applied.delete(`${machine.id}/${SITE_GUARD_KEY}`))
-            this.sql(
-              "DELETE FROM applied_state WHERE machine_id = ? AND key = ?",
-              machine.id,
-              SITE_GUARD_KEY,
-            );
-          fresh = true;
-        }
-        if (fresh) this.pushGrants();
-      }
       if (status.refusedProviders) this.notifyRefusals(machine, status.refusedProviders);
       if (status.offlineProviders) this.notifyOfflineProviders(machine, status.offlineProviders, Date.now());
       // K-627: a daemon that connects, or that runs another release now, can start or end an update.
@@ -5442,21 +5307,6 @@ export class Kitshn extends DurableObject<Env> {
       typeof message.key === "string" &&
       typeof message.hash === "string"
     ) {
-      if (message.key === SITE_GUARD_KEY) {
-        // An old socket can still deliver a late message after it was replaced. Only the current socket can
-        // acknowledge the exact guard push sent to it, and only while that push is still the desired one.
-        const current = this.pushesOf(machine.id).find((item) => item.key === SITE_GUARD_KEY)?.hash;
-        if (
-          attachment.check !== "signed" ||
-          !attachment.status?.capabilities?.includes(SITE_GUARD_CAPABILITY) ||
-          !attachment.status.siteGuardSocket ||
-          this.openSocket(machine.id) !== socket ||
-          attachment.siteGuardSentHash !== message.hash ||
-          current !== message.hash
-        )
-          return;
-        saveMachine(socket, { ...attachment, siteGuardAckHash: message.hash });
-      }
       // K-1608: written only when it changes, so a machine that applied everything writes nothing, and only for a key
       // that kitshn pushes to it now, so a daemon cannot fill the table.
       const id = `${machine.id}/${message.key}`;
@@ -6411,10 +6261,7 @@ export class Kitshn extends DurableObject<Env> {
           : "kitshn shares servers of joined machines. Name a port of one, such as 5173.",
       );
     if (!LIVE_LABEL.test(name)) return fail(400, "A name has 1 to 40 lowercase letters, digits and dashes.");
-    if (
-      RESERVED_SITE_NAMES.has(name) ||
-      reservedSiteLinkHost(`${name}.${this.env.KITSHN_ZONE}`, this.env.KITSHN_ZONE)
-    )
+    if (RESERVED_SITE_NAMES.has(name))
       return fail(400, `${name} belongs to kitshn itself. Pick another name.`);
     if (endsAt !== null && endsAt !== undefined && !(typeof endsAt === "number" && endsAt > Date.now()))
       return fail(400, "The end time must be in the future, or null for no end.");
@@ -7170,15 +7017,6 @@ export class Kitshn extends DurableObject<Env> {
           app?.id ??
           this.sitesOf(machine.id).find((site) => site.address === address)?.id ??
           liveSiteId(machine.id, report.name);
-        // Preserve a site that already held a now-reserved name; never give that name to a new report.
-        const previous = this.liveSites.get(id);
-        if (
-          reservedSiteLinkHost(address, this.env.KITSHN_ZONE) &&
-          !(previous?.machineId === machine.id && previous.address === address)
-        ) {
-          refused.push(`${address} belongs to kitshn itself.`);
-          continue;
-        }
         const other = [...this.state.resources.values()].find(
           (resource) => resource.id !== id && resource.addresses.includes(address),
         );
@@ -8772,14 +8610,6 @@ export class Kitshn extends DurableObject<Env> {
    * it sends visitors on to another card (K-1124). Deploys and provider cards (K-705) check the same rules.
    */
   private addressTaken(address: string, resourceId: string): string | null {
-    // An existing site or redirect keeps a name that predates this reservation. A new card cannot take it.
-    const ownAddress = this.state.resources.get(resourceId)?.addresses.includes(address) === true;
-    const ownSite = this.liveSites.get(resourceId)?.address === address;
-    const ownRedirect = this.oldAddresses().some(
-      (item) => item.address === address && item.cardId === resourceId,
-    );
-    if (reservedSiteLinkHost(address, this.env.KITSHN_ZONE) && !ownAddress && !ownSite && !ownRedirect)
-      return `${address} is reserved for a kitshn machine link.`;
     const other = [...this.state.resources.values()].find(
       (resource) => resource.id !== resourceId && resource.addresses.includes(address),
     );
@@ -13315,7 +13145,6 @@ export class Kitshn extends DurableObject<Env> {
     const held = this.heldSiteAddresses(Date.now()).map((row) => row.address);
     const used = (name: string) =>
       RESERVED_SITE_NAMES.has(name) ||
-      reservedSiteLinkHost(`${name}.${zone}`, this.env.KITSHN_ZONE) ||
       `${name}.${zone}` === this.env.KITSHN_HOST ||
       held.includes(`${name}.${zone}`) ||
       [...this.state.resources.values()].some((resource) => resource.addresses.includes(`${name}.${zone}`));
@@ -13340,11 +13169,6 @@ export class Kitshn extends DurableObject<Env> {
     const now = Date.now();
     const held = this.heldSiteAddresses(now);
     for (const address of card.addresses) {
-      // A removed app's revision does not reserve a machine-link host. An Undo must not reclaim one.
-      if (reservedSiteLinkHost(address, this.env.KITSHN_ZONE)) {
-        const refusal = this.addressTaken(address, card.id);
-        if (refusal) throw new RuleError(`${refusal} This undo no longer fits.`);
-      }
       const other = [...this.state.resources.values()].find(
         (resource) => resource.id !== card.id && resource.addresses.includes(address),
       );
@@ -13362,9 +13186,6 @@ export class Kitshn extends DurableObject<Env> {
       "SELECT address FROM old_addresses WHERE card_id = ?",
       card.id,
     )) {
-      // The old address can return only if no machine link has claimed it while the card was gone.
-      if (reservedSiteLinkHost(address, this.env.KITSHN_ZONE) && !this.state.resources.has(card.id))
-        throw new RuleError(`${address} is reserved for a kitshn machine link, so this undo no longer fits.`);
       const other = [...this.state.resources.values()].find((resource) =>
         resource.addresses.includes(address),
       );
@@ -14220,7 +14041,6 @@ export class Kitshn extends DurableObject<Env> {
     const addresses = relay ? [host, relayHost(name, this.env.KITSHN_ZONE)] : [host];
     const taken = (address: string) =>
       RESERVED_SITE_NAMES.has(address.split(".")[0] ?? "") ||
-      reservedSiteLinkHost(address, this.env.KITSHN_ZONE) ||
       this.gameRows("name = ?", name).length > 0 ||
       [...this.state.resources.values()].some((resource) => resource.addresses.includes(address)) ||
       [...this.liveSites.values()].some((site) => site.address === address) ||

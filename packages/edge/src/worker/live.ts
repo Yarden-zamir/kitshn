@@ -1,6 +1,6 @@
 import { ACCESS_NAME_PREFIX } from "../core/access.ts";
 import { RESERVED_SITE_NAMES } from "../core/library.ts";
-import { type LiveSiteReport, siteLinkDomain } from "../core/machine.ts";
+import type { LiveSiteReport } from "../core/machine.ts";
 import { type Resource, fnv } from "../core/model.ts";
 import { type AccessRow, appliesBypass } from "./access-sync.ts";
 
@@ -192,40 +192,11 @@ export function ingressPath(path: string): string {
   return path.endsWith("*") ? `^${pattern}` : `^${pattern}(/|$)`;
 }
 
-/** One guarded site path on a reserved link host. */
-export interface SiteLinkIngress {
-  readonly host: string;
-  readonly cardId: string;
-  readonly socket: string;
-  readonly teamName: string;
-  readonly audience: string;
-}
-
 /** K-603, K-607, K-1105: the ingress of a machine's tunnel from its live sites. */
-export function tunnelConfig(
-  sites: ReadonlyArray<LiveSite>,
-  accessOf: (site: LiveSite) => IngressAccess,
-  links: ReadonlyArray<SiteLinkIngress> = [],
-) {
+export function tunnelConfig(sites: ReadonlyArray<LiveSite>, accessOf: (site: LiveSite) => IngressAccess) {
   return {
     config: {
       ingress: [
-        ...[...links]
-          .filter(
-            (link) =>
-              siteLinkDomain(link.host, link.cardId) !== null &&
-              link.socket.startsWith("/") &&
-              !/[\r\n\0]/.test(link.socket) &&
-              link.teamName !== "" &&
-              link.audience !== "",
-          )
-          .sort((a, b) => a.host.localeCompare(b.host) || a.cardId.localeCompare(b.cardId))
-          .map((link) => ({
-            hostname: link.host,
-            path: ingressPath(`/site/${link.cardId}`),
-            service: `unix:${link.socket}`,
-            originRequest: { access: { required: true, teamName: link.teamName, audTag: [link.audience] } },
-          })),
         ...[...sites]
           .sort((a, b) => a.address.localeCompare(b.address))
           .flatMap((site) => {
@@ -295,14 +266,8 @@ export function reachableAddresses(input: {
   const reachable = new Set<string>();
   for (const body of input.ingress) {
     if (!body) continue;
-    const config = JSON.parse(body) as { config?: { ingress?: Array<{ hostname?: string; path?: string }> } };
-    for (const rule of config.config?.ingress ?? []) {
-      if (!rule.hostname) continue;
-      reachable.add(rule.hostname);
-      const link = /^\^\/site\/([a-z0-9][a-z0-9-]{0,62})\(\/\|\$\)$/.exec(rule.path ?? "");
-      const domain = link?.[1] ? siteLinkDomain(rule.hostname, link[1]) : null;
-      if (domain) reachable.add(domain);
-    }
+    const config = JSON.parse(body) as { config?: { ingress?: Array<{ hostname?: string }> } };
+    for (const rule of config.config?.ingress ?? []) if (rule.hostname) reachable.add(rule.hostname);
   }
   for (const record of input.records) if (record.record_id) reachable.add(record.address);
   for (const route of input.routes) if (route.route_id) reachable.add(route.address);
