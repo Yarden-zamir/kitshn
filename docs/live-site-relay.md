@@ -89,7 +89,7 @@ request transmission separately from failure after transmission, response header
 
 ## Rollout and validation
 
-- Land the provider-protocol dependency (#224) first. Ship the relay behind capability negotiation and fail closed with
+- The provider-protocol dependency (#224) is merged. Ship the relay behind capability negotiation and fail closed with
   mixed daemon versions. Enable only after implementation review and daemon updates; no changes to the user's active
   proxy routes are part of this draft.
 - Test the signed connection checks, source membership, all-of and public-circle semantics, share/card expiry, pause,
