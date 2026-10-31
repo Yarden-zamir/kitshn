@@ -1,9 +1,10 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import type { ReachedCard } from "@kitshn/local";
 import { describe, expect, it } from "vitest";
-import { linkPeerAdmitted, linkTarget, serveLinks } from "./link.ts";
+import { forwardBody, linkPeerAdmitted, linkTarget, serveLinks } from "./link.ts";
 
 const platform = process.platform === "darwin" ? "darwin" : "linux";
 const own = process.getuid!();
@@ -116,6 +117,67 @@ describe("the link proxy (K-1609)", () => {
 
       expect(await webSocketEcho(path, "/t3/b/ws", "hi")).toBe("echo hi");
     } finally {
+      links.stop();
+      void upstream.stop(true);
+    }
+  });
+
+  it("stops reading upstream while a slow client has filled its buffer", async () => {
+    const slow = new PassThrough({ highWaterMark: 1 });
+    const abort = new AbortController();
+    let pulled = 0;
+    async function* source() {
+      pulled++;
+      yield new Uint8Array([1]);
+      pulled++;
+      yield new Uint8Array([2]);
+    }
+    const forwarding = forwardBody(source(), slow, abort.signal);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(pulled).toBe(1);
+    slow.resume();
+    await forwarding;
+    expect(pulled).toBe(2);
+  });
+
+  it("cancels an upstream stream when its local client disconnects", async () => {
+    const cancelled = Promise.withResolvers<void>();
+    const upstream = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(request) {
+        request.signal.addEventListener("abort", () => cancelled.resolve());
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("first\n"));
+            },
+            cancel() {
+              cancelled.resolve();
+            },
+          }),
+        );
+      },
+    });
+    const path = join(mkdtempSync(join(tmpdir(), "kitshn-link-cancel-")), "link.sock");
+    const links = await serveLinks(path, {
+      reachOf: (provider) => (provider === "t3" ? [card(`127.0.0.1:${upstream.port}`)] : []),
+      token: () => ({ clientId: "a.access", clientSecret: "secret" }),
+      log: () => {},
+      scheme: "http",
+      peers: { platform, access: "private", admits: (uid) => linkPeerAdmitted(uid, own, []) },
+    });
+    const client = new AbortController();
+    try {
+      const answer = await fetch("http://link/t3/b/v1/messages", {
+        unix: path,
+        signal: client.signal,
+      } as RequestInit);
+      expect(new TextDecoder().decode((await answer.body!.getReader().read()).value)).toBe("first\n");
+      client.abort();
+      await cancelled.promise;
+    } finally {
+      client.abort();
       links.stop();
       void upstream.stop(true);
     }
