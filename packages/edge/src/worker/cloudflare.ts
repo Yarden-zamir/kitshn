@@ -11,7 +11,13 @@ export class CloudflareError extends Error {
 interface Envelope<T> {
   readonly success: boolean;
   readonly result: T;
-  readonly result_info?: { readonly total_count?: number };
+  readonly result_info?: {
+    readonly count?: number;
+    readonly page?: number;
+    readonly per_page?: number;
+    readonly total_count?: number;
+    readonly total_pages?: number;
+  };
   readonly errors?: ReadonlyArray<{ readonly code: number; readonly message: string }>;
 }
 
@@ -23,6 +29,47 @@ export async function cloudflare<T>(
   body?: unknown,
 ): Promise<T> {
   return (await envelope<T>(token, method, path, body)).result;
+}
+
+/**
+ * A complete paginated list, bounded so hostname inspection cannot consume an entire alarm budget. A partial or
+ * ambiguous answer is an error: reserved link hosts must not send credentials to an address held by an unseen object.
+ */
+export async function cloudflareCompleteList<T>(token: string, path: string): Promise<Array<T>> {
+  const result: Array<T> = [];
+  let pages: number | undefined;
+  let count: number | undefined;
+  let perPage: number | undefined;
+  for (let page = 1; page <= (pages ?? 1); page++) {
+    const query = `${path}${path.includes("?") ? "&" : "?"}per_page=1000&page=${page}`;
+    const answer = await envelope<Array<T>>(token, "GET", query);
+    const info = answer.result_info;
+    if (
+      !Array.isArray(answer.result) ||
+      !info ||
+      info.page !== page ||
+      info.count !== answer.result.length ||
+      typeof info.per_page !== "number" ||
+      !Number.isInteger(info.per_page) ||
+      info.per_page <= 0 ||
+      info.per_page < answer.result.length ||
+      typeof info.total_pages !== "number" ||
+      !Number.isInteger(info.total_pages) ||
+      info.total_pages < 0 ||
+      info.total_pages > 4 ||
+      (info.total_pages === 0 && (page !== 1 || answer.result.length !== 0)) ||
+      (info.total_pages !== 0 && info.total_pages < page) ||
+      (pages !== undefined && info.total_pages !== pages) ||
+      (perPage !== undefined && info.per_page !== perPage) ||
+      (page > 1 && info.total_count !== count)
+    )
+      throw new CloudflareError(200, `GET ${path} did not prove that the listing is complete.`);
+    pages = info.total_pages;
+    count = info.total_count;
+    perPage = info.per_page;
+    result.push(...answer.result);
+  }
+  return result;
 }
 
 /** K-1303: the number of items of a list, from one call with one item per page. */

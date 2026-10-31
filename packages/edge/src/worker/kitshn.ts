@@ -318,6 +318,7 @@ import {
   SITE_GUARD_KEY,
   SITE_LINKS_CAPABILITY,
   SITE_REACH_KEY,
+  reservedSiteLinkHost,
   siteLinkDomain,
   siteLinkHost,
 } from "../core/machine.ts";
@@ -6354,7 +6355,10 @@ export class Kitshn extends DurableObject<Env> {
           : "kitshn shares servers of joined machines. Name a port of one, such as 5173.",
       );
     if (!LIVE_LABEL.test(name)) return fail(400, "A name has 1 to 40 lowercase letters, digits and dashes.");
-    if (RESERVED_SITE_NAMES.has(name))
+    if (
+      RESERVED_SITE_NAMES.has(name) ||
+      reservedSiteLinkHost(`${name}.${this.env.KITSHN_ZONE}`, this.env.KITSHN_ZONE)
+    )
       return fail(400, `${name} belongs to kitshn itself. Pick another name.`);
     if (endsAt !== null && endsAt !== undefined && !(typeof endsAt === "number" && endsAt > Date.now()))
       return fail(400, "The end time must be in the future, or null for no end.");
@@ -7110,6 +7114,15 @@ export class Kitshn extends DurableObject<Env> {
           app?.id ??
           this.sitesOf(machine.id).find((site) => site.address === address)?.id ??
           liveSiteId(machine.id, report.name);
+        // Preserve a site that already held a now-reserved name; never give that name to a new report.
+        const previous = this.liveSites.get(id);
+        if (
+          reservedSiteLinkHost(address, this.env.KITSHN_ZONE) &&
+          !(previous?.machineId === machine.id && previous.address === address)
+        ) {
+          refused.push(`${address} belongs to kitshn itself.`);
+          continue;
+        }
         const other = [...this.state.resources.values()].find(
           (resource) => resource.id !== id && resource.addresses.includes(address),
         );
@@ -8703,6 +8716,14 @@ export class Kitshn extends DurableObject<Env> {
    * it sends visitors on to another card (K-1124). Deploys and provider cards (K-705) check the same rules.
    */
   private addressTaken(address: string, resourceId: string): string | null {
+    // An existing site or redirect keeps a name that predates this reservation. A new card cannot take it.
+    const ownAddress = this.state.resources.get(resourceId)?.addresses.includes(address) === true;
+    const ownSite = this.liveSites.get(resourceId)?.address === address;
+    const ownRedirect = this.oldAddresses().some(
+      (item) => item.address === address && item.cardId === resourceId,
+    );
+    if (reservedSiteLinkHost(address, this.env.KITSHN_ZONE) && !ownAddress && !ownSite && !ownRedirect)
+      return `${address} is reserved for a kitshn machine link.`;
     const other = [...this.state.resources.values()].find(
       (resource) => resource.id !== resourceId && resource.addresses.includes(address),
     );
@@ -13238,6 +13259,7 @@ export class Kitshn extends DurableObject<Env> {
     const held = this.heldSiteAddresses(Date.now()).map((row) => row.address);
     const used = (name: string) =>
       RESERVED_SITE_NAMES.has(name) ||
+      reservedSiteLinkHost(`${name}.${zone}`, this.env.KITSHN_ZONE) ||
       `${name}.${zone}` === this.env.KITSHN_HOST ||
       held.includes(`${name}.${zone}`) ||
       [...this.state.resources.values()].some((resource) => resource.addresses.includes(`${name}.${zone}`));
@@ -14134,6 +14156,7 @@ export class Kitshn extends DurableObject<Env> {
     const addresses = relay ? [host, relayHost(name, this.env.KITSHN_ZONE)] : [host];
     const taken = (address: string) =>
       RESERVED_SITE_NAMES.has(address.split(".")[0] ?? "") ||
+      reservedSiteLinkHost(address, this.env.KITSHN_ZONE) ||
       this.gameRows("name = ?", name).length > 0 ||
       [...this.state.resources.values()].some((resource) => resource.addresses.includes(address)) ||
       [...this.liveSites.values()].some((site) => site.address === address) ||

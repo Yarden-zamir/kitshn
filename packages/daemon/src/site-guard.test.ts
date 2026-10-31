@@ -414,7 +414,9 @@ describe("the reserved site-link guard (K-1609)", () => {
     try {
       const answer = await fetch("http://guard/site/live-mac-a/v1/messages", {
         unix: path,
-        headers: { "cf-access-jwt-assertion": await token("aud-a") },
+        headers: {
+          "cf-access-jwt-assertion": await token("aud-a", { exp: Math.floor(Date.now() / 1000) + 3600 }),
+        },
         signal: client.signal,
       } as RequestInit);
       const reader = answer.body!.getReader();

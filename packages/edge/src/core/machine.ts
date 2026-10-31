@@ -43,6 +43,15 @@ export const SITE_LINKS_CAPABILITY = "site-links";
 export const SITE_GUARD_KEY = "site:guard";
 export const SITE_GUARD_CAPABILITY = "site-link-guard";
 
+/** Only this namespace below the kitshn zone can be used for destination link hosts. */
+export function reservedSiteLinkHost(address: string, zone: string): boolean {
+  const suffix = `.${zone.toLowerCase()}`;
+  const lower = address.toLowerCase();
+  if (!lower.endsWith(suffix)) return false;
+  const label = lower.slice(0, -suffix.length);
+  return !label.includes(".") && label.startsWith("kitshn-link-");
+}
+
 /** The reserved host is one DNS label under the kitshn zone, so the zone's certificate covers it. */
 export function siteLinkHost(machineId: string, zone: string): string | null {
   const label = `kitshn-link-${machineId}`;

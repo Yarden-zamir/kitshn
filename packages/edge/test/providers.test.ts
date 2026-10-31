@@ -456,6 +456,69 @@ it("does not advertise ordinary site hostnames for machine credentials while the
   }
 });
 
+it("reserves link hostnames for new sites while keeping a site that already held one", async () => {
+  const { stub, sql, sites } = await setup();
+  const name = "kitshn-link-vps";
+  const address = `${name}.${env.KITSHN_ZONE}`;
+  const id = `live-vps-${name}`;
+  const site: Resource = {
+    id,
+    kind: "site.live",
+    name,
+    addresses: [address],
+    status: "running",
+    group: null,
+    machine: "vps",
+  };
+  try {
+    // A new daemon report cannot take the namespace, even before a link host is provisioned.
+    await sites(name);
+    const count = () =>
+      runInDurableObject(
+        stub,
+        (_, state) =>
+          state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM live_sites WHERE id = ?", id).one()
+            .n,
+      );
+    expect(await count()).toBe(0);
+    // An existing site survives the upgrade and can report its changed local target.
+    await sql(
+      `INSERT INTO live_sites (id, machine_id, name, address, target, dev, up, last_up, state)
+       VALUES (?, 'vps', ?, ?, 'http://localhost:8317', 0, 1, 1, 'ok')`,
+      id,
+      name,
+      address,
+    );
+    await sql("INSERT INTO resources (id, body) VALUES (?, ?)", id, JSON.stringify(site));
+    await sites(name);
+    expect(await count()).toBe(1);
+    await runInDurableObject(stub, (instance, state) => {
+      expect(
+        state.storage.sql.exec<{ target: string }>("SELECT target FROM live_sites WHERE id = ?", id).one()
+          .target,
+      ).toBe("http://localhost:3773");
+      const internals = instance as unknown as {
+        addressTaken(address: string, resourceId: string): string | null;
+        folderSiteName(name: string, zone: string): string | { readonly error: string };
+        addLiveSite(caller: object, body: object): Promise<Response>;
+      };
+      expect(internals.addressTaken(address, "another-card")).toContain("reserved");
+      expect(internals.addressTaken(address, id)).toBeNull();
+      expect(internals.folderSiteName(name, env.KITSHN_ZONE)).toMatchObject({
+        error: expect.stringContaining("taken"),
+      });
+      expect(internals.folderSiteName(name, "other.example")).toBe(name);
+      return internals.addLiveSite({}, { machineId: "vps", name, server: "8317" }).then((answer) => {
+        expect(answer.status).toBe(400);
+      });
+    });
+  } finally {
+    await sql("DELETE FROM live_sites WHERE id = ?", id);
+    await sql("DELETE FROM resources WHERE id = ?", id);
+    await sql("DELETE FROM places WHERE id = ?", id);
+  }
+});
+
 it("holds a job that waits for an idle machine while a provider is busy, and the next report sends it (K-1608)", async () => {
   const { stub, message } = await setup();
   await message("signed", [report([app])]);

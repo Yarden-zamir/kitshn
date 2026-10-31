@@ -1,6 +1,6 @@
 import type { ProviderReport } from "@kitshn/local";
 import { describe, expect, it } from "vitest";
-import { type Machine, siteLinkDomain, siteLinkHost } from "./machine.ts";
+import { type Machine, reservedSiteLinkHost, siteLinkDomain, siteLinkHost } from "./machine.ts";
 import { type Circle, OWNER_CIRCLE_ID, type Resource, type State, levelForKind, shareKey } from "./model.ts";
 import { applyChanges, forgetProviderChanges, invert, ruleViolation } from "./changes.ts";
 import { circlePolicies, desiredAccess } from "./access.ts";
@@ -469,6 +469,11 @@ describe("live-site reach of a machine (K-1609)", () => {
     expect(
       desiredAccess(publicState, 0, [], [], null, null, linkHosts).apps.has(`app:${site.id}:${domain}`),
     ).toBe(false);
+    expect(reservedSiteLinkHost("kitshn-link-mac.example.com", "example.com")).toBe(true);
+    expect(reservedSiteLinkHost("KITSHN-LINK-MAC.EXAMPLE.COM", "example.com")).toBe(true);
+    expect(reservedSiteLinkHost("kitshn-link-mac.other.com", "example.com")).toBe(false);
+    expect(reservedSiteLinkHost("x.kitshn-link-mac.example.com", "example.com")).toBe(false);
+    expect(reservedSiteLinkHost("a-kitshn-link-mac.example.com", "example.com")).toBe(false);
     expect(siteLinkHost("bad/id", "example.com")).toBeNull();
     expect(siteLinkHost("x".repeat(52), "example.com")).toBeNull();
     expect(siteLinkDomain(host, "bad/id")).toBeNull();
