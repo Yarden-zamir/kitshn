@@ -154,6 +154,68 @@ const behindStatus = {
   },
 };
 
+it("starts the rollout after a release wake when a signed daemon socket kept its old status (K-627)", async () => {
+  const stub = await setup();
+  await runInDurableObject(stub, (instance, state) => {
+    const kitshn = instance as unknown as {
+      env: { KITSHN_VERSION: string };
+      setPresence(machineId: string, online: boolean): void;
+      autoUpdate(): boolean;
+      resumeAutoUpdatesAfterWake(): void;
+    };
+    kitshn.env = { ...kitshn.env, KITSHN_VERSION: NEW };
+    const pair = new WebSocketPair();
+    state.acceptWebSocket(pair[1], [machine.id, "machines"]);
+    pair[0].accept();
+    pair[1].serializeAttachment({
+      kind: "machine",
+      machineId: machine.id,
+      since: Date.now(),
+      challenge: "",
+      check: "signed",
+      answered: true,
+      rotateBy: null,
+      status: behindStatus.status,
+      sample: null,
+    });
+    kitshn.setPresence(machine.id, true);
+    state.storage.sql.exec(
+      "INSERT OR REPLACE INTO meta (key, value) VALUES ('daemon_rollout_seen_version', ?)",
+      OLD,
+    );
+    const jobs = () =>
+      state.storage.sql
+        .exec<{ state: string; command: string }>(
+          "SELECT state, command FROM jobs WHERE machine_id = ?",
+          machine.id,
+        )
+        .toArray();
+    try {
+      expect(jobs()).toEqual([]);
+      const failure = vi.spyOn(kitshn, "autoUpdate").mockImplementationOnce(() => {
+        throw new Error("synthetic rollout failure");
+      });
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      kitshn.resumeAutoUpdatesAfterWake();
+      expect(jobs()).toEqual([]);
+      expect(logged).toHaveBeenCalledOnce();
+      expect(
+        state.storage.sql
+          .exec<{ value: string }>("SELECT value FROM meta WHERE key = 'daemon_rollout_seen_version'")
+          .one().value,
+      ).toBe(OLD);
+      failure.mockRestore();
+      // No new status message or socket reconnect occurs: the attachment came through the wake.
+      kitshn.resumeAutoUpdatesAfterWake();
+      expect(jobs()).toEqual([{ state: "sent", command: JSON.stringify({ kind: "update", version: NEW }) }]);
+      kitshn.resumeAutoUpdatesAfterWake();
+      expect(jobs()).toHaveLength(1);
+    } finally {
+      pair[1].close(1000, "test over");
+    }
+  });
+});
+
 it("lets a BEHIND daemon wait while a provider is busy, with no job that holds the rollout, and updates it once idle (K-627)", async () => {
   await withDaemon(async ({ daemon, jobs, rollout }) => {
     await daemon({ type: "providers", providers: [busyReport(true)] });

@@ -1316,6 +1316,9 @@ export class Kitshn extends DurableObject<Env> {
       // K-538: the progress rows and the open jobs, read at wake, so a map update reads only new jobs. An action that
       // nothing drives after a restart ends as interrupted.
       this.reconcileProgress(Date.now(), true);
+      // A hibernating daemon socket can survive a Worker deployment. Reconsider its saved status once per release,
+      // instead of relying on a new connection or status message to begin the configured rollout (K-627).
+      this.resumeAutoUpdatesAfterWake();
       await this.scheduleAlarm();
     });
   }
@@ -6658,6 +6661,19 @@ export class Kitshn extends DurableObject<Env> {
     );
     for (const notification of resolved) this.setNotificationState("update", notification.key, "closed");
     return delivered + this.deliverJobs() > 0 || next !== null;
+  }
+
+  /** K-627: one release check at wake; a failed check is retried on the next wake. */
+  private resumeAutoUpdatesAfterWake() {
+    try {
+      const version = this.env.KITSHN_VERSION;
+      if (!isRelease(version) || this.meta("daemon_rollout_seen_version") === version) return;
+      this.autoUpdate();
+      this.setMeta("daemon_rollout_seen_version", version);
+    } catch (error) {
+      // A rollout error must not stop the rest of kitshn from waking; no marker means a later wake retries.
+      console.error(`kitshn could not check daemon updates at wake: ${String(error)}`);
+    }
   }
 
   /** K-609: the owner sets the labels and the order of a machine. K-626: and "Update daemon automatically". */
