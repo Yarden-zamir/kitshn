@@ -1,5 +1,6 @@
 import { mkdtempSync, symlinkSync } from "node:fs";
 import { type IncomingMessage, createServer } from "node:http";
+import { connect as connectSocket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from "jose";
@@ -34,6 +35,7 @@ const context: GuardContext = {
   teamDomain: TEAM,
   site: (id) => (id === "live-mac-a" ? site : id === "live-mac-b" ? { ...site, audience: "aud-b" } : null),
   keys: () => keys,
+  onChange: () => () => {},
   now: () => NOW,
 };
 const unixIt = process.platform === "win32" ? it.skip : it;
@@ -71,6 +73,26 @@ describe("the reserved site-link guard (K-1609)", () => {
     expect(reach.site("live-mac-a")).toBeNull();
   });
 
+  it("notifies active requests after grant and connection changes, including malformed pushes", () => {
+    const reach = new SiteGuardReach(() => ({ target: site.target, dev: false }));
+    const owner = {};
+    const other = {};
+    const grant = { id: "live-mac-a", name: "proxy", ...site };
+    const snapshots: Array<string | null> = [];
+    const unsubscribe = reach.onChange(() => snapshots.push(reach.teamDomain()));
+    reach.connect(owner);
+    expect(reach.apply(owner, TEAM, [grant])).toBe(true);
+    expect(reach.apply(other, TEAM, [])).toBe(false);
+    expect(reach.apply(owner, TEAM, [{ ...grant, clients: "invalid" }])).toBe(false);
+    expect(reach.apply(owner, TEAM, [grant])).toBe(true);
+    reach.disconnect(other);
+    reach.disconnect(owner);
+    expect(snapshots).toEqual([null, TEAM, null, TEAM, null]);
+    unsubscribe();
+    reach.connect(other);
+    expect(snapshots).toHaveLength(5);
+  });
+
   it("takes the card from its reserved path and never takes a host from the caller", () => {
     expect(guardRoute("/site/live-mac-a/v1/messages?stream=1")).toEqual({
       cardId: "live-mac-a",
@@ -86,7 +108,11 @@ describe("the reserved site-link guard (K-1609)", () => {
 
   it("requires a current assertion for this card's own path app", async () => {
     const a = await token("aud-a");
-    expect(await guardSite(request(a), "live-mac-a", context)).toEqual(site);
+    expect(await guardSite(request(a), "live-mac-a", context)).toEqual({
+      site,
+      team: TEAM,
+      clientId: "mac.access",
+    });
     expect(await guardSite(request(a), "live-mac-b", context)).toBeNull();
     expect(await guardSite(request(), "live-mac-a", context)).toBeNull();
     expect(await guardSite(request("forged"), "live-mac-a", context)).toBeNull();
@@ -305,6 +331,169 @@ describe("the reserved site-link guard (K-1609)", () => {
     }
   });
 
+  unixIt("closes a streaming response and its origin when the caller is removed", async () => {
+    const cancelled = Promise.withResolvers<void>();
+    let stream: ReadableStreamDefaultController<Uint8Array> | null = null;
+    const upstream = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(request) {
+        request.signal.addEventListener("abort", () => cancelled.resolve());
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              stream = controller;
+              controller.enqueue(new TextEncoder().encode("first\n"));
+            },
+            cancel() {
+              cancelled.resolve();
+            },
+          }),
+        );
+      },
+    });
+    const reach = new SiteGuardReach(() => ({ target: `http://localhost:${upstream.port}`, dev: false }));
+    const owner = {};
+    const grant = { id: "live-mac-a", name: "proxy", ...site };
+    reach.connect(owner);
+    expect(reach.apply(owner, TEAM, [grant])).toBe(true);
+    const path = join(mkdtempSync(join(tmpdir(), "kitshn-guard-revoke-")), "guard.sock");
+    const guard = await serveSiteGuard(path, reachContext(reach));
+    const client = new AbortController();
+    try {
+      const answer = await fetch("http://guard/site/live-mac-a/v1/messages", {
+        unix: path,
+        headers: { "cf-access-jwt-assertion": await token("aud-a") },
+        signal: client.signal,
+      } as RequestInit);
+      const reader = answer.body!.getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toBe("first\n");
+      // A refresh with the same grant must preserve an in-flight request.
+      expect(reach.apply(owner, TEAM, [grant])).toBe(true);
+      (stream as ReadableStreamDefaultController<Uint8Array> | null)?.enqueue(
+        new TextEncoder().encode("second\n"),
+      );
+      expect(new TextDecoder().decode((await reader.read()).value)).toBe("second\n");
+      expect(reach.apply(owner, TEAM, [{ ...grant, clients: [] }])).toBe(true);
+      await closedReader(reader);
+      await within(cancelled.promise, "origin stayed open after revocation");
+    } finally {
+      client.abort();
+      guard.stop();
+      void upstream.stop(true);
+    }
+  });
+
+  unixIt("ends an established streaming response when a finite share expires", async () => {
+    const cancelled = Promise.withResolvers<void>();
+    const upstream = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(request) {
+        request.signal.addEventListener("abort", () => cancelled.resolve());
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("first\n"));
+            },
+            cancel() {
+              cancelled.resolve();
+            },
+          }),
+        );
+      },
+    });
+    const reach = new SiteGuardReach(() => ({ target: `http://localhost:${upstream.port}`, dev: false }));
+    const owner = {};
+    const grant = { id: "live-mac-a", name: "proxy", ...site };
+    reach.connect(owner);
+    expect(reach.apply(owner, TEAM, [grant])).toBe(true);
+    const path = join(mkdtempSync(join(tmpdir(), "kitshn-guard-expiry-")), "guard.sock");
+    const guard = await serveSiteGuard(path, { ...reachContext(reach), now: () => Date.now() });
+    const client = new AbortController();
+    try {
+      const answer = await fetch("http://guard/site/live-mac-a/v1/messages", {
+        unix: path,
+        headers: { "cf-access-jwt-assertion": await token("aud-a") },
+        signal: client.signal,
+      } as RequestInit);
+      const reader = answer.body!.getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toBe("first\n");
+      expect(
+        reach.apply(owner, TEAM, [
+          { ...grant, clients: [{ clientId: "mac.access", until: Date.now() + 350 }] },
+        ]),
+      ).toBe(true);
+      await closedReader(reader);
+      await within(cancelled.promise, "origin stayed open after expiry");
+    } finally {
+      client.abort();
+      guard.stop();
+      void upstream.stop(true);
+    }
+  });
+
+  unixIt("closes both sides of an upgraded WebSocket when the signed connection drops", async () => {
+    const originClosed = Promise.withResolvers<void>();
+    const upstream = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(request, server) {
+        if (server.upgrade(request)) return undefined;
+        return new Response("not upgraded", { status: 400 });
+      },
+      websocket: {
+        message() {},
+        close() {
+          originClosed.resolve();
+        },
+      },
+    });
+    const reach = new SiteGuardReach(() => ({ target: `http://localhost:${upstream.port}`, dev: false }));
+    const owner = {};
+    const grant = { id: "live-mac-a", name: "proxy", ...site };
+    reach.connect(owner);
+    expect(reach.apply(owner, TEAM, [grant])).toBe(true);
+    const path = join(mkdtempSync(join(tmpdir(), "kitshn-guard-ws-revoke-")), "guard.sock");
+    const guard = await serveSiteGuard(path, reachContext(reach));
+    const client = connectSocket(path);
+    const opened = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<void>();
+    let received = "";
+    client.on("data", (chunk) => {
+      received += chunk.toString();
+      if (received.includes("\r\n\r\n")) {
+        if (received.startsWith("HTTP/1.1 101")) opened.resolve();
+        else opened.reject(new Error(received));
+      }
+    });
+    client.on("error", (error) => opened.reject(error));
+    client.on("close", () => closed.resolve());
+    try {
+      client.write(
+        [
+          "GET /site/live-mac-a/ws HTTP/1.1",
+          "Host: link",
+          "Upgrade: websocket",
+          "Connection: Upgrade",
+          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+          "Sec-WebSocket-Version: 13",
+          `CF-Access-Jwt-Assertion: ${await token("aud-a")}`,
+          "",
+          "",
+        ].join("\r\n"),
+      );
+      await within(opened.promise, "WebSocket did not open");
+      reach.disconnect(owner);
+      await within(closed.promise, "client WebSocket stayed open after disconnect");
+      await within(originClosed.promise, "origin WebSocket stayed open after disconnect");
+    } finally {
+      client.destroy();
+      guard.stop();
+      void upstream.stop(true);
+    }
+  });
+
   unixIt("upgrades WebSockets only after checking and stripping the assertion", async () => {
     let seen: Headers | null = null;
     const upstream = Bun.serve({
@@ -419,6 +608,40 @@ describe("the reserved site-link guard (K-1609)", () => {
     ]);
   });
 });
+
+function reachContext(reach: SiteGuardReach): GuardContext {
+  return {
+    get teamDomain() {
+      return reach.teamDomain();
+    },
+    site: (id) => reach.site(id),
+    onChange: (listener) => reach.onChange(listener),
+    keys: () => keys,
+    now: () => NOW,
+  };
+}
+
+async function within<T>(promise: Promise<T>, reason: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(reason)), 3000);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function closedReader(reader: { read: () => Promise<{ readonly done?: boolean }> }) {
+  const closed = reader.read().then(
+    (result) => expect(result.done).toBe(true),
+    () => {}, // A reset is also a valid way to terminate a revoked stream.
+  );
+  await within(closed, "client stream stayed open after revocation");
+}
 
 /** Bun's WebSocket client has no Unix socket option, so the test makes its handshake and one masked frame. */
 function webSocketEcho(path: string, assertion: string): Promise<string> {

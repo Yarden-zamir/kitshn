@@ -13,7 +13,7 @@ import {
 } from "@kitshn/local";
 import { circleMatches, visitorLevel } from "./visitor.ts";
 import { circlePolicies } from "./access.ts";
-import { type Machine, type ReachedSite, type SiteGuardClient } from "./machine.ts";
+import { type Machine, type ReachedSite, type SiteGuardClient, type SiteGuardGrant } from "./machine.ts";
 import {
   type Member,
   type Resource,
@@ -166,6 +166,12 @@ export type ProviderPush =
   | { readonly key: string; readonly type: "paused"; readonly paused: boolean }
   | { readonly key: string; readonly type: "execRights"; readonly machines: ReadonlyArray<string> }
   | { readonly key: string; readonly type: "siteReach"; readonly cards: ReadonlyArray<ReachedSite> }
+  | {
+      readonly key: string;
+      readonly type: "siteGuard";
+      readonly teamDomain: string;
+      readonly grants: ReadonlyArray<SiteGuardGrant>;
+    }
   | {
       readonly key: string;
       readonly type: "reach";

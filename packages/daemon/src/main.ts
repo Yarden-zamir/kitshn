@@ -2791,6 +2791,8 @@ let lastSites = "";
 
 /** K-1107: tries each site every 10 seconds and reports the list only when it changes. */
 async function checkSites() {
+  // A changed local destination must end requests using the previous target.
+  siteGuardReach.refresh();
   // A broken file must not look like "no sites": that would remove every card and its shares on the map.
   const sites = readSites();
   if (sites === null) {
@@ -2919,6 +2921,7 @@ async function runCommand() {
         return siteGuardReach.teamDomain();
       },
       site: (id) => siteGuardReach.site(id),
+      onChange: (listener) => siteGuardReach.onChange(listener),
       keys: accessKeys,
     }).catch((error: unknown) => {
       log(`no site-link guard: ${error instanceof Error ? error.message : String(error)}`);

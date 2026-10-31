@@ -29,6 +29,8 @@ export interface GuardContext {
   readonly teamDomain: string | null;
   readonly site: (cardId: string) => GuardSite | null;
   readonly keys: (teamDomain: string) => JWTVerifyGetKey;
+  /** Notify active requests when the signed grants or their connection change. */
+  readonly onChange: (listener: () => void) => () => void;
   readonly now?: () => number;
 }
 
@@ -37,6 +39,7 @@ export class SiteGuardReach {
   private owner: object | null = null;
   private team: string | null = null;
   private grants = new Map<string, SiteGuardGrant>();
+  private readonly listeners = new Set<() => void>();
 
   constructor(
     private readonly local: (name: string) => { readonly target: string; readonly dev: boolean } | null,
@@ -45,6 +48,7 @@ export class SiteGuardReach {
   connect(owner: object) {
     this.owner = owner;
     this.clear();
+    this.changed();
   }
 
   apply(owner: object, team: unknown, grants: unknown): boolean {
@@ -56,12 +60,18 @@ export class SiteGuardReach {
       !Array.isArray(grants) ||
       grants.length > 512 ||
       !grants.every(validGrant)
-    )
+    ) {
+      this.changed();
       return false;
+    }
     const records = grants as Array<SiteGuardGrant>;
-    if (new Set(records.map((grant) => grant.id)).size !== records.length) return false;
+    if (new Set(records.map((grant) => grant.id)).size !== records.length) {
+      this.changed();
+      return false;
+    }
     this.team = team;
     this.grants = new Map(records.map((grant) => [grant.id, grant]));
+    this.changed();
     return true;
   }
 
@@ -69,6 +79,17 @@ export class SiteGuardReach {
     if (this.owner !== owner) return;
     this.owner = null;
     this.clear();
+    this.changed();
+  }
+
+  /** Recheck streams after a local site registration changes. */
+  refresh() {
+    this.changed();
+  }
+
+  onChange(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
   teamDomain() {
@@ -91,6 +112,10 @@ export class SiteGuardReach {
   private clear() {
     this.team = null;
     this.grants.clear();
+  }
+
+  private changed() {
+    for (const listener of this.listeners) listener();
   }
 }
 
@@ -138,12 +163,46 @@ export function guardRoute(rawUrl: string): { readonly cardId: string; readonly 
   return { cardId, path: `/${parts.slice(3).join("/")}${url.search}` };
 }
 
+/** The caller and local destination checked at the start of a request. */
+export interface GuardAuthorization {
+  readonly site: GuardSite;
+  readonly team: string;
+  readonly clientId: string;
+}
+
+/** The latest matching grant, or undefined if the original authorization no longer holds. */
+function authorizedUntil(
+  cardId: string,
+  authorization: GuardAuthorization,
+  context: GuardContext,
+): number | null | undefined {
+  const current = context.site(cardId);
+  const site = authorization.site;
+  if (
+    context.teamDomain !== authorization.team ||
+    !current ||
+    current.audience !== site.audience ||
+    current.target !== site.target ||
+    current.host !== site.host
+  )
+    return undefined;
+  const now = context.now?.() ?? Date.now();
+  let latest: number | undefined;
+  for (const entry of current.clients) {
+    if (entry.clientId !== authorization.clientId) continue;
+    if (entry.until === null) return null;
+    if (Number.isFinite(entry.until) && entry.until > now && (latest === undefined || entry.until > latest))
+      latest = entry.until;
+  }
+  return latest;
+}
+
 /** A link path accepts only a current service-token assertion for that exact card's Access application. */
 export async function guardSite(
   request: Pick<IncomingMessage, "headers">,
   cardId: string,
   context: GuardContext,
-): Promise<GuardSite | null> {
+): Promise<GuardAuthorization | null> {
   const site = context.site(cardId);
   const team = context.teamDomain;
   const assertion = request.headers["cf-access-jwt-assertion"];
@@ -155,27 +214,11 @@ export async function guardSite(
       requiredClaims: ["exp"],
       currentDate: new Date(context.now?.() ?? Date.now()),
     });
-    const client = payload["common_name"];
-    const allowed = (candidate: GuardSite) =>
-      candidate.clients.some(
-        (entry) =>
-          entry.clientId === client &&
-          (entry.until === null ||
-            (Number.isFinite(entry.until) && entry.until > (context.now?.() ?? Date.now()))),
-      );
-    if (typeof client !== "string" || !allowed(site)) return null;
-    // A removal or audience change while verification was in flight must not use the old result.
-    const current = context.site(cardId);
-    if (
-      context.teamDomain !== team ||
-      !current ||
-      current.audience !== site.audience ||
-      !allowed(current) ||
-      current.target !== site.target ||
-      current.host !== site.host
-    )
-      return null;
-    return current;
+    const clientId = payload["common_name"];
+    if (typeof clientId !== "string") return null;
+    const authorization = { site, team, clientId };
+    // A removal or destination change while verification was in flight must not use the old result.
+    return authorizedUntil(cardId, authorization, context) === undefined ? null : authorization;
   } catch {
     return null;
   }
@@ -256,6 +299,48 @@ function responseHeaders(rawHeaders: ReadonlyArray<string>): Array<[string, stri
  * the same user. The source request names only a card; its audience, local target and Host come from the daemon.
  */
 export function serveSiteGuard(path: string, context: GuardContext): Promise<{ readonly stop: () => void }> {
+  const active = new Set<() => void>();
+  const track = (
+    cardId: string,
+    authorization: GuardAuthorization,
+    revoke: () => void,
+  ): (() => void) | null => {
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let unsubscribe = () => {};
+    const release = () => {
+      if (!live) return;
+      live = false;
+      if (timer) clearTimeout(timer);
+      unsubscribe();
+      active.delete(cancel);
+    };
+    const cancel = () => {
+      release();
+      revoke();
+    };
+    const refresh = () => {
+      if (!live) return;
+      if (timer) clearTimeout(timer);
+      let until: number | null | undefined;
+      try {
+        until = authorizedUntil(cardId, authorization, context);
+      } catch {
+        // A broken local registry must never leave a previously authorized stream open.
+        until = undefined;
+      }
+      if (until === undefined) return cancel();
+      if (until !== null) {
+        const delay = Math.min(2_147_483_647, Math.max(1, until - (context.now?.() ?? Date.now())));
+        timer = setTimeout(refresh, delay);
+        timer.unref?.();
+      }
+    };
+    unsubscribe = context.onChange(refresh);
+    active.add(cancel);
+    refresh();
+    return live ? release : null;
+  };
   const server = createServer((request, response) => {
     void forward(request, response).catch(() => {
       if (response.headersSent) response.destroy();
@@ -270,13 +355,23 @@ export function serveSiteGuard(path: string, context: GuardContext): Promise<{ r
   };
   const forward = async (request: IncomingMessage, response: ServerResponse) => {
     const route = guardRoute(request.url ?? "/");
-    const site = route ? await guardSite(request, route.cardId, context) : null;
-    if (!route || !site) return refuse(response, 403);
+    const authorization = route ? await guardSite(request, route.cardId, context) : null;
+    if (!route || !authorization) return refuse(response, 403);
     if (response.destroyed) return;
-    const target = localTarget(site.target);
-    if (!target) return refuse(response, 502);
     let upstreamResponse: IncomingMessage | null = null;
-    let upstream: ClientRequest;
+    let upstream: ClientRequest | null = null;
+    const release = track(route.cardId, authorization, () => {
+      upstream?.destroy();
+      upstreamResponse?.destroy();
+      response.destroy();
+    });
+    if (!release) return;
+    const site = authorization.site;
+    const target = localTarget(site.target);
+    if (!target) {
+      release();
+      return refuse(response, 502);
+    }
     try {
       upstream = httpRequest({
         ...target,
@@ -285,27 +380,30 @@ export function serveSiteGuard(path: string, context: GuardContext): Promise<{ r
         headers: guardHeaders(request.rawHeaders, site.host).flat(),
       });
     } catch {
+      release();
       return refuse(response, 502);
     }
-    const close = () => {
+    const origin = upstream;
+    response.once("close", () => {
+      release();
       if (!response.writableFinished) {
-        upstream.destroy();
+        origin.destroy();
         upstreamResponse?.destroy();
       }
-    };
-    response.once("close", close);
-    upstream.once("response", (answer) => {
+    });
+    origin.once("response", (answer) => {
       upstreamResponse = answer;
+      if (response.destroyed) return answer.destroy();
       response.writeHead(answer.statusCode ?? 502, responseHeaders(answer.rawHeaders).flat());
       answer.once("error", () => response.destroy());
       answer.pipe(response);
     });
-    upstream.once("error", () => {
+    origin.once("error", () => {
       if (response.headersSent) response.destroy();
       else refuse(response, 502);
     });
-    request.once("error", () => upstream.destroy());
-    request.pipe(upstream);
+    request.once("error", () => origin.destroy());
+    request.pipe(origin);
   };
   server.on("upgrade", (request, client, head) => {
     // An error before authorization finishes must not crash the daemon.
@@ -317,13 +415,26 @@ export function serveSiteGuard(path: string, context: GuardContext): Promise<{ r
       if (!client.destroyed) client.end(`HTTP/1.1 ${code} Refused\r\nConnection: close\r\n\r\n`);
     };
     const route = guardRoute(request.url ?? "/");
-    const site = route ? await guardSite(request, route.cardId, context) : null;
-    if (!route || !site) return deny(403);
+    const authorization = route ? await guardSite(request, route.cardId, context) : null;
+    if (!route || !authorization) return deny(403);
     if (client.destroyed) return;
     if (request.method !== "GET" || request.headers.upgrade?.toLowerCase() !== "websocket") return deny(400);
+    let upstream: ClientRequest | null = null;
+    let originSocket: Duplex | null = null;
+    let originResponse: IncomingMessage | null = null;
+    const release = track(route.cardId, authorization, () => {
+      upstream?.destroy();
+      originSocket?.destroy();
+      originResponse?.destroy();
+      client.destroy();
+    });
+    if (!release) return;
+    const site = authorization.site;
     const target = localTarget(site.target);
-    if (!target) return deny(502);
-    let upstream: ClientRequest;
+    if (!target) {
+      release();
+      return deny(502);
+    }
     try {
       upstream = httpRequest({
         ...target,
@@ -336,9 +447,19 @@ export function serveSiteGuard(path: string, context: GuardContext): Promise<{ r
         ].flat(),
       });
     } catch {
+      release();
       return deny(502);
     }
-    upstream.once("upgrade", (answer, socket, first) => {
+    const origin = upstream;
+    client.once("close", () => {
+      release();
+      origin.destroy();
+      originSocket?.destroy();
+      originResponse?.destroy();
+    });
+    origin.once("upgrade", (answer, socket, first) => {
+      originSocket = socket;
+      if (client.destroyed) return socket.destroy();
       const lines = [
         `HTTP/1.1 ${answer.statusCode ?? 101} Switching Protocols`,
         "Connection: Upgrade",
@@ -354,25 +475,23 @@ export function serveSiteGuard(path: string, context: GuardContext): Promise<{ r
       socket.pipe(client);
       socket.once("error", () => client.destroy());
       client.once("error", () => socket.destroy());
-      client.once("close", () => socket.destroy());
       socket.once("close", () => client.destroy());
     });
-    upstream.once("response", (answer) => {
-      if (!client.destroyed) {
-        const lines = [
-          `HTTP/1.1 ${answer.statusCode ?? 502} Refused`,
-          "Connection: close",
-          ...responseHeaders(answer.rawHeaders).map(([name, value]) => `${name}: ${value}`),
-          "",
-          "",
-        ];
-        client.write(lines.join("\r\n"));
-        answer.pipe(client);
-      }
+    origin.once("response", (answer) => {
+      originResponse = answer;
+      if (client.destroyed) return answer.destroy();
+      const lines = [
+        `HTTP/1.1 ${answer.statusCode ?? 502} Refused`,
+        "Connection: close",
+        ...responseHeaders(answer.rawHeaders).map(([name, value]) => `${name}: ${value}`),
+        "",
+        "",
+      ];
+      client.write(lines.join("\r\n"));
+      answer.pipe(client);
     });
-    upstream.once("error", () => deny(502));
-    client.once("close", () => upstream.destroy());
-    upstream.end();
+    origin.once("error", () => deny(502));
+    origin.end();
   };
   try {
     rmSync(path, { force: true });
@@ -395,6 +514,7 @@ export function serveSiteGuard(path: string, context: GuardContext): Promise<{ r
         chmodSync(path, 0o600);
         resolve({
           stop: () => {
+            for (const cancel of active) cancel();
             listener.close();
             server.close();
             rmSync(path, { force: true });

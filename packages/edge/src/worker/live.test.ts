@@ -252,6 +252,42 @@ describe("live sites (K-1104 to K-1108)", () => {
     });
     expect([...reachable].sort()).toEqual(["dns.example.com", "old.example.com", "route.example.com"]);
   });
+
+  it("gives each link path its own mandatory Access check and keeps its application while ingress remains", () => {
+    const host = "kitshn-link-m.example.com";
+    const link = {
+      host,
+      cardId: "live-m-proxy",
+      socket: "/run/user/1/guard.sock",
+      teamName: "team",
+      audience: "aud",
+    };
+    const config = tunnelConfig([], () => bypass, [link]);
+    expect(config.config.ingress).toEqual([
+      {
+        hostname: host,
+        path: "^/site/live-m-proxy(/|$)",
+        service: "unix:/run/user/1/guard.sock",
+        originRequest: { access: { required: true, teamName: "team", audTag: ["aud"] } },
+      },
+      { service: "http_status:404" },
+    ]);
+    const reachable = reachableAddresses({ ingress: [JSON.stringify(config)], records: [], routes: [] });
+    expect(reachable.has(`${host}/site/live-m-proxy/*`)).toBe(true);
+    // A missing audience or unsafe socket never creates an unguarded path rule.
+    expect(
+      tunnelConfig([], () => bypass, [
+        { ...link, audience: "" },
+        { ...link, socket: "tcp://evil" },
+      ]).config.ingress,
+    ).toEqual([{ service: "http_status:404" }]);
+    const removed = reachableAddresses({
+      ingress: [JSON.stringify(tunnelConfig([], () => bypass))],
+      records: [{ address: host, record_id: "dns" }],
+      routes: [],
+    });
+    expect(removed.has(`${host}/site/live-m-proxy/*`)).toBe(false);
+  });
 });
 
 describe("several addresses of a Compose app (K-817)", () => {

@@ -43,6 +43,23 @@ export const SITE_LINKS_CAPABILITY = "site-links";
 export const SITE_GUARD_KEY = "site:guard";
 export const SITE_GUARD_CAPABILITY = "site-link-guard";
 
+/** The reserved host is one DNS label under the kitshn zone, so the zone's certificate covers it. */
+export function siteLinkHost(machineId: string, zone: string): string | null {
+  const label = `kitshn-link-${machineId}`;
+  if (
+    label.length > 63 ||
+    !/^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(label) ||
+    !/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(zone)
+  )
+    return null;
+  return `${label}.${zone}`;
+}
+
+/** Access scopes a separate application to each site's path on that host. */
+export function siteLinkDomain(host: string, cardId: string): string | null {
+  return /^[a-z0-9][a-z0-9-]{0,62}$/.test(cardId) ? `${host}/site/${cardId}/*` : null;
+}
+
 /** A joined machine (K-602). Its resource card has the same id and the kind `machine`. */
 export interface Machine {
   readonly id: string;

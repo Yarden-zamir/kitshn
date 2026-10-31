@@ -1,9 +1,9 @@
 import type { ProviderReport } from "@kitshn/local";
 import { describe, expect, it } from "vitest";
-import type { Machine } from "./machine.ts";
+import { type Machine, siteLinkDomain, siteLinkHost } from "./machine.ts";
 import { type Circle, OWNER_CIRCLE_ID, type Resource, type State, levelForKind, shareKey } from "./model.ts";
 import { applyChanges, forgetProviderChanges, invert, ruleViolation } from "./changes.ts";
-import { circlePolicies } from "./access.ts";
+import { circlePolicies, desiredAccess } from "./access.ts";
 import {
   commandsFor,
   grantTables,
@@ -437,6 +437,41 @@ describe("live-site reach of a machine (K-1609)", () => {
     expect(siteGuardClientsOf(bounded, "mac", 20).size).toBe(0);
     expect(siteGuardClientsOf({ ...base, paused: "lockdown" }, "mac", 0).size).toBe(0);
     expect(siteGuardClientsOf(base, "unknown", 0).size).toBe(0);
+  });
+
+  it("scopes a reserved link application to the site's own non-identity policies", () => {
+    const base = value();
+    const host = siteLinkHost("mac", "example.com")!;
+    const domain = siteLinkDomain(host, site.id)!;
+    const linkHosts = new Map([[site.id, host]]);
+    const access = desiredAccess(base, 0, [], [], null, null, linkHosts);
+    expect(host).toBe("kitshn-link-mac.example.com");
+    expect(domain).toBe("kitshn-link-mac.example.com/site/live-mac-proxy/*");
+    expect(access.apps.get(`app:${site.id}:${domain}`)).toMatchObject({
+      domain,
+      policyKeys: ["policy:links:tokens"],
+      path_cookie_attribute: true,
+    });
+    expect(desiredAccess(base, 0).apps.has(`app:${site.id}:${domain}`)).toBe(false);
+    expect(
+      desiredAccess({ ...base, paused: "lockdown" }, 0, [], [], null, null, linkHosts).apps.has(
+        `app:${site.id}:${domain}`,
+      ),
+    ).toBe(false);
+    const everyone = { ...share, id: "everyone", members: [{ _tag: "everyone" as const }] };
+    const publicState = {
+      ...base,
+      circles: new Map([
+        [share.id, share],
+        [everyone.id, everyone],
+      ]),
+    };
+    expect(
+      desiredAccess(publicState, 0, [], [], null, null, linkHosts).apps.has(`app:${site.id}:${domain}`),
+    ).toBe(false);
+    expect(siteLinkHost("bad/id", "example.com")).toBeNull();
+    expect(siteLinkHost("x".repeat(52), "example.com")).toBeNull();
+    expect(siteLinkDomain(host, "bad/id")).toBeNull();
   });
 });
 

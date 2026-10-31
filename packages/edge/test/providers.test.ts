@@ -3,7 +3,14 @@ import { env } from "cloudflare:workers";
 import type { ProviderReport } from "@kitshn/local";
 import { afterEach, expect, it, vi } from "vitest";
 import type { Machine, MachineStatus } from "../src/core/machine.ts";
-import { type Circle, OWNER_CIRCLE_ID, type Resource, providerCardId } from "../src/core/model.ts";
+import {
+  type Circle,
+  OWNER_CIRCLE_ID,
+  type Resource,
+  type State,
+  providerCardId,
+} from "../src/core/model.ts";
+import { siteReachOf } from "../src/core/providers.ts";
 import { type ActionProgress, currentStep } from "../src/core/progress.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
 
@@ -371,12 +378,24 @@ it("pushes live-site reach only to a supporting signed daemon, including without
         pair[1],
         JSON.stringify({ type: "applied", key: push.key, hash: push.hash }),
       );
+      // The destination guard has its own capability and connection-scoped acknowledgement.
+      await sendStatus(["applied", "site-links", "site-link-guard"]);
+      const guard = internals.pushesOf("vps").find((item) => item.key === "site:guard")!;
+      expect(internals.sentGrants.get("vps/site:guard")).toBe(guard.hash);
+      expect(internals.queuedFor(keyed, status(["applied", "site-links", "site-link-guard"]))).toBe(1);
+      await instance.webSocketMessage(
+        pair[1],
+        JSON.stringify({ type: "applied", key: guard.key, hash: guard.hash }),
+      );
+      expect(internals.queuedFor(keyed, status(["applied", "site-links", "site-link-guard"]))).toBe(0);
       // A connection with the Access token alone may report status, but gets no reach push.
       internals.sentGrants.delete("vps/site:reach");
+      internals.sentGrants.delete("vps/site:guard");
       pair[1].serializeAttachment({ ...attachment, check: "token" });
-      await sendStatus(["applied", "site-links"]);
+      await sendStatus(["applied", "site-links", "site-link-guard"]);
       internals.pushGrants();
       expect(internals.sentGrants.has("vps/site:reach")).toBe(false);
+      expect(internals.sentGrants.has("vps/site:guard")).toBe(false);
     } finally {
       pair[1].close(1000, "test over");
       pair[0].close(1000, "test over");
@@ -384,6 +403,57 @@ it("pushes live-site reach only to a supporting signed daemon, including without
       else internals.presence.delete("vps");
     }
   });
+});
+
+it("does not advertise ordinary site hostnames for machine credentials while the guarded link is unfinished", async () => {
+  const { stub, sql } = await setup();
+  const mac: Machine = { ...machine, id: "mac", name: "mac", clientId: "mac.access" };
+  const site: Resource = {
+    id: "live-mac-proxy",
+    kind: "site.live",
+    name: "proxy",
+    addresses: ["proxy.example.com"],
+    status: "running",
+    group: null,
+    machine: "mac",
+  };
+  const links: Circle = {
+    id: "site-links-test",
+    name: "Links",
+    color: "#7CFF8A",
+    level: "view",
+    members: [{ _tag: "machine", machineId: "vps" }],
+    match: "any",
+    needsPasskey: false,
+    endsAt: null,
+    x: 7000,
+    y: 7000,
+    r: 200,
+  };
+  await sql("INSERT OR REPLACE INTO machines (id, body) VALUES ('mac', ?)", JSON.stringify(mac));
+  await sql("INSERT OR REPLACE INTO resources (id, body) VALUES (?, ?)", site.id, JSON.stringify(site));
+  await sql("INSERT OR REPLACE INTO circles (id, body) VALUES (?, ?)", links.id, JSON.stringify(links));
+  await sql("INSERT OR REPLACE INTO places (id, x, y) VALUES (?, 7000, 7000)", site.id);
+  try {
+    await runInDurableObject(stub, (instance) => {
+      const internals = instance as unknown as {
+        state: State;
+        pushesOf(id: string): Array<{ key: string; push: unknown }>;
+      };
+      // The circle authorizes this machine, but the credential must not yet be sent to the site's public host.
+      expect(siteReachOf(internals.state, "vps", Date.now())).toEqual([
+        { id: site.id, address: site.addresses[0] },
+      ]);
+      expect(internals.pushesOf("vps").find((item) => item.key === "site:reach")?.push).toMatchObject({
+        cards: [],
+      });
+    });
+  } finally {
+    await sql("DELETE FROM circles WHERE id = ?", links.id);
+    await sql("DELETE FROM places WHERE id = ?", site.id);
+    await sql("DELETE FROM resources WHERE id = ?", site.id);
+    await sql("DELETE FROM machines WHERE id = 'mac'");
+  }
 });
 
 it("holds a job that waits for an idle machine while a provider is busy, and the next report sends it (K-1608)", async () => {

@@ -1,4 +1,4 @@
-import type { Machine } from "./machine.ts";
+import { type Machine, siteLinkDomain } from "./machine.ts";
 import {
   ADMIN_RESOURCE_ID,
   type Circle,
@@ -240,6 +240,8 @@ export function desiredAccess(
   old: ReadonlyArray<OldAddress> = [],
   pages: LoginPages | null = null,
   help: HelpPages | null = null,
+  /** Card ids and reserved destination hosts that can be provisioned safely. */
+  linkHosts: ReadonlyMap<string, string> = new Map(),
 ): DesiredAccess {
   const page = (id: string | undefined) => (id === undefined ? {} : { custom_pages: [id] });
   // K-1132: a refused person goes to `/ask` once it exists, else to the help page. The admin and `/ask` itself always
@@ -316,6 +318,24 @@ export function desiredAccess(
         ...denyUrl(resource.id === ADMIN_RESOURCE_ID),
       });
     }
+    const linkHost = linkHosts.get(resource.id);
+    const linkDomain = linkHost ? siteLinkDomain(linkHost, resource.id) : null;
+    const tokenKeys = policyKeys.filter((key) => policies.get(key)?.decision === "non_identity");
+    if (
+      resource.kind === "site.live" &&
+      linkDomain &&
+      tokenKeys.length > 0 &&
+      !policyKeys.some((key) => policies.get(key)?.decision === "bypass")
+    )
+      apps.set(`app:${resource.id}:${linkDomain}`, {
+        name: appName(`${resource.name} machine link`),
+        type: "self_hosted",
+        domain: linkDomain,
+        session_duration: "24h",
+        same_site_cookie_attribute: "lax",
+        path_cookie_attribute: true,
+        policyKeys: tokenKeys,
+      });
   }
   const ownerKey = `policy:${OWNER_CIRCLE_ID}:people`;
   const owner = state.circles.get(OWNER_CIRCLE_ID);

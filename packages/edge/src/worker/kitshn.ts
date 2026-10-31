@@ -311,9 +311,16 @@ import {
   providerCards,
   providerPushes,
   reachOf,
-  siteReachOf,
+  siteGuardClientsOf,
 } from "../core/providers.ts";
-import { SITE_LINKS_CAPABILITY, SITE_REACH_KEY } from "../core/machine.ts";
+import {
+  SITE_GUARD_CAPABILITY,
+  SITE_GUARD_KEY,
+  SITE_LINKS_CAPABILITY,
+  SITE_REACH_KEY,
+  siteLinkDomain,
+  siteLinkHost,
+} from "../core/machine.ts";
 import { healthCell, healthNotices } from "../core/health.ts";
 import {
   commandName,
@@ -381,6 +388,7 @@ import {
   type AccessStore,
   type Api,
   accessStates,
+  appliesBypass,
   CALLS_PER_RUN,
   fillAudiences,
   hasAccessWork,
@@ -3947,9 +3955,11 @@ export class Kitshn extends DurableObject<Env> {
       for (const { key, hash, push } of pushes) {
         // The first push follows the signed handshake, before status names this capability.
         if (
-          push.type === "siteReach" &&
+          (push.type === "siteReach" || push.type === "siteGuard") &&
           (attachment?.kind !== "machine" ||
-            !attachment.status?.capabilities?.includes(SITE_LINKS_CAPABILITY))
+            !attachment.status?.capabilities?.includes(
+              push.type === "siteReach" ? SITE_LINKS_CAPABILITY : SITE_GUARD_CAPABILITY,
+            ))
         )
           continue;
         if (this.sentGrants.get(`${machineId}/${key}`) === hash) continue;
@@ -3962,44 +3972,81 @@ export class Kitshn extends DurableObject<Env> {
 
   /** K-1608: every push that the providers of a machine get now, each with the hash of its content. */
   private pushesOf(machineId: string, now = Date.now()) {
-    return providerPushes(
-      this.state,
-      machineId,
-      this.providerRegs.get(machineId) ?? [],
-      this.desiredState,
-      this.cardSettings,
-      now,
-      {
-        teamDomain: this.env.ACCESS_TEAM_DOMAIN,
-        // An application lives until the sync deletes it, so its audience stays until then, also after a give-back.
-        servedHost: (cardId) => {
-          const site = this.liveSites.get(cardId);
-          const handover = this.handoverOf(cardId);
-          return site?.state === "ok" && (handover === null || (handover.switched && !handover.returning))
-            ? site.address
-            : null;
+    return (
+      providerPushes(
+        this.state,
+        machineId,
+        this.providerRegs.get(machineId) ?? [],
+        this.desiredState,
+        this.cardSettings,
+        now,
+        {
+          teamDomain: this.env.ACCESS_TEAM_DOMAIN,
+          // An application lives until the sync deletes it, so its audience stays until then, also after a give-back.
+          servedHost: (cardId) => {
+            const site = this.liveSites.get(cardId);
+            const handover = this.handoverOf(cardId);
+            return site?.state === "ok" && (handover === null || (handover.switched && !handover.returning))
+              ? site.address
+              : null;
+          },
+          audiencesOf: (cardId) => this.audiencesOf(cardId),
+          revOf: (kind) => this.desiredRevs.get(kind) ?? null,
         },
-        audiencesOf: (cardId) => this.audiencesOf(cardId),
-        revOf: (kind) => this.desiredRevs.get(kind) ?? null,
-      },
-    )
-      .concat(
-        (this.providerRegs.get(machineId) ?? []).length === 0
-          ? []
-          : [
-              { key: pushKey.paused(), type: "paused", paused: this.state.paused !== null },
-              {
-                key: pushKey.execRights(),
-                type: "execRights",
-                machines: execMachinesOf(this.state, machineId, now),
-              },
-            ],
       )
-      .concat([{ key: SITE_REACH_KEY, type: "siteReach", cards: siteReachOf(this.state, machineId, now) }])
-      .map((push) => {
-        const text = JSON.stringify(push);
-        return { key: push.key, hash: `${fnv(text)}${fnv(text, 0x050c5d1f)}`, push };
-      });
+        .concat(
+          (this.providerRegs.get(machineId) ?? []).length === 0
+            ? []
+            : [
+                { key: pushKey.paused(), type: "paused", paused: this.state.paused !== null },
+                {
+                  key: pushKey.execRights(),
+                  type: "execRights",
+                  machines: execMachinesOf(this.state, machineId, now),
+                },
+              ],
+        )
+        // No caller may send its reusable machine credential to an ordinary live-site hostname. Keep reach empty
+        // until the reserved link host, Access application, DNS and destination guard are all confirmed ready.
+        .concat([{ key: SITE_REACH_KEY, type: "siteReach", cards: [] }])
+        .concat([
+          {
+            key: SITE_GUARD_KEY,
+            type: "siteGuard",
+            teamDomain: this.env.ACCESS_TEAM_DOMAIN,
+            grants: this.guardGrantsOf(machineId, now),
+          },
+        ])
+        .map((push) => {
+          const text = JSON.stringify(push);
+          return { key: push.key, hash: `${fnv(text)}${fnv(text, 0x050c5d1f)}`, push };
+        })
+    );
+  }
+
+  /** The destination gets only known path audiences and locally enforced machine grants. */
+  private guardGrantsOf(machineId: string, now: number) {
+    const socket = this.openSocket(machineId);
+    const attachment = socket ? attachmentOf(socket) : null;
+    if (
+      attachment?.kind !== "machine" ||
+      attachment.check !== "signed" ||
+      !attachment.status?.capabilities?.includes(SITE_GUARD_CAPABILITY) ||
+      !attachment.status.siteGuardSocket
+    )
+      return [];
+    const host = siteLinkHost(machineId, this.env.KITSHN_ZONE);
+    if (!host) return [];
+    const wanted = this.desired(now).apps;
+    return [...siteGuardClientsOf(this.state, machineId, now)].flatMap(([id, clients]) => {
+      const site = this.liveSites.get(id);
+      const domain = siteLinkDomain(host, id);
+      if (!site || site.state !== "ok" || !domain) return [];
+      const key = `app:${id}:${domain}`;
+      const app = this.access.get(key);
+      if (!wanted.has(key) || !app?.cfId || !app.aud || appliesBypass(app, this.access) !== false) return [];
+      return [{ id, name: site.name, host: site.address, audience: app.aud, clients }];
+    });
   }
 
   /** K-603: the AUD tags of kitshn's Access applications of a card that exist in Cloudflare. */
@@ -4114,11 +4161,13 @@ export class Kitshn extends DurableObject<Env> {
     const v2 = status === null || status.capabilities?.includes("protocol-2") === true;
     // Until this connection reports support, do not count a push that an old daemon cannot apply.
     const siteLinks = status?.capabilities?.includes(SITE_LINKS_CAPABILITY) === true;
+    const siteGuard = status?.capabilities?.includes(SITE_GUARD_CAPABILITY) === true;
     const pushes = [...this.hashesOf(machine.id)].filter(
       ([key]) =>
         (access || !key.startsWith("access:")) &&
         (v2 || !key.startsWith("kitshn:")) &&
-        (siteLinks || key !== SITE_REACH_KEY),
+        (siteLinks || key !== SITE_REACH_KEY) &&
+        (siteGuard || key !== SITE_GUARD_KEY),
     );
     if (pushes.length === 0) return 0;
     // An online daemon that does not name `applied` never answers it, so its count is unknown.
@@ -5238,20 +5287,34 @@ export class Kitshn extends DurableObject<Env> {
               offlineProviders: providerRefusals(message.status.offlineProviders),
               providerProblems: providerRefusals(message.status.providerProblems),
               execPaths: execPathsOf(message.status.execPaths),
+              ...(typeof message.status.siteGuardSocket === "string" &&
+              message.status.siteGuardSocket.startsWith("/") &&
+              message.status.siteGuardSocket.length <= 200 &&
+              !/[\r\n\0]/.test(message.status.siteGuardSocket)
+                ? { siteGuardSocket: message.status.siteGuardSocket }
+                : {}),
             }
           : {}),
       };
       saveMachine(socket, { ...attachment, status });
       // A supporting daemon gets its first site reach only after it reports the capability.
-      if (
-        attachment.check === "signed" &&
-        status.capabilities?.includes(SITE_LINKS_CAPABILITY) &&
-        !attachment.status?.capabilities?.includes(SITE_LINKS_CAPABILITY)
-      ) {
-        // This reach lives only for one connection, so an acknowledgement from the previous one is stale.
-        if (this.applied.delete(`${machine.id}/${SITE_REACH_KEY}`))
-          this.sql("DELETE FROM applied_state WHERE machine_id = ? AND key = ?", machine.id, SITE_REACH_KEY);
-        this.pushGrants();
+      if (attachment.check === "signed") {
+        let fresh = false;
+        for (const [capability, key] of [
+          [SITE_LINKS_CAPABILITY, SITE_REACH_KEY],
+          [SITE_GUARD_CAPABILITY, SITE_GUARD_KEY],
+        ] as const) {
+          if (
+            !status.capabilities?.includes(capability) ||
+            attachment.status?.capabilities?.includes(capability)
+          )
+            continue;
+          // These grants live only for this connection, so an acknowledgement from the previous one is stale.
+          if (this.applied.delete(`${machine.id}/${key}`))
+            this.sql("DELETE FROM applied_state WHERE machine_id = ? AND key = ?", machine.id, key);
+          fresh = true;
+        }
+        if (fresh) this.pushGrants();
       }
       if (status.refusedProviders) this.notifyRefusals(machine, status.refusedProviders);
       if (status.offlineProviders) this.notifyOfflineProviders(machine, status.offlineProviders, Date.now());
