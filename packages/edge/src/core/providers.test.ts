@@ -12,6 +12,7 @@ import {
   providerCards,
   providerPushes,
   siteAudiences,
+  siteGuardClientsOf,
   siteReachOf,
   reachOf,
 } from "./providers.ts";
@@ -412,6 +413,30 @@ describe("live-site reach of a machine (K-1609)", () => {
       ]),
     };
     expect(siteReachOf(mixed, "vps", 0)).toEqual([]);
+  });
+
+  it("gives the destination each caller's latest valid expiry across matching shares", () => {
+    const base = value();
+    expect(siteGuardClientsOf(base, "mac", 0).get(site.id)).toEqual([
+      { clientId: "vps.access", until: null },
+    ]);
+    const early = { ...share, endsAt: 10 };
+    const later = { ...share, id: "later", endsAt: 30 };
+    const bounded = {
+      ...base,
+      circles: new Map([
+        [early.id, early],
+        [later.id, later],
+      ]),
+      shareSettings: new Map([[shareKey(site.id, later.id), { level: null, endsAt: 20 }]]),
+      ends: new Map([[site.id, 25]]),
+    };
+    expect(siteGuardClientsOf(bounded, "mac", 0).get(site.id)).toEqual([
+      { clientId: "vps.access", until: 20 },
+    ]);
+    expect(siteGuardClientsOf(bounded, "mac", 20).size).toBe(0);
+    expect(siteGuardClientsOf({ ...base, paused: "lockdown" }, "mac", 0).size).toBe(0);
+    expect(siteGuardClientsOf(base, "unknown", 0).size).toBe(0);
   });
 });
 

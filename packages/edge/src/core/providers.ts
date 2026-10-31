@@ -13,7 +13,7 @@ import {
 } from "@kitshn/local";
 import { circleMatches, visitorLevel } from "./visitor.ts";
 import { circlePolicies } from "./access.ts";
-import { type Machine, type ReachedSite } from "./machine.ts";
+import { type Machine, type ReachedSite, type SiteGuardClient } from "./machine.ts";
 import {
   type Member,
   type Resource,
@@ -355,4 +355,45 @@ export function siteReachOf(state: State, machineId: string, now: number): Array
       return allowed ? [{ id: card.id, address }] : [];
     })
     .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/** K-1609: the machine tokens that the destination guard may admit, with the end of each caller's last share. */
+export function siteGuardClientsOf(
+  state: State,
+  destination: string,
+  now: number,
+): Map<string, Array<SiteGuardClient>> {
+  const result = new Map<string, Array<SiteGuardClient>>();
+  if (!state.machines.has(destination)) return result;
+  for (const caller of state.machines.values()) {
+    if (caller.id === destination) continue;
+    const visitor = { email: null, clientId: caller.clientId, ip: null };
+    for (const reached of siteReachOf(state, caller.id, now)) {
+      const card = state.resources.get(reached.id);
+      if (!card || card.machine !== destination) continue;
+      const ends = activeShares(state, card, now)
+        .filter(({ circle }) => {
+          const policies = [...circlePolicies(circle, state.machines).values()];
+          return (
+            circleMatches(circle, visitor, state.machines) &&
+            policies.some((p) => p.decision === "non_identity")
+          );
+        })
+        .map(({ circle }) =>
+          Math.min(
+            circle.endsAt ?? Infinity,
+            state.shareSettings.get(shareKey(card.id, circle.id))?.endsAt ?? Infinity,
+            state.ends.get(card.id) ?? Infinity,
+          ),
+        );
+      // siteReachOf already checked that one matching non-identity policy exists. Fail closed if that changes.
+      if (ends.length === 0) continue;
+      const until = Math.max(...ends);
+      const clients = result.get(card.id) ?? [];
+      clients.push({ clientId: caller.clientId, until: Number.isFinite(until) ? until : null });
+      result.set(card.id, clients);
+    }
+  }
+  for (const clients of result.values()) clients.sort((a, b) => a.clientId.localeCompare(b.clientId));
+  return result;
 }
