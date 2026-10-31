@@ -529,6 +529,9 @@ type Attachment =
       readonly servers?: ReadonlyArray<ServerReport>;
       /** K-630: the last health check of this connection; an older daemon sends none. */
       readonly health?: HealthReport;
+      /** K-1609: the guard push sent and acknowledged on this exact signed connection. */
+      readonly siteGuardSentHash?: string;
+      readonly siteGuardAckHash?: string | null;
     };
 
 /** K-1805: a Compose tail runs on the daemon; K-1807: a Worker tail is a Cloudflare tail of the script. */
@@ -3947,12 +3950,9 @@ export class Kitshn extends DurableObject<Env> {
     for (const machineId of this.state.machines.keys()) {
       const pushes = this.pushesOf(machineId, now);
       this.pushHashes.set(machineId, new Map(pushes.map(({ key, hash }) => [key, hash])));
-      const socket = this.ctx.getWebSockets(machineId).find((item) => {
-        const attachment = attachmentOf(item);
-        return attachment?.kind === "machine" && attachment.check === "signed";
-      });
-      if (!socket) continue;
-      const attachment = attachmentOf(socket);
+      const socket = this.openSocket(machineId);
+      const attachment = socket ? attachmentOf(socket) : null;
+      if (!socket || attachment?.kind !== "machine" || attachment.check !== "signed") continue;
       for (const { key, hash, push } of pushes) {
         // The first push follows the signed handshake, before status names this capability.
         if (
@@ -3965,6 +3965,12 @@ export class Kitshn extends DurableObject<Env> {
           continue;
         if (this.sentGrants.get(`${machineId}/${key}`) === hash) continue;
         this.sentGrants.set(`${machineId}/${key}`, hash);
+        if (push.type === "siteGuard") {
+          const current = attachmentOf(socket);
+          if (current?.kind !== "machine" || current.check !== "signed") continue;
+          // A previous connection's acknowledgement, or an acknowledgement of older grants, cannot enable a link.
+          saveMachine(socket, { ...current, siteGuardSentHash: hash, siteGuardAckHash: null });
+        }
         const { key: _key, ...message } = push;
         send(socket, { ...message, hash } as ServerToDaemon);
       }
@@ -5401,6 +5407,19 @@ export class Kitshn extends DurableObject<Env> {
       typeof message.key === "string" &&
       typeof message.hash === "string"
     ) {
+      if (message.key === SITE_GUARD_KEY) {
+        // An old socket can still deliver a late message after it was replaced. Only the current socket can
+        // acknowledge the exact guard push sent to it, and only while that push is still the desired one.
+        const current = this.pushesOf(machine.id).find((item) => item.key === SITE_GUARD_KEY)?.hash;
+        if (
+          attachment.check !== "signed" ||
+          this.openSocket(machine.id) !== socket ||
+          attachment.siteGuardSentHash !== message.hash ||
+          current !== message.hash
+        )
+          return;
+        saveMachine(socket, { ...attachment, siteGuardAckHash: message.hash });
+      }
       // K-1608: written only when it changes, so a machine that applied everything writes nothing, and only for a key
       // that kitshn pushes to it now, so a daemon cannot fill the table.
       const id = `${machine.id}/${message.key}`;

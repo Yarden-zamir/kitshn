@@ -383,11 +383,48 @@ it("pushes live-site reach only to a supporting signed daemon, including without
       const guard = internals.pushesOf("vps").find((item) => item.key === "site:guard")!;
       expect(internals.sentGrants.get("vps/site:guard")).toBe(guard.hash);
       expect(internals.queuedFor(keyed, status(["applied", "site-links", "site-link-guard"]))).toBe(1);
+      expect(pair[1].deserializeAttachment()).toMatchObject({
+        siteGuardSentHash: guard.hash,
+        siteGuardAckHash: null,
+      });
+      await instance.webSocketMessage(
+        pair[1],
+        JSON.stringify({ type: "applied", key: guard.key, hash: "wrong" }),
+      );
+      expect(pair[1].deserializeAttachment()).toMatchObject({ siteGuardAckHash: null });
       await instance.webSocketMessage(
         pair[1],
         JSON.stringify({ type: "applied", key: guard.key, hash: guard.hash }),
       );
+      expect(pair[1].deserializeAttachment()).toMatchObject({ siteGuardAckHash: guard.hash });
       expect(internals.queuedFor(keyed, status(["applied", "site-links", "site-link-guard"]))).toBe(0);
+      // A newer connection's guard acknowledgement cannot be supplied by the replaced connection.
+      const next = new WebSocketPair();
+      state.acceptWebSocket(next[1], ["vps", "machines"]);
+      next[0].accept();
+      next[1].serializeAttachment(attachment);
+      internals.sentGrants.delete("vps/site:guard");
+      internals.sentGrants.delete("vps/site:reach");
+      await instance.webSocketMessage(
+        next[1],
+        JSON.stringify({ type: "status", status: status(["applied", "site-links", "site-link-guard"]) }),
+      );
+      expect(next[1].deserializeAttachment()).toMatchObject({
+        siteGuardSentHash: guard.hash,
+        siteGuardAckHash: null,
+      });
+      await instance.webSocketMessage(
+        pair[1],
+        JSON.stringify({ type: "applied", key: guard.key, hash: guard.hash }),
+      );
+      expect(next[1].deserializeAttachment()).toMatchObject({ siteGuardAckHash: null });
+      await instance.webSocketMessage(
+        next[1],
+        JSON.stringify({ type: "applied", key: guard.key, hash: guard.hash }),
+      );
+      expect(next[1].deserializeAttachment()).toMatchObject({ siteGuardAckHash: guard.hash });
+      next[1].close(1000, "new connection test over");
+      next[0].close(1000, "new connection test over");
       // A connection with the Access token alone may report status, but gets no reach push.
       internals.sentGrants.delete("vps/site:reach");
       internals.sentGrants.delete("vps/site:guard");

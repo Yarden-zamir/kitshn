@@ -23,7 +23,7 @@ describe("the link proxy (K-1609)", () => {
     const reach = new SiteReach();
     const first = {};
     const next = {};
-    const cards = [{ id: "live-b-proxy", address: "proxy.example.com" }];
+    const cards = [{ id: "live-b-proxy", address: "kitshn-link-b.example.com" }];
     expect(reach.apply(first, cards)).toBe(false);
     reach.connect(first);
     expect(reach.apply(first, cards)).toBe(true);
@@ -32,6 +32,19 @@ describe("the link proxy (K-1609)", () => {
     expect(reach.current()).toEqual([]);
     expect(reach.apply(first, cards)).toBe(false);
     expect(reach.apply(next, cards)).toBe(true);
+    for (const malformed of [
+      null,
+      [{ ...cards[0], address: "proxy.example.com" }],
+      [{ ...cards[0], address: "kitshn-link-b.example.com:8443" }],
+      [cards[0], cards[0]],
+      [{ ...cards[0], id: "../unsafe" }],
+    ]) {
+      expect(reach.apply(next, malformed)).toBe(false);
+      expect(reach.current()).toEqual([]);
+      expect(reach.apply(next, cards)).toBe(true);
+    }
+    // A stale connection cannot clear the current one's reach.
+    expect(reach.apply(first, null)).toBe(false);
     reach.disconnect(first);
     expect(reach.current()).toEqual(cards);
     reach.disconnect(next);

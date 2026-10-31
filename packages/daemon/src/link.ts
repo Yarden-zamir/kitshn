@@ -29,9 +29,27 @@ export class SiteReach {
     this.sites = [];
   }
 
-  apply(owner: object, sites: ReadonlyArray<ReachedSite>): boolean {
+  apply(owner: object, sites: unknown): boolean {
     if (this.owner !== owner) return false;
-    this.sites = sites;
+    // A malformed push from the current connection must not leave an older reach in force.
+    this.sites = [];
+    if (!Array.isArray(sites) || sites.length > 512) return false;
+    const ids = new Set<string>();
+    for (const item of sites) {
+      if (typeof item !== "object" || item === null || Array.isArray(item)) return false;
+      const site = item as Record<string, unknown>;
+      if (
+        typeof site["id"] !== "string" ||
+        !/^[a-z0-9][a-z0-9-]{0,62}$/.test(site["id"]) ||
+        ids.has(site["id"]) ||
+        typeof site["address"] !== "string" ||
+        site["address"].length > 253 ||
+        !/^kitshn-link-[a-z0-9-]+\.[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(site["address"])
+      )
+        return false;
+      ids.add(site["id"]);
+    }
+    this.sites = sites as Array<ReachedSite>;
     return true;
   }
 
