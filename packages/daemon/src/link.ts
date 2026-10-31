@@ -11,6 +11,7 @@ import type { ReachedCard } from "@kitshn/local";
 import type { ReachedSite } from "@kitshn/edge/machine";
 import type { Platform } from "./service.ts";
 import { peerUid } from "./peer.ts";
+import { pinnedSiteAddress } from "./site-link-address.ts";
 
 /** The Access service token of this machine (K-107). */
 export interface MachineToken {
@@ -74,7 +75,10 @@ export function linkTarget(
           : `the provider ${provider} of this machine reaches no address of the machine ${machineId} (K-1609).`,
       status: 403,
     };
-  const target = new URL(`${scheme}://${address}/${rest.join("/")}${url.search}`);
+  // The reserved site path selects the per-card Access application and destination guard.
+  // Provider links keep their existing path; site links retain the card prefix end to end.
+  const path = provider === "site" ? `site/${machineId}/${rest.join("/")}` : rest.join("/");
+  const target = new URL(`${scheme}://${address}/${path}${url.search}`);
   // A path cannot change the host: the proxy reaches only the card's own address.
   if (target.host !== address) return { error: `${url.pathname} leaves ${address}.`, status: 400 };
   return { target };
@@ -153,6 +157,8 @@ interface LinkOptions {
   readonly reachOf: (provider: string) => ReadonlyArray<ReachedCard>;
   /** K-1609: the signed connection owns this in-memory list, independent of providers. */
   readonly siteReach?: () => ReadonlyArray<ReachedSite>;
+  /** Tests may hold DNS resolution open to exercise revocation races. */
+  readonly pinSite?: typeof pinnedSiteAddress;
   readonly token: () => MachineToken | null;
   readonly log: (text: string) => void;
   /** `http` only in tests. */
@@ -220,9 +226,22 @@ export function serveLinks(path: string, options: LinkOptions): Promise<{ readon
     };
     response.once("close", cancel);
     try {
-      const answer = await fetch(found.target, {
+      const pinned =
+        provider === "site" && scheme === "https"
+          ? await (options.pinSite ?? pinnedSiteAddress)(found.target)
+          : null;
+      // DNS is asynchronous: do not use a grant that was withdrawn or redirected while it was in flight.
+      if (
+        provider === "site" &&
+        !options.siteReach?.().some((site) => site.id === machineId && site.address === found.target.host)
+      )
+        return refuse(response, 403, "the site link is no longer in reach.");
+      const headers = linkHeaders(request.rawHeaders, token);
+      if (pinned) headers.push(["Host", found.target.host]);
+      const answer = await fetch(pinned?.dial ?? found.target, {
         method,
-        headers: linkHeaders(request.rawHeaders, token),
+        headers,
+        ...(pinned ? { tls: { serverName: pinned.serverName } } : {}),
         redirect: "manual",
         signal: controller.signal,
         // The bytes go on as B sends them, so a compressed answer keeps its own encoding header.
@@ -231,13 +250,13 @@ export function serveLinks(path: string, options: LinkOptions): Promise<{ readon
           ? {}
           : { body: Readable.toWeb(request) as ReadableStream, duplex: "half" }),
       } as RequestInit);
-      const headers: Array<[string, string]> = [];
+      const answerHeaders: Array<[string, string]> = [];
       for (const [name, value] of answer.headers)
         if (name.toLowerCase() !== "set-cookie" && !HOP_HEADERS.has(name.toLowerCase()))
-          headers.push([name, value]);
+          answerHeaders.push([name, value]);
       for (const cookie of answer.headers.getSetCookie())
-        if (!setsAccessSession(cookie)) headers.push(["set-cookie", cookie]);
-      response.writeHead(answer.status, headers.flat());
+        if (!setsAccessSession(cookie)) answerHeaders.push(["set-cookie", cookie]);
+      response.writeHead(answer.status, answerHeaders.flat());
       audit(answer.status);
       if (answer.body) await forwardBody(answer.body, response, controller.signal);
       else response.end();
@@ -253,6 +272,9 @@ export function serveLinks(path: string, options: LinkOptions): Promise<{ readon
     }
   };
   server.on("upgrade", (request: IncomingMessage, client: Socket, head: Buffer) => {
+    void upgrade(request, client, head);
+  });
+  const upgrade = async (request: IncomingMessage, client: Socket, head: Buffer) => {
     const found = linkTarget(
       options.reachOf,
       new URL(request.url ?? "/", "http://link"),
@@ -265,11 +287,27 @@ export function serveLinks(path: string, options: LinkOptions): Promise<{ readon
       return;
     }
     const { target } = found;
+    const isSite = new URL(request.url ?? "/", "http://link").pathname.split("/")[1] === "site";
+    let host = target.hostname;
+    try {
+      if (isSite && scheme === "https")
+        host = (await (options.pinSite ?? pinnedSiteAddress)(target)).dial.hostname.replace(/^\[|\]$/g, "");
+    } catch (error) {
+      options.log(`link: ${target.host} failed: ${String(error)}`);
+      client.end("HTTP/1.1 502 Refused\r\nConnection: close\r\n\r\n");
+      return;
+    }
+    if (client.destroyed) return;
+    const cardId = new URL(request.url ?? "/", "http://link").pathname.split("/")[2];
+    if (isSite && !options.siteReach?.().some((site) => site.id === cardId && site.address === target.host)) {
+      client.end("HTTP/1.1 403 Refused\r\nConnection: close\r\n\r\n");
+      return;
+    }
     const port = Number(target.port || (scheme === "https" ? 443 : 80));
     const upstream =
       scheme === "https"
-        ? connectTls({ host: target.hostname, port, servername: target.hostname })
-        : connectTcp({ host: target.hostname, port });
+        ? connectTls({ host, port, servername: target.hostname })
+        : connectTcp({ host, port });
     const ready = scheme === "https" ? "secureConnect" : "connect";
     upstream.once(ready, () => {
       const lines = [
@@ -294,7 +332,7 @@ export function serveLinks(path: string, options: LinkOptions): Promise<{ readon
     client.on("error", close);
     client.on("close", () => upstream.destroy());
     upstream.on("close", () => client.destroy());
-  });
+  };
   const listener = createListener((socket) => {
     const peers = options.peers;
     if (peers) {

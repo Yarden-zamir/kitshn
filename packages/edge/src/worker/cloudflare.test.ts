@@ -24,6 +24,8 @@ describe("Cloudflare API calls", () => {
       { ...page, count: 2 },
       { ...page, page: 2 },
       { ...page, per_page: 0 },
+      { ...page, total_count: 2 },
+      { ...page, total_count: -1 },
     ]) {
       vi.stubGlobal(
         "fetch",
@@ -48,6 +50,16 @@ describe("Cloudflare API calls", () => {
       });
     });
     await expect(cloudflareCompleteList("t", "/apps")).resolves.toEqual([{ id: "one" }, { id: "two" }]);
+    // A changing list can repeat an id across pages and silently omit a different object.
+    vi.stubGlobal("fetch", async (url: string) => {
+      const isSecond = url.includes("page=2");
+      return Response.json({
+        success: true,
+        result: [{ id: "one" }],
+        result_info: { count: 1, page: isSecond ? 2 : 1, per_page: 1, total_pages: 2, total_count: 2 },
+      });
+    });
+    await expect(cloudflareCompleteList("t", "/apps")).rejects.toThrow("listing is complete");
   });
 
   it("still refuses an empty answer to other methods, and an error envelope", async () => {

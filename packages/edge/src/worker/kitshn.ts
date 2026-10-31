@@ -13284,6 +13284,11 @@ export class Kitshn extends DurableObject<Env> {
     const now = Date.now();
     const held = this.heldSiteAddresses(now);
     for (const address of card.addresses) {
+      // A removed app's revision does not reserve a machine-link host. An Undo must not reclaim one.
+      if (reservedSiteLinkHost(address, this.env.KITSHN_ZONE)) {
+        const refusal = this.addressTaken(address, card.id);
+        if (refusal) throw new RuleError(`${refusal} This undo no longer fits.`);
+      }
       const other = [...this.state.resources.values()].find(
         (resource) => resource.id !== card.id && resource.addresses.includes(address),
       );
@@ -13301,6 +13306,9 @@ export class Kitshn extends DurableObject<Env> {
       "SELECT address FROM old_addresses WHERE card_id = ?",
       card.id,
     )) {
+      // The old address can return only if no machine link has claimed it while the card was gone.
+      if (reservedSiteLinkHost(address, this.env.KITSHN_ZONE) && !this.state.resources.has(card.id))
+        throw new RuleError(`${address} is reserved for a kitshn machine link, so this undo no longer fits.`);
       const other = [...this.state.resources.values()].find((resource) =>
         resource.addresses.includes(address),
       );

@@ -78,7 +78,7 @@ describe("the link proxy (K-1609)", () => {
     const sites = [{ id: "live-b-proxy", address: "proxy.example.com" }];
     expect(
       linkTarget(reachOf, new URL("http://link/site/live-b-proxy/v1/messages?stream=1"), "https", sites),
-    ).toEqual({ target: new URL("https://proxy.example.com/v1/messages?stream=1") });
+    ).toEqual({ target: new URL("https://proxy.example.com/site/live-b-proxy/v1/messages?stream=1") });
     expect(linkTarget(reachOf, new URL("http://link/site/evil.example.com/x"), "https", sites)).toMatchObject(
       {
         status: 403,
@@ -162,7 +162,7 @@ describe("the link proxy (K-1609)", () => {
         },
         body: "request body",
       } as RequestInit);
-      expect(await siteAnswer.text()).toBe("POST /v1/messages");
+      expect(await siteAnswer.text()).toBe("POST /site/live-b-proxy/v1/messages");
       const siteHeaders = seen.at(-1)!;
       expect(siteHeaders.get("cf-access-client-id")).toBe("a.access");
       expect(siteHeaders.get("cf-access-client-secret")).toBe("secret");
@@ -180,6 +180,34 @@ describe("the link proxy (K-1609)", () => {
       void upstream.stop(true);
     }
   });
+  it("does not send a credential after a site share is removed during DNS resolution", async () => {
+    const path = join(mkdtempSync(join(tmpdir(), "kitshn-link-race-")), "link.sock");
+    const resolving = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    let sites = [{ id: "live-b-proxy", address: "kitshn-link-b.example.com" }];
+    const links = await serveLinks(path, {
+      reachOf: () => [],
+      siteReach: () => sites,
+      pinSite: async (target) => {
+        resolving.resolve();
+        await resume.promise;
+        return { dial: new URL("https://104.16.1.2/"), serverName: target.hostname };
+      },
+      token: () => ({ clientId: "a.access", clientSecret: "secret" }),
+      log: () => {},
+    });
+    try {
+      const answer = fetch("http://link/site/live-b-proxy/v1/messages", { unix: path } as RequestInit);
+      await resolving.promise;
+      sites = [];
+      resume.resolve();
+      expect((await answer).status).toBe(403);
+    } finally {
+      resume.resolve();
+      links.stop();
+    }
+  });
+
   it("stops reading upstream while a slow client has filled its buffer", async () => {
     const slow = new PassThrough({ highWaterMark: 1 });
     const abort = new AbortController();
