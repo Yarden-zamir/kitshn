@@ -200,7 +200,7 @@ import {
   unexposeRefusal,
 } from "./cli.ts";
 import { CliError } from "kitshn/cli-error";
-import { isOpCommand, runOpCommand } from "./ops.ts";
+import { isOpCommand, runOpCommand } from "kitshn/ops";
 import { checkSkill, installGlobalSkill, installRepoSkill, refreshGlobalSkill } from "./skill.ts";
 import { forwardDesired, providerReports } from "./desired.ts";
 import { appSocketFolder, removeOldSockets, socketPathProblem, upOnSocket } from "./sockets.ts";

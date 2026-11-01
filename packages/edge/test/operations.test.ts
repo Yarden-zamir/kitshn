@@ -12,7 +12,7 @@ import {
   opRequest,
 } from "../src/core/operations.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
-import { insertActors, machine as machineChip, tokenActor } from "./actors.ts";
+import { ACTOR_ROW, actorRows, insertActors, machine as machineChip, tokenActor } from "./actors.ts";
 import { forwarded, setup, withDaemon } from "./machine-http.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -239,6 +239,7 @@ const BODIES: Partial<Record<OpId, unknown>> = {
   "passes-set": { on: false },
   "audience-add": { address: "https://aud.example.com" },
   "audience-labels": { address: "https://aud.example.com", labels: false },
+  "ask-events": { label: "t3.thread.id=nothing" },
 };
 /**
  * Rows whose fixture fails for the owner too, so the test cannot see a refusal of the agent alone. Each reason says
@@ -280,7 +281,6 @@ const BOTH_FAIL: Partial<Record<OpId, string>> = {
   "repo-group-edit": "needs the id of a repo group",
   "repo-group-remove": "needs the id of a repo group",
   "proposal-deny": "needs an open proposal",
-  "ask-events": "needs the query ?label, which a call of /op does not send",
   usage: "calls the Cloudflare API",
   desired: "needs a provider that registered the state",
   "desired-set": "needs a provider that registered the state",
@@ -369,7 +369,7 @@ it("runs each gated row through the owner code: it fails only where the owner fa
           continue;
         }
         const request = () =>
-          new Request(`https://kit.example.com${built.path}`, {
+          new Request(`https://kit.example.com${built.path}${built.search}`, {
             method: built.method,
             headers: { "content-type": "application/json" },
             ...(built.body === null ? {} : { body: JSON.stringify(built.body) }),
@@ -656,4 +656,118 @@ it("asks the Owner when the scope fails or a secret goes out, and the Owner's ap
   await waits(await op("machine-rotate-key", "rotate-other", call("m2")));
   const own = await op("machine-rotate-key", "rotate-own", call("vps"));
   expect(await own.json()).not.toMatchObject({ outcome: "waiting" });
+});
+
+/** K-1778: the token "script" of an actor of its own, in no circle; an Access token of it on the admin path. */
+async function scriptToken() {
+  const stub = env.KITSHN.getByName("kitshn");
+  await runInDurableObject(stub, (_, state) => {
+    for (const [id, body] of actorRows([tokenActor("t-script", "script.access", "nightly backup")]))
+      state.storage.sql.exec(ACTOR_ROW, id, body);
+    state.storage.sql.exec("DELETE FROM proposals");
+  });
+  await evictDurableObject(stub);
+  return accessToken(ADMIN, { common_name: "script.access" });
+}
+
+const post = (jwt: string, path: string, body: string) =>
+  send(path, {
+    method: "POST",
+    headers: { "cf-access-jwt-assertion": jwt, "content-type": "application/json" },
+    body,
+  });
+
+it("lets a token actor call /op: an unset right waits for the Owner, and another credential approves it (K-1778)", async () => {
+  stubAccessCerts();
+  await setup({});
+  const jwt = await scriptToken();
+  const order = call("vps", { order: 5 });
+  const first = await post(jwt, "/op/machine-order", order);
+  expect(first.status, await first.clone().text()).toBe(409);
+  const { proposalId } = (await first.json()) as { proposalId: string };
+  const stub = env.KITSHN.getByName("kitshn");
+  const credential = await runInDurableObject(stub, (_, state) =>
+    state.storage.sql
+      .exec<{ credential: string; machine_id: string }>(
+        "SELECT credential, machine_id FROM proposals WHERE id = ?",
+        proposalId,
+      )
+      .one(),
+  );
+  expect(credential).toEqual({ credential: "token/t-script", machine_id: "" });
+  type Decide = {
+    decide(id: string, decision: "approved", by: object): Promise<{ ok: boolean; error?: string }>;
+  };
+  // The credential that asked never approves its own ask, also when the rules would let it (K-1778).
+  const self = await runInDurableObject(stub, (instance) =>
+    (instance as unknown as Decide).decide(proposalId, "approved", {
+      actor: { _tag: "device", clientId: "script.access", name: "nightly backup" },
+      visitor: { email: null, clientId: "script.access", ip: null },
+      machineId: null,
+      reason: null,
+    }),
+  );
+  expect(self).toMatchObject({ ok: false, error: expect.stringContaining("never approves its own ask") });
+  const approved = await runInDurableObject(stub, (instance) =>
+    (instance as unknown as Decide).decide(proposalId, "approved", {
+      actor: { _tag: "person", email: "owner@example.com" },
+      visitor: { email: "owner@example.com", clientId: null, ip: null },
+      machineId: null,
+      reason: null,
+    }),
+  );
+  expect(approved).toMatchObject({ ok: true });
+  const second = await post(jwt, "/op/machine-order", order);
+  expect(second.status, await second.clone().text()).toBe(200);
+  expect(await second.json()).toMatchObject({ outcome: "done", result: { order: 5 } });
+});
+
+it("reads the map through the gate, and caps the open asks of each credential at 20 (K-1777, K-1778)", async () => {
+  stubAccessCerts();
+  await setup({});
+  const jwt = await scriptToken();
+  // The token is in no agent circle, so "reads the map" asks the Owner like any unset right; the owner reads at once.
+  const read = (token: string) => send("/op/state", { headers: { "cf-access-jwt-assertion": token } });
+  const waiting = await read(jwt);
+  expect(waiting.status).toBe(409);
+  expect(await waiting.json()).toMatchObject({ outcome: "waiting" });
+  const owner = await read(await accessToken(ADMIN, { email: "owner@example.com" }));
+  expect(owner.status).toBe(200);
+  expect(await owner.json()).toMatchObject({
+    outcome: "done",
+    result: { hidden: { jobs: expect.any(String) } },
+  });
+  const stub = env.KITSHN.getByName("kitshn");
+  await runInDurableObject(stub, (_, state) => {
+    for (let index = 0; index < 20; index++)
+      state.storage.sql.exec(
+        `INSERT INTO proposals (id, machine_id, credential, action, target, body, reason, labels, right_name, circle_id, shown,
+         shown_hash, state, created_at, expires_at, verified) VALUES (?, '', 'token/t-script', 'forward', 't', 'null', NULL, '{}',
+         'owner', 'owner', 's', ?, 'pending', 0, ?, '[]')`,
+        `p-cap-${index}`,
+        `h-${index}`,
+        Date.now() + 60_000,
+      );
+  });
+  const capped = await post(jwt, "/op/machine-order", call("vps", { order: 9 }));
+  expect(capped.status).toBe(409);
+  expect(await capped.json()).toMatchObject({
+    outcome: "refused",
+    reason: expect.stringContaining("20 open asks"),
+  });
+  // Another credential keeps its own 20.
+  const key = await newMachineKey();
+  await setup({ deploys: { mode: "automatic" } }, key);
+  const other = await forwarded(
+    key,
+    "POST",
+    "/op/machine-labels",
+    "cap-other-0123456789abcdef",
+    call("vps", { labels: [] }),
+    {},
+    ADMIN,
+  );
+  expect(other.status).toBe(409);
+  expect(await other.json()).toMatchObject({ outcome: "waiting" });
+  await runInDurableObject(stub, (_, state) => state.storage.sql.exec("DELETE FROM proposals"));
 });

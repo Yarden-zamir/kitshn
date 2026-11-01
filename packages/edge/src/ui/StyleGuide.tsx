@@ -772,6 +772,7 @@ function Lists(props: { state: State }) {
   const proposal: ProposalView = {
     id: "p-1",
     machineId: "vps",
+    credential: "machine/vps",
     machineName: "VPS",
     action: "publish",
     target: "tick3d",

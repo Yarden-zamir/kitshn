@@ -1,7 +1,7 @@
 // K-1777: `kitshn ops`, `kitshn state` and `kitshn <operation>`: one call shape for every owner action.
-import { OPERATIONS, type OpId, isOpId, opsText } from "@kitshn/edge/operations";
-import type { AgentTransport } from "kitshn/agent";
-import { CliError } from "kitshn/cli-error";
+import type { AgentTransport } from "./agent.ts";
+import { CliError } from "./cli-error.ts";
+import { OPERATIONS, type OpId, isOpId, opsText } from "./operations.ts";
 
 export const OP_COMMANDS = ["ops", "state"] as const;
 export type OpCommand = (typeof OP_COMMANDS)[number] | OpId;
@@ -12,7 +12,7 @@ export const isOpCommand = (value: string): value is OpCommand =>
 export const OPS_HELP = `kitshn ops [--json]                     every operation that an owner can do, with its gate (K-1777)
 kitshn state [field...] [--json]        the map as the owner sees it, without the hidden fields (K-1777)
 kitshn <operation> [target] [--body json] [--reason text]
-                                        do one operation as this machine: it runs, waits for a person, or says why not`;
+                                        do one operation as this actor: it runs, waits for a person, or says why not`;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -38,7 +38,7 @@ export async function opResult(response: Response): Promise<unknown> {
 
 /** The body of `kitshn <operation>`: the target, `--body` as JSON, and `--reason`. */
 export function opCallBody(args: ReadonlyArray<string>): { target: string; body: unknown; reason?: string } {
-  const [target = ""] = words(args, ["--body", "--reason"]);
+  const [target = ""] = words(args, ["--body", "--reason", "--server"]);
   const text = flag(args, "--body");
   let body: unknown = {};
   if (text !== undefined) {
@@ -72,7 +72,7 @@ export async function runOpCommand(
   }
   if (command === "state") {
     const result = await opResult(await transport().call("/op/state", { method: "GET" }));
-    const fields = words(args, []);
+    const fields = words(args, ["--server"]);
     if (fields.length === 0 || !isRecord(result) || !isRecord(result["snapshot"])) {
       console.log(JSON.stringify(result, null, 2));
       return;

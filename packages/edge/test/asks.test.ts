@@ -931,9 +931,10 @@ it("only a person lifts the K-718 limit of a machine (K-718, K-1723)", async () 
     visitor: { email: null, clientId: "vps.access", ip: null },
     machineId: "vps",
   };
+  // K-1778: the machine that asked never approves its own ask, whatever its circle.
   expect(await decideAs(stub, id, asMachine)).toMatchObject({
     ok: false,
-    error: expect.stringContaining("no longer allowed"),
+    error: expect.stringContaining("never approves its own ask"),
   });
   // A machine in the Owner circle does not approve a call outside K-718, and the ask stays for a person.
   const held = await setup({});

@@ -329,16 +329,24 @@ export function desiredAccess(
         policyKeys.push(key);
       }
     }
-    // K-1777: `/op` sits below the admin address, and the token of each machine reaches its Worker gate; a machine
-    // still proves its key there (K-1714). During a pause only people pass, as for the Owner devices above.
-    // Limit: only machine tokens, because only the owner and machines call `/op` until actors land.
-    if (resource.id === ADMIN_RESOURCE_ID && !state.paused && state.machines.size > 0) {
+    // K-1777, K-1778: `/op` sits below the admin address, and every token of kitshn reaches its Worker gate: each
+    // machine token, and each token credential of an actor. Never "any valid service token", which would let in every
+    // token of the account. A machine still proves its key there (K-1714). During a pause only people pass.
+    const opTokens = [
+      ...new Set([
+        ...[...state.machines.values()].map((machine) => machine.serviceTokenId),
+        ...[...state.actors.values()].flatMap((actor) =>
+          actor.credentials.flatMap((credential) =>
+            credential._tag === "token" ? [credential.tokenId] : [],
+          ),
+        ),
+      ]),
+    ].sort();
+    if (resource.id === ADMIN_RESOURCE_ID && !state.paused && opTokens.length > 0) {
       policies.set(OP_TOKENS_POLICY, {
-        name: `${ACCESS_NAME_PREFIX}operation machines`,
+        name: `${ACCESS_NAME_PREFIX}operation tokens`,
         decision: "non_identity",
-        include: [...state.machines.values()].map((machine) => ({
-          service_token: { token_id: machine.serviceTokenId },
-        })),
+        include: opTokens.map((token_id) => ({ service_token: { token_id } })),
         require: [],
         exclude: [],
       });

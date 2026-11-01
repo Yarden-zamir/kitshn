@@ -183,11 +183,14 @@ const usageFail = (text: string): never => {
 export function keyTransport(server: string): AgentTransport {
   if (!server)
     fail("name the kitshn server with --server or KITSHN_SERVER, for example https://kit.example.com.");
-  const id = process.env["CF_ACCESS_CLIENT_ID"];
-  const secret = process.env["CF_ACCESS_CLIENT_SECRET"];
+  // K-1778: KITSHN_TOKEN is `<client id>:<secret>` of a token of an actor; the two Access variables still work.
+  const token = process.env["KITSHN_TOKEN"] ?? "";
+  const colon = token.indexOf(":");
+  const id = colon > 0 ? token.slice(0, colon) : process.env["CF_ACCESS_CLIENT_ID"];
+  const secret = colon > 0 ? token.slice(colon + 1) : process.env["CF_ACCESS_CLIENT_SECRET"];
   if (!id || !secret)
     fail(
-      "on a joined machine, run kitshn of the machine; elsewhere set CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET to the service token of an agent key.",
+      "on a joined machine, run kitshn of the machine; elsewhere set KITSHN_TOKEN=<client id>:<secret> to a token of an actor.",
     );
   const credentials = { "cf-access-client-id": id ?? "", "cf-access-client-secret": secret ?? "" };
   const call: AgentTransport["call"] = (path, init) =>

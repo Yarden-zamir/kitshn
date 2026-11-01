@@ -6,11 +6,14 @@ import type { OpId } from "../core/operations.ts";
 import type { Attested, Visitor } from "../core/visitor.ts";
 import type { Env } from "./env.ts";
 
-/** K-1776, K-1777: what lets the job of a machine go out without the agent checks of its delivery. */
-export interface JobApproval {
-  readonly machineId: string;
-  /** The key of the machine that asked, at the approval, so a reset or a rotation ends the approval. */
-  readonly key: string | null;
+/**
+ * K-1776, K-1777: what lets the job of a gated call go out without the agent checks of its delivery. The asker is a
+ * machine with its key at the approval, so a reset or a rotation ends the approval; or a token or login credential of an
+ * actor (K-1778), which ends when no actor holds it.
+ */
+export type JobApproval = (
+  { readonly machineId: string; readonly key: string | null } | { readonly credential: string }
+) & {
   /** The right that the approval or the gate used; null when no right lets an agent run the call (K-1777). */
   readonly right: Right | null;
   /**
@@ -18,7 +21,7 @@ export interface JobApproval {
    * that is not closed, and its job keeps the normal expiry (K-613).
    */
   readonly person: boolean;
-}
+};
 
 export interface Caller {
   readonly visitor: Visitor;

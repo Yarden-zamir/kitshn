@@ -11,7 +11,7 @@ import {
   isAgentCommand,
   waitingLine,
 } from "kitshn/agent";
-import { OPS_HELP } from "./ops.ts";
+import { OPS_HELP } from "kitshn/ops";
 import type { SiteEntry } from "./sites.ts";
 
 /**

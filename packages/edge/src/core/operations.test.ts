@@ -29,7 +29,6 @@ const ui = import.meta.glob<string>(["../ui/**/*.{ts,tsx}", "!../ui/**/*.test.ts
 /** The reads that `kitshn state` carries, so they need no operation. */
 const READS: Readonly<Record<string, string>> = {
   "/api/ws": "the map socket sends the snapshot that kitshn state reads",
-  "/api/state": "the snapshot that kitshn state reads",
   "/api/icons/": "card icons, which kitshn state leaves out",
 };
 /** Map calls of the Worker's passkey path: the person rows resume and restore-time. */
@@ -194,6 +193,7 @@ describe("operations (K-1777)", () => {
     ).toEqual({
       method: "POST",
       path: "/api/jobs",
+      search: "",
       body: { machineId: "m1", command: { kind: "update" } },
     });
     expect(
@@ -204,6 +204,7 @@ describe("operations (K-1777)", () => {
     ).toEqual({
       method: "POST",
       path: "/api/jobs",
+      search: "",
       body: { machineId: "m1", command: { kind: "shell", script: "id" } },
     });
     expect(
@@ -211,7 +212,15 @@ describe("operations (K-1777)", () => {
     ).toEqual({
       method: "POST",
       path: "/api/machines/a%2Fb",
+      search: "",
       body: { labels: ["gpu"] },
+    });
+    // A GET sends no body, so the text fields of its body go in the query (K-1756).
+    expect(opRequest(OPERATIONS["ask-events"], "", { label: "t3.thread.id=a b", other: "x" })).toEqual({
+      method: "GET",
+      path: "/api/ask-events",
+      search: "?label=t3.thread.id%3Da+b",
+      body: null,
     });
     expect(opRequest(OPERATIONS["provider-forget"], "m1", {})).toBe(
       'This operation needs the body field "provider".',

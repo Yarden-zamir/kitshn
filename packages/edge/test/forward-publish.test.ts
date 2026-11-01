@@ -71,8 +71,8 @@ it("binds an approval of a forwarded call to the thread that asked (K-1714)", as
   const now = Date.now();
   const found = await runInDurableObject(env.KITSHN.getByName("kitshn"), (instance, state) => {
     state.storage.sql.exec(
-      `INSERT INTO proposals (id, machine_id, action, target, body, reason, labels, right_name, circle_id, shown, shown_hash,
-       state, created_at, expires_at, verified, decided_at, decided_by) VALUES ('p-thread', 'vps', 'forward', 'POST /agent/library', 'null',
+      `INSERT INTO proposals (id, machine_id, credential, action, target, body, reason, labels, right_name, circle_id, shown, shown_hash,
+       state, created_at, expires_at, verified, decided_at, decided_by) VALUES ('p-thread', 'vps', 'machine/vps', 'forward', 'POST /agent/library', 'null',
        NULL, '{"t3.thread.id":"a"}', 'addsPages', 'owner', 's', 'h-thread', 'approved', ?, ?, '[]', ?, ?)`,
       now,
       now + 60_000,
@@ -84,7 +84,7 @@ it("binds an approval of a forwarded call to the thread that asked (K-1714)", as
         instance as unknown as {
           forwardApproval(m: string, h: string, c: string, t: string | null, n: number): object | null;
         }
-      ).forwardApproval("vps", "h-thread", "owner", thread, now);
+      ).forwardApproval("machine/vps", "h-thread", "owner", thread, now);
     return { same: approval("a"), other: approval("b"), none: approval(null) };
   });
   // K-1777: the approval says that a person gave it, so its job keeps the 1-hour expiry of K-613.

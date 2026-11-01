@@ -8,7 +8,6 @@ import {
   labelProblem,
   parseConditions,
   rightWarnings,
-  selfApprovers,
 } from "./asks.ts";
 import type { Circle } from "./model.ts";
 import { actorOf, chip, login, machineKey } from "./testkit.ts";
@@ -71,68 +70,14 @@ describe("warnings of machine rights (K-1725)", () => {
   ]);
   const state = { circles, actors: ACTORS, machines: new Map() };
 
-  it("warns and allows: self-approval, no person for a high-risk right, agent approvers, automatic code writes", () => {
+  it("warns and allows: an approver circle of the asker alone, no person for a high-risk right, agent approvers, automatic code writes", () => {
     expect(rightWarnings(state, VPS, { runsCommands: { mode: "ask", circleId: "owner" } })).toEqual([]);
     const warnings = rightWarnings(state, VPS, {
       runsCommands: { mode: "ask", circleId: "bots" },
       writesCode: { mode: "automatic" },
     });
     expect(warnings).toHaveLength(4);
-    expect(warnings.join(" ")).toMatch(/approve itself/);
-  });
-});
-
-describe("self-approval (K-1727)", () => {
-  it("names a machine that a right of it lets approve its own asks in this circle", () => {
-    const base = {
-      color: "#000000",
-      level: "control" as const,
-      match: "any" as const,
-      needsPasskey: false,
-      endsAt: null,
-      x: 0,
-      y: 0,
-      r: 1,
-    };
-    const bots = {
-      ...base,
-      id: "bots",
-      name: "bots",
-      members: [chip(machineKey("vps"))],
-    };
-    const agents = {
-      ...base,
-      id: "agents",
-      name: "agents",
-      members: [chip(machineKey("vps"), { deploys: { mode: "ask", circleId: "bots" } })],
-    };
-    const circles = new Map<string, Circle>([
-      ["bots", bots],
-      ["agents", agents],
-    ]);
-    expect(selfApprovers(circles, bots)).toEqual([VPS.id]);
-    expect(selfApprovers(circles, agents)).toEqual([]);
-    // In a passkey circle, a machine approves only with "approves without passkey", and the rule warning names it.
-    const locked: Circle = { ...bots, needsPasskey: true };
-    const lockedCircles = new Map<string, Circle>([
-      [locked.id, locked],
-      [agents.id, agents],
-    ]);
-    expect(selfApprovers(lockedCircles, locked)).toEqual([]);
-    const lockedState = { circles: lockedCircles, actors: ACTORS, machines: new Map() };
-    expect(rightWarnings(lockedState, VPS, { deploys: { mode: "ask", circleId: "bots" } })).toEqual([
-      expect.stringContaining("no person"),
-    ]);
-    const open: Circle = { ...locked, approvesWithoutPasskey: true };
-    const openCircles = new Map<string, Circle>([
-      [open.id, open],
-      [agents.id, agents],
-    ]);
-    expect(selfApprovers(openCircles, open)).toEqual([VPS.id]);
-    const openState = { circles: openCircles, actors: ACTORS, machines: new Map() };
-    expect(rightWarnings(openState, VPS, { deploys: { mode: "ask", circleId: "bots" } }).join(" ")).toMatch(
-      /"approves without passkey" is on/,
-    );
+    expect(warnings.join(" ")).toMatch(/never approves its own ask/);
   });
 });
 

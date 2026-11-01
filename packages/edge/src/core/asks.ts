@@ -199,13 +199,16 @@ export async function shownHash(shown: string): Promise<string> {
 /** K-1722: the longest shown text of a proposal; a longer ask is refused, so each snapshot stays small. */
 export const MAX_SHOWN = 4096;
 
-/** K-1722: at most 20 open proposals for each machine; a new ask past it is refused. */
+/** K-1722, K-1778: at most 20 open proposals for each credential that asks; a new ask past it is refused. */
 export const MAX_OPEN_PROPOSALS = 20;
 
 /** K-1722: a proposal of an ask that waits for its approver circle. */
 export interface Proposal {
   readonly id: string;
+  /** The machine that asked; empty for a token or a login (K-1778). */
   readonly machineId: string;
+  /** K-1778: the credential that asked: `machine/<id>`, `token/<id>` or `login/<email>`. It never approves. */
+  readonly credential: string;
   readonly action: ProposalAction;
   readonly target: string;
   readonly body: unknown;
@@ -300,11 +303,14 @@ export function rightWarnings(
     }
     const agentsHere =
       approvesWithoutPasskey(circle) && circle.members.some((member) => isAgentMember(member, state));
+    // K-1778: the credential that asked never approves, so a circle of this actor alone answers no ask of it.
     if (
-      approvesWithoutPasskey(circle) &&
-      circle.members.some((member) => member._tag === "actor" && member.actorId === actor.id)
+      circle.members.length > 0 &&
+      circle.members.every((member) => member._tag === "actor" && member.actorId === actor.id)
     )
-      warnings.push(`"${name}" asks ${circle.name}, which holds this actor, so it can approve itself.`);
+      warnings.push(
+        `"${name}" asks ${circle.name}, which holds only this actor, and an actor never approves its own ask.`,
+      );
     if (HIGH_RISK_RIGHTS.has(right) && !circle.members.some((member) => isPersonMember(member, state)))
       warnings.push(
         `"${name}" asks ${circle.name}, which has no person, so no person sees it before it runs.`,
@@ -319,28 +325,6 @@ export function rightWarnings(
       );
   }
   return [...new Set(warnings)];
-}
-
-/**
- * K-1725, K-1727: the actors of this circle that it would let approve their own asks, because one of their rights asks
- * this circle. The circle editor warns at once, when the owner adds the actor or sets the rule.
- */
-export function selfApprovers(circles: ReadonlyMap<string, Circle>, circle: Circle): Array<string> {
-  if (!approvesWithoutPasskey(circle)) return [];
-  return circle.members.flatMap((member) => {
-    if (member._tag !== "actor") return [];
-    const asks = [...circles.values()].some((other) =>
-      (other.id === circle.id ? circle : other).members.some(
-        (each) =>
-          each._tag === "actor" &&
-          each.actorId === member.actorId &&
-          Object.values(each.rights ?? {}).some(
-            (mode) => mode?.mode === "ask" && mode.circleId === circle.id,
-          ),
-      ),
-    );
-    return asks ? [member.actorId] : [];
-  });
 }
 
 /** K-1754: conditions as the editor writes them: `key=value,value; key=value`. */

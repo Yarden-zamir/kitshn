@@ -323,6 +323,13 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
     // The actor that a device invite adds its token to; null makes a new actor of the token (K-1601).
     "ALTER TABLE device_invites ADD COLUMN actor_id TEXT",
   ],
+  // 45: a proposal belongs to the credential that asked (K-1778): `machine/<id>`, `token/<id>` or `login/<email>`. A
+  // token actor has no machine, so its `machine_id` is empty. The credential never approves its own ask.
+  [
+    "ALTER TABLE proposals ADD COLUMN credential TEXT NOT NULL DEFAULT ''",
+    "UPDATE proposals SET credential = 'machine/' || machine_id",
+    "CREATE INDEX proposals_credential ON proposals (credential, state)",
+  ],
 ];
 
 /** K-819: the migration after which the Durable Object derives the repo ids of older deploy rows. */

@@ -1,5 +1,6 @@
 import type { Machine } from "./machine.ts";
 import {
+  ADMIN_RESOURCE_ID,
   type Actor,
   type Circle,
   type Credential,
@@ -148,6 +149,19 @@ export function circleMatches(
  */
 export const passkeyHolds = (circle: Circle, visitor: Visitor) =>
   !circle.needsPasskey || visitor.email !== null;
+
+/**
+ * K-1778: a login proves a passkey on the admin path when every circle that gives it the admin needs a passkey, because
+ * Access then asked for one before it let the login in (K-103). Any other proof has none.
+ */
+export function adminPasskey(state: State, visitor: Visitor, now: number): boolean {
+  const admin = state.resources.get(ADMIN_RESOURCE_ID);
+  if (!admin || visitor.email === null) return false;
+  const giving = activeShares(state, admin, now).filter(
+    (share) => share.level === "control" && circleMatches(share.circle, visitor, state),
+  );
+  return giving.length > 0 && giving.every((share) => share.circle.needsPasskey);
+}
 
 /** K-207: the highest level of the shares whose circle matches the visitor, or null. */
 export function visitorLevel(state: State, resource: Resource, visitor: Visitor, now: number): Level | null {

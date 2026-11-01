@@ -36,7 +36,7 @@ import { callApi } from "./store.ts";
 import { Switch, useDialogEscape } from "./controls.tsx";
 import { ItemIcon } from "./ItemIcon.tsx";
 import { ActorRights, withMode } from "./ActorRights.tsx";
-import { formatConditions, parseConditions, selfApprovers } from "../core/asks.ts";
+import { formatConditions, parseConditions } from "../core/asks.ts";
 import type { ComponentChildren } from "preact";
 import { levelEdit } from "./actions.ts";
 import { type DeviceInvite, InviteDialog } from "./Invite.tsx";
@@ -816,12 +816,6 @@ export function CircleEditor(props: {
             />
           );
         })}
-        {selfApprovers(state.circles, circle).map((actorId) => (
-          <li key={`self-${actorId}`} class="warning">
-            ⚠️ {state.actors.get(actorId)?.name ?? actorId} can approve its own asks here: a right of it asks
-            this circle (K-1727).
-          </li>
-        ))}
         {circle.members.length === 0 ? (
           <li class="help">Nobody yet. A circle with no members matches nobody.</li>
         ) : null}
