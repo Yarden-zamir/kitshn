@@ -1,18 +1,36 @@
 import { describe, expect, it } from "vitest";
-import { type LegacyCircle, migrateMembers } from "./actors.ts";
+import { type ActorMigration, type LegacyCircle, migrateMembers } from "./actors.ts";
+import { ruleViolation } from "./changes.ts";
 import type { Machine } from "./machine.ts";
-import { type Circle, actorIdOf, machineActorId } from "./model.ts";
+import {
+  ADMIN_RESOURCE_ID,
+  type Circle,
+  type Resource,
+  type ShareSetting,
+  type State,
+  actorIdOf,
+  machineActorId,
+  shareKey,
+} from "./model.ts";
+import { grantsOf } from "./providers.ts";
 import { keyRights, login, machineKey, token } from "./testkit.ts";
+import { type Visitor, visitorLevel } from "./visitor.ts";
 
-const vps: Machine = {
-  id: "vps",
-  name: "VPS",
+const machineOf = (id: string, name: string): Machine => ({
+  id,
+  name,
   labels: [],
   order: 0,
-  serviceTokenId: "s",
-  clientId: "vps.access",
-  tunnelId: "t",
-};
+  serviceTokenId: `s-${id}`,
+  clientId: `${id}.access`,
+  tunnelId: `t-${id}`,
+});
+const vps = machineOf("vps", "VPS");
+const mac = machineOf("mac", "Mac");
+const machines = new Map([
+  ["vps", vps],
+  ["mac", mac],
+]);
 
 const circle = (
   id: string,
@@ -49,45 +67,95 @@ const bot = {
 } as const;
 const conditions = [{ key: "t3.project.name", values: ["kitshn"] }];
 
+const card = (id: string, kind: Resource["kind"]): Resource => ({
+  id,
+  kind,
+  name: id,
+  addresses: [],
+  status: "running",
+  group: null,
+  machine: null,
+});
+const admin = card(ADMIN_RESOURCE_ID, "kitshn.admin");
+const site = card("site", "site.static");
+const machineCard = card("mac-card", "machine");
+const strictSite = card("strict-site", "site.static");
+const places = new Map([
+  [admin.id, { x: 0, y: 0 }],
+  [site.id, { x: 20, y: 0 }],
+  [machineCard.id, { x: 40, y: 0 }],
+  [strictSite.id, { x: 4000, y: 0 }],
+]);
+/** The Owner circle gives the machine card at "use" only. */
+const settings = new Map<string, ShareSetting>([
+  [shareKey(machineCard.id, "owner"), { level: "use", endsAt: null }],
+]);
+
 /** The Owner circle holds the admin at (0, 0); the others sit apart from it. */
-const migrated = () =>
-  migrateMembers(
+const legacy: ReadonlyArray<LegacyCircle> = [
+  circle("owner", 0, [{ _tag: "email", email: "Yarden@example.com" }, phone], { needsPasskey: true }),
+  circle("everyone", 500, [{ _tag: "everyone" }], { level: "view" }),
+  circle("friends", 1000, [
+    { _tag: "email", email: "yarden@example.com" },
+    phone,
+    { _tag: "domain", domain: "qlik.com" },
+  ]),
+  circle(
+    "agents",
+    2000,
     [
-      circle("owner", 0, [{ _tag: "email", email: "Yarden@example.com" }, phone], { needsPasskey: true }),
-      circle("friends", 1000, [
-        { _tag: "email", email: "yarden@example.com" },
-        phone,
-        { _tag: "domain", domain: "qlik.com" },
-      ]),
-      circle(
-        "agents",
-        2000,
-        [
-          bot,
-          {
-            _tag: "machine",
-            machineId: "vps",
-            rights: {
-              deploys: { mode: "automatic" },
-              writesCode: { mode: "automatic", conditions },
-              readsCode: { mode: "ask", circleId: "owner", conditions },
-              restores: { mode: "off" },
-            },
-          },
-        ],
-        { machinesMayApprove: true },
-      ),
+      bot,
+      {
+        _tag: "machine",
+        machineId: "vps",
+        rights: {
+          deploys: { mode: "automatic" },
+          writesCode: { mode: "automatic", conditions },
+          maintains: { mode: "automatic", conditions },
+          readsCode: { mode: "ask", circleId: "owner", conditions },
+          restores: { mode: "off" },
+        },
+      },
     ],
-    new Map([["vps", vps]]),
-    { x: 0, y: 0 },
-  );
+    { machinesMayApprove: true },
+  ),
+  circle("machines", 3000, [
+    { _tag: "machine", machineId: "vps" },
+    { _tag: "device", tokenId: "s-mac", clientId: "mac.access", name: "kitshn machine mac" },
+    { _tag: "machine", machineId: "mac" },
+  ]),
+  circle(
+    "strict",
+    4000,
+    [
+      { _tag: "email", email: "yarden@example.com" },
+      { _tag: "ip", range: "10.0.0.0/8" },
+    ],
+    { match: "all", level: "view" },
+  ),
+];
+
+const migrated = () => migrateMembers(legacy, machines, { x: 0, y: 0 }, settings);
+
+const stateOf = (migration: ActorMigration): State => ({
+  circles: new Map(migration.circles.map((each) => [each.id, each])),
+  resources: new Map([admin, site, machineCard, strictSite].map((each) => [each.id, each])),
+  places,
+  shareSettings: new Map([...settings, ...migration.shareSettings]),
+  ends: new Map(),
+  stacks: new Map(),
+  paused: null,
+  machines,
+  actors: new Map(migration.actors.map((actor) => [actor.id, actor])),
+});
 
 const byId = (circles: ReadonlyArray<Circle>, id: string) => circles.find((each) => each.id === id)!;
+const yardenId = actorIdOf(login("yarden@example.com"));
 
 describe("the migration of members into actors (K-1778, migration 44)", () => {
-  it("makes one person per email and adds the phone of the owner to that person, so no circle changes whom it lets in", () => {
+  it("makes one person per email and adds the phone of the owner to that person", () => {
     const { actors, circles } = migrated();
-    const yarden = actors.find((actor) => actor.id === actorIdOf(login("yarden@example.com")))!;
+    const yarden = actors.find((actor) => actor.id === yardenId)!;
     expect(yarden.credentials).toEqual([
       login("yarden@example.com"),
       token("t-phone", "phone.access", "Yarden's phone"),
@@ -96,6 +164,31 @@ describe("the migration of members into actors (K-1778, migration 44)", () => {
     expect(byId(circles, "friends").members).toEqual([
       { _tag: "actor", actorId: yarden.id },
       { _tag: "domain", domain: "qlik.com" },
+    ]);
+    expect(byId(circles, "everyone").members).toEqual([{ _tag: "everyone" }]);
+  });
+
+  it("keeps every card of a passkey circle for its token in a devices circle, except the admin (H2)", () => {
+    const migration = migrated();
+    const devices = migration.circles.find((each) => each.name === "yarden@example.com's devices")!;
+    expect(devices).toMatchObject({
+      members: [{ _tag: "actor", actorId: yardenId }],
+      needsPasskey: false,
+      level: "control",
+      x: 0,
+      y: 0,
+      r: 100,
+    });
+    expect(migration.notes.join(" ")).toContain(devices.name);
+    const state = stateOf(migration);
+    const phoneVisitor: Visitor = { email: null, clientId: "phone.access", ip: null };
+    const levels = (visitor: Visitor) =>
+      [admin, site, machineCard].map((each) => visitorLevel(state, each, visitor, 0));
+    expect(levels(phoneVisitor)).toEqual([null, "view", "use"]);
+    expect(levels({ ...phoneVisitor, email: "yarden@example.com", clientId: null })).toEqual([
+      "control",
+      "view",
+      "use",
     ]);
   });
 
@@ -107,6 +200,7 @@ describe("the migration of members into actors (K-1778, migration 44)", () => {
       ],
       new Map(),
       null,
+      new Map(),
     );
     const own = actorIdOf(token("t-phone", "phone.access", "Yarden's phone"));
     expect(actors.map((actor) => actor.id)).toContain(own);
@@ -125,33 +219,70 @@ describe("the migration of members into actors (K-1778, migration 44)", () => {
     });
   });
 
-  it("moves the rights with conditions of a machine to one agent actor, and the machine keeps the others (break 5)", () => {
+  it("moves the rights with conditions to an agent actor, and the machine chip asks the Owner for them (M1)", () => {
     const { actors, circles } = migrated();
     const agentId = actorIdOf(machineKey("vps"), conditions);
     expect(actors.find((actor) => actor.id === agentId)).toEqual({
       id: agentId,
-      name: "VPS reads code, writes code",
+      name: "VPS reads code, writes code, maintains",
       credentials: [machineKey("vps")],
       conditions,
     });
+    const ask = { mode: "ask", circleId: "owner" } as const;
     expect(byId(circles, "agents").members.slice(1)).toEqual([
       {
         _tag: "actor",
         actorId: machineActorId("vps"),
-        rights: { deploys: { mode: "automatic" }, restores: { mode: "off" } },
+        rights: {
+          deploys: { mode: "automatic" },
+          writesCode: ask,
+          readsCode: ask,
+          restores: { mode: "off" },
+          maintains: ask,
+        },
       },
       {
         _tag: "actor",
         actorId: agentId,
-        rights: { readsCode: { mode: "ask", circleId: "owner" }, writesCode: { mode: "automatic" } },
+        rights: { readsCode: ask, writesCode: { mode: "automatic" }, maintains: { mode: "automatic" } },
       },
     ]);
   });
 
-  it("gives every joined machine its actor, and renames machines may approve", () => {
+  it("gives every joined machine one actor, also in two circles and as its token (K-107), and renames machines may approve", () => {
     const { actors, circles } = migrated();
-    expect(actors.find((actor) => actor.id === machineActorId("vps"))?.name).toBe("VPS");
+    expect(actors.filter((actor) => actor.id === machineActorId("vps")).map((actor) => actor.name)).toEqual([
+      "VPS",
+    ]);
+    expect(byId(circles, "machines").members).toEqual([
+      { _tag: "actor", actorId: machineActorId("vps") },
+      { _tag: "actor", actorId: machineActorId("mac") },
+    ]);
     expect(byId(circles, "agents").approvesWithoutPasskey).toBe(true);
     expect("machinesMayApprove" in byId(circles, "agents")).toBe(false);
+  });
+
+  it("grants an all-must-match circle of a person with a token by the login alone (M2)", () => {
+    const strict = byId(migrated().circles, "strict");
+    expect(grantsOf(stateOf(migrated()), strictSite, 0).map((grant) => grant.circle)).toEqual([
+      expect.objectContaining({
+        id: strict.id,
+        rules: [{ email: "yarden@example.com" }, { ip: "10.0.0.0/8" }],
+      }),
+    ]);
+  });
+
+  it("leaves a map that keeps every rule (H1)", () => {
+    expect(ruleViolation(stateOf(migrated()))).toBeNull();
+  });
+
+  it("keeps a chip of after the migration and throws on a member it does not know (M3)", () => {
+    const chip = { _tag: "actor", actorId: yardenId } as const;
+    const run = (members: LegacyCircle["members"]) =>
+      migrateMembers([circle("a", 1000, members)], new Map(), null, new Map()).circles[0]?.members;
+    expect(run([chip])).toEqual([chip]);
+    expect(() => run([{ _tag: "group", name: "x" } as unknown as LegacyCircle["members"][number]])).toThrow(
+      /does not know the member/,
+    );
   });
 });

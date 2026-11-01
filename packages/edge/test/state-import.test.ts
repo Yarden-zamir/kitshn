@@ -1,7 +1,8 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
-import type { Circle } from "../src/core/model.ts";
+import { type Actor, type Circle, actorIdOf } from "../src/core/model.ts";
+import { login, token } from "../src/core/testkit.ts";
 import { type StateExport, stateExport } from "../src/worker/backups.ts";
 import { MIGRATIONS } from "../src/worker/migrations.ts";
 import { IMPORT_OBJECT } from "../src/worker/state-import.ts";
@@ -82,6 +83,16 @@ const importInto = (name: string, before?: (sql: SqlStorage, instance: Instance)
         .toArray()
         .map((row) => row.summary),
       version: meta(sql, "schema_version"),
+      members: Object.fromEntries(
+        sql
+          .exec<{ id: string; body: string }>("SELECT id, body FROM circles")
+          .toArray()
+          .map((row) => [row.id, (JSON.parse(row.body) as Circle).members]),
+      ),
+      actors: sql
+        .exec<{ body: string }>("SELECT body FROM actors")
+        .toArray()
+        .map((row) => JSON.parse(row.body) as Actor),
     };
   });
 
@@ -120,11 +131,23 @@ describe("state import (K-1833)", () => {
 
   it("imports an export of an older schema and runs the later migrations", async () => {
     const full = await exportOf("source-b");
+    // The circles of before migration 44 hold email and device members (K-1778).
+    const legacy: Record<string, ReadonlyArray<unknown>> = {
+      owner: [{ _tag: "email", email: "owner@example.com" }],
+      friends: [
+        { _tag: "email", email: "friend@example.com" },
+        { _tag: "device", tokenId: "t-phone", clientId: "phone.access", name: "Phone" },
+      ],
+    };
+    const circles = full.tables["circles"]!.map((row) => {
+      const body = JSON.parse(String(row["body"])) as Circle;
+      return { ...row, body: JSON.stringify({ ...body, members: legacy[body.id] ?? body.members }) };
+    });
     const old: StateExport = {
       ...full,
       schemaVersion: 20,
       tables: {
-        circles: full.tables["circles"]!,
+        circles,
         resources: full.tables["resources"]!,
         places: full.tables["places"]!,
         meta: [{ key: "schema_version", value: "20" }],
@@ -134,6 +157,12 @@ describe("state import (K-1833)", () => {
     const after = await importInto("target-b");
     expect(after.refused).toBeNull();
     expect(after.version).toBe(String(MIGRATIONS.length));
+    const friend = actorIdOf(login("friend@example.com"));
+    expect(after.members["friends"]).toEqual([{ _tag: "actor", actorId: friend }]);
+    expect(after.actors.find((actor) => actor.id === friend)?.credentials).toEqual([
+      login("friend@example.com"),
+      token("t-phone", "phone.access", "Phone"),
+    ]);
   });
 
   it("refuses with a fixed code, and changes nothing", async () => {

@@ -765,6 +765,18 @@ export function CircleEditor(props: {
                         <summary data-tip={`Add a phone, desktop app or script to ${actor.name} (K-1601).`}>
                           Add device
                         </summary>
+                        {[...state.circles.values()]
+                          .filter((each) =>
+                            each.members.some(
+                              (other) => other._tag === "actor" && other.actorId === actor.id,
+                            ),
+                          )
+                          .every((each) => each.needsPasskey) ? (
+                          <p class="warning">
+                            Every circle of {actor.name} needs a passkey, so a new token of it opens nothing
+                            (K-1778). Put {actor.name} in a circle without a passkey first.
+                          </p>
+                        ) : null}
                         <NewToken
                           actorId={actor.id}
                           onToken={(token) =>

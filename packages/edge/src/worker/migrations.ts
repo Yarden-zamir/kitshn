@@ -314,8 +314,11 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
     `UPDATE resources SET body = json_set(body, '$.kind', 'port') WHERE json_extract(body, '$.kind') = 'game'`,
   ],
   // 44: actors (K-1778). Its code step (`migrateMembers`) turns the email, device and machine members of each circle into
-  // actors and their chips, once, in the transaction of the migration.
+  // actors and their chips, once, in the transaction of the migration. The circle bodies of before stay in
+  // `circles_before_actors`, so an owner can go back by hand to a kitshn of before it.
   [
+    "CREATE TABLE circles_before_actors (id TEXT PRIMARY KEY, body TEXT NOT NULL)",
+    "INSERT INTO circles_before_actors (id, body) SELECT id, body FROM circles",
     "CREATE TABLE actors (id TEXT PRIMARY KEY, body TEXT NOT NULL)",
     // The actor that a device invite adds its token to; null makes a new actor of the token (K-1601).
     "ALTER TABLE device_invites ADD COLUMN actor_id TEXT",

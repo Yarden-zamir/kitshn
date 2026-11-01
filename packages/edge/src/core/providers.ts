@@ -14,10 +14,12 @@ import {
 import { visitorLevel } from "./visitor.ts";
 import type { Machine } from "./machine.ts";
 import {
+  type Circle,
   type Member,
   type Resource,
   type State,
   activeShares,
+  isPerson,
   isPublicCircle,
   levelName,
   providerCardId,
@@ -72,7 +74,8 @@ export function providerCards(
  * none, because the provider sees only the machine token (decision 5 of the actor design). A passkey circle gives no
  * rule of a token or a machine (the passkey line). An empty list is a member that the provider cannot see.
  */
-const rulesOf = (member: Member, state: State, needsPasskey: boolean): ReadonlyArray<GrantRule> => {
+const rulesOf = (member: Member, state: State, circle: Circle): ReadonlyArray<GrantRule> => {
+  const { needsPasskey } = circle;
   switch (member._tag) {
     case "domain":
       return [{ domain: member.domain.toLowerCase() }];
@@ -85,7 +88,8 @@ const rulesOf = (member: Member, state: State, needsPasskey: boolean): ReadonlyA
       if (!actor || (actor.conditions ?? []).length > 0) return [];
       return actor.credentials.flatMap((credential): Array<GrantRule> => {
         if (credential._tag === "login") return [{ email: credential.email.toLowerCase() }];
-        if (needsPasskey) return [];
+        // In "all must match" a person is its one login, as in the Access compile (`allRules`).
+        if (needsPasskey || (circle.match === "all" && isPerson(actor))) return [];
         if (credential._tag === "token") {
           // A machine's daemon token held as a token is that machine (K-107): the provider admits machines only
           // through a machine rule.
@@ -112,7 +116,7 @@ export function grantsOf(state: State, card: Resource, now: number): Array<Grant
   const grants: Array<Grant> = [];
   for (const share of activeShares(state, card, now)) {
     const { circle } = share;
-    const known = circle.members.map((member) => rulesOf(member, state, circle.needsPasskey));
+    const known = circle.members.map((member) => rulesOf(member, state, circle));
     // In "all must match", each member is one rule; a member of none or of several would widen it (K-006).
     if (
       circle.match === "all" &&

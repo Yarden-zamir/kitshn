@@ -1384,19 +1384,7 @@ export class Kitshn extends DurableObject<Env> {
         : `answered ${answer.status}`;
     });
     void ctx.blockConcurrencyWhile(async () => {
-      // Numbered migrations: each runs once per database, with its version, in one transaction.
-      ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
-      const [version] = ctx.storage.sql
-        .exec<{ value: string }>("SELECT value FROM meta WHERE key = 'schema_version'")
-        .toArray();
-      const from = Number(version?.value ?? 0);
-      ctx.storage.transactionSync(() => {
-        migrate((query) => ctx.storage.sql.exec(query), from);
-        // The rest of migration 6 needs code: the repo id comes out of each card id.
-        if (from < REPO_GATE_MIGRATION) this.backfillRepoIds();
-        if (from < ACTORS_MIGRATION) this.migrateActors();
-        this.migrateAgents();
-      });
+      this.migrateSchema();
       this.load();
       // K-1833: a bootstrap with KITSHN_IMPORT asks for one import, before the start steps, so they run on the
       // imported state. Each start reads the meta row of a due finish, and one more while the variable is set.
@@ -1413,6 +1401,23 @@ export class Kitshn extends DurableObject<Env> {
       // instead of relying on a new connection or status message to begin the configured rollout (K-627).
       this.resumeAutoUpdatesAfterWake();
       await this.scheduleAlarm();
+    });
+  }
+
+  /** Numbered migrations: each runs once per database, with its version, in one transaction. */
+  private migrateSchema() {
+    const storage = this.ctx.storage;
+    storage.sql.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+    const [version] = storage.sql
+      .exec<{ value: string }>("SELECT value FROM meta WHERE key = 'schema_version'")
+      .toArray();
+    const from = Number(version?.value ?? 0);
+    storage.transactionSync(() => {
+      migrate((query) => storage.sql.exec(query), from);
+      // The rest of migration 6 needs code: the repo id comes out of each card id.
+      if (from < REPO_GATE_MIGRATION) this.backfillRepoIds();
+      if (from < ACTORS_MIGRATION) this.migrateActors();
+      this.migrateAgents();
     });
   }
 
@@ -2195,6 +2200,10 @@ export class Kitshn extends DurableObject<Env> {
 
   /** K-1502, K-1506: Undo reverses the caller's own newest revision, and runs the same rules as an edit. */
   private undo(actor: Author, revisionId: number, source: UndoSource | null) {
+    if (revisionId <= Number(this.meta(ACTORS_UNDO_FLOOR) ?? 0))
+      throw new RuleError(
+        `Revision #${revisionId} is from before migration 44, which moved the circle members to actors (K-1778), so it has no Undo.`,
+      );
     const target = undoTarget(this.state, this.storedRevisions(), actor, { revision: revisionId });
     return this.commitUndo(actor, target.changes, { revision: target.revision, item: null, source });
   }
@@ -8511,12 +8520,30 @@ export class Kitshn extends DurableObject<Env> {
       "SELECT x, y FROM places WHERE id = ?",
       ADMIN_RESOURCE_ID,
     );
-    const migrated = migrateMembers(circles, machines, admin ? { x: admin.x, y: admin.y } : null);
+    const shareSettings = new Map(
+      this.sql<{ id: string; body: string }>("SELECT id, body FROM share_settings").map((row) => [
+        row.id,
+        JSON.parse(row.body) as ShareSetting,
+      ]),
+    );
+    const migrated = migrateMembers(
+      circles,
+      machines,
+      admin ? { x: admin.x, y: admin.y } : null,
+      shareSettings,
+    );
     for (const actor of migrated.actors)
       this.sql("INSERT OR REPLACE INTO actors (id, body) VALUES (?, ?)", actor.id, JSON.stringify(actor));
     for (const circle of migrated.circles)
-      this.sql("UPDATE circles SET body = ? WHERE id = ?", JSON.stringify(circle), circle.id);
+      this.sql("INSERT OR REPLACE INTO circles (id, body) VALUES (?, ?)", circle.id, JSON.stringify(circle));
+    for (const [id, setting] of migrated.shareSettings)
+      this.sql("INSERT OR REPLACE INTO share_settings (id, body) VALUES (?, ?)", id, JSON.stringify(setting));
     if (circles.length === 0) return;
+    // A state that breaks a rule throws, so the transaction rolls back and the database stays at migration 43.
+    this.load();
+    const problem = ruleViolation(this.state);
+    if (problem !== null)
+      throw new Error(`Migration 44 (K-1778) stops, because the moved map breaks a rule: ${problem}`);
     const floor = this.insertRevision(
       { _tag: "kitshn", reason: "actors (K-1778)" },
       `Moved the circle members to actors (K-1778)${migrated.notes.length > 0 ? `. ${migrated.notes.join(" ")}` : ""}`.slice(
@@ -12315,6 +12342,13 @@ export class Kitshn extends DurableObject<Env> {
       return {
         ok: false,
         error: `${circle.name} needs a passkey: approve through the passkey check (K-1723).`,
+      };
+    // K-1723, K-1778: an ask that raises access (the Owner decides) needs a passkey proof, also where the circle lets a
+    // token or a machine approve.
+    if (decision === "approved" && proposal.right === "owner" && via !== "passkey")
+      return {
+        ok: false,
+        error: "This ask raises access, so only a person approves it, through the passkey check (K-1723).",
       };
     if (proposal.state !== "pending")
       return { ok: false, error: `This ask is already decided (${proposal.state}).` };

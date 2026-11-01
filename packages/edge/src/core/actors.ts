@@ -2,6 +2,8 @@
 // bodies of before the actor model and gives the actors and the new circle bodies.
 import type { Machine } from "./machine.ts";
 import {
+  ADMIN_RESOURCE_ID,
+  OWNER_CIRCLE_ID,
   RIGHTS,
   RIGHT_NAMES,
   type Actor,
@@ -12,9 +14,11 @@ import {
   type Right,
   type RightCondition,
   type RightMode,
+  type ShareSetting,
   actorIdOf,
   insideCircle,
   machineActorId,
+  shareKey,
 } from "./model.ts";
 
 type LegacyMode =
@@ -40,7 +44,9 @@ export type LegacyMember =
       readonly machineId: string;
       readonly rights?: Readonly<Partial<Record<Right, LegacyMode>>>;
     }
-  | { readonly _tag: "everyone" };
+  | { readonly _tag: "everyone" }
+  // A chip of after migration 44 stays as it is.
+  | Extract<Member, { _tag: "actor" }>;
 
 export type LegacyCircle = Omit<Circle, "members" | "approvesWithoutPasskey"> & {
   readonly members: ReadonlyArray<LegacyMember>;
@@ -49,8 +55,11 @@ export type LegacyCircle = Omit<Circle, "members" | "approvesWithoutPasskey"> & 
 
 export interface ActorMigration {
   readonly actors: ReadonlyArray<Actor>;
+  /** The stored circles, then each new devices circle of a token that left a passkey circle. */
   readonly circles: ReadonlyArray<Circle>;
-  /** What the owner reads in History: each token that joined a person, each new agent actor. */
+  /** The share settings of the new devices circles, by `shareKey`. */
+  readonly shareSettings: ReadonlyArray<readonly [string, ShareSetting]>;
+  /** What the owner reads in History: each token that joined a person, each new agent actor, each devices circle. */
   readonly notes: ReadonlyArray<string>;
 }
 
@@ -63,16 +72,21 @@ const KEY_RIGHTS = ["addsApps", "publishes"] as const;
  * K-1778: the actors of the stored circles.
  * - An email becomes a person actor, one per email across circles.
  * - A machine becomes a machine actor; its rights without conditions stay on its chip. Each set of conditions becomes an
- *   agent actor "<machine> <rights>" with those rights, and the machine chip keeps them at default (break 5).
+ *   agent actor "<machine> <rights>" with those rights. The machine chip asks the Owner for them, so a call without the
+ *   labels waits for the Owner, and no default of K-1777 runs it at once (break 5).
  * - An agent key (a device in a circle of devices and machines only, and in no circle that holds the admin) becomes a
  *   token actor. Its flags become "automatic" and its other rights "off", as before (K-1732).
  * - Another device becomes a token of the one person that every circle of the device also holds, else its own actor.
- *   So no circle lets in anyone new, except that the person's token now opens the person's other circles (decision 1).
+ *   The person's token then also opens the person's other circles (decision 1).
+ * - A token in a circle that needs a passkey gets nothing there (the passkey line). So its actor goes into a new circle
+ *   "<actor>'s devices" without a passkey, with the place, the level and the share settings of that circle, and no
+ *   share of the admin. The token keeps its cards; the login of a person actor also gets them without a passkey.
  */
 export function migrateMembers(
   circles: ReadonlyArray<LegacyCircle>,
   machines: ReadonlyMap<string, Machine>,
   adminPlace: Point | null,
+  shareSettings: ReadonlyMap<string, ShareSetting>,
 ): ActorMigration {
   const actors = new Map<string, Actor>();
   const notes: Array<string> = [];
@@ -108,11 +122,13 @@ export function migrateMembers(
       circle.members.flatMap((member) => (member._tag === "email" ? [member.email.toLowerCase()] : [])),
     );
 
+  // K-107: a device member with the token of a joined machine is that machine, as in the grant tables.
+  const machineOfToken = new Map([...machines.values()].map((machine) => [machine.clientId, machine.id]));
   // Each token across circles: its circles, and whether it is an agent key.
   const devices = new Map<string, { device: Device; circles: Array<LegacyCircle> }>();
   for (const circle of circles)
     for (const member of circle.members)
-      if (member._tag === "device") {
+      if (member._tag === "device" && !machineOfToken.has(member.clientId)) {
         const entry = devices.get(member.tokenId) ?? { device: member, circles: [] };
         entry.circles.push(circle);
         devices.set(member.tokenId, entry);
@@ -178,6 +194,8 @@ export function migrateMembers(
     );
   }
 
+  /** By passkey circle id: the actors of the tokens that left it, each with the names of those tokens. */
+  const tokensLeft = new Map<string, Map<string, Array<string>>>();
   const migrated = circles.map((circle): Circle => {
     const members: Array<Member> = [];
     const chips = new Map<string, Extract<Member, { _tag: "actor" }>>();
@@ -203,14 +221,27 @@ export function migrateMembers(
           members.push(member);
           break;
         case "device": {
-          const owner = owners.get(member.tokenId);
+          const tokenMachine = machineOfToken.get(member.clientId);
+          if (tokenMachine !== undefined && !circle.needsPasskey) {
+            chip(machineActor(tokenMachine), {});
+            break;
+          }
+          const owner = tokenMachine === undefined ? owners.get(member.tokenId) : machineActor(tokenMachine);
+          const id =
+            owner ??
+            actorIdOf({
+              _tag: "token",
+              tokenId: member.tokenId,
+              clientId: member.clientId,
+              name: member.name,
+            });
+          if (circle.needsPasskey) {
+            const left = tokensLeft.get(circle.id) ?? new Map<string, Array<string>>();
+            left.set(id, [...(left.get(id) ?? []), member.name]);
+            tokensLeft.set(circle.id, left);
+            break;
+          }
           if (owner) break;
-          const id = actorIdOf({
-            _tag: "token",
-            tokenId: member.tokenId,
-            clientId: member.clientId,
-            name: member.name,
-          });
           const rights: Partial<Record<Right, RightMode>> = {};
           if (keys.has(member.tokenId) && isAgentCircle(circle))
             for (const right of RIGHTS)
@@ -236,15 +267,61 @@ export function migrateMembers(
             }
             const id = agentId(member.machineId, mode.conditions ?? []);
             byAgent.set(id, { ...byAgent.get(id), [right]: plain });
+            own[right] = { mode: "ask", circleId: OWNER_CIRCLE_ID };
           }
           chip(machineActor(member.machineId), own);
           for (const [id, rights] of byAgent) chip(id, rights);
           break;
         }
+        case "actor":
+          chip(member.actorId, member.rights ?? {});
+          break;
+        default:
+          throw new Error(`Migration 44 does not know the member ${JSON.stringify(member satisfies never)}.`);
       }
     }
     const { machinesMayApprove, ...rest } = circle;
     return { ...rest, members, ...(machinesMayApprove === true ? { approvesWithoutPasskey: true } : {}) };
   });
-  return { actors: [...actors.values()], circles: migrated, notes };
+
+  const ids = new Set(circles.map((circle) => circle.id));
+  const names = new Set(circles.map((circle) => circle.name));
+  const unique = (base: string, taken: Set<string>, max: number) => {
+    let value = base.slice(0, max);
+    for (let n = 2; taken.has(value); n++) value = `${base.slice(0, max - `-${n}`.length)}-${n}`;
+    taken.add(value);
+    return value;
+  };
+  const added: Array<Circle> = [];
+  const settings: Array<readonly [string, ShareSetting]> = [];
+  for (const circle of migrated) {
+    for (const [actorId, tokens] of tokensLeft.get(circle.id) ?? []) {
+      const actorName = actors.get(actorId)?.name ?? actorId;
+      const base =
+        circle.id === OWNER_CIRCLE_ID ? `${actorName}'s devices` : `${actorName}'s devices in ${circle.name}`;
+      const id = unique(`${circle.id}-devices`, ids, 63);
+      const name = unique(base, names, 80);
+      // In "all must match" the rules of the circle still narrow it; in "any" they would let others in.
+      const rules = circle.match === "all" ? circle.members.filter((member) => member._tag !== "actor") : [];
+      const { approvesWithoutPasskey: _, ...shape } = circle;
+      added.push({
+        ...shape,
+        id,
+        name,
+        needsPasskey: false,
+        members: [{ _tag: "actor", actorId }, ...rules],
+      });
+      for (const [key, setting] of shareSettings) {
+        const prefix = key.slice(0, -`/${circle.id}`.length);
+        if (key.endsWith(`/${circle.id}`) && prefix !== ADMIN_RESOURCE_ID)
+          settings.push([shareKey(prefix, id), setting]);
+      }
+      // The admin has only the level "control" (K-104), so "view" gives it no share here.
+      settings.push([shareKey(ADMIN_RESOURCE_ID, id), { level: "view", endsAt: null }]);
+      notes.push(
+        `${tokens.join(", ")} got nothing in ${circle.name}, which needs a passkey, so ${actorName} is in the new circle ${name}, with the same cards and levels, except the admin.`,
+      );
+    }
+  }
+  return { actors: [...actors.values()], circles: [...migrated, ...added], shareSettings: settings, notes };
 }

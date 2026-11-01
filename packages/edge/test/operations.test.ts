@@ -12,7 +12,7 @@ import {
   opRequest,
 } from "../src/core/operations.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
-import { machine as machineChip } from "./actors.ts";
+import { insertActors, machine as machineChip, tokenActor } from "./actors.ts";
 import { forwarded, setup, withDaemon } from "./machine-http.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -59,15 +59,54 @@ it("lets an agent do owner actions through /op: care runs, a circle edit waits f
       .one(),
   );
   expect(right.right_name).toBe("owner");
-  await runInDurableObject(stub, (instance) =>
+  // K-1723, K-1778: an ask that raises access needs a passkey proof, also where the Owner circle lets a token approve.
+  const script = tokenActor("t-script", "script.access", "Script");
+  const ownerBody = await runInDurableObject(stub, (_, state) => {
+    const { body } = state.storage.sql
+      .exec<{ body: string }>("SELECT body FROM circles WHERE id = ?", OWNER_CIRCLE_ID)
+      .one();
+    const open = JSON.parse(body) as Circle;
+    state.storage.sql.exec(
+      "UPDATE circles SET body = ? WHERE id = ?",
+      JSON.stringify({ ...open, members: [...open.members, script], approvesWithoutPasskey: true }),
+      OWNER_CIRCLE_ID,
+    );
+    insertActors(state.storage.sql, [script]);
+    return body;
+  });
+  await evictDurableObject(stub);
+  const byToken = await runInDurableObject(stub, (instance) =>
     (
       instance as unknown as { decide(id: string, decision: "approved", by: object): Promise<unknown> }
     ).decide(waiting.proposalId, "approved", {
-      actor: { _tag: "person", email: "owner@example.com" },
-      visitor: { email: "owner@example.com", clientId: null, ip: null },
+      actor: { _tag: "kitshn", reason: "test" },
+      visitor: { email: null, clientId: "script.access", ip: null },
       machineId: null,
       reason: null,
     }),
+  );
+  expect(byToken).toMatchObject({ ok: false, error: expect.stringMatching(/raises access/) });
+  await runInDurableObject(stub, (_, state) =>
+    state.storage.sql.exec("UPDATE circles SET body = ? WHERE id = ?", ownerBody, OWNER_CIRCLE_ID),
+  );
+  await evictDurableObject(stub);
+  await runInDurableObject(stub, (instance) =>
+    (
+      instance as unknown as {
+        decide(id: string, decision: "approved", by: object, hash: null, via: "passkey"): Promise<unknown>;
+      }
+    ).decide(
+      waiting.proposalId,
+      "approved",
+      {
+        actor: { _tag: "person", email: "owner@example.com" },
+        visitor: { email: "owner@example.com", clientId: null, ip: null },
+        machineId: null,
+        reason: null,
+      },
+      null,
+      "passkey",
+    ),
   );
   const second = await op("apply", "edit-2", edit);
   expect(second.status, await second.clone().text()).toBe(200);
@@ -470,14 +509,21 @@ const approveAsOwner = (proposalId: string) =>
   runInDurableObject(env.KITSHN.getByName("kitshn"), (instance) =>
     (
       instance as unknown as {
-        decide(id: string, decision: "approved", by: object): Promise<{ ok: boolean; error?: string }>;
+        decide(
+          id: string,
+          decision: "approved",
+          by: object,
+          hash: null,
+          via: "passkey",
+        ): Promise<{ ok: boolean; error?: string }>;
       }
-    ).decide(proposalId, "approved", {
-      actor: ownerCaller.actor,
-      visitor: ownerCaller.visitor,
-      machineId: null,
-      reason: null,
-    }),
+    ).decide(
+      proposalId,
+      "approved",
+      { actor: ownerCaller.actor, visitor: ownerCaller.visitor, machineId: null, reason: null },
+      null,
+      "passkey",
+    ),
   );
 
 it("checks K-718 again when a job that no person approved goes out, and gives it the normal expiry (K-613, K-1777)", async () => {
