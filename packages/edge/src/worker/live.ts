@@ -105,13 +105,21 @@ export function ingressAccess(
 /**
  * K-817: one entry for each address that serves a live site. The socket of a Compose app serves every address of
  * its card, each with its own ingress rule, DNS record and Access application; any other site serves its own.
+ * K-824, K-828: the socket of each instance serves its own address and every address of the primary, so a failover
+ * changes only DNS records. Each entry of a Compose card carries the card id.
  */
 export function servedSites(
   site: LiveSite,
-  card: Pick<Resource, "kind" | "addresses"> | undefined,
+  card: Pick<Resource, "id" | "kind" | "addresses" | "instances"> | undefined,
 ): Array<LiveSite> {
-  if (card?.kind !== "site.compose" || card.addresses[0] !== site.address) return [site];
-  return card.addresses.map((address) => ({ ...site, address }));
+  if (card?.kind !== "site.compose") return [site];
+  const instances = card.instances ?? [];
+  const own = instances.find((instance) => instance.machine === site.machineId);
+  const reportsOwn = own !== undefined && own.address === site.address;
+  if (card.addresses[0] !== site.address && !reportsOwn) return [site];
+  const owned = new Set(instances.map((instance) => instance.address));
+  const shared = card.addresses.filter((address) => !owned.has(address));
+  return [...shared, ...(own ? [own.address] : [])].map((address) => ({ ...site, id: card.id, address }));
 }
 
 /**
@@ -120,12 +128,12 @@ export function servedSites(
  */
 export function protectedLiveSites(
   sites: Iterable<LiveSite>,
-  cardOf: (id: string) => Pick<Resource, "kind" | "addresses"> | undefined,
+  cardOf: (site: LiveSite) => Pick<Resource, "id" | "kind" | "addresses" | "instances"> | undefined,
   hasApplication: (site: LiveSite) => boolean,
 ): Array<LiveSite> {
   return [...sites]
     .filter((site) => site.state === "ok")
-    .flatMap((site) => servedSites(site, cardOf(site.id)))
+    .flatMap((site) => servedSites(site, cardOf(site)))
     .filter(hasApplication);
 }
 

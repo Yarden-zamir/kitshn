@@ -36,7 +36,15 @@ import {
   WINDOW_ACTIONS,
 } from "@kitshn/local";
 import { linkPairs, nextReport, probeLink, providerChecks } from "./health.ts";
-import { composeFiles, composeRisks, envFileRisks, rawRisks, realpathOnDisk, sourceRisks } from "./guard.ts";
+import {
+  composeFiles,
+  composeRisks,
+  envFileRisks,
+  rawRisks,
+  realpathOnDisk,
+  sourceRisks,
+  spreadData,
+} from "./guard.ts";
 import { type Notify, accessEnv, withAppEnv } from "./appEnv.ts";
 import { HELPER_IMAGE, backup, finishRestores, restore, unpauseMarked } from "./backup.ts";
 import { keyPlan } from "./keys.ts";
@@ -1505,6 +1513,14 @@ async function composeUp(
     refuse(envFileRisks(await readConfig(["--no-interpolate"]), roots, real));
     const config = await readConfig([]);
     refuse(composeRisks(config, command.project, roots, real));
+    // K-826: an instance of a spread app keeps no data, because kitshn cannot move data to another machine yet.
+    if (command.kind === "compose" && command.spread === true) {
+      const kept = spreadData(config, data, real);
+      if (kept.length > 0)
+        throw new Error(
+          `a spread app keeps no data, because kitshn cannot move data between machines yet; remove ${kept.join(", ")}, or use placement "every" or "one" (K-826)`,
+        );
+    }
     // The container user may not be the daemon user; the socket directory must take its socket.
     mkdirSync(sockets, { recursive: true });
     chmodSync(sockets, 0o777);
@@ -1879,7 +1895,14 @@ function runJob(
     return oneAtATime(command.card, async () => {
       const outcome =
         command.kind === "backup"
-          ? await backup(machine, command.card, command.run, command.prune, command.pauseLimitMs)
+          ? await backup(
+              machine,
+              command.card,
+              command.run,
+              command.prune,
+              command.pauseLimitMs,
+              command.repository,
+            )
           : await restore(
               machine,
               command.card,
@@ -1887,6 +1910,7 @@ function runJob(
               command.before,
               command.sources,
               command.pauseLimitMs,
+              command.repository,
             );
       return { ...outcome, exitCode: outcome.ok ? 0 : 1 };
     });
@@ -2050,6 +2074,10 @@ function report() {
               "logs",
               "backup",
               "backup-restore",
+              // K-826: this daemon refuses a spread app with volumes.
+              "compose-spread",
+              // K-827: this daemon backs up an instance into its own repository.
+              "backup-instances",
               "provider",
               // K-1608: this daemon answers `applied` for each push that it saved.
               "applied",

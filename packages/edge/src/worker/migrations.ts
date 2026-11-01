@@ -340,6 +340,15 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
     `UPDATE jobs SET state = 'failed', output = 'kitshn moved to effects; send the job again (K-1730)'
       WHERE state = 'queued' AND json_extract(visitor, '$.ownerApproved') IS NOT NULL`,
   ],
+  // 47: placement (K-823). `compose` keeps the `compose` part of the recipe as JSON, so the drift of K-825 reads its
+  // labels and placement. `deploy_instances` holds the job of each instance of a deploy beyond the home one (K-827);
+  // `deferred` marks a machine that was offline at plan time, whose job the deploy does not wait for.
+  [
+    "ALTER TABLE deploys ADD COLUMN compose TEXT",
+    `CREATE TABLE deploy_instances (deploy_id TEXT NOT NULL, machine_id TEXT NOT NULL, address TEXT NOT NULL,
+      job_id INTEGER, deferred INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (deploy_id, machine_id))`,
+    "CREATE INDEX deploy_instances_job ON deploy_instances (job_id)",
+  ],
 ];
 
 /** K-819: the migration after which the Durable Object derives the repo ids of older deploy rows. */

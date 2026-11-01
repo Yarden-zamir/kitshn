@@ -1959,3 +1959,139 @@ describe("Browser Integrity Check on private cards (K-412)", () => {
     expect(open).toEqual([{ text: expect.stringContaining('"Zone > Config Rules > Edit"') }]);
   });
 });
+
+describe("placement (K-823, K-824, K-827)", () => {
+  it('runs an "every" app on each machine, each other instance at its own address, and waits for every job', async () => {
+    fakeCloudflare();
+    const app = repo("71", "everywhere");
+    await allow(app);
+    const stub = env.KITSHN.getByName("kitshn");
+    const machines = [
+      { id: "m-71a", name: "Mac", order: 0 },
+      { id: "m-71b", name: "Oracle VPS", order: 1 },
+    ];
+    await runInDurableObject(stub, (_instance, durable) => {
+      for (const item of machines) {
+        const machine: Machine = {
+          ...item,
+          labels: ["deploy"],
+          serviceTokenId: `token-${item.id}`,
+          clientId: `${item.id}.access`,
+          tunnelId: `tunnel-${item.id}`,
+        };
+        durable.storage.sql.exec(
+          "INSERT INTO machines (id, body) VALUES (?, ?)",
+          item.id,
+          JSON.stringify(machine),
+        );
+      }
+    });
+    await evictDurableObject(stub);
+    const status: MachineStatus = {
+      version: "0123456789ab",
+      os: "linux",
+      arch: "x64",
+      hostname: "host",
+      tunnel: "running",
+      capabilities: ["compose-guard"],
+    };
+    const sockets = await runInDurableObject(stub, (_instance, durable) =>
+      machines.map((item) => {
+        const pair = new WebSocketPair();
+        durable.acceptWebSocket(pair[1], [item.id, "machines"]);
+        pair[0].accept();
+        pair[1].serializeAttachment({
+          kind: "machine",
+          machineId: item.id,
+          since: Date.now(),
+          challenge: "",
+          check: "signed",
+          answered: true,
+          rotateBy: null,
+          status,
+          sample: null,
+        });
+        return pair[1];
+      }),
+    );
+    const composeRecipe = {
+      compose: { placement: "every" },
+      deploy: [{ on: "push", branch: "main", name: "prod", startsIn: "Everyone" }],
+    };
+    const planned = await step(app, "/deploy/plan", { recipe: composeRecipe, event: {} });
+    expect(planned.status, JSON.stringify(planned.body)).toBe(200);
+    const deployId = String(planned.body["deployId"]);
+    const homeAddress = "everywhere-mac.example.com";
+    const instanceAddress = "everywhere-oracle-vps.example.com";
+    const sql = <T extends Record<string, SqlStorageValue>>(query: string, ...bindings: Array<string>) =>
+      runInDurableObject(stub, (_instance, durable) =>
+        durable.storage.sql.exec<T>(query, ...bindings).toArray(),
+      );
+    expect(
+      await sql(
+        "SELECT machine_id, address, deferred FROM deploy_instances WHERE deploy_id = ? ORDER BY machine_id",
+        deployId,
+      ),
+    ).toEqual([
+      { machine_id: "m-71a", address: homeAddress, deferred: 0 },
+      { machine_id: "m-71b", address: instanceAddress, deferred: 0 },
+    ]);
+    // K-824: the record of the instance address goes to the tunnel of its own machine.
+    const runs = await runInDurableObject(
+      stub,
+      (instance) =>
+        (
+          instance as unknown as {
+            deploys(): { composeRuns: Array<{ addresses: Array<string>; machineId: string }> };
+          }
+        ).deploys().composeRuns,
+    );
+    expect(runs).toContainEqual(expect.objectContaining({ addresses: [app.address], machineId: "m-71a" }));
+    expect(runs).toContainEqual(expect.objectContaining({ addresses: [homeAddress], machineId: "m-71a" }));
+    expect(runs).toContainEqual(
+      expect.objectContaining({ addresses: [instanceAddress], machineId: "m-71b" }),
+    );
+    let started = await step(app, "/deploy/start", { deployId });
+    for (let attempt = 0; attempt < 10 && started.status === 503; attempt++)
+      started = await step(app, "/deploy/start", { deployId });
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    const jobs = await sql<{ id: number; machine_id: string; command: string }>(
+      "SELECT id, machine_id, command FROM jobs WHERE json_extract(command, '$.kind') = 'compose' ORDER BY id",
+    );
+    expect(jobs.map((job) => [job.machine_id, (JSON.parse(job.command) as { name: string }).name])).toEqual([
+      ["m-71a", "everywhere"],
+      ["m-71b", "everywhere-oracle-vps"],
+    ]);
+    const [card] = await sql<{ body: string }>("SELECT body FROM resources WHERE id = ?", app.card);
+    expect(JSON.parse(card?.body ?? "{}")).toMatchObject({
+      machine: "m-71a",
+      addresses: [app.address, homeAddress, instanceAddress],
+      instances: [
+        { machine: "m-71a", address: homeAddress },
+        { machine: "m-71b", address: instanceAddress, status: "deploying" },
+      ],
+    });
+    const finish = (index: number) =>
+      runInDurableObject(stub, async (instance) => {
+        const job = jobs[index];
+        const socket = sockets[index];
+        if (!job || !socket) throw new Error("no job");
+        await instance.webSocketMessage(
+          socket,
+          JSON.stringify({ type: "jobResult", id: job.id, result: { ok: true, exitCode: 0, output: "up" } }),
+        );
+      });
+    await finish(0);
+    expect((await step(app, "/deploy/status", { deployId })).body["state"]).toBe("running");
+    await finish(1);
+    const done = await step(app, "/deploy/status", { deployId });
+    expect(done.body["state"]).toBe("done");
+    expect(String(done.body["output"])).toContain("--- Oracle VPS: done");
+    await runInDurableObject(stub, async (instance) => {
+      for (const socket of sockets) {
+        socket.close(1001, "gone");
+        await instance.webSocketClose(socket);
+      }
+    });
+  });
+});

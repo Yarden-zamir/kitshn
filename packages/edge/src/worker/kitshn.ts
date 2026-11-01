@@ -157,6 +157,8 @@ import {
   R2_FREE_BYTES,
   gigabytes,
   BACK_UP_NOW,
+  instanceRepository,
+  repositoryParts,
 } from "../core/backups.ts";
 import { bucketSize, stateExport, writeExport } from "./backups.ts";
 import {
@@ -309,7 +311,19 @@ import {
   opRequest,
 } from "../core/operations.ts";
 import { type MachineOs, machineOs } from "../core/icons.ts";
-import { deployLabels, hasLabels, machineFacts } from "../core/facts.ts";
+import { deployLabels, hasLabels, isReservedLabel, machineFacts } from "../core/facts.ts";
+import {
+  type Candidate,
+  type Instance,
+  type Placement,
+  cardInstances,
+  instanceAddress,
+  otherInstances,
+  placeMachines,
+  placementDrift,
+  placementOf,
+  primaryInstance,
+} from "../core/instances.ts";
 import {
   contentSecurityPolicy,
   type ContentVisitor,
@@ -481,7 +495,16 @@ import {
   pullRequestNumber,
 } from "./deploys.ts";
 import { DEFAULT_APP } from "kitshn/names";
-import { AppKey, type Recipe, WorkerApp, decodeRecipe, deployOrder, plan, repoSlug } from "kitshn/recipe";
+import {
+  AppKey,
+  ComposeApp,
+  type Recipe,
+  WorkerApp,
+  decodeRecipe,
+  deployOrder,
+  plan,
+  repoSlug,
+} from "kitshn/recipe";
 import { removeStaleDomains, zoneFor, zoneOfAddressIn, zonesOf, zonesOrMain } from "./zones.ts";
 import { BIC_CALLS, type BicHosts, privateHosts, syncBic } from "./bic-sync.ts";
 import {
@@ -996,6 +1019,8 @@ export class Kitshn extends DurableObject<Env> {
    * kitshn never prunes; `sql` drops this memo on every write that names the table.
    */
   private deployFacts: DeployFacts | null = null;
+  /** K-825: when kitshn last started a build for the placement of a card; in memory, so an eviction asks once more. */
+  private readonly placementBuilds = new Map<string, number>();
 
   /** K-1305: the last Usage answer, kept in memory for 5 minutes, so the view costs no writes. */
   private usage: Usage | null = null;
@@ -1441,7 +1466,11 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   private sql<T extends Record<string, SqlStorageValue>>(query: string, ...bindings: Array<SqlStorageValue>) {
-    if (!query.trimStart().startsWith("SELECT") && query.includes("deploys")) this.deployFacts = null;
+    if (
+      !query.trimStart().startsWith("SELECT") &&
+      (query.includes("deploys") || query.includes("deploy_instances"))
+    )
+      this.deployFacts = null;
     if (query.trimStart().startsWith("INSERT INTO jobs")) this.jobsAdded = true;
     return this.ctx.storage.sql.exec<T>(query, ...bindings).toArray();
   }
@@ -2475,6 +2504,7 @@ export class Kitshn extends DurableObject<Env> {
 
   /** K-1804, K-1805: the connection of the card's machine, when it is online and its daemon reads logs. */
   private logDaemon(resource: Resource): { socket: WebSocket; name: string } | { error: string } {
+    // K-827 known limit: the home instance only. Revisit when an "every" app needs the logs of each machine.
     const machine = resource.machine ? this.state.machines.get(resource.machine) : undefined;
     if (!machine) return { error: "The card has no machine, so it has no logs to read." };
     const socket = this.checkedSockets(machine.id).at(-1);
@@ -2659,10 +2689,15 @@ export class Kitshn extends DurableObject<Env> {
   private latestBackups(): Map<string, BackupRun> {
     if (this.backupMemory) return this.backupMemory;
     const memory = new Map<string, BackupRun>();
+    // K-827: the newest run of each instance; the card panel shows the home one.
     for (const row of this.sql<BackupRow>(
-      "SELECT * FROM backups WHERE (card, at) IN (SELECT card, MAX(at) FROM backups GROUP BY card)",
-    ))
-      memory.set(row.card, backupRun(row));
+      `SELECT * FROM backups WHERE (card, machine_id, at) IN
+       (SELECT card, machine_id, MAX(at) FROM backups GROUP BY card, machine_id)`,
+    )) {
+      const home = this.state.resources.get(row.card)?.machine;
+      if (home === undefined || home === null || home === row.machine_id)
+        memory.set(row.card, backupRun(row));
+    }
     this.backupMemory = memory;
     return memory;
   }
@@ -2675,11 +2710,18 @@ export class Kitshn extends DurableObject<Env> {
   /** K-1814: restic of a machine reaches a card's repository only while that machine runs a job of the card. */
   private backupAccess(body: { card: string; clientId: string }) {
     const machine = [...this.state.machines.values()].find((item) => item.clientId === body.clientId);
-    const resource = this.state.resources.get(body.card);
+    // K-827: `card` names a repository: the card's own for the home instance, or `<card>@<machine id>`.
+    const repository = body.card;
+    const parts = repositoryParts(repository);
+    const resource = this.state.resources.get(parts.card);
     const refuse = (error: string) => Response.json({ error }, { status: 403 });
     if (!machine) return refuse("This service token is no machine of kitshn.");
-    if (resource?.kind !== "site.compose" || resource.machine !== machine.id)
-      return refuse(`${body.card} is no Compose card of ${machine.name} (K-1814).`);
+    const runs =
+      parts.machineId === null
+        ? resource?.machine === machine.id
+        : parts.machineId === machine.id && runsOnMachine(resource, machine.id);
+    if (resource?.kind !== "site.compose" || !runs)
+      return refuse(`${repository} is no Compose repository of ${machine.name} (K-1814, K-827).`);
     // A dropped socket marks the job failed for now; the job keeps its access until it expires (K-1814).
     const running = this.sql<{ command: string }>(
       `SELECT command FROM jobs WHERE machine_id = ? AND expires_at > ?
@@ -2688,11 +2730,15 @@ export class Kitshn extends DurableObject<Env> {
       Date.now(),
     ).some((row) => {
       const command = JSON.parse(row.command) as Command;
-      return (command.kind === "backup" || command.kind === "backup-restore") && command.card === body.card;
+      return (
+        (command.kind === "backup" || command.kind === "backup-restore") &&
+        command.card === parts.card &&
+        (command.repository ?? command.card) === repository
+      );
     });
     return running
       ? Response.json({ ok: true })
-      : refuse(`${machine.name} runs no backup of ${body.card} now (K-1814).`);
+      : refuse(`${machine.name} runs no backup of ${repository} now (K-1814).`);
   }
 
   /** K-1817, K-1819, K-1820: why a card cannot back up now, or null. */
@@ -2864,18 +2910,50 @@ export class Kitshn extends DurableObject<Env> {
   private queueBackup(card: string, actor: Author, prune: boolean, now: number) {
     const resource = this.state.resources.get(card);
     if (!resource?.machine) throw new Error(`${card} has no machine.`);
+    const home = resource.machine;
+    // K-827: each other instance backs up into its own repository, on a daemon that knows instance repositories.
+    const others = otherInstances(resource)
+      .map((instance) => instance.machine)
+      .filter((id) =>
+        this.machineStatus(id)?.capabilities?.some((capability) => capability === "backup-instances"),
+      );
     const run = crypto.randomUUID();
     const jobId = this.ctx.storage.transactionSync(() => {
       const queued = this.queueKitshnJob(
-        resource.machine!,
+        home,
         { kind: "backup", card, run, prune, pauseLimitMs: this.pauseLimitOf(card) },
         actor,
         now + DAY,
       );
-      this.insertBackup(run, card, resource.machine!, now, queued);
+      this.insertBackup(run, card, home, now, queued);
+      for (const machineId of others) {
+        const instanceRun = crypto.randomUUID();
+        const repository = instanceRepository(card, machineId);
+        const instanceJob = this.queueKitshnJob(
+          machineId,
+          {
+            kind: "backup",
+            card,
+            repository,
+            run: instanceRun,
+            prune,
+            pauseLimitMs: this.pauseLimitOf(card),
+          },
+          actor,
+          now + DAY,
+        );
+        this.insertBackup(instanceRun, card, machineId, now, instanceJob);
+      }
       return queued;
     });
     return { run, jobId };
+  }
+
+  /** K-605: the newest status of a connected machine, or null. */
+  private machineStatus(machineId: string) {
+    const socket = this.openSocket(machineId);
+    const attachment = socket ? attachmentOf(socket) : null;
+    return attachment?.kind === "machine" ? attachment.status : null;
   }
 
   private insertBackup(run: string, card: string, machineId: string, at: number, jobId: number) {
@@ -2887,6 +2965,8 @@ export class Kitshn extends DurableObject<Env> {
       at,
       jobId,
     );
+    // K-1819, K-827: the card panel shows the newest backup of the home instance; "Backups…" lists every instance.
+    if (machineId !== this.state.resources.get(card)?.machine) return;
     this.latestBackups().set(card, {
       run,
       card,
@@ -2936,16 +3016,32 @@ export class Kitshn extends DurableObject<Env> {
       return Response.json({ error: "kitshn has no finished backup run like this." }, { status: 404 });
     const sources = JSON.parse(row.sources) as Array<string>;
     const resource = this.state.resources.get(card)!;
+    // K-827: a run goes back to the instance that made it, from that instance's repository.
+    const home = row.machine_id === resource.machine;
+    if (!home && !runsOnMachine(resource, row.machine_id))
+      return Response.json(
+        { error: "The instance of this backup no longer runs; kitshn cannot move data yet (K-826)." },
+        { status: 409 },
+      );
+    const repository = home ? {} : { repository: instanceRepository(card, row.machine_id) };
     const before = crypto.randomUUID();
     const now = Date.now();
     const jobId = this.ctx.storage.transactionSync(() => {
       const queued = this.queueKitshnJob(
-        resource.machine!,
-        { kind: "backup-restore", card, run, before, sources, pauseLimitMs: this.pauseLimitOf(card) },
+        row.machine_id,
+        {
+          kind: "backup-restore",
+          card,
+          ...repository,
+          run,
+          before,
+          sources,
+          pauseLimitMs: this.pauseLimitOf(card),
+        },
         actor,
         now + DAY,
       );
-      this.insertBackup(before, card, resource.machine!, now, queued);
+      this.insertBackup(before, card, row.machine_id, now, queued);
       return queued;
     });
     this.startBackupAction(card, jobId, "Restore", "Back up the app as it is, then write the backup back");
@@ -2959,6 +3055,7 @@ export class Kitshn extends DurableObject<Env> {
     command: Extract<Command, { kind: "backup" | "backup-restore" }>,
     actor: Author,
     result: Record<string, unknown>,
+    machineId: string,
   ) {
     const run = command.kind === "backup" ? command.run : command.before;
     const report = isRecord(result["backup"]) ? result["backup"] : null;
@@ -2984,9 +3081,11 @@ export class Kitshn extends DurableObject<Env> {
     // K-1817: a run that the retention removed from the repository loses its row too.
     if (Array.isArray(report?.["kept"])) {
       const kept = new Set(report["kept"].filter((item): item is string => typeof item === "string"));
+      // K-827: one repository holds the runs of one instance only.
       for (const row of this.sql<{ run: string }>(
-        "SELECT run FROM backups WHERE card = ? AND state = 'done'",
+        "SELECT run FROM backups WHERE card = ? AND machine_id = ? AND state = 'done'",
         command.card,
+        machineId,
       ))
         if (!kept.has(row.run)) this.sql("DELETE FROM backups WHERE run = ?", row.run);
     }
@@ -3069,12 +3168,15 @@ export class Kitshn extends DurableObject<Env> {
       if (this.state.resources.has(card)) this.sql("DELETE FROM backup_gone WHERE card = ?", card);
     const gone = this.sql<{ card: string }>("SELECT card FROM backup_gone WHERE since < ?", now - 7 * DAY);
     for (const { card } of gone) {
-      let cursor: string | undefined;
-      do {
-        const page = await bucket.list({ prefix: `backups/${card}/`, ...(cursor ? { cursor } : {}) });
-        if (page.objects.length > 0) await bucket.delete(page.objects.map((object) => object.key));
-        cursor = page.truncated ? page.cursor : undefined;
-      } while (cursor);
+      // K-827: the repositories of the other instances go with the card's own.
+      for (const prefix of [`backups/${card}/`, `backups/${card}@`]) {
+        let cursor: string | undefined;
+        do {
+          const page = await bucket.list({ prefix, ...(cursor ? { cursor } : {}) });
+          if (page.objects.length > 0) await bucket.delete(page.objects.map((object) => object.key));
+          cursor = page.truncated ? page.cursor : undefined;
+        } while (cursor);
+      }
       this.sql("DELETE FROM backups WHERE card = ?", card);
       this.sql("DELETE FROM backup_gone WHERE card = ?", card);
     }
@@ -3242,9 +3344,10 @@ export class Kitshn extends DurableObject<Env> {
       this.sql(
         `INSERT INTO deploys (id, repo, repo_id, environment, resource_id, address, script, starts_in, kind, sha, state,
            expires_at, branch, app, machine_id, job_id, compose_file, addresses, worker, app_key, reason, version_id,
-           run_id, run_attempt, images, needs, origin, workflow)
+           run_id, run_attempt, images, needs, origin, workflow, compose)
          SELECT ?, repo, repo_id, environment, resource_id, address, script, starts_in, kind, sha, ?, ?, branch, app,
-           machine_id, ?, compose_file, addresses, worker, app_key, ?, version_id, NULL, NULL, images, needs, ?, workflow
+           machine_id, ?, compose_file, addresses, worker, app_key, ?, version_id, NULL, NULL, images, needs, ?, workflow,
+           compose
          FROM deploys WHERE id = ?`,
         id,
         state,
@@ -3293,30 +3396,62 @@ export class Kitshn extends DurableObject<Env> {
           `Update the daemon on ${machine.name} first: it cannot roll back yet (K-821).`,
         ),
       };
+    const rollbackOn = (on: Machine, address: string): Command => ({
+      kind: "compose-rollback",
+      deployId: origin,
+      allowed: allowedFor(on, target.repo),
+      project: card,
+      name: address.slice(0, -this.env.KITSHN_ZONE.length - 1),
+      environment: target.environment,
+      repo: target.repo,
+      file: target.compose_file,
+      group,
+    });
+    // K-827: each other instance whose machine built the origin deploy rolls back too; a newer one has no kept build.
+    const built = new Set(this.deployInstances(origin).map((instance) => instance.machine_id));
+    const others = otherInstances(resource).flatMap((instance) => {
+      const other = this.state.machines.get(instance.machine);
+      return other &&
+        built.has(other.id) &&
+        this.machineView(other).status?.capabilities?.includes("compose-rollback")
+        ? [{ machine: other, address: instance.address }]
+        : [];
+    });
+    const skipped = otherInstances(resource).length - others.length;
     const jobId = this.ctx.storage.transactionSync(() => {
       const queued = this.queueKitshnJob(
         machine.id,
-        {
-          kind: "compose-rollback",
-          deployId: origin,
-          allowed: allowedFor(machine, target.repo),
-          project: card,
-          name: target.address.slice(0, -this.env.KITSHN_ZONE.length - 1),
-          environment: target.environment,
-          repo: target.repo,
-          file: target.compose_file,
-          group,
-        },
+        rollbackOn(machine, target.address),
         actor,
         Date.now() + DEPLOY_MS,
       );
       insert("running", queued);
+      for (const other of others) {
+        const otherJob = this.queueKitshnJob(
+          other.machine.id,
+          rollbackOn(other.machine, other.address),
+          actor,
+          Date.now() + DEPLOY_MS,
+        );
+        this.sql(
+          "INSERT INTO deploy_instances (deploy_id, machine_id, address, job_id) VALUES (?, ?, ?, ?)",
+          id,
+          other.machine.id,
+          other.address,
+          otherJob,
+        );
+      }
       this.insertRevision(actor, `Rolled back ${resource.name} to ${sha} (K-821)`, [], null);
       return queued;
     });
     this.deliverJobs();
+    const names = [machine, ...others.map((other) => other.machine)].map((item) => item.name).join(", ");
+    const left =
+      skipped > 0
+        ? ` ${skipped} other instance(s) did not build ${sha} or cannot roll back, so they keep their build.`
+        : "";
     return {
-      note: `${machine.name} starts the kept build ${sha} of ${resource.name}, with the params of that deploy; its data does not roll back.`,
+      note: `${names} start the kept build ${sha} of ${resource.name}, with the params of that deploy; its data does not roll back.${left}`,
       jobId,
     };
   }
@@ -3700,13 +3835,22 @@ export class Kitshn extends DurableObject<Env> {
         row.app === "compose" &&
         (row.state === "planned" || row.state === "running" || row.state === "done") &&
         row.expires_at > Date.now()
-      )
+      ) {
         composeRuns.push({
           card: row.resource_id,
           addresses: row.addresses === null ? [row.address] : (JSON.parse(row.addresses) as Array<string>),
           machineId: row.machine_id,
           expiresAt: row.expires_at,
         });
+        // K-824: each other instance gets the record of its own address on its own machine's tunnel.
+        for (const instance of this.deployInstances(row.id))
+          composeRuns.push({
+            card: row.resource_id,
+            addresses: [instance.address],
+            machineId: instance.machine_id,
+            expiresAt: row.expires_at,
+          });
+      }
       if (row.repo_id !== null || row.state === "done") {
         deployed.add(row.resource_id);
         // As the GLOB 'pr-[0-9]*' of K-821: "pr-" and a digit.
@@ -3798,7 +3942,7 @@ export class Kitshn extends DurableObject<Env> {
         (capability) => this.machineView(machine).status?.capabilities?.includes(capability) ?? false,
       ),
       takesDeploys: machine.labels.includes("deploy"),
-      runsCard: this.state.resources.get(card)?.machine === machine.id,
+      runsCard: runsOnMachine(this.state.resources.get(card), machine.id),
       allowed: allowedFor(machine, repo),
     };
   }
@@ -3807,11 +3951,24 @@ export class Kitshn extends DurableObject<Env> {
   private stopCompose(actor: Author, card: AppCard) {
     const teardown = appTeardown(card, this.env.KITSHN_ZONE, this.isFolderSite(card.id));
     if (teardown.kind !== "compose") throw new Error(`${card.name} is no Compose app.`);
+    // K-827: each other instance stops on its own machine and keeps its volumes there.
+    const others = otherInstances(card).flatMap((instance) => {
+      const machine = this.state.machines.get(instance.machine);
+      const name = instance.address.slice(0, -this.env.KITSHN_ZONE.length - 1);
+      return machine ? [{ machine, command: { ...teardown.command, name } }] : [];
+    });
     const machine = teardown.machineId ? this.state.machines.get(teardown.machineId) : undefined;
     if (!machine) return `kitshn knows no machine of ${card.name}, so nothing stops there.`;
-    this.queueKitshnJob(machine.id, teardown.command, actor, NEVER);
-    const when = this.jobMachines().has(machine.id) ? "now" : `when ${machine.name} comes online with a key`;
-    return `${card.name} stops on ${machine.name} ${when}; its volumes stay on the machine.`;
+    const ready = this.jobMachines();
+    return [{ machine, command: teardown.command }, ...others]
+      .map((target) => {
+        this.queueKitshnJob(target.machine.id, target.command, actor, NEVER);
+        const when = ready.has(target.machine.id)
+          ? "now"
+          : `when ${target.machine.name} comes online with a key`;
+        return `${card.name} stops on ${target.machine.name} ${when}; its volumes stay on the machine.`;
+      })
+      .join(" ");
   }
 
   /** K-909: the undo of a removal starts the app again where it can, and says why where it cannot. */
@@ -3834,8 +3991,10 @@ export class Kitshn extends DurableObject<Env> {
     if (plan.kind === "none") return `${back}, but kitshn did not start it: ${plan.reason}`;
     if (plan.kind === "redeploy") {
       if (!machine) throw new Error("A redeploy plan without its machine.");
-      this.queueKitshnJob(machine.id, plan.command, actor, Date.now() + DEPLOY_MS);
-      return `${back} and starts its last good build on ${machine.name}.`;
+      const targets = [{ machine, command: plan.command }, ...this.instanceRedeploys(card, plan.command)];
+      for (const target of targets)
+        this.queueKitshnJob(target.machine.id, target.command, actor, Date.now() + DEPLOY_MS);
+      return `${back} and starts its last good build on ${targets.map((target) => target.machine.name).join(", ")}.`;
     }
     try {
       const repo = await this.dispatchBuild(
@@ -5186,6 +5345,192 @@ export class Kitshn extends DurableObject<Env> {
     );
   }
 
+  /**
+   * K-823, K-825: each machine as placement sees it, for a Compose app with these `runsOn` labels. Only a machine
+   * online with a key (K-1708) fits now. An offline one is "unknown" while its owner labels and K-819 still hold,
+   * because its fact labels are gone while it is offline (K-635).
+   */
+  private placementCandidates(runsOn: ReadonlyArray<string>, agent: string | null): Array<Candidate> {
+    const ready = this.jobMachines();
+    const now = Date.now();
+    const needed = deployLabels(runsOn);
+    return [...this.state.machines.values()].map((machine) => {
+      const socket = this.openSocket(machine.id);
+      const attachment = socket ? attachmentOf(socket) : null;
+      const live = attachment?.kind === "machine" ? attachment : null;
+      const capabilities = live?.status?.capabilities ?? [];
+      const allowed = mayDeployOn(this.state, agent, machine.id, now);
+      const fits =
+        allowed &&
+        capabilities.includes("compose-guard") &&
+        hasLabels(machine.labels, machineFacts(live?.status ?? null), needed);
+      const ownerLabels = needed.filter((label) => !isReservedLabel(label));
+      // A connection without its first status has no facts and no capabilities yet.
+      const fit: Candidate["fit"] =
+        ready.has(machine.id) && live?.status
+          ? fits
+            ? "yes"
+            : "no"
+          : allowed && ownerLabels.every((label) => machine.labels.includes(label))
+            ? "unknown"
+            : "no";
+      return {
+        id: machine.id,
+        order: machine.order,
+        fit,
+        spreadReady: capabilities.includes("compose-spread"),
+        load: live?.sample ? Math.max(live.sample.cpu, live.sample.memory) : null,
+      };
+    });
+  }
+
+  /**
+   * K-825: drops the instances of `"every"` and spread cards whose machine no longer qualifies, and starts a build of
+   * the push branch when a machine has room for one. A card with a running deploy waits for its end.
+   */
+  private async reconcilePlacement() {
+    const actor: Author = { _tag: "kitshn", reason: "placement (K-825)" };
+    const builds: Array<{ card: string; repoId: string; branch: string; workflow: string }> = [];
+    for (const card of this.state.resources.values()) {
+      if (card.kind !== "site.compose" || card.machine === null || this.deployRuns(card.id)) continue;
+      const done = this.lastDone(card.id);
+      if (!done?.repo_id || isPreview(done.environment) || this.closedPreview(card.id)) continue;
+      const placement: Placement = placementOf(composeOf(done));
+      if (placement === "one" && (card.instances ?? []).length === 0) continue;
+      const candidates = this.placementCandidates(
+        composeOf(done)?.runsOn ?? [],
+        this.allowingAgent(done.repo_id)?.clientId ?? null,
+      );
+      const current = [card.machine, ...otherInstances(card).map((instance) => instance.machine)];
+      const drift = placementDrift(placement, candidates, current);
+      if (drift.drop.length > 0) {
+        const { notes } = this.ctx.storage.transactionSync(() => {
+          const result = this.dropInstances(card, drift.drop, actor);
+          this.insertRevision(actor, result.notes.join(" "), [], null);
+          return result;
+        });
+        console.log(notes.join(" "));
+        this.load();
+      }
+      const askedAt = this.placementBuilds.get(card.id) ?? 0;
+      if (drift.build && Date.now() - askedAt >= PLACEMENT_BUILD_GAP_MS && !this.state.paused)
+        builds.push({
+          card: card.id,
+          repoId: done.repo_id,
+          branch: done.branch,
+          workflow: done.workflow ?? AGENT_WORKFLOW,
+        });
+    }
+    this.deliverJobs();
+    this.broadcast();
+    for (const build of builds) {
+      this.placementBuilds.set(build.card, Date.now());
+      // Known limit: without the GitHub App, the next push adds the instance (K-825).
+      await this.dispatchBuild(build.repoId, build.branch, build.workflow).catch((error: unknown) =>
+        console.warn(`kitshn could not start a build for the placement of ${build.card}: ${String(error)}`),
+      );
+    }
+  }
+
+  /** K-827: the instances of a Compose card, the home one first, as `/agent/state` shows them. */
+  private instanceViews(card: Resource) {
+    const newest = new Map(
+      this.sql<{ machine_id: string; at: number; state: string; error: string | null }>(
+        `SELECT machine_id, at, state, error FROM backups WHERE card = ? AND (machine_id, at) IN
+         (SELECT machine_id, MAX(at) FROM backups WHERE card = ? GROUP BY machine_id)`,
+        card.id,
+        card.id,
+      ).map((row) => [row.machine_id, { at: row.at, state: row.state, error: row.error }]),
+    );
+    const instances = cardInstances(card);
+    const primary = this.primaryOf(card);
+    return instances.map((instance) => ({
+      ...instance,
+      primary: instance.machine === primary,
+      machineName: this.state.machines.get(instance.machine)?.name ?? instance.machine,
+      backup: newest.get(instance.machine) ?? null,
+    }));
+  }
+
+  /** K-827: whether a job of a deploy, of any instance, still waits or runs. */
+  private deployJobsLeft(deployId: string) {
+    const [row] = this.sql<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM jobs WHERE state IN ('queued', 'sent') AND id IN (
+         SELECT job_id FROM deploys WHERE id = ? UNION SELECT job_id FROM deploy_instances WHERE deploy_id = ?)`,
+      deployId,
+      deployId,
+    );
+    return (row?.n ?? 0) > 0;
+  }
+
+  /**
+   * K-827: the status of the instance of a Compose card on a machine: a failed job marks it, and its live site
+   * (updateLiveSites) sets it after a job that came up. The home instance keeps the card status.
+   */
+  private setInstanceStatus(cardId: string, machineId: string, status: Instance["status"] | null) {
+    const card = this.state.resources.get(cardId);
+    if (status === null || !card?.instances?.some((instance) => instance.machine === machineId)) return;
+    this.putResource({
+      ...card,
+      instances: card.instances.map((instance) =>
+        instance.machine === machineId ? { ...instance, status } : instance,
+      ),
+    });
+    this.load();
+  }
+
+  /** K-827: the instance rows of a deploy beyond the home one. */
+  private deployInstances(deployId: string) {
+    return this.sql<DeployInstanceRow>("SELECT * FROM deploy_instances WHERE deploy_id = ?", deployId);
+  }
+
+  /**
+   * K-827: the state of a Compose deploy from its jobs: failed when one failed, done when every job that it waits
+   * for is done, else running. A deferred instance (its machine was offline at plan time) does not count.
+   */
+  private composeJobsState(row: DeployRow): {
+    readonly state: "running" | "done" | "failed" | "expired";
+    readonly output: string;
+    readonly exitCode: number | null;
+  } {
+    type JobState = { state: string; output: string; exit_code: number | null; expires_at: number };
+    const jobOf = (id: number | null) =>
+      id === null
+        ? undefined
+        : this.sql<JobState>("SELECT state, output, exit_code, expires_at FROM jobs WHERE id = ?", id)[0];
+    const now = Date.now();
+    // A dropped connection fails the job only for now: kitshn still takes its real result (OFFLINE_OUTPUT),
+    // until the job would have expired; a daemon that restarted never sends it.
+    const stateOf = (job: JobState | undefined): "running" | "done" | "failed" | "expired" => {
+      const waiting = job?.state === "failed" && job.output === OFFLINE_OUTPUT && job.expires_at > now;
+      if (job?.state === "done") return "done";
+      if (job?.state === "expired") return "expired";
+      return job?.state === "failed" && !waiting ? "failed" : "running";
+    };
+    const machineName = (id: string | null) => this.state.machines.get(id ?? "")?.name ?? id ?? "?";
+    const jobs = [
+      { machine: row.machine_id, job: jobOf(row.job_id) },
+      ...this.deployInstances(row.id)
+        .filter((instance) => instance.deferred === 0 && instance.machine_id !== row.machine_id)
+        .map((instance) => ({ machine: instance.machine_id, job: jobOf(instance.job_id) })),
+    ].map((item) => ({ ...item, state: stateOf(item.job) }));
+    const [home] = jobs;
+    if (jobs.length === 1 && home)
+      return {
+        state: home.state,
+        output: home.state === "running" ? "" : (home.job?.output ?? ""),
+        exitCode: home.job?.exit_code ?? null,
+      };
+    const ended = jobs.filter((item) => item.state !== "running");
+    const output = ended
+      .map((item) => `--- ${machineName(item.machine)}: ${item.state}\n${item.job?.output ?? ""}`)
+      .join("\n");
+    const bad = jobs.find((item) => item.state === "failed" || item.state === "expired");
+    if (bad) return { state: bad.state, output, exitCode: bad.job?.exit_code ?? null };
+    if (ended.length < jobs.length) return { state: "running", output: "", exitCode: null };
+    return { state: "done", output, exitCode: home?.job?.exit_code ?? null };
+  }
+
   /** K-524: the system of a machine; its presence row changes only when the system does (K-1302). */
   private setMachineOs(machineId: string, os: MachineOs | null) {
     const presence = this.presence.get(machineId);
@@ -5413,7 +5758,7 @@ export class Kitshn extends DurableObject<Env> {
         capabilities: Array.isArray(message.status.capabilities)
           ? message.status.capabilities
               .filter((item): item is string => typeof item === "string")
-              .slice(0, 20)
+              .slice(0, 32)
           : [],
         tunnel: ["starting", "running", "stopped"].includes(String(message.status.tunnel))
           ? message.status.tunnel
@@ -5453,6 +5798,15 @@ export class Kitshn extends DurableObject<Env> {
       if (!attachment.status?.capabilities?.includes("doors") && status.capabilities?.includes("doors"))
         this.queueDoors(machine.id, { _tag: "kitshn", reason: "door plan on connect (K-2006)" }, Date.now());
       this.setMachineOs(machine.id, machineOs(status.os));
+      // K-825: a first status, or new facts or capabilities, can change where Compose instances belong.
+      if (
+        attachment.check === "signed" &&
+        (attachment.status === null ||
+          attachment.status.os !== status.os ||
+          attachment.status.arch !== status.arch ||
+          JSON.stringify(attachment.status.capabilities) !== JSON.stringify(status.capabilities))
+      )
+        void this.reconcilePlacement();
       // An update job waits for the status; it can go now.
       if (this.deliverJobs() > 0) this.broadcast();
       else this.sendMachine(machine);
@@ -5662,15 +6016,39 @@ export class Kitshn extends DurableObject<Env> {
       if (command?.kind === "compose" || command?.kind === "compose-rollback") {
         // K-820: a build that came up clears the give-up note of the CLI; a failed one keeps the machine's error.
         const error = jobError(String(result.output ?? ""));
-        this.sql(
-          "UPDATE deploys SET state = ?, reason = ?, images = ? WHERE job_id = ? AND state = 'running'",
-          result.ok === true ? "done" : "failed",
-          result.ok === true ? null : error,
-          result.ok === true ? keptImages(result["images"]) : null,
+        // K-827: the deploy settles once every job that it waits for ended; the home job keeps the image tags.
+        const [home] = this.sql<DeployRow>(
+          "SELECT * FROM deploys WHERE job_id = ? AND state = 'running'",
           message.id,
         );
-        if (command.kind === "compose-rollback" && command.group)
-          this.continueRollback(command.group, result.ok === true ? null : error);
+        const [instance] = home
+          ? []
+          : this.sql<{ deploy_id: string }>(
+              "SELECT deploy_id FROM deploy_instances WHERE job_id = ?",
+              message.id,
+            );
+        if (home && result.ok === true)
+          this.sql("UPDATE deploys SET images = ? WHERE id = ?", keptImages(result["images"]), home.id);
+        const [row] = home
+          ? [home]
+          : instance
+            ? this.sql<DeployRow>(
+                "SELECT * FROM deploys WHERE id = ? AND state = 'running'",
+                instance.deploy_id,
+              )
+            : [];
+        const settled = row ? this.composeJobsState(row).state : "running";
+        if (row && settled !== "running")
+          this.sql(
+            "UPDATE deploys SET state = ?, reason = ? WHERE id = ?",
+            settled === "done" ? "done" : "failed",
+            settled === "done" ? null : error,
+            row.id,
+          );
+        this.setInstanceStatus(command.project, machine.id, result.ok === true ? null : "failed");
+        // K-821, K-827: a rollback of a run goes on once this card settled on every instance.
+        if (command.kind === "compose-rollback" && command.group && row && settled !== "running")
+          this.continueRollback(command.group, settled === "done" ? null : error);
         // K-817: a failed build gives up the DNS record that its plan made.
         if (result.ok !== true) void this.scheduleAlarm();
       }
@@ -5694,8 +6072,9 @@ export class Kitshn extends DurableObject<Env> {
         this.autoUpdate();
       }
       if (job && (command?.kind === "backup" || command?.kind === "backup-restore"))
-        this.backupResult(command, JSON.parse(job.actor) as Author, result);
-      if (command?.kind === "compose" && this.env.BUCKET) {
+        this.backupResult(command, JSON.parse(job.actor) as Author, result, machine.id);
+      // K-827: the files stay while another instance of the deploy still waits for them.
+      if (command?.kind === "compose" && this.env.BUCKET && !this.deployJobsLeft(command.deployId)) {
         void this.env.BUCKET.delete([
           deployObject(command.deployId, "source.tgz"),
           deployObject(command.deployId, "params.env"),
@@ -6027,6 +6406,8 @@ export class Kitshn extends DurableObject<Env> {
     this.load();
     // A relay machine that stays drops the ports of the removed machine's port cards.
     for (const relay of relaysLeft) this.queueDoors(relay, caller.actor, Date.now());
+    // K-825: an instance on the removed machine leaves its card.
+    void this.reconcilePlacement();
     this.broadcast();
     void this.scheduleAlarm();
     return Response.json({ removed: id });
@@ -7021,6 +7402,8 @@ export class Kitshn extends DurableObject<Env> {
       );
     });
     this.load();
+    // K-825: a label change can add or drop Compose instances.
+    void this.reconcilePlacement();
     this.deliverJobs();
     this.broadcast();
     return Response.json(updated);
@@ -7237,13 +7620,56 @@ export class Kitshn extends DurableObject<Env> {
     return { _tag: "forget", id, before: null, after: null };
   }
 
+  /** K-828: the machine of the primary instance of a card, or its home machine for a card without instances. */
+  private primaryOf(card: Resource) {
+    const online = this.onlineMachines();
+    const primary = primaryInstance(
+      cardInstances(card),
+      (machineId) => this.state.machines.get(machineId)?.order ?? Number.MAX_SAFE_INTEGER,
+      (machineId) => online.has(machineId),
+    );
+    return primary?.machine ?? card.machine;
+  }
+
+  /**
+   * K-828: the site entries that DNS records and offline routes follow: an address that several instances serve keeps
+   * only the entry of the primary; an instance address keeps its own.
+   */
+  private recordSites(sites: ReadonlyArray<LiveSite>): Array<LiveSite> {
+    const primaries = new Map<string, string | null>();
+    return sites.filter((site) => {
+      const card = this.state.resources.get(site.id);
+      if (card?.kind !== "site.compose" || (card.instances ?? []).length === 0) return true;
+      if (card.instances?.some((instance) => instance.address === site.address)) return true;
+      if (!primaries.has(card.id)) primaries.set(card.id, this.primaryOf(card));
+      return primaries.get(card.id) === site.machineId;
+    });
+  }
+
+  /** K-824: the Compose card whose instance on this machine serves this address, if any. */
+  private instanceOwner(site: Pick<LiveSite, "machineId" | "address">): Resource | undefined {
+    return [...this.state.resources.values()].find(
+      (resource) =>
+        resource.kind === "site.compose" &&
+        (resource.instances ?? []).some(
+          (instance) => instance.machine === site.machineId && instance.address === site.address,
+        ),
+    );
+  }
+
+  /** K-824, K-410: the card whose Access application guards a live site: its instance card, or the site's own. */
+  private siteCard(site: Pick<LiveSite, "id" | "machineId" | "address">) {
+    return this.instanceOwner(site)?.id ?? site.id;
+  }
+
   private sitesOf(machineId: string) {
     return [...this.liveSites.values()].filter((site) => site.machineId === machineId);
   }
 
   /** K-603: the Access check of each ingress rule, from the Access objects that Cloudflare accepted. */
   private ingressAccessOf() {
-    return (site: LiveSite) => ingressAccess(site, this.access, this.env.ACCESS_TEAM_DOMAIN);
+    return (site: LiveSite) =>
+      ingressAccess({ ...site, id: this.siteCard(site) }, this.access, this.env.ACCESS_TEAM_DOMAIN);
   }
 
   /** Live sites whose address is checked and whose Access application exists in Cloudflare. */
@@ -7308,9 +7734,9 @@ export class Kitshn extends DurableObject<Env> {
       [...this.liveSites.values(), ...this.relaySites()].filter(
         (site) => machineId === undefined || site.machineId === machineId,
       ),
-      (id) => this.state.resources.get(id),
+      (site) => this.state.resources.get(site.id) ?? this.instanceOwner(site),
       // The application exists in Cloudflare; a later failed update of it does not take the site down.
-      (site) => Boolean(this.access.get(`app:${site.id}:${site.address}`)?.cfId),
+      (site) => Boolean(this.access.get(`app:${this.siteCard(site)}:${site.address}`)?.cfId),
     );
   }
 
@@ -7336,6 +7762,8 @@ export class Kitshn extends DurableObject<Env> {
               ? resource.provider.site === report.name && resource.provider.droppedAt === undefined
               : resource.kind === "site.compose" && resource.addresses.includes(address)),
         );
+        // K-824: the socket of another instance of a Compose card serves the address of that instance.
+        const owner = app ? undefined : this.instanceOwner({ machineId: machine.id, address });
         // K-909: a removed Compose app keeps its row until its compose-down ends, so it never turns into a
         // live site card meanwhile.
         const id =
@@ -7343,7 +7771,8 @@ export class Kitshn extends DurableObject<Env> {
           this.sitesOf(machine.id).find((site) => site.address === address)?.id ??
           liveSiteId(machine.id, report.name);
         const other = [...this.state.resources.values()].find(
-          (resource) => resource.id !== id && resource.addresses.includes(address),
+          (resource) =>
+            resource.id !== id && resource.id !== owner?.id && resource.addresses.includes(address),
         );
         const otherSite = [...this.liveSites.values()].find(
           (site) => site.id !== id && site.address === address,
@@ -7380,6 +7809,16 @@ export class Kitshn extends DurableObject<Env> {
         // K-705: a provider reports the status of its own cards.
         if (resource && !resource.provider)
           this.putResource({ ...resource, status: report.up ? "running" : "stopped" });
+        // K-827: the instance has its own status on the card.
+        if (owner)
+          this.putResource({
+            ...owner,
+            instances: (owner.instances ?? []).map((instance) =>
+              instance.machine === machine.id
+                ? { ...instance, status: report.up ? "running" : "stopped" }
+                : instance,
+            ),
+          });
       }
       for (const site of this.sitesOf(machine.id)) {
         if (keep.has(site.id)) continue;
@@ -7388,6 +7827,17 @@ export class Kitshn extends DurableObject<Env> {
         this.setHandover(site.id, null);
         // K-705: a provider card stays when its site goes; the provider removes the card itself.
         if (this.state.resources.get(site.id)?.provider) continue;
+        // K-827: an instance site is no card; its instance stays on the card until placement drops it (K-825).
+        const owner = this.instanceOwner(site);
+        if (owner) {
+          this.putResource({
+            ...owner,
+            instances: (owner.instances ?? []).map((instance) =>
+              instance.machine === machine.id ? { ...instance, status: "stopped" as const } : instance,
+            ),
+          });
+          continue;
+        }
         // A removed app has its History entry already (K-909).
         const hadCard = this.state.resources.has(site.id);
         const forgotten = this.forgetCard(site.id);
@@ -7418,6 +7868,12 @@ export class Kitshn extends DurableObject<Env> {
       this.sql<{ record_id: string }>("SELECT record_id FROM dns_objects").map((row) => row.record_id),
     );
     for (const site of [...this.liveSites.values()].filter((item) => item.state === "checking")) {
+      // K-824: the plan checked an instance address as an address of its card (K-1111), and it makes no card.
+      if (this.instanceOwner(site)) {
+        this.sql("UPDATE live_sites SET state = 'ok' WHERE id = ?", site.id);
+        changed = true;
+        continue;
+      }
       if ((this.checkRetryAt.get(site.id) ?? 0) > Date.now()) continue;
       if (calls + 2 > budget) break;
       calls += 2;
@@ -7614,7 +8070,8 @@ export class Kitshn extends DurableObject<Env> {
     // K-817, K-901: a Compose deploy gets its records at plan time (wantedRecords).
     const wanted = wantedRecords(
       this.deploys().composeRuns,
-      this.protectedSites(),
+      // K-828: an address that several instances serve points to the primary.
+      this.recordSites(this.protectedSites()),
       (machineId) => this.state.machines.get(machineId)?.tunnelId,
       now,
     );
@@ -7668,8 +8125,11 @@ export class Kitshn extends DurableObject<Env> {
         now,
       ).map((row) => row.address),
     );
+    // K-828: the main address needs its offline route only when its primary does, which means no instance is healthy.
     const wanted = new Set(
-      sitesNeedingRoutes(this.protectedSites(), this.onlineMachines()).map((site) => site.address),
+      sitesNeedingRoutes(this.recordSites(this.protectedSites()), this.onlineMachines()).map(
+        (site) => site.address,
+      ),
     );
     return [
       ...[...wanted]
@@ -7816,7 +8276,7 @@ export class Kitshn extends DurableObject<Env> {
   private offlineInfo(address: string) {
     // K-817: an extra address of a Compose app shows the offline page of its site too.
     const site = [...this.liveSites.values()]
-      .flatMap((item) => servedSites(item, this.state.resources.get(item.id)))
+      .flatMap((item) => servedSites(item, this.state.resources.get(item.id) ?? this.instanceOwner(item)))
       .find((item) => item.address === address);
     if (!site) return Response.json({ error: "No live site has this address." }, { status: 404 });
     const machine = this.state.machines.get(site.machineId);
@@ -9389,8 +9849,11 @@ export class Kitshn extends DurableObject<Env> {
     const agentLimit = allowedBy
       ? ` The agent ${allowedBy.name} allowed this repo, so it deploys only to a machine whose card, and every card on it, that agent manages (K-819).`
       : "";
-    // K-610, K-611: a new Compose app goes to the first online machine with all labels; a running one stays.
+    // K-610, K-611, K-823: a new Compose app goes where its placement says; a running instance stays.
     let machineId: string | null = null;
+    // K-823: a preview has one instance.
+    const placement = result.kind === "deploy" && !result.ephemeral ? placementOf(compose) : "one";
+    let instances: Array<{ machine: string; address: string; deferred: boolean }> = [];
     if (compose) {
       if (existing?.machine) {
         // K-611: a running app stays on its machine, but only while the owner still offers it (K-610).
@@ -9429,27 +9892,36 @@ export class Kitshn extends DurableObject<Env> {
             },
             { status: 409 },
           );
-      } else if (result.kind === "deploy") {
+      }
+      if (result.kind === "deploy") {
         const labels = compose.runsOn ?? [];
-        // K-1708: a machine without a key is online for status only and gets no job.
-        const ready = this.jobMachines();
-        const pick = [...this.state.machines.values()]
-          // Only a machine that the owner labels "deploy" runs the apps of repos (K-610).
-          .filter((machine) => hasLabels(machine.labels, this.liveFacts(machine.id), deployLabels(labels)))
-          // K-818: only a daemon that checks Compose settings runs the apps of repos.
-          .filter((machine) => this.machineView(machine).status?.capabilities?.includes("compose-guard"))
-          .filter((machine) => mayDeployOn(this.state, allowedBy?.clientId ?? null, machine.id, Date.now()))
-          .sort((a, b) => a.order - b.order)
-          .find((machine) => ready.has(machine.id));
-        if (!pick) {
+        const candidates = this.placementCandidates(labels, allowedBy?.clientId ?? null);
+        const current = existing?.machine
+          ? [existing.machine, ...otherInstances(existing).map((instance) => instance.machine)]
+          : [];
+        const [home, ...others] = placeMachines(placement, candidates, current);
+        if (home === undefined) {
+          const spread = typeof placement === "string" ? "" : ' and the capability "compose-spread" (K-826)';
           return Response.json(
             {
-              error: `No online machine with a Compose-ready daemon has the labels ${deployLabels(labels).join(", ")}. Label a machine "deploy", update its daemon, start it, or give it a key (K-1708).${agentLimit}`,
+              error: `No online machine with a Compose-ready daemon${spread} has the labels ${deployLabels(labels).join(", ")}. Label a machine "deploy", update its daemon, start it, or give it a key (K-1708).${agentLimit}`,
             },
             { status: 409 },
           );
         }
-        machineId = pick.id;
+        machineId = home;
+        // K-824: an instance keeps its address; a new one takes a name that no address of the card has.
+        const taken = [...result.addresses, ...(existing?.addresses ?? [])];
+        const ready = this.jobMachines();
+        // K-824: a "one" app has no instance addresses; otherwise each instance, the home one too, has its own.
+        instances = (placement === "one" ? [] : [home, ...others]).map((id) => {
+          const kept = existing?.instances?.find((instance) => instance.machine === id)?.address;
+          const machine = this.state.machines.get(id);
+          if (!machine) throw new Error(`placeMachines named the unknown machine ${id}.`);
+          const address = kept ?? instanceAddress(result.address, machine, this.env.KITSHN_ZONE, taken);
+          taken.push(address);
+          return { machine: id, address, deferred: !ready.has(id) };
+        });
       }
     }
     // K-1124: a static site or a Worker app moves, and its old address sends visitors on. A Compose app keeps its main
@@ -9466,9 +9938,13 @@ export class Kitshn extends DurableObject<Env> {
     const adminHost = result.addresses.find((address) => adminHosts(this.env).includes(address));
     if (adminHost)
       return Response.json({ error: `${adminHost} is the kitshn admin host (K-817).` }, { status: 409 });
+    // K-824, K-1111: a new instance address passes the same checks; a kept one is the card's already.
+    const newInstanceAddresses = instances
+      .map((instance) => instance.address)
+      .filter((address) => !existing?.addresses.includes(address));
     const addressRefused = await this.addressRefusal(
       api,
-      result.addresses,
+      [...result.addresses, ...newInstanceAddresses],
       resourceId,
       script,
       existing,
@@ -9519,8 +9995,8 @@ export class Kitshn extends DurableObject<Env> {
     this.ctx.storage.transactionSync(() => {
       if (handover) this.takeOver(handover, deployer, key, result.environment);
       this.sql(
-        `INSERT INTO deploys (id, repo, repo_id, environment, resource_id, address, script, starts_in, kind, sha, state, expires_at, branch, app, machine_id, compose_file, addresses, worker, app_key, run_id, run_attempt, needs, workflow)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO deploys (id, repo, repo_id, environment, resource_id, address, script, starts_in, kind, sha, state, expires_at, branch, app, machine_id, compose_file, addresses, worker, app_key, run_id, run_attempt, needs, workflow, compose)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         deployId,
         deployer.repo,
         deployer.repoId,
@@ -9544,7 +10020,16 @@ export class Kitshn extends DurableObject<Env> {
         deployer.runAttempt,
         JSON.stringify(recipe.needs?.apps ?? []),
         deployer.workflow,
+        compose ? JSON.stringify(compose) : null,
       );
+      for (const instance of instances)
+        this.sql(
+          "INSERT INTO deploy_instances (deploy_id, machine_id, address, deferred) VALUES (?, ?, ?, ?)",
+          deployId,
+          instance.machine,
+          instance.address,
+          instance.deferred ? 1 : 0,
+        );
     });
     if (handover) this.load();
     // K-817, K-901: the alarm makes the DNS records of a Compose deploy now, before its build (dnsWork).
@@ -9584,11 +10069,32 @@ export class Kitshn extends DurableObject<Env> {
     deployer: Deployer,
     kind: "site.static" | "site.worker" | "site.compose",
     machine: string | null,
+    planned: ReadonlyArray<DeployInstanceRow> = [],
   ) {
     const actor: Author = { _tag: "kitshn", reason: `deploy of ${row.repo} ${deployer.sha.slice(0, 7)}` };
-    const addresses = rowAddresses(row);
-    const existing = this.state.resources.get(row.resource_id);
+    let existing = this.state.resources.get(row.resource_id);
+    // K-824: the other instances of a Compose card, each with its own address after the addresses of the home one.
+    const instances: Array<Instance> = planned.map((instance) => ({
+      machine: instance.machine_id,
+      address: instance.address,
+      status:
+        existing?.instances?.find((item) => item.machine === instance.machine_id)?.status ??
+        (instance.deferred === 1 ? "offline" : "deploying"),
+    }));
+    const addresses = [...rowAddresses(row), ...instances.map((instance) => instance.address)];
+    const withInstances = instances.length > 0 ? { instances } : {};
     if (existing) {
+      // K-825: an instance that the placement no longer wants stops, and its address leaves first.
+      if (kind === "site.compose") {
+        const kept = new Set(instances.map((instance) => instance.machine));
+        existing = this.dropInstances(
+          existing,
+          otherInstances(existing)
+            .map((instance) => instance.machine)
+            .filter((id) => !kept.has(id)),
+          actor,
+        ).card;
+      }
       // K-817, K-410: a Compose card takes the new list at once; the tunnel sync drops an old address in order. A
       // static card keeps its old addresses until finishDeploy has taken their custom domains off.
       const next = nextCardAddresses(kind, addresses, existing.addresses);
@@ -9600,10 +10106,15 @@ export class Kitshn extends DurableObject<Env> {
           existing.addresses.filter((address) => !next.includes(address)),
           next,
         );
-      if (JSON.stringify(next) !== JSON.stringify(existing.addresses)) {
-        this.putResource({ ...existing, addresses: next });
-        this.load();
+      const { instances: _old, ...card } = existing;
+      const updated: Resource = kind === "site.compose" ? { ...card, ...withInstances } : existing;
+      if (
+        JSON.stringify(next) !== JSON.stringify(existing.addresses) ||
+        JSON.stringify(updated.instances) !== JSON.stringify(existing.instances)
+      ) {
+        this.putResource({ ...updated, addresses: next });
       }
+      this.load();
       return "The card keeps its place; the map decides who opens it (K-807).";
     }
     const slug = repoSlug(row.repo);
@@ -9618,6 +10129,7 @@ export class Kitshn extends DurableObject<Env> {
       status: "deploying",
       group: slug,
       machine,
+      ...withInstances,
     });
     this.load();
     // K-819: the card of a repo that an agent key allowed starts in that key's circle, never in `startsIn`.
@@ -9701,19 +10213,19 @@ export class Kitshn extends DurableObject<Env> {
       (item) => item.clientId === caller.visitor.clientId,
     );
     const [row] = this.sql<DeployRow>("SELECT * FROM deploys WHERE id = ?", deployId);
-    const [job] = row?.job_id
-      ? this.sql<{ state: string; machine_id: string }>(
-          "SELECT state, machine_id FROM jobs WHERE id = ?",
-          row.job_id,
-        )
+    // K-827: the job of the home instance or of another instance of this deploy.
+    const jobIds = row
+      ? [row.job_id, ...this.deployInstances(row.id).map((instance) => instance.job_id)]
       : [];
-    if (
-      !machine ||
-      !row ||
-      job?.machine_id !== machine.id ||
-      job.state !== "sent" ||
-      !["source.tgz", "params.env"].includes(file)
-    )
+    const sent = jobIds.some((id) => {
+      if (id === null) return false;
+      const [job] = this.sql<{ state: string; machine_id: string }>(
+        "SELECT state, machine_id FROM jobs WHERE id = ?",
+        id,
+      );
+      return job?.machine_id === machine?.id && job?.state === "sent";
+    });
+    if (!machine || !row || !sent || !["source.tgz", "params.env"].includes(file))
       return new Response("This machine runs no such deploy now.", { status: 404 });
     const refusal = this.repoRefusal(row.repo_id);
     if (refusal) return new Response(refusal, { status: 403 });
@@ -9735,35 +10247,107 @@ export class Kitshn extends DurableObject<Env> {
         },
         { status: 409 },
       );
-    const card = this.ensureCard(row, deployer, "site.compose", machine.id);
+    // K-823, K-819: an instance whose machine left or that the key lost since the plan does not start.
+    const instances = this.deployInstances(row.id).filter((instance) => {
+      const keep =
+        this.state.machines.has(instance.machine_id) &&
+        mayDeployOn(this.state, allowedBy?.clientId ?? null, instance.machine_id, Date.now());
+      if (!keep)
+        this.sql(
+          "DELETE FROM deploy_instances WHERE deploy_id = ? AND machine_id = ?",
+          row.id,
+          instance.machine_id,
+        );
+      return keep;
+    });
+    const card = this.ensureCard(row, deployer, "site.compose", machine.id, instances);
+    const extra = instances.filter((instance) => instance.machine_id !== row.machine_id);
     // Fail closed: the Access application exists before the tunnel sends the address to the app (K-410, K-817).
     await this.syncAccessLocked(api, 20);
     const notReady = this.accessNotReady(row);
     if (notReady) return notReady;
     const ended = this.endedRefusal(row.id);
     if (ended) return ended;
-    const command: Command = {
+    const commandFor = (target: Machine, address: string): Command => ({
       kind: "compose",
       deployId: row.id,
-      allowed: allowedFor(machine, row.repo),
+      allowed: allowedFor(target, row.repo),
       project: row.resource_id,
-      name: row.address.slice(0, -this.env.KITSHN_ZONE.length - 1),
+      name: address.slice(0, -this.env.KITSHN_ZONE.length - 1),
       environment: row.environment,
       repo: row.repo,
       file: row.compose_file,
-    };
+      ...(typeof placementOf(composeOf(row)) === "string" ? {} : { spread: true }),
+    });
+    const actor: Author = { _tag: "kitshn", reason: `deploy of ${row.repo}` };
     this.ctx.storage.transactionSync(() => {
       const jobId = this.queueKitshnJob(
         machine.id,
-        command,
-        { _tag: "kitshn", reason: `deploy of ${row.repo}` },
+        commandFor(machine, row.address),
+        actor,
         Date.now() + DEPLOY_MS,
       );
       this.sql("UPDATE deploys SET state = 'running', job_id = ? WHERE id = ?", jobId, row.id);
+      for (const instance of extra) {
+        const target = this.state.machines.get(instance.machine_id)!;
+        // K-613, K-827: the job of an offline machine waits a day; the deploy does not wait for it.
+        const expires = Date.now() + (instance.deferred === 1 ? DAY : DEPLOY_MS);
+        const instanceJob = this.queueKitshnJob(
+          target.id,
+          commandFor(target, instance.address),
+          actor,
+          expires,
+        );
+        this.sql(
+          "UPDATE deploy_instances SET job_id = ? WHERE deploy_id = ? AND machine_id = ?",
+          instanceJob,
+          row.id,
+          target.id,
+        );
+      }
     });
     this.deliverJobs();
     this.broadcast();
-    return Response.json({ machine: machine.name, card });
+    const others = extra.map((instance) => this.state.machines.get(instance.machine_id)?.name ?? "?");
+    return Response.json({ machine: [machine.name, ...others].join(", "), card });
+  }
+
+  /**
+   * K-825, K-909: stops the instances of a card on these machines and keeps their volumes. Each instance address
+   * leaves the card and sends its visitors on (K-1124). Returns a line for each instance.
+   */
+  private dropInstances(
+    card: Resource,
+    machineIds: ReadonlyArray<string>,
+    actor: Author,
+  ): { readonly card: Resource; readonly notes: ReadonlyArray<string> } {
+    const dropped = (card.instances ?? []).filter((instance) => machineIds.includes(instance.machine));
+    if (dropped.length === 0) return { card, notes: [] };
+    const gone = dropped.map((instance) => instance.address);
+    const addresses = card.addresses.filter((address) => !gone.includes(address));
+    this.rememberOld(card.id, gone, addresses);
+    for (const instance of dropped) {
+      const machine = this.state.machines.get(instance.machine);
+      if (!machine) continue;
+      const name = instance.address.slice(0, -this.env.KITSHN_ZONE.length - 1);
+      this.queueKitshnJob(
+        machine.id,
+        { kind: "compose-down", project: card.id, name, removeData: false },
+        actor,
+        NEVER,
+      );
+    }
+    const next: Resource = {
+      ...card,
+      addresses,
+      instances: (card.instances ?? []).filter((instance) => !machineIds.includes(instance.machine)),
+    };
+    this.putResource(next);
+    const notes = dropped.map(
+      (instance) =>
+        `${card.name} stops on ${this.state.machines.get(instance.machine)?.name ?? instance.machine}; its volumes stay (K-825).`,
+    );
+    return { card: next, notes };
   }
 
   /** K-813: the state and output of a Compose deploy, for the Actions step that waits on it. */
@@ -9771,26 +10355,10 @@ export class Kitshn extends DurableObject<Env> {
     const [row] = this.sql<DeployRow>("SELECT * FROM deploys WHERE id = ?", deployId);
     if (!row || row.repo_id !== deployer.repoId || row.job_id === null)
       return Response.json({ error: "kitshn knows no such running deploy of this repo." }, { status: 404 });
-    const [job] = this.sql<{ state: string; output: string; exit_code: number | null; expires_at: number }>(
-      "SELECT state, output, exit_code, expires_at FROM jobs WHERE id = ?",
-      row.job_id,
-    );
-    // A dropped connection fails the job only for now: kitshn still takes its real result (OFFLINE_OUTPUT),
-    // until the job would have expired; a daemon that restarted never sends it.
-    const waiting = job?.state === "failed" && job.output === OFFLINE_OUTPUT && job.expires_at > Date.now();
-    const state =
-      job?.state === "done"
-        ? "done"
-        : (job?.state === "failed" && !waiting) || job?.state === "expired"
-          ? job.state
-          : "running";
+    const { state, output, exitCode } = this.composeJobsState(row);
     if (state !== "running" && row.state === "running")
       this.sql("UPDATE deploys SET state = ? WHERE id = ?", state === "done" ? "done" : "failed", row.id);
-    return Response.json({
-      state,
-      output: waiting ? "" : (job?.output ?? ""),
-      exitCode: job?.exit_code ?? null,
-    });
+    return Response.json({ state, output, exitCode });
   }
 
   /** K-904: a closed pull request stops its Compose preview; its card goes once the machine stops exposing it. */
@@ -10395,7 +10963,7 @@ export class Kitshn extends DurableObject<Env> {
       command.kind === "compose-redeploy" ||
       command.kind === "compose-rollback"
     )
-      failQueuedDowns(this.query, command.project, REPLACED);
+      failQueuedDowns(this.query, command.project, REPLACED, machineId);
     const [row] = this.sql<{ id: number }>(
       `INSERT INTO jobs (machine_id, labels, command, state, created_at, expires_at, actor, visitor, exit_code, output, when_idle)
        VALUES (?, '[]', ?, 'queued', ?, ?, ?, '${KITSHN_JOB}', NULL, '', ?) RETURNING id`,
@@ -11277,6 +11845,8 @@ export class Kitshn extends DurableObject<Env> {
               deploy: deploys.newest.get(id) ?? null,
               backup: backup ? { at: backup.at, state: backup.state, error: backup.error } : null,
               uptime: uptime ? { up: uptime.up, since: uptime.since } : null,
+              // K-827: each instance of a Compose card with its machine, address, status and newest backup.
+              ...(kind === "site.compose" ? { instances: this.instanceViews(resource) } : {}),
             },
           ];
         }),
@@ -11602,7 +12172,16 @@ export class Kitshn extends DurableObject<Env> {
         return started.ok && outside !== null ? Response.json({ dispatched: true }) : started;
       }
       if (!machine) return Response.json({ error: "The machine of this app is gone." }, { status: 409 });
-      return this.agentRedeploy(agent, machine.id, plan.command, ownerApproved);
+      const resource = this.state.resources.get(card);
+      const others = resource ? this.instanceRedeploys(resource, plan.command) : [];
+      return this.agentRedeploy(
+        agent,
+        [{ machine, command: plan.command }, ...others].map((target) => ({
+          machineId: target.machine.id,
+          command: target.command,
+        })),
+        ownerApproved,
+      );
     }
     return Response.json({ error: `The agent path has no ${request.method} ${path}.` }, { status: 404 });
   }
@@ -13272,9 +13851,35 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /** K-718: why a machine may not start the last good build of a card now, or null. */
+  /**
+   * K-827: the start of the last good build on each other instance of a card, from the command of the home one. An
+   * instance whose machine cannot redeploy or no longer takes deploys is left out; placement handles it (K-825).
+   */
+  private instanceRedeploys(
+    card: Pick<Resource, "id" | "machine" | "instances">,
+    command: Extract<Command, { kind: "compose-redeploy" }>,
+  ) {
+    return otherInstances(card).flatMap((instance) => {
+      const machine = this.state.machines.get(instance.machine);
+      if (!machine) return [];
+      const facts = this.redeployFacts(machine, card.id, command.repo);
+      if (!facts.canRedeploy || !facts.takesDeploys) return [];
+      return [
+        {
+          machine,
+          command: {
+            ...command,
+            allowed: facts.allowed,
+            name: instance.address.slice(0, -this.env.KITSHN_ZONE.length - 1),
+          },
+        },
+      ];
+    });
+  }
+
   private redeployRefusal(machineId: string | null, card: string) {
     const machine = machineId === null ? undefined : this.state.machines.get(machineId);
-    if (!machine || this.state.resources.get(card)?.machine !== machine.id)
+    if (!machine || !runsOnMachine(this.state.resources.get(card), machine.id))
       return "This app no longer runs on the machine of its last deploy.";
     return machine.labels.includes("deploy")
       ? null
@@ -13284,31 +13889,40 @@ export class Kitshn extends DurableObject<Env> {
   /** K-718: queues the start of the last build that came up; kitshn makes the job, the key reads it. */
   private agentRedeploy(
     caller: Caller,
-    machineId: string,
-    command: Extract<Command, { kind: "compose-redeploy" }>,
+    targets: ReadonlyArray<{
+      readonly machineId: string;
+      readonly command: Extract<Command, { kind: "compose-redeploy" }>;
+    }>,
     ownerApproved: JobApproval | null,
   ) {
     const now = Date.now();
-    const id = this.ctx.storage.transactionSync(() => {
-      failQueuedDowns(this.query, command.project, REPLACED);
-      const [inserted] = this.sql<{ id: number }>(
-        `INSERT INTO jobs (machine_id, labels, command, state, created_at, expires_at, actor, visitor, exit_code, output)
-         VALUES (?, '[]', ?, 'queued', ?, ?, ?, ?, NULL, '') RETURNING id`,
-        machineId,
-        JSON.stringify(command),
-        now,
-        now + DEPLOY_MS,
-        JSON.stringify(caller.actor),
-        JSON.stringify({ ...caller.visitor, kitshn: true, ownerApproved }),
-      );
-      this.insertRevision(caller.actor, `Redeployed the last good build of ${command.name}`, [], null);
-      return inserted?.id ?? null;
+    const [home] = targets;
+    if (!home) throw new Error("agentRedeploy needs the home instance.");
+    // K-827: one job per instance; the answer names the job of the home instance.
+    const ids = this.ctx.storage.transactionSync(() => {
+      failQueuedDowns(this.query, home.command.project, REPLACED);
+      const queued = targets.map((target) => {
+        const [inserted] = this.sql<{ id: number }>(
+          `INSERT INTO jobs (machine_id, labels, command, state, created_at, expires_at, actor, visitor, exit_code, output)
+           VALUES (?, '[]', ?, 'queued', ?, ?, ?, ?, NULL, '') RETURNING id`,
+          target.machineId,
+          JSON.stringify(target.command),
+          now,
+          now + DEPLOY_MS,
+          JSON.stringify(caller.actor),
+          JSON.stringify({ ...caller.visitor, kitshn: true, ownerApproved }),
+        );
+        return inserted?.id ?? null;
+      });
+      this.insertRevision(caller.actor, `Redeployed the last good build of ${home.command.name}`, [], null);
+      return queued;
     });
+    const id = ids[0] ?? null;
     this.load();
     this.deliverJobs();
     this.broadcast();
     void this.scheduleAlarm();
-    return Response.json({ job: id });
+    return Response.json({ job: id, ...(ids.length > 1 ? { jobs: ids } : {}) });
   }
 
   /** K-718, K-812, K-819: a new build runs the kitshn workflow of the repo with this id on one branch. */
@@ -17112,6 +17726,18 @@ interface DeployRow extends Record<string, SqlStorageValue> {
   origin: string | null;
   /** K-1121: the workflow file of the run that made the deploy; null starts `kitshn.yml`. */
   workflow: string | null;
+  /** K-825: the `compose` part of the recipe as JSON; null on older rows and other kinds. */
+  compose: string | null;
+}
+
+/** K-827: the job of one instance of a deploy beyond the home one. */
+interface DeployInstanceRow extends Record<string, SqlStorageValue> {
+  deploy_id: string;
+  machine_id: string;
+  address: string;
+  job_id: number | null;
+  /** 1 when the machine was offline at plan time, so the deploy does not wait for this job. */
+  deferred: number;
 }
 
 /** K-821: one finished deploy of a card in the rollback list; `why` says why a rollback cannot go there. */
@@ -17144,6 +17770,20 @@ function workerOf(row: DeployRow): typeof WorkerApp.Type {
 }
 
 const decodeWorkerApp = Schema.decodeUnknownSync(WorkerApp);
+const decodeComposeApp = Schema.decodeUnknownSync(ComposeApp);
+
+/** K-824: whether a card runs on a machine, as its home instance or another one. */
+function runsOnMachine(card: Resource | undefined, machineId: string) {
+  return (
+    card !== undefined &&
+    (card.machine === machineId || (card.instances ?? []).some((instance) => instance.machine === machineId))
+  );
+}
+
+/** K-825: the `compose` part of the recipe of a Compose deploy; null on a row from before placement (K-823). */
+function composeOf(row: Pick<DeployRow, "compose">): typeof ComposeApp.Type | null {
+  return row.compose === null ? null : decodeComposeApp(JSON.parse(row.compose));
+}
 
 /** K-817: the addresses of a deploy row, the main one first. */
 function rowAddresses(row: Pick<DeployRow, "address" | "addresses">): Array<string> {
@@ -17490,6 +18130,8 @@ const KITSHN_JOB = JSON.stringify({ email: null, clientId: null, ip: null, kitsh
 
 /** K-718: the workflow file that an agent key starts in an app repo, the one that the map's recipe shows. */
 const AGENT_WORKFLOW = "kitshn.yml";
+/** K-825: kitshn starts at most one placement build per card in this time. */
+const PLACEMENT_BUILD_GAP_MS = 10 * 60_000;
 /** K-909: the expiry of a job that waits for its machine however long. */
 const NEVER = Number.MAX_SAFE_INTEGER;
 const NO_GITHUB_APP =

@@ -20,6 +20,7 @@ import {
   stepToken,
 } from "./auth.ts";
 import { type BadgeState, badgeSvg } from "../core/badge.ts";
+import { repositoryParts } from "../core/backups.ts";
 import type { Usage } from "../core/usage.ts";
 import { NOTIFY_BODY_MAX } from "../core/notify.ts";
 import { escapeHtml } from "../core/html.ts";
@@ -620,17 +621,19 @@ export default {
       if (clientId === null)
         return Response.json({ error: "Only a machine's service token reaches backups." }, { status: 403 });
       const [first = "", ...rest] = url.pathname.slice("/connect/backups/".length).split("/");
-      let card: string;
+      // K-827: the repository of the card, or of one of its other instances.
+      let repository: string;
       try {
-        card = decodeURIComponent(first);
+        repository = decodeURIComponent(first);
       } catch {
         return Response.json({ error: "The card name is no valid path part." }, { status: 400 });
       }
+      const { card } = repositoryParts(repository);
       const allowed = await env.KITSHN.getByName("kitshn").fetch(
         "https://kitshn.internal/internal/backup-access",
         {
           method: "POST",
-          body: JSON.stringify({ card, clientId }),
+          body: JSON.stringify({ card: repository, clientId }),
         },
       );
       if (!allowed.ok) return allowed;
@@ -647,7 +650,7 @@ export default {
         return Response.json({ password: await backupPassword(env.KITSHN_BACKUP_KEY, card) });
       }
       if (!env.BUCKET) return Response.json({ error: "R2 is off on this account." }, { status: 503 });
-      return serveRestic(env.BUCKET, card, path, request);
+      return serveRestic(env.BUCKET, repository, path, request);
     }
     // K-604, K-812: the daemon connection, and the files of a deploy that the daemon runs.
     if (url.pathname === "/connect" || url.pathname.startsWith("/connect/deploys/")) {

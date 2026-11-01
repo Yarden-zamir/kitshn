@@ -378,11 +378,13 @@ export async function backup(
   run: string,
   prune: boolean,
   limitMs: number,
+  /** K-827: `<card>@<machine id>` for an instance that is not the home one. */
+  repository = card,
 ): Promise<Outcome> {
   const folder = jobSocketFolder(machine.data, run);
-  const proxy = startProxy(machine, card, folder);
+  const proxy = startProxy(machine, repository, folder);
   try {
-    const restic = await openRepository(machine, card, proxy.socket, proxy.repository);
+    const restic = await openRepository(machine, repository, proxy.socket, proxy.repository);
     const report = await backupRun(restic, machine, card, run, [], limitMs);
     const kept = await forget(restic, prune);
     return {
@@ -503,9 +505,11 @@ export async function restore(
   before: string,
   wanted: ReadonlyArray<string>,
   limitMs: number,
+  /** K-827: as for `backup`. */
+  repository = card,
 ): Promise<Outcome> {
   const folder = jobSocketFolder(machine.data, before);
-  const proxy = startProxy(machine, card, folder);
+  const proxy = startProxy(machine, repository, folder);
   let report: BackupReport | undefined;
   let stopped = false;
   let used: Array<Source> = [];
@@ -516,7 +520,7 @@ export async function restore(
     if (missing.length > 0)
       throw new Error(`The app has no ${missing.join(", ")} now, so kitshn changed nothing.`);
     used = all.filter((source) => wanted.includes(source.name));
-    const restic = await openRepository(machine, card, proxy.socket, proxy.repository);
+    const restic = await openRepository(machine, repository, proxy.socket, proxy.repository);
     const [snapshot] = JSON.parse(
       await restic.call("restic snapshots", ["snapshots", "--json", "--tag", `run-${run}`]),
     ) as Array<{ id: string }>;
