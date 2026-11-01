@@ -40,6 +40,7 @@ const Rights = Schema.Struct({
   restores: Schema.optionalKey(RightMode),
   maintains: Schema.optionalKey(RightMode),
   readsMap: Schema.optionalKey(RightMode),
+  raisesAccess: Schema.optionalKey(RightMode),
 });
 // A new right of RIGHTS fails here until the schema decodes it.
 const _everyRight: Record<Model.Right, unknown> = Rights.fields;

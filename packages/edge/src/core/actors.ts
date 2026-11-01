@@ -80,7 +80,9 @@ const KEY_RIGHTS = ["addsApps", "publishes"] as const;
  *   The person's token then also opens the person's other circles (decision 1).
  * - A token in a circle that needs a passkey gets nothing there (the passkey line), and it stays its own actor. Its
  *   actor goes into a new circle "<actor>'s devices" without a passkey, with the place, the level and the share
- *   settings of that circle, and no share of the admin. The token keeps its cards; no login gets them without a passkey.
+ *   settings of that circle. The token keeps its cards; no login gets them without a passkey.
+ * - A token or a machine that held the admin through a circle keeps it, with "raises access" automatic on its chip, so it
+ *   still acts as the owner. Without the admin, a devices circle gets no share of it.
  */
 export function migrateMembers(
   circles: ReadonlyArray<LegacyCircle>,
@@ -115,6 +117,15 @@ export function migrateMembers(
 
   const holdsAdmin = (circle: LegacyCircle) =>
     adminPlace !== null && insideCircle(adminPlace, circle as unknown as Circle);
+  // The admin has only the level "control" (K-104), so any other level gives it no share.
+  const givesAdmin = (circle: Pick<Circle, "id" | "level">) =>
+    holdsAdmin(circle as LegacyCircle) &&
+    (shareSettings.get(shareKey(ADMIN_RESOURCE_ID, circle.id))?.level ?? circle.level) === "control";
+  const ACTS_AS_OWNER: Partial<Record<Right, RightMode>> = { raisesAccess: { mode: "automatic" } };
+  const actsAsOwner = (actorId: string, circleName: string) =>
+    notes.push(
+      `${actors.get(actorId)?.name ?? actorId} held the kitshn admin, so it has "raises access" automatic in ${circleName} and acts as the owner, as before. Set the right to default, and its access changes wait for a person.`,
+    );
   const isAgentCircle = (circle: LegacyCircle) =>
     circle.members.every((member) => member._tag === "device" || member._tag === "machine");
   const emailsOf = (circle: LegacyCircle) =>
@@ -226,7 +237,9 @@ export function migrateMembers(
         case "device": {
           const tokenMachine = machineOfToken.get(member.clientId);
           if (tokenMachine !== undefined && !circle.needsPasskey) {
-            chip(machineActor(tokenMachine), {});
+            const id = machineActor(tokenMachine);
+            chip(id, givesAdmin(circle) ? ACTS_AS_OWNER : {});
+            if (givesAdmin(circle)) actsAsOwner(id, circle.name);
             break;
           }
           const owner = tokenMachine === undefined ? owners.get(member.tokenId) : machineActor(tokenMachine);
@@ -245,14 +258,17 @@ export function migrateMembers(
             break;
           }
           if (owner) break;
-          const rights: Partial<Record<Right, RightMode>> = {};
+          const rights: Partial<Record<Right, RightMode>> = givesAdmin(circle) ? { ...ACTS_AS_OWNER } : {};
+          if (givesAdmin(circle)) actsAsOwner(id, circle.name);
+          // A key never raised access by itself, so "raises access" stays at default: it asks the Owner, as before.
           if (keys.has(member.tokenId) && isAgentCircle(circle))
             for (const right of RIGHTS)
-              rights[right] =
-                (KEY_RIGHTS as ReadonlyArray<Right>).includes(right) &&
-                member[right as (typeof KEY_RIGHTS)[number]]
-                  ? { mode: "automatic" }
-                  : { mode: "off" };
+              if (right !== "raisesAccess")
+                rights[right] =
+                  (KEY_RIGHTS as ReadonlyArray<Right>).includes(right) &&
+                  member[right as (typeof KEY_RIGHTS)[number]]
+                    ? { mode: "automatic" }
+                    : { mode: "off" };
           chip(id, rights);
           break;
         }
@@ -271,6 +287,10 @@ export function migrateMembers(
             const id = agentId(member.machineId, mode.conditions ?? []);
             byAgent.set(id, { ...byAgent.get(id), [right]: plain });
             own[right] = { mode: "ask", circleId: OWNER_CIRCLE_ID };
+          }
+          if (givesAdmin(circle)) {
+            Object.assign(own, ACTS_AS_OWNER);
+            actsAsOwner(machineActor(member.machineId), circle.name);
           }
           chip(machineActor(member.machineId), own);
           for (const [id, rights] of byAgent) chip(id, rights);
@@ -298,6 +318,7 @@ export function migrateMembers(
   const added: Array<Circle> = [];
   const settings: Array<readonly [string, ShareSetting]> = [];
   for (const circle of migrated) {
+    const keepsAdmin = givesAdmin(circle);
     for (const [actorId, tokens] of tokensLeft.get(circle.id) ?? []) {
       const actorName = actors.get(actorId)?.name ?? actorId;
       const base =
@@ -312,18 +333,19 @@ export function migrateMembers(
         id,
         name,
         needsPasskey: false,
-        members: [{ _tag: "actor", actorId }, ...rules],
+        members: [{ _tag: "actor", actorId, ...(keepsAdmin ? { rights: ACTS_AS_OWNER } : {}) }, ...rules],
       });
       for (const [key, setting] of shareSettings) {
         const prefix = key.slice(0, -`/${circle.id}`.length);
-        if (key.endsWith(`/${circle.id}`) && prefix !== ADMIN_RESOURCE_ID)
+        if (key.endsWith(`/${circle.id}`) && (keepsAdmin || prefix !== ADMIN_RESOURCE_ID))
           settings.push([shareKey(prefix, id), setting]);
       }
       // The admin has only the level "control" (K-104), so "view" gives it no share here.
-      settings.push([shareKey(ADMIN_RESOURCE_ID, id), { level: "view", endsAt: null }]);
+      if (!keepsAdmin) settings.push([shareKey(ADMIN_RESOURCE_ID, id), { level: "view", endsAt: null }]);
       notes.push(
-        `${tokens.join(", ")} got nothing in ${circle.name}, which needs a passkey, so ${actorName} is in the new circle ${name}, with the same cards and levels, except the admin.`,
+        `${tokens.join(", ")} got nothing in ${circle.name}, which needs a passkey, so ${actorName} is in the new circle ${name}, with the same cards and levels${keepsAdmin ? "" : ", except the admin"}.`,
       );
+      if (keepsAdmin) actsAsOwner(actorId, name);
     }
   }
   return { actors: [...actors.values()], circles: [...migrated, ...added], shareSettings: settings, notes };

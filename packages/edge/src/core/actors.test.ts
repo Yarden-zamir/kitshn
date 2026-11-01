@@ -185,7 +185,8 @@ describe("the migration of members into actors (K-1778, migration 44)", () => {
   });
 
   it("keeps every card of a passkey circle for its token in a devices circle, except the admin (H2)", () => {
-    const migration = migrated();
+    // The admin sits in "friends" here, so Owner does not give it, and the devices circle gets no share of it.
+    const migration = migrateMembers(legacy, machines, { x: 1000, y: 0 }, settings);
     const devices = migration.circles.find((each) => each.name === "Yarden's phone's devices")!;
     expect(devices).toMatchObject({
       members: [{ _tag: "actor", actorId: phoneId }],
@@ -196,11 +197,12 @@ describe("the migration of members into actors (K-1778, migration 44)", () => {
       r: 100,
     });
     expect(migration.notes.join(" ")).toContain(devices.name);
-    const state = stateOf(migration);
+    const state = { ...stateOf(migration), places: new Map(places).set(admin.id, { x: 1000, y: 0 }) };
     const phoneVisitor: Visitor = { email: null, clientId: "phone.access", ip: null };
     const levels = (visitor: Visitor) =>
-      [admin, site, machineCard].map((each) => visitorLevel(state, each, visitor, 0));
-    expect(levels(phoneVisitor)).toEqual([null, "view", "use"]);
+      [site, machineCard].map((each) => visitorLevel(state, each, visitor, 0));
+    expect(levels(phoneVisitor)).toEqual(["view", "use"]);
+    expect(visitorLevel(stateOf(migration), admin, phoneVisitor, 0)).toBeNull();
     // M1: Access asks the login for a passkey in Owner, so without one it opens only circles that need no passkey.
     const withoutPasskey = stateOf({
       ...migration,
@@ -211,6 +213,59 @@ describe("the migration of members into actors (K-1778, migration 44)", () => {
         visitorLevel(withoutPasskey, each, { email: "yarden@example.com", clientId: null, ip: null }, 0),
       ),
     ).toEqual([null, null, null]);
+  });
+
+  it("keeps the admin of each token and machine that held it, with raises access automatic, and gives it to no other actor", () => {
+    const owner = circle(
+      "owner",
+      0,
+      [
+        { _tag: "email", email: "yarden@example.com" },
+        { _tag: "device", tokenId: "s-mac", clientId: "mac.access", name: "kitshn machine mac" },
+        { _tag: "device", tokenId: "t-test", clientId: "test.access", name: "kitshn test agent" },
+        phone,
+      ],
+      { needsPasskey: true },
+    );
+    // A circle without a passkey that also gives the admin keeps its token and machine members there.
+    const ops = { _tag: "device", tokenId: "t-ops", clientId: "ops.access", name: "Ops" } as const;
+    const admins = circle("admins", 0, [{ _tag: "machine", machineId: "vps" }, ops], { r: 50 });
+    const migration = migrateMembers(
+      [owner, admins, ...legacy.filter((each) => each.id !== "owner")],
+      machines,
+      { x: 0, y: 0 },
+      settings,
+    );
+    const state = stateOf(migration);
+    const automatic = { mode: "automatic" } as const;
+    const holders = migration.circles.flatMap((each) =>
+      each.members.flatMap((member) =>
+        member._tag === "actor" && member.rights?.raisesAccess !== undefined
+          ? [[each.name, member.actorId, member.rights.raisesAccess] as const]
+          : [],
+      ),
+    );
+    const testId = actorIdOf(token("t-test", "test.access", "kitshn test agent"));
+    const botId = actorIdOf(token("t-bot", "bot.access", "Bot"));
+    expect(holders).toEqual([
+      ["admins", machineActorId("vps"), automatic],
+      ["admins", actorIdOf(token("t-ops", "ops.access", "Ops")), automatic],
+      ["Mac's devices", machineActorId("mac"), automatic],
+      ["kitshn test agent's devices", testId, automatic],
+      ["Yarden's phone's devices", phoneId, automatic],
+    ]);
+    for (const clientId of ["mac.access", "test.access", "phone.access", "vps.access", "ops.access"])
+      expect(visitorLevel(state, admin, { email: null, clientId, ip: null }, 0)).toBe("control");
+    // The agent key "Bot" in "agents" holds no admin there, so its key rights stay as before.
+    expect(byId(migration.circles, "agents").members[0]).toEqual({
+      _tag: "actor",
+      actorId: botId,
+      rights: keyRights({ publishes: true }),
+    });
+    expect(visitorLevel(state, admin, { email: null, clientId: "bot.access", ip: null }, 0)).toBeNull();
+    for (const name of ["Mac", "kitshn test agent", "Yarden's phone", "VPS", "Ops"])
+      expect(migration.notes.some((note) => note.startsWith(`${name} held the kitshn admin`))).toBe(true);
+    expect(ruleViolation(state)).toBeNull();
   });
 
   it("keeps a token of its own when no one person shares every circle of it", () => {

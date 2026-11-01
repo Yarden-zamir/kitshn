@@ -33,10 +33,13 @@ export const chip = (credential: Credential, rights?: Partial<Record<Right, Righ
   ...(rights ? { rights } : {}),
 });
 
-/** The rights that migration 44 gives an agent key: its flags automatic, every other right off (K-1732). */
+/**
+ * The rights that migration 44 gives an agent key: its flags automatic, "raises access" at default, every other right
+ * off (K-1732).
+ */
 export const keyRights = (on: { readonly addsApps?: true; readonly publishes?: true } = {}) =>
   Object.fromEntries(
-    RIGHTS.map((right): [Right, RightMode] => [
+    RIGHTS.filter((right) => right !== "raisesAccess").map((right): [Right, RightMode] => [
       right,
       (right === "addsApps" && on.addsApps) || (right === "publishes" && on.publishes)
         ? { mode: "automatic" }

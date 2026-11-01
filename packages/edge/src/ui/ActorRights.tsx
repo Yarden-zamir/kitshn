@@ -31,6 +31,8 @@ const RIGHT_HELP: Record<Right, string> = {
     "Maintains: machine care (restart, update, diagnostics, order, its own key), and closing device invites and asks (K-1777). Default: automatic.",
   readsMap:
     "Reads the map: kitshn state shows the whole map, without job output and History text (K-1777). Default: automatic.",
+  raisesAccess:
+    "Raises access: the calls that the Owner decides, such as a share, a new member or a higher level (K-715). Automatic acts as the owner. Default: a person approves with a passkey (K-1778).",
 };
 
 /**

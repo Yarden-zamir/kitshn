@@ -93,9 +93,16 @@ describe("migration 44 on a database of migration 43 (K-1778)", () => {
     expect(JSON.parse(after.owner).members).toEqual([
       { _tag: "actor", actorId: actorIdOf({ _tag: "login", email: "owner@example.com" }) },
     ]);
-    // M1: the devices circle holds only the token, so the login opens nothing new there without a passkey.
+    // M1: the devices circle holds only the token, so the login opens nothing new there without a passkey. The token
+    // held the admin through Owner, so it keeps it with "raises access" automatic.
     expect(after.circles).toContain("Phone's devices");
-    expect(after.devices).toEqual([{ _tag: "actor", actorId: actorIdOf({ ...phone, _tag: "token" }) }]);
+    expect(after.devices).toEqual([
+      {
+        _tag: "actor",
+        actorId: actorIdOf({ ...phone, _tag: "token" }),
+        rights: { raisesAccess: { mode: "automatic" } },
+      },
+    ]);
     expect(after.violation).toBeNull();
     // L2: the refusal of an Undo from before it names the migration.
     expect(after.undo).toMatch(/before migration 44/);
