@@ -4,7 +4,7 @@ import type { Edit } from "../src/core/changes.ts";
 import {
   type Actor,
   type Member,
-  type Right,
+  type Effect,
   type RightCondition,
   type RightMode,
   actorIdOf,
@@ -13,7 +13,7 @@ import { actorOf, keyRights, login, machineKey, token } from "../src/core/testki
 
 const known = new Map<string, Actor>();
 
-const chipOf = (actor: Actor, rights?: Partial<Record<Right, RightMode>>): Member => {
+const chipOf = (actor: Actor, rights?: Partial<Record<Effect, RightMode>>): Member => {
   known.set(actor.id, actor);
   return { _tag: "actor", actorId: actor.id, ...(rights ? { rights } : {}) };
 };
@@ -22,14 +22,14 @@ const chipOf = (actor: Actor, rights?: Partial<Record<Right, RightMode>>): Membe
 export const person = (email: string) => chipOf(actorOf(login(email)));
 
 /** A machine actor, with these rights in the circle. */
-export const machine = (machineId: string, rights?: Partial<Record<Right, RightMode>>) =>
+export const machine = (machineId: string, rights?: Partial<Record<Effect, RightMode>>) =>
   chipOf(actorOf(machineKey(machineId), machineId), rights);
 
 /** An agent actor of a machine: the calls with these verified labels (K-1754). */
 export const agent = (
   machineId: string,
   conditions: ReadonlyArray<RightCondition>,
-  rights?: Partial<Record<Right, RightMode>>,
+  rights?: Partial<Record<Effect, RightMode>>,
 ) =>
   chipOf(
     {
@@ -45,7 +45,7 @@ export const key = (
   tokenId: string,
   clientId: string,
   name: string,
-  flags: { readonly addsApps?: true; readonly publishes?: true } = {},
+  flags: Readonly<Partial<Record<Effect, true>>> = {},
 ) => chipOf(actorOf(token(tokenId, clientId, name)), keyRights(flags));
 
 /** A token actor with no right set, such as a phone of its own. */

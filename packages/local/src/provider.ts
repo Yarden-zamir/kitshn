@@ -663,7 +663,7 @@ export const pushKey = {
   access: (provider: string) => `access:${provider}`,
   /** K-721: whether kitshn is paused, for every provider of the machine. */
   paused: () => "kitshn:paused",
-  /** K-722: the machines whose "runs commands" covers this machine at automatic. */
+  /** K-722: the machines whose "runs" covers this machine at automatic. */
   execRights: () => "kitshn:execRights",
 } as const;
 

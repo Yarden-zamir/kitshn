@@ -46,7 +46,7 @@ describe("agent organize (K-532)", () => {
       ids.push(((await published.json()) as { id: string }).id);
     }
     // A people circle also holds one card, and Everyone holds another one that the agent published, while it has no
-    // "publishes" right now. No agent may move them; they stay and the other cards still organize.
+    // "shares" right now. No agent may move them; they stay and the other cards still organize.
     const state = (await (
       await send("/api/state", { headers: { "cf-access-jwt-assertion": await owner() } })
     ).json()) as { circles: ReadonlyArray<Circle> };

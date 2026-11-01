@@ -242,7 +242,7 @@ it("ends a wizard site as the owner who asked, who can undo it; a failed request
 
 it("puts a card of expose --circle in that circle only when the machine controls it, else in the tray (K-1104, K-718)", async () => {
   stubAccessCerts();
-  await agentSetup({ addsPages: { mode: "automatic" } });
+  await agentSetup({ creates: { mode: "automatic" } });
   const stub = env.KITSHN.getByName("kitshn");
   const owner = await accessToken("admin-aud", { email: "owner@example.com" });
   await runInDurableObject(stub, (instance) =>
@@ -278,7 +278,7 @@ it("puts a card of expose --circle in that circle only when the machine controls
 
 it("refuses on the server a change that would admit no one whom a circle admits now (K-539)", async () => {
   stubAccessCerts();
-  await agentSetup({ addsPages: { mode: "automatic" } });
+  await agentSetup({ creates: { mode: "automatic" } });
   const owner = await accessToken("admin-aud", { email: "owner@example.com" });
   const apply = (circle: object) =>
     send("/api/apply", {
@@ -314,7 +314,7 @@ it("refuses on the server a change that would admit no one whom a circle admits 
 
 it("puts a wizard site in the circle of its request, and a failed job leaves no wish for a later card (K-1131)", async () => {
   stubAccessCerts();
-  await agentSetup({ addsPages: { mode: "automatic" } });
+  await agentSetup({ creates: { mode: "automatic" } });
   const stub = env.KITSHN.getByName("kitshn");
   const owner = await accessToken("admin-aud", { email: "owner@example.com" });
   const ask = async (name: string, circle: string | null) => {

@@ -1,6 +1,6 @@
 import type { LogAnswer, LogLine, LogSearch } from "./logs.ts";
 import type { BackupReport } from "./backups.ts";
-import type { Right } from "./model.ts";
+import type { Effect } from "./model.ts";
 import type {
   CardSettingValues,
   DesiredParts,
@@ -262,7 +262,7 @@ export type AskOutcome =
   | { readonly outcome: "done"; readonly result: unknown }
   | { readonly outcome: "waiting"; readonly proposalId: string }
   /** K-1776: `need` names the right that refused the call. */
-  | { readonly outcome: "refused"; readonly reason: string; readonly need?: Right }
+  | { readonly outcome: "refused"; readonly reason: string; readonly need?: Effect }
   /** K-1760: the owner of the repo is "not kitshn"; the machine uses its own login. */
   | { readonly outcome: "not-kitshn"; readonly reason: string };
 
@@ -390,7 +390,7 @@ export type ServerToDaemon =
     }
   /** K-721: whether kitshn is paused (K-1504), on each signed connection and on each change. */
   | { readonly type: "paused"; readonly paused: boolean; readonly hash: string }
-  /** K-722: the machines whose "runs commands" covers this machine at automatic, on connect and on each change. */
+  /** K-722: the machines whose "runs" covers this machine at automatic, on connect and on each change. */
   | { readonly type: "execRights"; readonly machines: ReadonlyArray<string>; readonly hash: string }
   /** K-722, A: how a run that this machine started stands. */
   | {

@@ -60,8 +60,8 @@ const circle = (id: string, members: ReadonlyArray<Member>, at: { x: number; r: 
   y: 0,
   r: at.r,
 });
-const mac = (runsCommands?: RightMode): Member =>
-  chip(machineKey("mac"), { readsCode: { mode: "automatic" }, ...(runsCommands ? { runsCommands } : {}) });
+const mac = (runs?: RightMode): Member =>
+  chip(machineKey("mac"), { reads: { mode: "automatic" }, ...(runs ? { runs } : {}) });
 const OWNER_CHIP = chip(login("owner@example.com"));
 const HER_CHIP = chip(login("her@example.com"));
 const ACTORS = new Map(
@@ -119,7 +119,7 @@ describe("exec on another machine (K-722)", () => {
       conditions,
     };
     const conditioned = world(
-      { _tag: "actor", actorId: agent.id, rights: { runsCommands: { mode: "automatic" } } },
+      { _tag: "actor", actorId: agent.id, rights: { runs: { mode: "automatic" } } },
       ["vps"],
       {
         actors: new Map([...ACTORS, [agent.id, agent]]),
@@ -200,7 +200,7 @@ describe("the t3.agents migration (K-722, migration 42)", () => {
         .sort(),
     ).toEqual(["machines", "owner"]);
     expect(placed.circles.get("machines")?.members[0]).toMatchObject({
-      rights: { readsCode: { mode: "automatic" }, runsCommands: { mode: "automatic" } },
+      rights: { reads: { mode: "automatic" }, runs: { mode: "automatic" } },
     });
   });
 

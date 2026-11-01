@@ -24,7 +24,7 @@ export interface CheckContext {
   readonly audiences: ReadonlyArray<string>;
   readonly paused: boolean;
   readonly syncedAt: number | null;
-  /** K-722: the machines whose "runs commands" covers this machine at "automatic". */
+  /** K-722: the machines whose "runs" covers this machine at "automatic". */
   readonly execMachines: ReadonlySet<string>;
   readonly now: number;
   readonly keys: (teamDomain: string) => JWTVerifyGetKey;

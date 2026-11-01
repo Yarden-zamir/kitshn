@@ -601,11 +601,12 @@ function Agents(props: { base: State }) {
   const vps: Extract<Member, { _tag: "actor" }> = {
     _tag: "actor",
     actorId: machineActorId("vps"),
-    rights: { deploys: { mode: "automatic" }, publishes: { mode: "ask", circleId: OWNER_CIRCLE_ID } },
+    rights: { changes: { mode: "automatic" }, shares: { mode: "ask", circleId: OWNER_CIRCLE_ID } },
   };
   const proposal: ProposalView = {
     id: "p-1",
     machineId: "vps",
+    credential: "machine/vps",
     machineName: "VPS",
     action: "publish",
     target: "tick3d",
@@ -613,7 +614,7 @@ function Agents(props: { base: State }) {
     reason: "Release 2.4",
     labels: { agent: "claude", repo: "tick3d" },
     verified: ["repo"],
-    right: "publishes",
+    right: "shares",
     circleId: OWNER_CIRCLE_ID,
     shown: "publish tick3d",
     shownHash: "0",
@@ -623,9 +624,9 @@ function Agents(props: { base: State }) {
   };
   return (
     <Concept
-      name="Rights, modes and asks"
-      words="An actor is a name that can act: a person, a script, a machine, or an agent on a machine. Each right of an actor in a circle (adds apps, publishes, deploys, runs commands and more) has a mode: default, off, automatic, or ask a circle. An ask waits for one member of that circle to approve or deny it."
-      relates="Rights sit on actor chips in agent circles, which hold actors that are not people. A machine proves itself with its own key pair; an agent actor is the calls of a machine with given attested labels. Asks wait in the Inbox; History records each one."
+      name="Effects, modes and asks"
+      words="An actor is a name that can act: a person, a script, a machine, or an agent on a machine. Each operation has one effect: reads, maintains, creates, changes, runs, destroys, shares or secrets. Each effect of an actor in a circle has a mode: default, off, automatic, or ask a circle. An ask waits for one member of that circle to approve or deny it."
+      relates="Circles decide where an actor acts; effects decide what kind of action, the same for every actor. Effects sit on actor chips. A machine proves itself with its own key pair; an agent actor is the calls of a machine with given attested labels. Asks wait in the Inbox; History records each one."
       ks={["K-1701", "K-1720", "K-1721", "K-1722", "K-1730", "K-1778"]}
       section={["Machine identity and agent rights", "agent-rights.md"]}
     >

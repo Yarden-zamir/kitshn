@@ -20,30 +20,25 @@ const Conditions = Schema.Array(
     ),
   }),
 ).check(Schema.isMaxLength(10));
-/** K-1720: the mode of one right. */
+/** K-1720: the mode of one effect. */
 const RightMode = Schema.Union([
   Schema.Struct({ mode: Schema.Literal("automatic") }),
   Schema.Struct({ mode: Schema.Literal("ask"), circleId: Id }),
   Schema.Struct({ mode: Schema.Literal("off") }),
 ]);
-/** K-1730, K-1776: each right of an actor in a circle; a missing right asks the Owner, "off" refuses. */
+/** K-1730, K-1776: the mode of each effect of an actor in a circle; a missing effect takes its default. */
 const Rights = Schema.Struct({
-  addsApps: Schema.optionalKey(RightMode),
-  publishes: Schema.optionalKey(RightMode),
-  deploys: Schema.optionalKey(RightMode),
-  runsCommands: Schema.optionalKey(RightMode),
-  readsCode: Schema.optionalKey(RightMode),
-  writesCode: Schema.optionalKey(RightMode),
-  addsAudiences: Schema.optionalKey(RightMode),
-  getsPasses: Schema.optionalKey(RightMode),
-  addsPages: Schema.optionalKey(RightMode),
-  restores: Schema.optionalKey(RightMode),
+  reads: Schema.optionalKey(RightMode),
   maintains: Schema.optionalKey(RightMode),
-  readsMap: Schema.optionalKey(RightMode),
-  raisesAccess: Schema.optionalKey(RightMode),
+  creates: Schema.optionalKey(RightMode),
+  changes: Schema.optionalKey(RightMode),
+  runs: Schema.optionalKey(RightMode),
+  destroys: Schema.optionalKey(RightMode),
+  shares: Schema.optionalKey(RightMode),
+  secrets: Schema.optionalKey(RightMode),
 });
-// A new right of RIGHTS fails here until the schema decodes it.
-const _everyRight: Record<Model.Right, unknown> = Rights.fields;
+// A new effect of EFFECTS fails here until the schema decodes it.
+const _everyEffect: Record<Model.Effect, unknown> = Rights.fields;
 
 const Email = Schema.String.check(Schema.isPattern(/^[^\s@]+@[^\s@]+\.[^\s@]+$/));
 

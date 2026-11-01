@@ -12,7 +12,14 @@ import {
   opRequest,
 } from "../src/core/operations.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
-import { insertActors, machine as machineChip, tokenActor } from "./actors.ts";
+import {
+  ACTOR_ROW,
+  actorRows,
+  insertActors,
+  key as keyChip,
+  machine as machineChip,
+  tokenActor,
+} from "./actors.ts";
 import { forwarded, setup, withDaemon } from "./machine-http.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -24,7 +31,7 @@ it("lets an agent do owner actions through /op: care runs, a circle edit waits f
   stubAccessCerts();
   const key = await newMachineKey();
   // A right set makes "agents" an agent circle of the machine (K-1730).
-  await setup({ deploys: { mode: "automatic" } }, key);
+  await setup({ changes: { mode: "automatic" } }, key);
   const op = (id: string, nonce: string, body: string) =>
     forwarded(key, "POST", `/op/${id}`, `${nonce}-0123456789abcdef`, body, {}, ADMIN);
 
@@ -33,13 +40,13 @@ it("lets an agent do owner actions through /op: care runs, a circle edit waits f
   expect(care.status, await care.clone().text()).toBe(200);
   expect(await care.json()).toMatchObject({ outcome: "done", result: { id: "vps", autoUpdate: false } });
 
-  // A circle edit raises access, so it asks the Owner (K-715); the proposal names no right.
+  // A circle edit raises access, so it asks the Owner (K-715) for the effect "shares" (K-1778).
   const renamed: Circle = {
     id: "agents",
     name: "Builders",
     color: "#ffcc00",
     level: "control",
-    members: [machineChip("vps", { deploys: { mode: "automatic" } })],
+    members: [machineChip("vps", { changes: { mode: "automatic" } })],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -58,7 +65,7 @@ it("lets an agent do owner actions through /op: care runs, a circle edit waits f
       .exec<{ right_name: string }>("SELECT right_name FROM proposals WHERE id = ?", waiting.proposalId)
       .one(),
   );
-  expect(right.right_name).toBe("owner");
+  expect(right.right_name).toBe("shares");
   // K-1723, K-1778: an ask that raises access needs a passkey proof, also where the Owner circle lets a token approve.
   const script = tokenActor("t-script", "script.access", "Script");
   const ownerBody = await runInDurableObject(stub, (_, state) => {
@@ -85,7 +92,10 @@ it("lets an agent do owner actions through /op: care runs, a circle edit waits f
       reason: null,
     }),
   );
-  expect(byToken).toMatchObject({ ok: false, error: expect.stringMatching(/raises access/) });
+  expect(byToken).toMatchObject({
+    ok: false,
+    error: expect.stringMatching(/"shares", so only a person approves/),
+  });
   await runInDurableObject(stub, (_, state) =>
     state.storage.sql.exec("UPDATE circles SET body = ? WHERE id = ?", ownerBody, OWNER_CIRCLE_ID),
   );
@@ -163,6 +173,18 @@ it("runs an owner call at once, and refuses a service token that is no machine (
   });
 });
 
+it("refuses a machine token on an owner route, also when the machine holds the admin (K-1714, M3)", async () => {
+  stubAccessCerts();
+  // The circle holds the admin card of the seed at (0, 40), and "shares" and "secrets" are automatic (K-1778).
+  const automatic = { mode: "automatic" } as const;
+  await setup({ shares: automatic, secrets: automatic }, null, { x: 0, y: 40 });
+  const answer = await send("/api/state", {
+    headers: { "cf-access-jwt-assertion": await accessToken(ADMIN, { common_name: "vps.access" }) },
+  });
+  expect(answer.status).toBe(403);
+  expect(await answer.json()).toMatchObject({ error: expect.stringContaining("/op") });
+});
+
 it("refuses an unsigned call of a machine token on /op (K-1714)", async () => {
   stubAccessCerts();
   await setup({});
@@ -216,7 +238,7 @@ const TARGETS: Partial<Record<OpId, string>> = {
   "device-invite-cancel": "token-x",
   "proposal-deny": "proposal-x",
   desired: "t3.settings",
-  "desired-set": "t3.settings",
+  "desired-set-shared": "t3.settings",
 };
 const BODIES: Partial<Record<OpId, unknown>> = {
   "card-time": { endsAt: null },
@@ -233,12 +255,14 @@ const BODIES: Partial<Record<OpId, unknown>> = {
   "app-restore": { run: "run-1" },
   "port-add": { machine: "vps", name: "p1", ports: ["25565/tcp"] },
   "port-door-close": { address: "p1.example.com" },
-  "desired-set": { machineId: "vps", value: {} },
+  "desired-set-machine": { kind: "t3.settings", value: {} },
+  "desired-set-shared": { value: {} },
   "repo-group-add": { match: "acme" },
   "github-way": { githubWay: "not-kitshn" },
   "passes-set": { on: false },
   "audience-add": { address: "https://aud.example.com" },
   "audience-labels": { address: "https://aud.example.com", labels: false },
+  "ask-events": { label: "t3.thread.id=nothing" },
 };
 /**
  * Rows whose fixture fails for the owner too, so the test cannot see a refusal of the agent alone. Each reason says
@@ -280,10 +304,10 @@ const BOTH_FAIL: Partial<Record<OpId, string>> = {
   "repo-group-edit": "needs the id of a repo group",
   "repo-group-remove": "needs the id of a repo group",
   "proposal-deny": "needs an open proposal",
-  "ask-events": "needs the query ?label, which a call of /op does not send",
   usage: "calls the Cloudflare API",
   desired: "needs a provider that registered the state",
-  "desired-set": "needs a provider that registered the state",
+  "desired-set-machine": "needs a provider that registered the state",
+  "desired-set-shared": "needs a provider that registered the state",
   "sign-out": "calls the Cloudflare API",
   "sign-out-retry": "needs a sign-out with sessions left",
 };
@@ -313,7 +337,7 @@ it("runs each gated row through the owner code: it fails only where the owner fa
   const key = await newMachineKey();
   // The machine is in an agent circle that controls no card, so only the gate lets its calls run. The owner controls
   // the machine card and the provider card, so a refusal of the agent alone shows.
-  await setup({ deploys: { mode: "automatic" } }, key);
+  await setup({ changes: { mode: "automatic" } }, key);
   const stub = env.KITSHN.getByName("kitshn");
   const owner = await runInDurableObject(stub, (_, state) => {
     const owner = JSON.parse(
@@ -361,7 +385,7 @@ it("runs each gated row through the owner code: it fails only where the owner fa
         // A queued job of the owner, for job-cancel; no delivery runs before the cancel.
         if (id === "job-cancel") queueOwnerJob(state, 9001);
         const op: Operation = OPERATIONS[id];
-        const right = isPersonGate(op.gate) ? null : op.gate.right;
+        const right = op.effect;
         const onCard = !isPersonGate(op.gate) && (op.gate.scope === "card" || op.gate.scope === "own");
         const built = opRequest(op, TARGETS[id] ?? (onCard ? appId : "vps"), bodies[id] ?? {});
         if (typeof built === "string") {
@@ -369,7 +393,7 @@ it("runs each gated row through the owner code: it fails only where the owner fa
           continue;
         }
         const request = () =>
-          new Request(`https://kit.example.com${built.path}`, {
+          new Request(`https://kit.example.com${built.path}${built.search}`, {
             method: built.method,
             headers: { "content-type": "application/json" },
             ...(built.body === null ? {} : { body: JSON.stringify(built.body) }),
@@ -413,10 +437,189 @@ it("runs each gated row through the owner code: it fails only where the owner fa
   expect(problems).toEqual([]);
 });
 
+/**
+ * The rows of scope "never" before effects (K-1730): each asked the Owner always. `desired-set` is now two rows. Each
+ * has a real scope or the scope "owner", so a target out of scope still waits, whatever "shares" says (K-1778).
+ * `desired` has the scope "any" now, because desired state holds no secret (K-709).
+ */
+const FORMER_NEVER: ReadonlyArray<OpId> = [
+  "organize",
+  "undo",
+  "undo-item",
+  "card-take-address",
+  "card-give-address-back",
+  "machine-volume-remove",
+  "machine-labels",
+  "machine-compose-allow",
+  "machine-reset-key",
+  "machine-add",
+  "machine-remove",
+  "provider-forget",
+  "site-live-add",
+  "worker-storage-remove",
+  "bot-run-deploy",
+  "device-token-add",
+  "device-invite",
+  "repo-block",
+  "repo-forget",
+  "repo-group-add",
+  "repo-group-edit",
+  "repo-group-remove",
+  "github-way",
+  "passes-set",
+  "passes-rotate",
+  "audience-labels",
+  "audience-remove",
+  "state-export",
+  "jobs",
+  "desired-set-machine",
+  "desired-set-shared",
+  "sign-out",
+];
+
+it.each([
+  ["ask", { mode: "ask", circleId: OWNER_CIRCLE_ID }],
+  ["automatic", { mode: "automatic" }],
+] as const)(
+  "still asks the Owner for each former never row out of scope, with shares %s and every other effect automatic (K-1730, K-1778)",
+  async (name, shares) => {
+    stubAccessCerts();
+    const key = await newMachineKey();
+    const automatic = { mode: "automatic" } as const;
+    await setup(
+      {
+        reads: automatic,
+        maintains: automatic,
+        creates: automatic,
+        changes: automatic,
+        runs: automatic,
+        destroys: automatic,
+        secrets: automatic,
+        shares,
+      },
+      key,
+    );
+    const stub = env.KITSHN.getByName("kitshn");
+    // The machine card of vps sits in the Owner circle only, so a card or machine target is out of scope.
+    await runInDurableObject(stub, (_, state) => {
+      const owner = JSON.parse(
+        state.storage.sql
+          .exec<{ body: string }>("SELECT body FROM circles WHERE id = ?", OWNER_CIRCLE_ID)
+          .one().body,
+      ) as Circle;
+      const card: Resource = {
+        id: "vps",
+        kind: "machine",
+        name: "vps",
+        addresses: [],
+        status: "running",
+        group: null,
+        machine: "vps",
+      };
+      state.storage.sql.exec(
+        "INSERT OR REPLACE INTO resources (id, body) VALUES ('vps', ?)",
+        JSON.stringify(card),
+      );
+      state.storage.sql.exec(
+        "INSERT OR REPLACE INTO places (id, x, y) VALUES ('vps', ?, ?)",
+        owner.x,
+        owner.y,
+      );
+    });
+    await evictDurableObject(stub);
+    const bodies: Partial<Record<OpId, unknown>> = {
+      ...BODIES,
+      "machine-volume-remove": { command: { volume: "old" } },
+      "desired-set-machine": { kind: "t3.settings", value: {} },
+    };
+    const outcomes: Array<string> = [];
+    for (const id of FORMER_NEVER) {
+      const answer = await forwarded(
+        key,
+        "POST",
+        `/op/${id}`,
+        `never-${name}-${id}-0123456789abcdef`,
+        call(TARGETS[id] ?? "vps", bodies[id] ?? {}),
+        {},
+        ADMIN,
+      );
+      const result = (await answer.json()) as { outcome: string; reason?: string };
+      const [proposal] = await runInDurableObject(stub, (_, state) => {
+        const rows = state.storage.sql
+          .exec<{ right_name: string }>("SELECT right_name FROM proposals")
+          .toArray();
+        // At most 20 open asks per credential (K-1722): each row starts with none.
+        state.storage.sql.exec("DELETE FROM proposals");
+        return rows;
+      });
+      outcomes.push(`${id}: ${result.outcome} ${proposal?.right_name ?? result.reason ?? ""}`);
+    }
+    expect(outcomes).toEqual(FORMER_NEVER.map((id) => `${id}: waiting shares`));
+  },
+);
+
+it("never lets an actor set its own effects: with every effect automatic but secrets, the edit and the secrets wait for the Owner (K-1778)", async () => {
+  stubAccessCerts();
+  const key = await newMachineKey();
+  const automatic = { mode: "automatic" } as const;
+  const rights = {
+    reads: automatic,
+    maintains: automatic,
+    creates: automatic,
+    changes: automatic,
+    runs: automatic,
+    destroys: automatic,
+    shares: automatic,
+  };
+  await setup(rights, key);
+  const stub = env.KITSHN.getByName("kitshn");
+  const agents = await runInDurableObject(stub, (_, state) =>
+    state.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = 'agents'").one(),
+  );
+  const before = JSON.parse(agents.body) as Circle;
+  const own = call("", {
+    edits: [
+      {
+        _tag: "circle",
+        id: "agents",
+        after: { ...before, members: [machineChip("vps", { ...rights, secrets: automatic })] },
+      },
+    ],
+  });
+  const op = (id: string, nonce: string, body: string) =>
+    forwarded(key, "POST", `/op/${id}`, `${nonce}-0123456789abcdef`, body, {}, ADMIN);
+  const outcomes: Array<string> = [];
+  for (const [id, body] of [
+    ["apply", own],
+    ["state-export", call("")],
+    ["device-token-add", call("", { name: "phone" })],
+  ] as const) {
+    const answer = await op(id, `escalate-${id}`, body);
+    const result = (await answer.json()) as { outcome: string };
+    const [proposal] = await runInDurableObject(stub, (_, state) => {
+      const rows = state.storage.sql
+        .exec<{ right_name: string; circle_id: string }>("SELECT right_name, circle_id FROM proposals")
+        .toArray();
+      state.storage.sql.exec("DELETE FROM proposals");
+      return rows;
+    });
+    outcomes.push(`${id}: ${result.outcome} ${proposal?.right_name ?? ""} ${proposal?.circle_id ?? ""}`);
+  }
+  expect(outcomes).toEqual([
+    `apply: waiting shares ${OWNER_CIRCLE_ID}`,
+    `state-export: refused  `,
+    `device-token-add: refused  `,
+  ]);
+  const after = await runInDurableObject(stub, (_, state) =>
+    state.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = 'agents'").one(),
+  );
+  expect(after.body).toBe(agents.body);
+});
+
 it("sends the job of a gated call once its machine is online, and the right off or the pause ends it (K-1777)", async () => {
   stubAccessCerts();
   const key = await newMachineKey();
-  await setup({ deploys: { mode: "automatic" } }, key);
+  await setup({ changes: { mode: "automatic" } }, key);
   const restart = async (nonce: string) => {
     const answer = await forwarded(
       key,
@@ -440,10 +643,18 @@ it("sends the job of a gated call once its machine is online, and the right off 
   // The machine is offline at the call, so the job waits, and goes out when the daemon is back.
   expect(await deliver(await restart("sent"))).toMatchObject({ state: "sent" });
   const off = await restart("off");
-  await setup({ deploys: { mode: "automatic" }, maintains: { mode: "off" } }, key);
+  await setup({ changes: { mode: "automatic" }, maintains: { mode: "off" } }, key);
   expect(await deliver(off)).toMatchObject({ state: "failed", output: expect.stringContaining("off") });
+  // No person approved it, so "ask" ends it too: only an automatic effect let it in (M5).
+  await setup({ changes: { mode: "automatic" } }, key);
+  const asks = await restart("asks");
+  await setup({ changes: { mode: "automatic" }, maintains: { mode: "ask", circleId: OWNER_CIRCLE_ID } }, key);
+  expect(await deliver(asks)).toMatchObject({
+    state: "failed",
+    output: expect.stringContaining('"maintains" of the caller is no longer automatic'),
+  });
 
-  await setup({ deploys: { mode: "automatic" } }, key);
+  await setup({ changes: { mode: "automatic" } }, key);
   const paused = await restart("paused");
   const pause = await send("/api/apply", {
     method: "POST",
@@ -529,7 +740,7 @@ const approveAsOwner = (proposalId: string) =>
 it("checks K-718 again when a job that no person approved goes out, and gives it the normal expiry (K-613, K-1777)", async () => {
   stubAccessCerts();
   const key = await newMachineKey();
-  await setup({ runsCommands: { mode: "automatic" } }, key);
+  await setup({ runs: { mode: "automatic" } }, key);
   const shell = async (nonce: string) =>
     forwarded(
       key,
@@ -564,6 +775,16 @@ it("checks K-718 again when a job that no person approved goes out, and gives it
     life: 24 * HOUR,
   });
 
+  // K-1778: out of scope, "shares" automatic does not let a shell in, so K-718 never falls away; it waits for the Owner.
+  await setup({ runs: { mode: "automatic" }, shares: { mode: "automatic" } }, key);
+  const shared = await shell("shared");
+  expect(shared.status, await shared.clone().text()).toBe(409);
+  expect(await shared.json()).toMatchObject({ outcome: "waiting", circle: "Owner" });
+  await runInDurableObject(env.KITSHN.getByName("kitshn"), (_, state) =>
+    state.storage.sql.exec("DELETE FROM proposals"),
+  );
+  await setup({ runs: { mode: "automatic" } }, key);
+
   // Out of scope, the same call asks the Owner. The Owner's approval covers what they saw, for 1 hour.
   const asked = await shell("asked");
   expect(asked.status, await asked.clone().text()).toBe(409);
@@ -576,11 +797,69 @@ it("checks K-718 again when a job that no person approved goes out, and gives it
   expect(await job(approvedId)).toMatchObject({ state: "sent", life: HOUR });
 });
 
+it("never runs an Owner ask on an approval of a right that came without a passkey (K-1723)", async () => {
+  stubAccessCerts();
+  const key = await newMachineKey();
+  await setup({ runs: { mode: "ask", circleId: OWNER_CIRCLE_ID } }, key);
+  await placeMachineCards("agents");
+  const stub = env.KITSHN.getByName("kitshn");
+  // The Owner circle lets the token "script" approve without a passkey (K-1725 warns).
+  const script = tokenActor("t-script", "script.access", "Script");
+  await runInDurableObject(stub, (_, state) => {
+    const owner = JSON.parse(
+      state.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = ?", OWNER_CIRCLE_ID).one()
+        .body,
+    ) as Circle;
+    state.storage.sql.exec(
+      "UPDATE circles SET body = ? WHERE id = ?",
+      JSON.stringify({ ...owner, members: [...owner.members, script], approvesWithoutPasskey: true }),
+      OWNER_CIRCLE_ID,
+    );
+    insertActors(state.storage.sql, [script]);
+  });
+  await evictDurableObject(stub);
+  const shell = (nonce: string) =>
+    forwarded(
+      key,
+      "POST",
+      "/op/machine-shell",
+      `${nonce}-0123456789abcdef`,
+      call("vps", { command: { script: "true" } }),
+      {},
+      ADMIN,
+    );
+  const asked = await shell("passkey-asked");
+  expect(asked.status, await asked.clone().text()).toBe(409);
+  const { proposalId } = (await asked.json()) as { proposalId: string };
+  const byToken = await runInDurableObject(stub, (instance) =>
+    (
+      instance as unknown as { decide(id: string, decision: "approved", by: object): Promise<unknown> }
+    ).decide(proposalId, "approved", {
+      actor: { _tag: "device", clientId: "script.access", name: "Script" },
+      visitor: { email: null, clientId: "script.access", ip: null },
+      machineId: null,
+      reason: null,
+    }),
+  );
+  expect(byToken).toMatchObject({ ok: true });
+  // Out of scope, the same call is an Owner ask (right "owner"), which only a passkey approval runs.
+  await placeMachineCards("owner");
+  const again = await shell("passkey-again");
+  expect(again.status, await again.clone().text()).toBe(409);
+});
+
 it("asks the Owner when the scope fails or a secret goes out, and the Owner's approval runs the call (K-1777)", async () => {
   stubAccessCerts();
   const key = await newMachineKey();
-  // Both rights run at once, so only a failed scope asks.
-  await setup({ maintains: { mode: "automatic" }, addsApps: { mode: "automatic" } }, key);
+  // These effects run at once, so only a failed scope asks; "secrets" asks the Owner instead of its default off.
+  await setup(
+    {
+      maintains: { mode: "automatic" },
+      creates: { mode: "automatic" },
+      secrets: { mode: "ask", circleId: OWNER_CIRCLE_ID },
+    },
+    key,
+  );
   await placeMachineCards("owner");
   const stub = env.KITSHN.getByName("kitshn");
   const op = (id: string, nonce: string, body: string) =>
@@ -621,6 +900,7 @@ it("asks the Owner when the scope fails or a secret goes out, and the Owner's ap
     );
   const reset = await waits(await op("machine-reset-key", "reset", call("vps")));
   expect(await shown(reset)).toContain("gives: a key code that can act as the machine vps");
+  // K-1730: job output can quote a secret that a person typed, so it waits for the Owner.
   const jobs = await waits(await op("jobs", "jobs", call("")));
   expect(await shown(jobs)).toContain("gives: the commands and output of the last 100 jobs");
 
@@ -656,4 +936,264 @@ it("asks the Owner when the scope fails or a secret goes out, and the Owner's ap
   await waits(await op("machine-rotate-key", "rotate-other", call("m2")));
   const own = await op("machine-rotate-key", "rotate-own", call("vps"));
   expect(await own.json()).not.toMatchObject({ outcome: "waiting" });
+});
+
+/** K-1778: the token "script" of an actor of its own, in no circle; an Access token of it on the admin path. */
+async function scriptToken() {
+  const stub = env.KITSHN.getByName("kitshn");
+  await runInDurableObject(stub, (_, state) => {
+    for (const [id, body] of actorRows([tokenActor("t-script", "script.access", "nightly backup")]))
+      state.storage.sql.exec(ACTOR_ROW, id, body);
+    state.storage.sql.exec("DELETE FROM proposals");
+  });
+  await evictDurableObject(stub);
+  return accessToken(ADMIN, { common_name: "script.access" });
+}
+
+const post = (jwt: string, path: string, body: string) =>
+  send(path, {
+    method: "POST",
+    headers: { "cf-access-jwt-assertion": jwt, "content-type": "application/json" },
+    body,
+  });
+
+it("lets a token actor call /op: an unset right waits for the Owner, and another credential approves it (K-1778)", async () => {
+  stubAccessCerts();
+  await setup({});
+  const jwt = await scriptToken();
+  const order = call("vps", { order: 5 });
+  const first = await post(jwt, "/op/machine-order", order);
+  expect(first.status, await first.clone().text()).toBe(409);
+  const { proposalId } = (await first.json()) as { proposalId: string };
+  const stub = env.KITSHN.getByName("kitshn");
+  const credential = await runInDurableObject(stub, (_, state) =>
+    state.storage.sql
+      .exec<{ credential: string; machine_id: string }>(
+        "SELECT credential, machine_id FROM proposals WHERE id = ?",
+        proposalId,
+      )
+      .one(),
+  );
+  expect(credential).toEqual({ credential: "token/t-script", machine_id: "" });
+  type Decide = {
+    decide(id: string, decision: "approved", by: object): Promise<{ ok: boolean; error?: string }>;
+  };
+  // The credential that asked never approves its own ask, also when the rules would let it (K-1778).
+  const self = await runInDurableObject(stub, (instance) =>
+    (instance as unknown as Decide).decide(proposalId, "approved", {
+      actor: { _tag: "device", clientId: "script.access", name: "nightly backup" },
+      visitor: { email: null, clientId: "script.access", ip: null },
+      machineId: null,
+      reason: null,
+    }),
+  );
+  expect(self).toMatchObject({ ok: false, error: expect.stringContaining("never approves its own ask") });
+  const approved = await runInDurableObject(stub, (instance) =>
+    (instance as unknown as Decide).decide(proposalId, "approved", {
+      actor: { _tag: "person", email: "owner@example.com" },
+      visitor: { email: "owner@example.com", clientId: null, ip: null },
+      machineId: null,
+      reason: null,
+    }),
+  );
+  expect(approved).toMatchObject({ ok: true });
+  const second = await post(jwt, "/op/machine-order", order);
+  expect(second.status, await second.clone().text()).toBe(200);
+  expect(await second.json()).toMatchObject({ outcome: "done", result: { order: 5 } });
+});
+
+it("lets a token raise access only by its shares: automatic runs, ask and default wait, off refuses, and a person gate stays (K-1778)", async () => {
+  stubAccessCerts();
+  const jwt = await scriptToken();
+  const stub = env.KITSHN.getByName("kitshn");
+  // The circle holds the admin card of the seed at (0, 40), so the token has control on the admin (K-104).
+  const atAdmin = { x: 0, y: 40 };
+  const added = tokenActor("t-new", "new.access", "new phone");
+  const outcomes: Array<[string, number, unknown, boolean, boolean]> = [];
+  for (const mode of ["automatic", "ask", "default", "off"] as const) {
+    const script = tokenActor("t-script", "script.access", "nightly backup");
+    const chip =
+      mode === "default"
+        ? { ...script, rights: { maintains: { mode: "automatic" as const } } }
+        : mode === "ask"
+          ? { ...script, rights: { shares: { mode, circleId: OWNER_CIRCLE_ID } } }
+          : { ...script, rights: { shares: { mode }, secrets: { mode } } };
+    await setup({}, null, atAdmin, [chip]);
+    await runInDurableObject(stub, (_, state) => {
+      insertActors(state.storage.sql, [added]);
+      state.storage.sql.exec("DELETE FROM proposals");
+    });
+    await evictDurableObject(stub);
+    const agents = await runInDurableObject(stub, (_, state) =>
+      state.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = 'agents'").one(),
+    );
+    const before = JSON.parse(agents.body) as Circle;
+    // K-715: a new member raises access.
+    const edit = call("", {
+      edits: [{ _tag: "circle", id: "agents", after: { ...before, members: [...before.members, added] } }],
+    });
+    const answer = await post(jwt, "/op/apply", edit);
+    const after = await runInDurableObject(stub, (_, state) => ({
+      members: (
+        JSON.parse(
+          state.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = 'agents'").one().body,
+        ) as Circle
+      ).members.length,
+      asks: state.storage.sql
+        .exec<{ right_name: string; circle_id: string }>("SELECT right_name, circle_id FROM proposals")
+        .toArray(),
+    }));
+    const body = (await answer.json()) as { outcome: string; reason?: string };
+    // K-104, K-1778: the map path holds the admin for a token only with "shares" and "secrets" automatic.
+    const map = await send("/api/state", { headers: { "cf-access-jwt-assertion": jwt } });
+    const resume = await post(jwt, "/op/resume", call(""));
+    outcomes.push([
+      mode,
+      answer.status,
+      { outcome: body.outcome, members: after.members - before.members.length, asks: after.asks },
+      map.status === 200,
+      resume.status === 403,
+    ]);
+  }
+  expect(outcomes).toEqual([
+    ["automatic", 200, { outcome: "done", members: 1, asks: [] }, true, true],
+    ...(["ask", "default"] as const).map((mode) => [
+      mode,
+      409,
+      { outcome: "waiting", members: 0, asks: [{ right_name: "shares", circle_id: OWNER_CIRCLE_ID }] },
+      false,
+      true,
+    ]),
+    ["off", 403, { outcome: "refused", members: 0, asks: [] }, false, true],
+  ]);
+});
+
+it("reads the map through the gate, and caps the open asks of each credential at 20 (K-1777, K-1778)", async () => {
+  stubAccessCerts();
+  await setup({});
+  const jwt = await scriptToken();
+  // The token is in no agent circle, so "reads the map" asks the Owner like any unset right; the owner reads at once.
+  const read = (token: string) => send("/op/state", { headers: { "cf-access-jwt-assertion": token } });
+  const waiting = await read(jwt);
+  expect(waiting.status).toBe(409);
+  expect(await waiting.json()).toMatchObject({ outcome: "waiting" });
+  const owner = await read(await accessToken(ADMIN, { email: "owner@example.com" }));
+  expect(owner.status).toBe(200);
+  expect(await owner.json()).toMatchObject({
+    outcome: "done",
+    result: { hidden: { jobs: expect.any(String) } },
+  });
+  const stub = env.KITSHN.getByName("kitshn");
+  await runInDurableObject(stub, (_, state) => {
+    for (let index = 0; index < 20; index++)
+      state.storage.sql.exec(
+        `INSERT INTO proposals (id, machine_id, credential, action, target, body, reason, labels, right_name, circle_id, shown,
+         shown_hash, state, created_at, expires_at, verified) VALUES (?, '', 'token/t-script', 'forward', 't', 'null', NULL, '{}',
+         'owner', 'owner', 's', ?, 'pending', 0, ?, '[]')`,
+        `p-cap-${index}`,
+        `h-${index}`,
+        Date.now() + 60_000,
+      );
+  });
+  const capped = await post(jwt, "/op/machine-order", call("vps", { order: 9 }));
+  expect(capped.status).toBe(409);
+  expect(await capped.json()).toMatchObject({
+    outcome: "refused",
+    reason: expect.stringContaining("20 open asks"),
+  });
+  // Another credential keeps its own 20.
+  const key = await newMachineKey();
+  await setup({ changes: { mode: "automatic" } }, key);
+  const other = await forwarded(
+    key,
+    "POST",
+    "/op/machine-labels",
+    "cap-other-0123456789abcdef",
+    call("vps", { labels: [] }),
+    {},
+    ADMIN,
+  );
+  expect(other.status).toBe(409);
+  expect(await other.json()).toMatchObject({ outcome: "waiting" });
+  await runInDurableObject(stub, (_, state) => state.storage.sql.exec("DELETE FROM proposals"));
+});
+
+it("allows a repo through /op only as an agent: a waiting repo under its own credential, never a blocked or taken one (K-819)", async () => {
+  stubAccessCerts();
+  const key = await newMachineKey();
+  await setup({ runs: { mode: "automatic" } }, key);
+  const stub = env.KITSHN.getByName("kitshn");
+  await runInDurableObject(stub, (_, state) =>
+    state.storage.sql.exec(
+      `INSERT OR REPLACE INTO repos (repo_id, name, state, first_seen, allowed_by_client, allowed_by_name) VALUES
+       ('2001', 'acme/waiting', 'waiting', 1, NULL, NULL),
+       ('2002', 'acme/blocked', 'blocked', 1, NULL, NULL),
+       ('2003', 'acme/taken', 'allowed', 1, 'other.access', 'other agent')`,
+    ),
+  );
+  await evictDurableObject(stub);
+  const outcomes: Array<string> = [];
+  for (const repo of ["2001", "2002", "2003"]) {
+    const answer = await forwarded(
+      key,
+      "POST",
+      "/op/repo-allow",
+      `repo-allow-${repo}-0123456789abcdef`,
+      call(repo),
+      {},
+      ADMIN,
+    );
+    outcomes.push(`${repo}: ${answer.status}`);
+  }
+  const rows = await runInDurableObject(stub, (_, state) =>
+    state.storage.sql
+      .exec<{ repo_id: string; state: string; allowed_by_client: string | null }>(
+        "SELECT repo_id, state, allowed_by_client FROM repos WHERE repo_id IN ('2001', '2002', '2003') ORDER BY repo_id",
+      )
+      .toArray(),
+  );
+  expect({ outcomes, rows }).toEqual({
+    outcomes: ["2001: 200", "2002: 409", "2003: 409"],
+    rows: [
+      { repo_id: "2001", state: "allowed", allowed_by_client: "vps.access" },
+      { repo_id: "2002", state: "blocked", allowed_by_client: null },
+      { repo_id: "2003", state: "allowed", allowed_by_client: "other.access" },
+    ],
+  });
+});
+
+it("lets an agent key with shares automatic move its own card into another circle on /agent/apply, but never edit a circle (K-1778)", async () => {
+  stubAccessCerts();
+  await setup({}, null, { x: 5000, y: 5000 }, [keyChip("t-key", "key.access", "kit key", { shares: true })]);
+  const stub = env.KITSHN.getByName("kitshn");
+  const owner = await runInDurableObject(stub, (_, state) => {
+    const card: Resource = {
+      id: "key-card",
+      kind: "site.static",
+      name: "key card",
+      addresses: [],
+      status: "unknown",
+      group: null,
+      machine: null,
+    };
+    state.storage.sql.exec(
+      "INSERT OR REPLACE INTO resources (id, body) VALUES ('key-card', ?)",
+      JSON.stringify(card),
+    );
+    state.storage.sql.exec("INSERT OR REPLACE INTO places (id, x, y) VALUES ('key-card', 5000, 5000)");
+    return JSON.parse(
+      state.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = ?", OWNER_CIRCLE_ID).one()
+        .body,
+    ) as Circle;
+  });
+  await evictDurableObject(stub);
+  const jwt = await accessToken("agent-aud", { common_name: "key.access" });
+  const apply = (edits: ReadonlyArray<object>) => post(jwt, "/agent/apply", JSON.stringify({ edits }));
+  const agents = await runInDurableObject(stub, (_, state) =>
+    state.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = 'agents'").one(),
+  );
+  const renamed = { ...(JSON.parse(agents.body) as Circle), name: "Mine" };
+  const rename = await apply([{ _tag: "circle", id: "agents", after: renamed }]);
+  const share = await apply([{ _tag: "place", id: "key-card", after: { x: owner.x, y: owner.y } }]);
+  expect([rename.status, share.status]).toEqual([403, 200]);
 });

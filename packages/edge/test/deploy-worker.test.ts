@@ -1084,12 +1084,12 @@ const agentStep = async (clientId: string, path: string, body: unknown) =>
     body,
   );
 
-const agentCircle = (id: string, clientId: string, addsApps: boolean) => ({
+const agentCircle = (id: string, clientId: string, creates: boolean) => ({
   id,
   name: id,
   color: "#7c3aed",
   level: "control",
-  members: [key(`t-${id}`, clientId, id, addsApps ? { addsApps } : {})],
+  members: [key(`t-${id}`, clientId, id, creates ? { creates } : {})],
   match: "any",
   needsPasskey: false,
   endsAt: null,
@@ -1106,7 +1106,7 @@ const noOldAddresses = () =>
   });
 
 describe("folder sites (K-1123)", () => {
-  it("publishes a folder with may add apps, keeps its script on Remove app, and Undo brings it back", async () => {
+  it("publishes a folder with creates, keeps its script on Remove app, and Undo brings it back", async () => {
     const cloudflare = fakeCloudflare();
     const edits = [
       { _tag: "circle", id: "folders", after: agentCircle("folders", "folder-key.access", true) },
@@ -1838,8 +1838,8 @@ describe("forwarded folder site (K-1714, K-1776)", () => {
     fakeCloudflare();
     await noOldAddresses();
     const key = await newMachineKey();
-    // "adds pages" is unset, so the plan asks the Owner; the site is new, so it also needs "adds apps".
-    await setup({ deploys: { mode: "automatic" }, addsApps: { mode: "automatic" } }, key);
+    // "creates" asks the Owner, so the plan waits, and its approval covers the files and the finish.
+    await setup({ changes: { mode: "automatic" }, creates: { mode: "ask", circleId: "owner" } }, key);
     const forward = async (path: string, body: unknown, nonce: string) => {
       const at = Date.now();
       const labels = "{}";

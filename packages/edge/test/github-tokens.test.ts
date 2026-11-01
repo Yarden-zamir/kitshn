@@ -116,7 +116,7 @@ async function askToken(stub: DurableObjectStub, repo: string, extra: object = {
 
 it("gives a write token for one repo of an App owner, and revokes it when the key resets (K-1762, K-1716)", async () => {
   const calls = fakeGitHub();
-  const stub = await setup({ writesCode: { mode: "automatic" } });
+  const stub = await setup({ changes: { mode: "automatic" } });
   expect(await askToken(stub, "Yarden-zamir/riffle")).toEqual({
     outcome: "done",
     result: { token: "ghs_test", expiresAt: expect.any(String), permission: "write" },
@@ -145,7 +145,7 @@ it("gives a write token for one repo of an App owner, and revokes it when the ke
 
 it("opens the one-hour window on approval with no token; the next ask of the machine gets it (K-1723)", async () => {
   fakeGitHub();
-  const stub = await setup({ writesCode: { mode: "ask", circleId: "owner" } });
+  const stub = await setup({ changes: { mode: "ask", circleId: "owner" } });
   const waiting = await askToken(stub, "Yarden-zamir/riffle");
   if (waiting.outcome !== "waiting") throw new Error(`The ask did not wait: ${waiting.outcome}`);
   const sent: Array<ServerToDaemon> = [];
@@ -179,7 +179,7 @@ it("opens the one-hour window on approval with no token; the next ask of the mac
       .exec<{ body: string }>("SELECT body FROM circles WHERE id = 'agents'")
       .toArray();
     const agents = JSON.parse(row?.body ?? "null") as Circle;
-    const members = [machineChip("vps", { writesCode: { mode: "ask", circleId: "agents" } })];
+    const members = [machineChip("vps", { changes: { mode: "ask", circleId: "agents" } })];
     state.storage.sql.exec(
       "UPDATE circles SET body = ? WHERE id = 'agents'",
       JSON.stringify({ ...agents, members }),
@@ -189,24 +189,27 @@ it("opens the one-hour window on approval with no token; the next ask of the mac
   expect(await askToken(stub, "Yarden-zamir/riffle")).toMatchObject({ outcome: "waiting" });
 });
 
-it("asks the Owner for a read token when only writes code is off (K-1776)", async () => {
+it("gives a read token at once when only changes is off, because reads starts automatic on a repo in scope (K-1730)", async () => {
   fakeGitHub();
-  const stub = await setup({ writesCode: { mode: "off" } });
-  expect(await askToken(stub, "Yarden-zamir/riffle")).toMatchObject({ outcome: "waiting" });
-  const right = await runInDurableObject(stub, (_, state) =>
-    state.storage.sql.exec<{ right_name: string }>("SELECT right_name FROM proposals").one(),
+  const stub = await setup({ changes: { mode: "off" } });
+  expect(await askToken(stub, "Yarden-zamir/riffle")).toMatchObject({
+    outcome: "done",
+    result: { permission: "read" },
+  });
+  const asks = await runInDurableObject(stub, (_, state) =>
+    state.storage.sql.exec("SELECT id FROM proposals").toArray(),
   );
-  expect(right.right_name).toBe("readsCode");
+  expect(asks).toEqual([]);
 });
 
 it("answers not kitshn for another owner, and refuses an App owner's repo whose code rights are off (K-1760, K-1733)", async () => {
   fakeGitHub();
-  const stub = await setup({ readsCode: { mode: "off" }, writesCode: { mode: "off" } });
+  const stub = await setup({ reads: { mode: "off" }, changes: { mode: "off" } });
   expect(await askToken(stub, "qlik-trial/app")).toMatchObject({ outcome: "not-kitshn" });
   expect(await askToken(stub, "Yarden-zamir/riffle")).toMatchObject({
     outcome: "refused",
-    reason: expect.stringContaining('"reads code" is off'),
-    need: "readsCode",
+    reason: expect.stringContaining('"reads" is off'),
+    need: "reads",
   });
 });
 

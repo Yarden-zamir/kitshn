@@ -323,6 +323,23 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
     // The actor that a device invite adds its token to; null makes a new actor of the token (K-1601).
     "ALTER TABLE device_invites ADD COLUMN actor_id TEXT",
   ],
+  // 45: a proposal belongs to the credential that asked (K-1778): `machine/<id>`, `token/<id>` or `login/<email>`. A
+  // token actor has no machine, so its `machine_id` is empty. The credential never approves its own ask. A call that the
+  // Owner decides now asks for the right "raises access" (K-1778), not "owner".
+  [
+    "ALTER TABLE proposals ADD COLUMN credential TEXT NOT NULL DEFAULT ''",
+    "UPDATE proposals SET credential = 'machine/' || machine_id",
+    "CREATE INDEX proposals_credential ON proposals (credential, state)",
+    "UPDATE proposals SET right_name = 'raisesAccess' WHERE right_name = 'owner'",
+  ],
+  // 46: effects (K-1730). Its code step (`migrateRights`) moves the rights of each chip, the proposals and the approvals
+  // of deploys and handovers to effects, once, in the transaction of the migration. A queued job keeps the approval of
+  // its call with the right names of before, so it fails, and the caller sends it again.
+  [
+    "UPDATE github_tokens SET right_name = CASE right_name WHEN 'writesCode' THEN 'changes' ELSE 'reads' END",
+    `UPDATE jobs SET state = 'failed', output = 'kitshn moved to effects; send the job again (K-1730)'
+      WHERE state = 'queued' AND json_extract(visitor, '$.ownerApproved') IS NOT NULL`,
+  ],
 ];
 
 /** K-819: the migration after which the Durable Object derives the repo ids of older deploy rows. */
@@ -331,6 +348,8 @@ export const REPO_GATE_MIGRATION = 6;
 export const AGENTS_MIGRATION = 42;
 /** K-1778: the migration of the actors; a database or an import from before it runs `migrateMembers`. */
 export const ACTORS_MIGRATION = 44;
+/** K-1730: the migration of the effects; a database or an import from before it runs `migrateRights`. */
+export const EFFECTS_MIGRATION = 46;
 
 /**
  * Runs the migrations after `from`, up to `to` (K-1833 stops at the schema of an export). Returns the new version.

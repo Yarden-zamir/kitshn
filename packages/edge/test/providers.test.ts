@@ -240,7 +240,7 @@ it("stores desired state from a provider, and runs a provider command that an ag
     name: "Agents",
     color: "#ffcc00",
     level: "control",
-    members: [machineChip("vps", { runsCommands: { mode: "automatic" } })],
+    members: [machineChip("vps", { runs: { mode: "automatic" } })],
     match: "any",
     needsPasskey: false,
     endsAt: null,

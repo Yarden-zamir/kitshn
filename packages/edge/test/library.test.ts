@@ -9,12 +9,13 @@ import { key, withActors } from "./actors.ts";
 
 /** K-1116, K-1117: an agent key publishes a page, updates it by name, and the owner restores its previous version. */
 
-const agentCircle = (id: string, clientId: string, x: number, publishes = false): Circle => ({
+const agentCircle = (id: string, clientId: string, x: number, shares = false): Circle => ({
   id,
   name: id,
   color: "#7c3aed",
   level: "control",
-  members: [key(`t-${id}`, clientId, id, publishes ? { publishes } : {})],
+  // K-1730: taking down its own page has no Undo, so the key needs "destroys".
+  members: [key(`t-${id}`, clientId, id, shares ? { shares, destroys: true } : { destroys: true })],
   match: "any",
   needsPasskey: false,
   endsAt: null,

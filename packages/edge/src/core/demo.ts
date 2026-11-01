@@ -134,7 +134,7 @@ export function demo() {
       {
         _tag: "actor",
         actorId: botActor.id,
-        rights: { addsApps: { mode: "off" }, publishes: { mode: "off" } },
+        rights: { creates: { mode: "off" }, shares: { mode: "off" } },
       },
     ],
     match: "any",

@@ -43,7 +43,7 @@ import {
 } from "./model.ts";
 import { placeInside } from "./place.ts";
 import { seed } from "./seed.ts";
-import { circleMatches, ipInRange, visitorLevel } from "./visitor.ts";
+import { adminPasskey, circleMatches, ipInRange, visitorLevel } from "./visitor.ts";
 import { actorOf, chip, login, machineKey, token } from "./testkit.ts";
 
 const OWNER = "owner@example.com";
@@ -293,16 +293,14 @@ describe("changes and undo (K-1501, K-1502)", () => {
       {
         _tag: "circle",
         id: "owner",
-        after: { ...owner, members: [...owner.members, chip(BOT, { publishes: { mode: "automatic" } })] },
+        after: { ...owner, members: [...owner.members, chip(BOT, { shares: { mode: "automatic" } })] },
       },
     ]);
-    expect(summarize(withBot, gave.after, gave.changes)).toBe("Set publishes of Bot to automatic in Owner");
+    expect(summarize(withBot, gave.after, gave.changes)).toBe("Set shares of Bot to automatic in Owner");
     const took = edit(gave.after, [
       { _tag: "circle", id: "owner", after: { ...owner, members: [...owner.members, chip(BOT)] } },
     ]);
-    expect(summarize(gave.after, took.after, took.changes)).toBe(
-      "Set publishes of Bot to default (asks the Owner) in Owner",
-    );
+    expect(summarize(gave.after, took.after, took.changes)).toBe("Set shares of Bot to default in Owner");
   });
 
   it("uses a share override over the circle default (K-205)", () => {
@@ -493,7 +491,15 @@ describe("Access compile (K-401 to K-403)", () => {
   it("gives each addressed card an application with the policies of its circles", () => {
     const state = start();
     const access = desiredAccess(state, 0);
-    expect(access.apps.get("app:kitshn-admin:kit.example.com")?.policyKeys).toEqual(["policy:owner:people"]);
+    // K-1778: every token of an actor reaches the gate of `/op`, also with no machine joined.
+    expect(access.apps.get("app:kitshn-admin:kit.example.com")?.policyKeys).toEqual([
+      OP_TOKENS_POLICY,
+      "policy:owner:people",
+    ]);
+    expect(access.policies.get(OP_TOKENS_POLICY)?.include).toEqual([
+      { service_token: { token_id: "t" } },
+      { service_token: { token_id: "t1" } },
+    ]);
     expect(access.apps.get("app:riffle:riffle.example.com")?.policyKeys).toEqual(["policy:owner:people"]);
     const moved = applyChanges(
       state,
@@ -522,6 +528,7 @@ describe("Access compile (K-401 to K-403)", () => {
     ]);
     expect(desiredAccess(joined, 0).policies.get(OP_TOKENS_POLICY)?.include).toEqual([
       { service_token: { token_id: "t" } },
+      { service_token: { token_id: "t1" } },
     ]);
     expect(
       desiredAccess({ ...joined, paused: "lockdown" }, 0).apps.get("app:kitshn-admin:kit.example.com")
@@ -1017,8 +1024,8 @@ describe("emergency pause (K-1504)", () => {
     };
     expect(() => refuseRaiseWhilePaused(placed, tray)).not.toThrow();
     // K-718: a right that opens raises access; one that turns off lowers it.
-    const off = chip(BOT, { publishes: { mode: "off" } });
-    const on = chip(BOT, { publishes: { mode: "automatic" } });
+    const off = chip(BOT, { shares: { mode: "off" } });
+    const on = chip(BOT, { shares: { mode: "automatic" } });
     const withDevice = (member: Circle["members"][number]) => ({
       ...paused,
       circles: new Map(paused.circles).set("owner", { ...owner, members: [...owner.members, member] }),
@@ -1400,6 +1407,24 @@ describe("actors and the passkey line (K-1778)", () => {
     const riffle = state.resources.get("riffle")!;
     const shared = { ...state, places: new Map(state.places).set("riffle", { x: 400, y: 0 }) };
     expect(visitorLevel(shared, riffle, tokenOf("c1.access"), 0)).toBe("view");
+  });
+
+  it("takes a login of the admin as a passkey proof only when every circle that gives it the admin needs a passkey", () => {
+    const state = withPhones();
+    const owner = { email: OWNER, clientId: null, ip: null };
+    expect(adminPasskey(state, owner, 0)).toBe(true);
+    expect(adminPasskey(state, tokenOf("owner-phone.access"), 0)).toBe(false);
+    // A second circle without a passkey gives the owner the admin too, so Access may have let the login in without one.
+    const plain = {
+      ...circle(state, "her"),
+      level: "control" as const,
+      members: [chip(login(OWNER))],
+      x: 0,
+      y: 40,
+      r: 50,
+    };
+    const both = { ...state, circles: new Map(state.circles).set("her", plain) };
+    expect(adminPasskey(both, owner, 0)).toBe(false);
   });
 
   it("compiles no token, machine or network of a passkey circle into Access", () => {

@@ -1,5 +1,5 @@
-// Machine rights (K-1720, K-1776): the rights editor of a machine in an agent circle, with "default" (asks the Owner),
-// "off", and the rights "adds pages" and "restores". The scenario puts the demo machine vps in the Agents circle.
+// Effects (K-1720, K-1730): the effects editor of a machine in an agent circle, with "default", "off", and a warning
+// for "shares" at automatic. The scenario puts the demo machine vps in the Agents circle.
 import { machineActorId } from "../../src/core/model.ts";
 import { DESKTOP, type Scenario } from "../capture-views.ts";
 
@@ -18,9 +18,9 @@ export default {
           _tag: "actor",
           actorId: machineActorId("vps"),
           rights: {
-            deploys: { mode: "automatic" },
-            addsPages: { mode: "automatic" },
-            runsCommands: { mode: "off" },
+            changes: { mode: "automatic" },
+            shares: { mode: "automatic" },
+            runs: { mode: "off" },
           },
         });
         socket.send(JSON.stringify(data));
@@ -32,7 +32,7 @@ export default {
     await page.waitForTimeout(600);
     await page.locator('[data-head="agents"]').first().click();
     await page.waitForTimeout(500);
-    await page.locator("fieldset.right-mode", { hasText: "adds pages" }).first().scrollIntoViewIfNeeded();
+    await page.locator("fieldset.right-mode", { hasText: "shares" }).first().scrollIntoViewIfNeeded();
     await shot("rights");
   },
 } satisfies Scenario;

@@ -28,7 +28,7 @@ export default {
         const agents = data.snapshot?.circles?.find((circle) => circle.id === "agents");
         agents?.members.push(
           { _tag: "actor", actorId: machineActorId("vps"), rights: { maintains: { mode: "automatic" } } },
-          { _tag: "actor", actorId: builder.id, rights: { deploys: { mode: "automatic" } } },
+          { _tag: "actor", actorId: builder.id, rights: { changes: { mode: "automatic" } } },
         );
         data.snapshot?.actors?.push(builder);
         const person = data.snapshot?.actors?.find((actor) => actor.id === her);

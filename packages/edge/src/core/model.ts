@@ -1,4 +1,5 @@
 import type { Machine } from "./machine.ts";
+import type { Effect } from "kitshn/operations";
 import type {
   ProviderCardSetting,
   ProviderFact,
@@ -138,55 +139,23 @@ export type Member =
   | {
       readonly _tag: "actor";
       readonly actorId: string;
-      readonly rights?: Readonly<Partial<Record<Right, RightMode>>>;
+      /** K-1730: the mode of each effect that this chip sets. */
+      readonly rights?: Readonly<Partial<Record<Effect, RightMode>>>;
     }
   | { readonly _tag: "domain"; readonly domain: string }
   | { readonly _tag: "ip"; readonly range: string }
   | { readonly _tag: "everyone" };
 
-/** K-1730: the rights of an actor in a circle. Every right starts at "default". */
-export const RIGHTS = [
-  "addsApps",
-  "publishes",
-  "deploys",
-  "runsCommands",
-  "readsCode",
-  "writesCode",
-  "addsAudiences",
-  "getsPasses",
-  "addsPages",
-  "restores",
-  /** K-1777: machine care, such as restart, update, order and automatic update; `OPERATIONS` lists each row. */
-  "maintains",
-  /** K-1777: the full map read of `kitshn state`, through AGENT_READ. */
-  "readsMap",
-  /** K-1778: the calls that the Owner decides: rows of scope "never", a target out of scope, access raises (K-715). */
-  "raisesAccess",
-] as const;
-export type Right = (typeof RIGHTS)[number];
-export const RIGHT_NAMES: Record<Right, string> = {
-  addsApps: "adds apps",
-  publishes: "publishes",
-  deploys: "deploys",
-  runsCommands: "runs commands",
-  readsCode: "reads code",
-  writesCode: "writes code",
-  addsAudiences: "adds audiences",
-  getsPasses: "gets passes",
-  addsPages: "adds pages",
-  restores: "restores",
-  maintains: "maintains",
-  readsMap: "reads the map",
-  raisesAccess: "raises access",
-};
-/** K-1725: the rights that the map warns about when no person approves them. */
-export const HIGH_RISK_RIGHTS: ReadonlySet<Right> = new Set([
-  "raisesAccess",
-  "runsCommands",
-  "deploys",
-  "writesCode",
-  "addsApps",
-  "restores",
+export { EFFECTS, type Effect } from "kitshn/operations";
+
+/** K-1725: the effects that the map warns about when no person approves them. */
+export const HIGH_RISK_EFFECTS: ReadonlySet<Effect> = new Set([
+  "creates",
+  "changes",
+  "runs",
+  "destroys",
+  "shares",
+  "secrets",
 ]);
 
 /** K-1754: an attested label must have one of these values. */

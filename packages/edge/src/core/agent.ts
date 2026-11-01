@@ -1,11 +1,13 @@
 import type { Change } from "./changes.ts";
 import type { Command } from "./machine.ts";
 import {
+  ADMIN_RESOURCE_ID,
   CIRCLE_ALONE_KEY,
   type Circle,
   type Directory,
   EVERYONE_CIRCLE_ID,
-  type Right,
+  OWNER_CIRCLE_ID,
+  type Effect,
   type Member,
   type OpenRightMode,
   type Point,
@@ -19,9 +21,17 @@ import {
   shareKey,
   type CardKind,
 } from "./model.ts";
+import { effectDefault } from "./operations.ts";
 import { placeInside } from "./place.ts";
 import { coveringCards } from "./repoGroups.ts";
-import { type Attested, type Visitor, actorMatches, circleMatches, visitorLevel } from "./visitor.ts";
+import {
+  type Attested,
+  type Visitor,
+  actorMatches,
+  circleMatches,
+  passkeyHolds,
+  visitorLevel,
+} from "./visitor.ts";
 
 /**
  * K-718, K-1730, K-1778: true when the member is an actor that the proof is, with at least one right set in this circle,
@@ -72,33 +82,54 @@ const machineVisitor = (state: State, machineId: string): Visitor | null => {
 };
 
 /**
- * K-1720, K-1730: the mode of one right of a proof through its agent circles: "automatic" from any matched chip wins,
- * else the first "ask <circle>". Null means that no chip opens it.
+ * K-1720, K-1730: the set mode of one effect of a proof through its chips: "automatic" from any matched chip wins, else
+ * the first "ask <circle>". Null means that no chip opens it; `effectiveMode` adds the default.
  */
 export const rightMode = (
   state: State,
   visitor: Visitor,
-  right: Right,
+  right: Effect,
   now: number,
   attested: Attested | null,
 ): OpenRightMode | null => pickMode(rightModes(state, visitor, right, now, attested));
 
-/** K-1776: true when a matched chip sets this right to "off" and no matched chip opens it. */
+/** K-1776: true when a matched chip sets this effect to "off" and no matched chip opens it. */
 export const rightOff = (
   state: State,
   visitor: Visitor,
-  right: Right,
+  right: Effect,
   now: number,
   attested: Attested | null,
 ) =>
   rightModes(state, visitor, right, now, attested).some((mode) => mode.mode === "off") &&
   rightMode(state, visitor, right, now, attested) === null;
 
+/** K-1730: the mode of an effect for a proof, with the default of the effect where no chip sets it. */
+export function effectiveMode(
+  state: State,
+  visitor: Visitor,
+  effect: Effect,
+  now: number,
+  attested: Attested | null,
+): RightMode {
+  const open = rightMode(state, visitor, effect, now, attested);
+  if (open !== null) return open;
+  if (rightOff(state, visitor, effect, now, attested)) return { mode: "off" };
+  switch (effectDefault(effect, circlesOf(state, visitor, now, attested).size > 0)) {
+    case "automatic":
+      return { mode: "automatic" };
+    case "ask the Owner":
+      return { mode: "ask", circleId: OWNER_CIRCLE_ID };
+    case "off":
+      return { mode: "off" };
+  }
+}
+
 /** K-1720: `rightMode` for a call of a machine's daemon, with the verified labels of the call (null: none). */
 export function machineRightMode(
   state: State,
   machineId: string,
-  right: Right,
+  right: Effect,
   now: number,
   attested: Attested | null,
 ): OpenRightMode | null {
@@ -106,33 +137,43 @@ export function machineRightMode(
   return visitor ? rightMode(state, visitor, right, now, attested) : null;
 }
 
-/** K-1776: `rightOff` for a call of a machine's daemon. */
-export const machineRightOff = (
+/** K-1730: `effectiveMode` for a call of a machine's daemon; a machine that is gone has every effect off. */
+export function machineEffectiveMode(
   state: State,
   machineId: string,
-  right: Right,
+  effect: Effect,
   now: number,
   attested: Attested | null,
-) => {
+): RightMode {
   const visitor = machineVisitor(state, machineId);
-  return visitor !== null && rightOff(state, visitor, right, now, attested);
-};
+  return visitor ? effectiveMode(state, visitor, effect, now, attested) : { mode: "off" };
+}
 
-/** K-1778: the chips of the actors that the proof is, in its agent circles. */
+/**
+ * K-1730, K-1778: the chips of the actors that the proof is, in every circle that holds it now. Effects count for every
+ * actor, persons too; a passkey circle holds only a login (the passkey line).
+ */
 const matchedChips = (state: State, visitor: Visitor, now: number, attested: Attested | null) =>
-  [...circlesOf(state, visitor, now, attested)].flatMap((id) =>
-    (state.circles.get(id)?.members ?? []).flatMap((member) => {
-      const actor = memberActor(member, state);
-      return member._tag === "actor" && actor && actorMatches(actor, visitor, state.machines, attested)
-        ? [{ circleId: id, member }]
-        : [];
-    }),
-  );
+  [...state.circles.values()]
+    .filter(
+      (circle) =>
+        passkeyHolds(circle, visitor) &&
+        (circle.endsAt === null || circle.endsAt > now) &&
+        circleMatches(circle, visitor, state, attested),
+    )
+    .flatMap((circle) =>
+      circle.members.flatMap((member) => {
+        const actor = memberActor(member, state);
+        return member._tag === "actor" && actor && actorMatches(actor, visitor, state.machines, attested)
+          ? [{ circleId: circle.id, member }]
+          : [];
+      }),
+    );
 
 function rightModes(
   state: State,
   visitor: Visitor,
-  right: Right,
+  right: Effect,
   now: number,
   attested: Attested | null,
 ): Array<RightMode> {
@@ -155,19 +196,19 @@ export const machineOf = (state: State, visitor: Visitor) =>
     : [...state.machines.values()].find((machine) => machine.clientId === visitor.clientId);
 
 /**
- * K-1720: a proof has a right when the right is "automatic" on a chip of its actors, or when an approval of its circle
+ * K-1720: a proof has an effect when it is "automatic" for the proof (`effectiveMode`), or when an approval of its circle
  * (`approved`) gave it for this one call. K-1723, K-1776: an approval of exactly this call counts also for a right that
  * no circle sets; "off" never gets this far, because the approval refuses first (proposalGone).
  */
 export function agentHas(
   state: State,
   visitor: Visitor,
-  right: Right,
+  right: Effect,
   now: number,
   attested: Attested | null,
-  approved: ReadonlyArray<Right> = [],
+  approved: ReadonlyArray<Effect> = [],
 ) {
-  return approved.includes(right) || rightMode(state, visitor, right, now, attested)?.mode === "automatic";
+  return approved.includes(right) || effectiveMode(state, visitor, right, now, attested).mode === "automatic";
 }
 
 /**
@@ -300,7 +341,7 @@ export const isEveryoneCircle = (circle: Circle) =>
  *
  * A card that the key added (`added`: the cards of repos that it allowed, K-819) may also sit in the Everyone
  * circle, but only together with one of its agent circles at `control`, so the key keeps managing it. Only a
- * key that "publishes" moves such a card into Everyone; any key may take it out again.
+ * key with "shares" moves such a card into Everyone; any key may take it out again.
  */
 export function agentRefusal(
   state: State,
@@ -310,11 +351,11 @@ export function agentRefusal(
   now: number,
   added: ReadonlySet<string>,
   attested: Attested | null,
-  approved: ReadonlyArray<Right> = [],
+  approved: ReadonlyArray<Effect> = [],
 ) {
   const controlled = cardsControlledBy(state, visitor, now, attested);
   const own = circlesOf(state, visitor, now, attested);
-  const publishes = agentHas(state, visitor, "publishes", now, attested, approved);
+  const publishes = agentHas(state, visitor, "shares", now, attested, approved);
   for (const edit of changes) {
     if (edit._tag !== "place") return `An agent may only move cards; it cannot change a ${edit._tag}.`;
     if (!controlled.has(edit.id))
@@ -341,6 +382,24 @@ export function agentRefusal(
   return null;
 }
 
+/**
+ * K-1778: whether "shares" reaches these changes beyond the rule above: each one moves a card that the caller manages,
+ * other than the admin card (K-104). So "shares" puts the caller's own cards into any circle or Everyone, and an edit of
+ * a circle, a member, a level, a stack, the chip effects or the pause stays with the Owner.
+ */
+export function sharesReach(
+  state: State,
+  visitor: Visitor,
+  changes: ReadonlyArray<Change>,
+  now: number,
+  attested: Attested | null,
+) {
+  const controlled = cardsControlledBy(state, visitor, now, attested);
+  return changes.every(
+    (change) => change._tag === "place" && change.id !== ADMIN_RESOURCE_ID && controlled.has(change.id),
+  );
+}
+
 /** K-718: why a published card would leave every agent circle of the key. */
 function publishRefusal(state: State, visitor: Visitor, now: number, attested: Attested | null) {
   const everyone = [...state.circles.values()].find(isEveryoneCircle);
@@ -357,7 +416,7 @@ function publishRefusal(state: State, visitor: Visitor, now: number, attested: A
 /**
  * K-1116: where a page or a file that an agent key publishes lands: in the tray without a circle, else inside exactly
  * `circleId`, which must be one of its agent circles at `control`. With `publish`, in the overlap of that circle (or
- * its first agent circle) and Everyone, which needs "may publish" (K-718). It keeps clear of the cards on the map.
+ * its first agent circle) and Everyone, which needs "shares" (K-718). It keeps clear of the cards on the map.
  * A string names why not.
  */
 export function agentUploadPlace(
@@ -367,7 +426,7 @@ export function agentUploadPlace(
   publish: boolean,
   now: number,
   attested: Attested | null,
-  approved: ReadonlyArray<Right> = [],
+  approved: ReadonlyArray<Effect> = [],
 ): Point | null | string {
   if (circleId === null && !publish) return null;
   const homes = controlCircles(state, visitor, now, attested);
@@ -383,8 +442,8 @@ export function agentUploadPlace(
       placeInside(state, home, new Set([home.id]), taken) ??
       `kitshn finds no free spot inside "${home.name}".`
     );
-  if (!agentHas(state, visitor, "publishes", now, attested, approved))
-    return 'This agent may not publish. The owner turns on "may publish" for it (K-718).';
+  if (!agentHas(state, visitor, "shares", now, attested, approved))
+    return 'This agent may not publish: "shares" is not automatic for it. The owner sets it (K-718).';
   const everyone = [...state.circles.values()].find(isEveryoneCircle);
   if (!everyone) return "The map has no Everyone circle.";
   return (
@@ -465,14 +524,14 @@ export function agentDeployPlan(
 }
 
 /**
- * K-1733, K-1761: the mode of a code right of a machine for one repo. A right counts only in an agent circle that holds a
- * card covering the repo (a repo group or its repo card) at `control`. "writes code" includes "reads code". Automatic
- * from any such circle wins, else the first "ask <circle>"; null is off.
+ * K-1733, K-1761: the set mode of "reads" or "changes" of a machine for one repo. It counts only on a chip in a circle
+ * that holds a card covering the repo (a repo group or its repo card) at `control`. "changes" includes "reads".
+ * Automatic from any such circle wins, else the first "ask <circle>"; null means that no such chip opens it.
  */
 export const codeRightMode = (
   state: State,
   machineId: string,
-  right: "readsCode" | "writesCode",
+  right: "reads" | "changes",
   fullName: string,
   now: number,
   attested: Attested | null,
@@ -482,7 +541,7 @@ export const codeRightMode = (
 export const codeRightOff = (
   state: State,
   machineId: string,
-  right: "readsCode" | "writesCode",
+  right: "reads" | "changes",
   fullName: string,
   now: number,
   attested: Attested | null,
@@ -490,10 +549,39 @@ export const codeRightOff = (
   codeModes(state, machineId, right, fullName, now, attested, true).some((mode) => mode.mode === "off") &&
   codeRightMode(state, machineId, right, fullName, now, attested) === null;
 
+/**
+ * K-1730, K-1733: true when a repo is in scope of a machine in an agent circle: a chip of the machine sits in a circle that
+ * holds a card covering the repo at `control`. Then an unset "reads" takes its default for the repo.
+ */
+export function codeInScope(
+  state: State,
+  machineId: string,
+  fullName: string,
+  now: number,
+  attested: Attested | null,
+): boolean {
+  const machine = state.machines.get(machineId);
+  if (!machine) return false;
+  const visitor = { email: null, clientId: machine.clientId, ip: null };
+  if (circlesOf(state, visitor, now, attested).size === 0) return false;
+  const covering = coveringCards(state, fullName);
+  return matchedChips(state, visitor, now, attested).some(({ circleId }) => {
+    const circle = state.circles.get(circleId);
+    return (
+      circle !== undefined &&
+      covering.some(
+        (card) =>
+          circlesHolding(state, card.id).some((held) => held.id === circleId) &&
+          levelIn(state, card.id, circle) === "control",
+      )
+    );
+  });
+}
+
 function codeModes(
   state: State,
   machineId: string,
-  right: "readsCode" | "writesCode",
+  right: "reads" | "changes",
   fullName: string,
   now: number,
   attested: Attested | null,
@@ -502,9 +590,8 @@ function codeModes(
   const machine = state.machines.get(machineId);
   if (!machine) return [];
   const covering = coveringCards(state, fullName);
-  // "writes code" includes reading for an open mode; "off" counts only for its own right (K-1776).
-  const rights: ReadonlyArray<Right> =
-    right === "readsCode" && !exact ? ["readsCode", "writesCode"] : [right];
+  // "changes" includes reading for an open mode; "off" counts only for its own effect (K-1776).
+  const rights: ReadonlyArray<Effect> = right === "reads" && !exact ? ["reads", "changes"] : [right];
   const visitor = { email: null, clientId: machine.clientId, ip: null };
   return matchedChips(state, visitor, now, attested).flatMap(({ circleId, member }) => {
     const circle = state.circles.get(circleId);

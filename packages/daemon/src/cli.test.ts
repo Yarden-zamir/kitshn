@@ -156,10 +156,10 @@ describe("command text (UX audit C5, C10, C11, C12)", () => {
   it("names the rights by their map names, with the circle that an ask goes to", () => {
     expect(
       rightLines([
-        { id: "addsPages", name: "adds pages", mode: "automatic" },
-        { id: "deploys", name: "deploys", mode: "ask", circle: { id: "owner", name: "Owner" } },
+        { id: "creates", name: "creates", mode: "automatic" },
+        { id: "changes", name: "changes", mode: "ask", circle: { id: "owner", name: "Owner" } },
       ]),
-    ).toEqual(["adds pages: automatic", "deploys: asks Owner"]);
+    ).toEqual(["creates: automatic", "changes: asks Owner"]);
   });
 
   it("lists the exposed names when unexpose finds no site", () => {

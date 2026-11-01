@@ -26,7 +26,6 @@ import {
   type TypedKind,
   actorMember,
   deleteActorEdits,
-  isAgentCircle,
   machineMember,
   memberFrom,
   memberKind,
@@ -36,7 +35,7 @@ import { callApi } from "./store.ts";
 import { Switch, useDialogEscape } from "./controls.tsx";
 import { ItemIcon } from "./ItemIcon.tsx";
 import { ActorRights, withMode } from "./ActorRights.tsx";
-import { formatConditions, parseConditions, selfApprovers } from "../core/asks.ts";
+import { formatConditions, parseConditions } from "../core/asks.ts";
 import type { ComponentChildren } from "preact";
 import { levelEdit } from "./actions.ts";
 import { type DeviceInvite, InviteDialog } from "./Invite.tsx";
@@ -683,7 +682,6 @@ export function CircleEditor(props: {
     circlesHolding(state, resource.id).includes(circle),
   );
   // K-718, K-1778: rights count only in an agent circle: actors that are not people, and no rule.
-  const agentCircle = isAgentCircle(circle, state);
   const hasPeople = circle.members.some((member) => {
     const actor = memberActor(member, state);
     return member._tag === "domain" || (actor !== undefined && isPerson(actor));
@@ -747,7 +745,7 @@ export function CircleEditor(props: {
               extra={
                 member._tag === "actor" && actor ? (
                   <>
-                    {agentCircle && !isPerson(actor) ? (
+                    {!circle.needsPasskey || isPerson(actor) ? (
                       <ActorRights
                         member={member}
                         actor={actor}
@@ -816,12 +814,6 @@ export function CircleEditor(props: {
             />
           );
         })}
-        {selfApprovers(state.circles, circle).map((actorId) => (
-          <li key={`self-${actorId}`} class="warning">
-            ⚠️ {state.actors.get(actorId)?.name ?? actorId} can approve its own asks here: a right of it asks
-            this circle (K-1727).
-          </li>
-        ))}
         {circle.members.length === 0 ? (
           <li class="help">Nobody yet. A circle with no members matches nobody.</li>
         ) : null}
