@@ -71,6 +71,105 @@ it("reads few rows on a wake and on each snapshot", async () => {
   expect(rowsRead).toBeLessThan(100);
 });
 
+/**
+ * K-1302: the hot paths with grown tables, as on 2026-11-01, when the free plan ran out. A load (each change) keeps the
+ * History it holds, a snapshot (each map update and `kitshn ops state`) reads no whole notifications or library table,
+ * and a link event trims by id.
+ */
+it("reads few rows per change, snapshot and link event once the tables grow", async () => {
+  stubAccessCerts();
+  const stub = env.KITSHN.getByName("kitshn");
+  const headers = {
+    "cf-access-jwt-assertion": await accessToken("admin-aud", { email: "owner@example.com" }),
+  };
+  let rowsRead = 0;
+  await runInDurableObject(stub, (_instance, state) => {
+    const sql = state.storage.sql;
+    const now = Date.now();
+    for (let i = 0; i < 300; i++)
+      sql.exec(
+        "INSERT INTO revisions (at, actor, summary, changes) VALUES (?, ?, 'test', '[]')",
+        now,
+        JSON.stringify({ _tag: "kitshn", reason: "test" }),
+      );
+    for (let i = 0; i < 400; i++)
+      sql.exec(
+        `INSERT INTO notifications (source, key, recipients, level, priority, title, text, actions, state, opened_at,
+           closed_at, episode) VALUES ('uptime', ?, '[]', 'view', 'normal', 't', 't', '[]', ?, ?, ?, 'e')`,
+        `card-${i}`,
+        i < 2 ? "dismissed" : "closed",
+        now,
+        now,
+      );
+    for (let i = 0; i < 60; i++)
+      sql.exec(
+        `INSERT INTO library (id, kind, title, size, content_type, created_at)
+         VALUES (?, 'page', 't', 1, 'text/html', ?)`,
+        `page-${i}`,
+        now,
+      );
+    for (let i = 0; i < 2100; i++)
+      sql.exec(
+        `INSERT INTO link_events (at, source, target, kind, name, outcome)
+         VALUES (?, 'mac', 'vps', 'exec', 'ls', 'succeeded')`,
+        now,
+      );
+  });
+  // A new object, so the first snapshot reads History with these rows.
+  await evictDurableObject(stub);
+  await runInDurableObject(stub, (_instance, state) => {
+    const sql = state.storage.sql;
+    const exec = sql.exec.bind(sql);
+    sql.exec = ((query: string, ...bindings: Array<SqlStorageValue>) => {
+      const cursor = exec(query, ...bindings);
+      const toArray = cursor.toArray.bind(cursor);
+      cursor.toArray = () => {
+        const rows = toArray();
+        rowsRead += cursor.rowsRead;
+        return rows;
+      };
+      return cursor;
+    }) as typeof sql.exec;
+  });
+  // The first snapshot reads History, and the first link event trims the 100 events beyond 2,000.
+  await send("/api/state", { headers });
+  const recordExec = (instance: unknown) =>
+    (instance as { recordExec(row: object, exit: object): void }).recordExec(
+      { source: "mac", target: "vps", thread: null, command: "ls", cwd: null },
+      { exitCode: 0, reason: null },
+    );
+  await runInDurableObject(stub, recordExec);
+  rowsRead = 0;
+  await send("/api/state", { headers });
+  const snapshot = rowsRead;
+  rowsRead = 0;
+  // A writer that inserts a revision and then loads, as most writers do.
+  const written = await runInDurableObject(stub, (instance, state) => {
+    const [row] = state.storage.sql
+      .exec<{ id: number }>(
+        "INSERT INTO revisions (at, actor, summary, changes) VALUES (?, ?, 'written', '[]') RETURNING id",
+        Date.now(),
+        JSON.stringify({ _tag: "kitshn", reason: "test" }),
+      )
+      .toArray();
+    (instance as unknown as { load(): void }).load();
+    return row!.id;
+  });
+  const after = (await (await send("/api/state", { headers })).json()) as {
+    revisions: ReadonlyArray<RevisionView>;
+  };
+  const changeAndSnapshot = rowsRead;
+  expect(after.revisions[0]?.id).toBe(written);
+  expect(after.revisions).toHaveLength(200);
+  rowsRead = 0;
+  await runInDurableObject(stub, recordExec);
+  const linkEvent = rowsRead;
+  // Without the indexes, the History refresh and the trim by id: 188, 505 and 2,007 rows.
+  expect(snapshot).toBeLessThan(100);
+  expect(changeAndSnapshot).toBeLessThan(300);
+  expect(linkEvent).toBeLessThan(10);
+});
+
 /** What a wake does: the load, which leaves History unread. */
 const wake = (stub: DurableObjectStub) =>
   runInDurableObject(stub, (instance) => (instance as unknown as { load(): void }).load());

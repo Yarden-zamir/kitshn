@@ -618,6 +618,11 @@ const decodeExecRun = Schema.decodeUnknownSync(ExecRunSchema);
 const LINK_BROADCAST_MS = 10_000;
 /** K-1610: the forwarded calls of one machine that kitshn records in a minute; the rest are counted and dropped. */
 const LINK_CALLS_PER_MINUTE = 120;
+/**
+ * K-1610: the newest 2,000 link events stay, trimmed by id right after an insert, so a trim reads only the rows that
+ * it deletes, not the whole table (K-1302).
+ */
+const TRIM_LINK_EVENTS = "DELETE FROM link_events WHERE id <= last_insert_rowid() - 2000";
 
 /** K-722: one run that kitshn relays; a row of `exec_runs`, so an evicted Durable Object finds it again. */
 type ExecRow = {
@@ -854,6 +859,8 @@ export class Kitshn extends DurableObject<Env> {
    * costs about 4 rows per revision. Writers change it only when it is loaded, because SQL has their row.
    */
   private revisionCache: Array<RevisionView> | null = null;
+  /** K-1302: a load can follow new revisions; the next read takes only the rows after the newest one it holds. */
+  private revisionsStale = false;
   /** K-1126: the last uptime turn of this wake; an alarm in the same turn fetches nothing. */
   private uptimeSlot: number | null = null;
   /** K-1125: the cards that are down or failing, read on first use (K-1302); a card with no row is up. */
@@ -904,6 +911,22 @@ export class Kitshn extends DurableObject<Env> {
     (notification: Notification, action: string, caller: Caller) => Promise<string | null> | string | null
   >();
   private get revisions(): Array<RevisionView> {
+    if (this.revisionCache && this.revisionsStale) {
+      const fresh = this.loadRevisions(this.revisionCache[0]?.id ?? 0);
+      const undone = new Map(
+        fresh.flatMap((revision) =>
+          revision.undoes === null ? [] : [[revision.undoes, revision.id] as const],
+        ),
+      );
+      this.revisionCache = [
+        ...fresh,
+        ...this.revisionCache.map((old) => {
+          const undoneBy = undone.get(old.id);
+          return undoneBy === undefined ? old : { ...old, undoneBy };
+        }),
+      ].slice(0, RECENT_REVISIONS);
+    }
+    this.revisionsStale = false;
     this.revisionCache ??= this.loadRevisions();
     return this.revisionCache;
   }
@@ -1030,6 +1053,9 @@ export class Kitshn extends DurableObject<Env> {
    * kitshn never prunes; `sql` drops this memo on every write that names the table.
    */
   private deployFacts: DeployFacts | null = null;
+  /** K-1302: the newest 50 rows of each event table, which each snapshot shows; `sql` drops them on a write. */
+  private recentAskRows: Array<AskEventRow> | null = null;
+  private recentLinkRows: Array<LinkEventRow> | null = null;
   /** K-825: when kitshn last started a build for the placement of a card; in memory, so an eviction asks once more. */
   private readonly placementBuilds = new Map<string, number>();
 
@@ -1477,11 +1503,11 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   private sql<T extends Record<string, SqlStorageValue>>(query: string, ...bindings: Array<SqlStorageValue>) {
-    if (
-      !query.trimStart().startsWith("SELECT") &&
-      (query.includes("deploys") || query.includes("deploy_instances"))
-    )
-      this.deployFacts = null;
+    if (!query.trimStart().startsWith("SELECT")) {
+      if (query.includes("deploys") || query.includes("deploy_instances")) this.deployFacts = null;
+      if (query.includes("ask_events")) this.recentAskRows = null;
+      if (query.includes("link_events")) this.recentLinkRows = null;
+    }
     if (query.trimStart().startsWith("INSERT INTO jobs")) this.jobsAdded = true;
     return this.ctx.storage.sql.exec<T>(query, ...bindings).toArray();
   }
@@ -1583,14 +1609,15 @@ export class Kitshn extends DurableObject<Env> {
     this.iconCache = null;
     this.accessWarnings = JSON.parse(this.meta("access_warnings") ?? "[]") as Array<string>;
     // The Access rows stay: every write goes through accessStore() or also sets the map (the daily reset).
-    this.revisionCache = null;
+    this.revisionsStale = true;
     this.uptimeCache = null;
     this.openCache = null;
     this.muteCache = null;
     this.dismissedCache = null;
   }
 
-  private loadRevisions(): Array<RevisionView> {
+  /** The recent revisions newer than `after`, newest first. */
+  private loadRevisions(after = 0): Array<RevisionView> {
     const rows = this.sql<{
       id: number;
       at: number;
@@ -1608,7 +1635,8 @@ export class Kitshn extends DurableObject<Env> {
              'members', CASE WHEN json_extract(value, '$._tag') = 'stack'
                THEN json_array(json_extract(value, '$.before.members'), json_extract(value, '$.after.members')) END))
            FROM json_each(changes)) AS targets
-       FROM revisions ORDER BY id DESC LIMIT ?`,
+       FROM revisions WHERE id > ? ORDER BY id DESC LIMIT ?`,
+      after,
       RECENT_REVISIONS,
     );
     // An undo comes after the revision that it undoes, so the undo of a recent revision is a recent row too.
@@ -8721,6 +8749,7 @@ export class Kitshn extends DurableObject<Env> {
         now - REVISION_DAYS * DAY,
         REVISION_COUNT,
       );
+      this.revisionCache = null;
       // K-408: retry what failed once a day.
       this.sql("UPDATE access_objects SET error = NULL WHERE error IS NOT NULL");
       this.sql("DELETE FROM meta WHERE key = 'launcher_failed'");
@@ -8922,9 +8951,10 @@ export class Kitshn extends DurableObject<Env> {
   private showRevision(revision: RevisionView) {
     this.revisionCache &&= [
       revision,
-      ...this.revisionCache.map((old) =>
-        old.id === revision.undoes ? { ...old, undoneBy: revision.id } : old,
-      ),
+      ...this.revisionCache
+        // A read after a load can hold it already.
+        .filter((old) => old.id !== revision.id)
+        .map((old) => (old.id === revision.undoes ? { ...old, undoneBy: revision.id } : old)),
     ].slice(0, RECENT_REVISIONS);
     this.broadcast();
   }
@@ -13913,9 +13943,7 @@ export class Kitshn extends DurableObject<Env> {
       name,
       status >= 200 && status < 400 ? "succeeded" : status === 401 || status === 403 ? "refused" : "failed",
     );
-    this.sql(
-      "DELETE FROM link_events WHERE id <= (SELECT id FROM link_events ORDER BY id DESC LIMIT 1 OFFSET 2000)",
-    );
+    this.sql(TRIM_LINK_EVENTS);
     if (now - this.linkBroadcastAt >= LINK_BROADCAST_MS) {
       this.linkBroadcastAt = now;
       this.broadcast();
@@ -13942,9 +13970,7 @@ export class Kitshn extends DurableObject<Env> {
       execOutcome(exit),
       exit.exitCode,
     );
-    this.sql(
-      "DELETE FROM link_events WHERE id <= (SELECT id FROM link_events ORDER BY id DESC LIMIT 1 OFFSET 2000)",
-    );
+    this.sql(TRIM_LINK_EVENTS);
     // Known limit: the last events of a burst show with the next change of the map; revisit if History must be live.
     if (Date.now() - this.linkBroadcastAt >= LINK_BROADCAST_MS) {
       this.linkBroadcastAt = Date.now();
@@ -13955,23 +13981,17 @@ export class Kitshn extends DurableObject<Env> {
   /** K-1610: the newest 50 link events, of one machine or of all, with machine names. */
   private recentLinkEvents(machineId: string | null = null): Array<LinkEventView> {
     const name = (id: string) => this.state.machines.get(id)?.name ?? id;
-    return this.sql<{
-      id: number;
-      at: number;
-      source: string;
-      target: string;
-      kind: "exec" | "tool";
-      thread: string | null;
-      name: string;
-      cwd: string | null;
-      outcome: LinkEventView["outcome"];
-      exit_code: number | null;
-    }>(
+    const rows =
       machineId === null
-        ? "SELECT * FROM link_events ORDER BY id DESC LIMIT 50"
-        : "SELECT * FROM link_events WHERE source = ? OR target = ? ORDER BY id DESC LIMIT 50",
-      ...(machineId === null ? [] : [machineId, machineId]),
-    ).map(({ exit_code, ...row }) => ({
+        ? (this.recentLinkRows ??= this.sql<LinkEventRow>(
+            "SELECT * FROM link_events ORDER BY id DESC LIMIT 50",
+          ))
+        : this.sql<LinkEventRow>(
+            "SELECT * FROM link_events WHERE source = ? OR target = ? ORDER BY id DESC LIMIT 50",
+            machineId,
+            machineId,
+          );
+    return rows.map(({ exit_code, ...row }) => ({
       ...row,
       source: name(row.source),
       target: name(row.target),
@@ -13981,9 +14001,8 @@ export class Kitshn extends DurableObject<Env> {
 
   /** K-1717: the newest 50 ask events, for History; a snapshot reads at most 50 rows for them. */
   private recentAskEvents(): Array<AskEventView> {
-    return this.sql<AskEventRow>("SELECT * FROM ask_events ORDER BY id DESC LIMIT 50").map((row) =>
-      this.askEventView(row),
-    );
+    this.recentAskRows ??= this.sql<AskEventRow>("SELECT * FROM ask_events ORDER BY id DESC LIMIT 50");
+    return this.recentAskRows.map((row) => this.askEventView(row));
   }
 
   /** K-1756: the newest 50 ask events with one label, of one machine or of all; it reads at most 50 index rows. */
@@ -18624,6 +18643,19 @@ const proposalOf = (row: ProposalRow): Proposal => ({
 });
 
 /** K-1717: a row of the ask events table. */
+interface LinkEventRow extends Record<string, SqlStorageValue> {
+  id: number;
+  at: number;
+  source: string;
+  target: string;
+  kind: "exec" | "tool";
+  thread: string | null;
+  name: string;
+  cwd: string | null;
+  outcome: LinkEventView["outcome"];
+  exit_code: number | null;
+}
+
 interface AskEventRow extends Record<string, SqlStorageValue> {
   readonly id: number;
   readonly at: number;

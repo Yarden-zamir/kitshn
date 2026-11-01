@@ -351,6 +351,13 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
     // K-827: the repository of an instance that is not the home one; null for the card's own repository.
     "ALTER TABLE backups ADD COLUMN repository TEXT",
   ],
+  // 48: rows read (K-1302). Each wake, load and snapshot filters these tables; an index reads only the rows it needs.
+  [
+    "CREATE INDEX notifications_state ON notifications (state)",
+    "CREATE INDEX library_previous ON library (previous_size) WHERE previous_size IS NOT NULL",
+    "CREATE INDEX library_added ON library (kind) WHERE added_by IS NOT NULL",
+    "CREATE INDEX repos_first_seen ON repos (first_seen)",
+  ],
 ];
 
 /** K-819: the migration after which the Durable Object derives the repo ids of older deploy rows. */
