@@ -126,42 +126,62 @@ const owner = {
   reason: null,
 };
 
-it("decides an apply that raises access by shares: automatic runs, ask waits, off refuses (K-1778)", async () => {
+it("decides a move of its own cards beyond the rule by shares, and asks the Owner for a circle edit whatever shares says (K-1778)", async () => {
   const results: Array<unknown> = [];
   for (const shares of [
     { mode: "automatic" },
-    { mode: "ask", circleId: "owner" },
+    { mode: "ask", circleId: "agents" },
     { mode: "off" },
   ] as const) {
-    const rights = { maintains: { mode: "automatic" }, shares } as const;
-    const stub = await setup(rights);
-    // A circle edit is no card move, so it fails the rule of K-718 and raises access (K-715).
-    const renamed = {
-      id: "agents",
-      name: "Builders",
-      color: "#ffcc00",
-      level: "control",
-      members: [machineChip("vps", rights)],
-      match: "any",
-      needsPasskey: false,
-      endsAt: null,
-      x: 5000,
-      y: 5000,
-      r: 200,
-    };
-    const outcome = await ask(stub, "apply", "", {
-      body: { edits: [{ _tag: "circle", id: "agents", after: renamed }] },
-    });
-    const state = await runInDurableObject(stub, (_, storage) => ({
-      name: (
-        JSON.parse(
-          storage.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = 'agents'").one()
-            .body,
-        ) as Circle
-      ).name,
-      asks: storage.storage.sql.exec<{ right_name: string }>("SELECT right_name FROM proposals").toArray(),
-    }));
-    results.push([shares.mode, outcome.outcome, state.name, state.asks]);
+    // "share" goes first: the first ask event of the file comes before any proposal, as the row count test expects.
+    for (const edit of ["share", "rename"] as const) {
+      const rights = { maintains: { mode: "automatic" }, shares } as const;
+      const stub = await setup(rights);
+      const ownerCircle = await runInDurableObject(
+        stub,
+        (_, storage) =>
+          JSON.parse(
+            storage.storage.sql
+              .exec<{ body: string }>("SELECT body FROM circles WHERE id = ?", OWNER_CIRCLE_ID)
+              .one().body,
+          ) as Circle,
+      );
+      // A circle edit is no card move, so it is out of scope (K-715). A move of the managed card into the Owner
+      // circle fails the rule of K-718, but only moves a card that the machine manages, so "shares" decides it.
+      const renamed = {
+        id: "agents",
+        name: "Builders",
+        color: "#ffcc00",
+        level: "control",
+        members: [machineChip("vps", rights)],
+        match: "any",
+        needsPasskey: false,
+        endsAt: null,
+        x: 5000,
+        y: 5000,
+        r: 200,
+      };
+      const edits =
+        edit === "rename"
+          ? [{ _tag: "circle", id: "agents", after: renamed }]
+          : [{ _tag: "place", id: "managed", after: { x: ownerCircle.x, y: ownerCircle.y } }];
+      const outcome = await ask(stub, "apply", "", { body: { edits } });
+      const state = await runInDurableObject(stub, (_, storage) => ({
+        name: (
+          JSON.parse(
+            storage.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = 'agents'").one()
+              .body,
+          ) as Circle
+        ).name,
+        moved:
+          storage.storage.sql.exec<{ x: number }>("SELECT x FROM places WHERE id = 'managed'").one().x !==
+          5000,
+        asks: storage.storage.sql
+          .exec<{ right_name: string; circle_id: string }>("SELECT right_name, circle_id FROM proposals")
+          .toArray(),
+      }));
+      results.push([shares.mode, edit, outcome.outcome, state.name, state.moved, state.asks]);
+    }
   }
   // K-1777: apply and organize have the effect "changes", as on /op: an edit inside the rule waits or runs by
   // "changes", and "changes" off refuses also an edit that "shares" would take.
@@ -206,10 +226,14 @@ it("decides an apply that raises access by shares: automatic runs, ask waits, of
     );
     results.push([label, outcome.outcome, asks]);
   }
+  const owner = [{ right_name: "shares", circle_id: OWNER_CIRCLE_ID }];
   expect(results).toEqual([
-    ["automatic", "done", "Builders", []],
-    ["ask", "waiting", "Agents", [{ right_name: "shares" }]],
-    ["off", "refused", "Agents", []],
+    ["automatic", "share", "done", "Agents", true, []],
+    ["automatic", "rename", "waiting", "Agents", false, owner],
+    ["ask", "share", "waiting", "Agents", false, [{ right_name: "shares", circle_id: "agents" }]],
+    ["ask", "rename", "waiting", "Agents", false, owner],
+    ["off", "share", "refused", "Agents", false, []],
+    ["off", "rename", "refused", "Agents", false, []],
     ["move, changes automatic", "done", []],
     ["move, changes ask", "waiting", [{ right_name: "changes" }]],
     ["rename, changes off", "refused", []],

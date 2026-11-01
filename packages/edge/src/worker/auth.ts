@@ -28,8 +28,6 @@ export type JobApproval = (
    * checks that the effect stays automatic.
    */
   readonly automatic?: Effect;
-  /** K-1778: "shares" automatic let the call run past its scope, so its delivery does not check K-718 again. */
-  readonly raises?: true;
 };
 
 export interface Caller {

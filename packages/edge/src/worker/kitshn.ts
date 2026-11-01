@@ -241,6 +241,7 @@ import {
   machineOf,
   rightMode,
   rightOff,
+  sharesReach,
 } from "../core/agent.ts";
 import { DEMO_MACHINES, DEMO_ICONS, demo, demoUsage } from "../core/demo.ts";
 import { type LegacyCircle, migrateMembers } from "../core/actors.ts";
@@ -296,6 +297,8 @@ import {
   type Decision,
   type Operation,
   OPERATIONS,
+  type Scope,
+  type ScopeResult,
   type SecretOpId,
   agentRead,
   decide,
@@ -4932,12 +4935,33 @@ export class Kitshn extends DurableObject<Env> {
       this.broadcast();
       return Response.json({ githubWay: way });
     }
-    if (path.startsWith("/api/repos/") && request.method === "POST")
-      return await this.setRepoState(
-        caller,
-        decodeURIComponent(path.slice("/api/repos/".length)),
-        await request.json().catch(() => null),
+    if (path.startsWith("/api/repos/") && request.method === "POST") {
+      const repoId = decodeURIComponent(path.slice("/api/repos/".length));
+      const body: unknown = await request.json().catch(() => null);
+      if (caller.gated === undefined || !isRecord(body) || body["state"] !== "allowed")
+        return await this.setRepoState(caller, repoId, body);
+      // K-819, K-1777: a gated caller allows as an agent, as /agent/repos does: only a waiting repo, under its own
+      // credential, so it never unblocks a repo of the owner or takes over one that another agent allowed.
+      const [row] = this.sql<RepoRow>("SELECT * FROM repos WHERE repo_id = ?", repoId);
+      const refusal = agentAllowRefusal(
+        row ? repoGateOf(row) : undefined,
+        body["state"],
+        true,
+        row?.gone_at !== null && row?.gone_at !== undefined,
       );
+      if (refusal) return Response.json({ error: refusal.error }, { status: refusal.status });
+      const name =
+        caller.actor._tag === "machine" || caller.actor._tag === "device" ? caller.actor.name : null;
+      if (caller.visitor.clientId === null || name === null)
+        return Response.json(
+          {
+            error:
+              "Only a token or a machine allows a repo as an agent. Allow it with the passkey of the admin (K-819).",
+          },
+          { status: 403 },
+        );
+      return await this.setRepoState(caller, repoId, body, { clientId: caller.visitor.clientId, name });
+    }
     if (path.startsWith("/api/jobs/") && path.endsWith("/cancel") && request.method === "POST") {
       const error = this.cancelJob(
         Number(path.slice("/api/jobs/".length, -"/cancel".length)),
@@ -6048,8 +6072,6 @@ export class Kitshn extends DurableObject<Env> {
       effectiveMode(this.state, visitor, approval.automatic, now, attested).mode !== "automatic"
     )
       return `${NO_LONGER_ALLOWED} the effect "${approval.automatic}" of the caller is no longer automatic.`;
-    // K-1778: "shares" let it past the scope, so K-718 does not count.
-    if (approval.raises === true) return null;
     // K-718: only the gate let this job in, so a command that gives a shell needs the whole machine again now.
     if (
       !approval.person &&
@@ -8822,7 +8844,7 @@ export class Kitshn extends DurableObject<Env> {
   /**
    * K-819: the owner allows, blocks or forgets one repo. Allow starts the first refused push through the
    * GitHub App, except during the pause. Block fails the repo's deploys and jobs that have not finished.
-   * An agent key with "creates" allows a waiting repo too (K-718); `allowedBy` then names it.
+   * An agent with "runs" allows a waiting repo too (K-718); `allowedBy` then names it.
    */
   private async setRepoState(
     caller: Caller,
@@ -10716,8 +10738,8 @@ export class Kitshn extends DurableObject<Env> {
         };
         const hash = await shownHash(shownAsk("forward", opTarget, shownBody));
         const thread = labels["t3.thread.id"] ?? null;
-        // K-1778: a call out of scope waits by "shares", whatever the mode of the row's effect.
-        const askRight: Effect = gate.scope ? right : "shares";
+        // K-1778: a call beyond its scope or its rule waits by "shares", whatever the mode of the row's effect.
+        const askRight: Effect = gate.scope === "holds" ? right : "shares";
         used = this.forwardApproval(asker.credential, hash, decision.circleId, askRight, thread, now);
         if (used !== null) decision = decide(op, { ...gate, approved: true }, OWNER_CIRCLE_ID);
         else {
@@ -10755,8 +10777,7 @@ export class Kitshn extends DurableObject<Env> {
         right,
         labels,
         person: used?.person === true,
-        ...(used === null ? { automatic: gate.scope ? right : ("shares" as const) } : {}),
-        ...(!gate.scope && used === null ? { raises: true as const } : {}),
+        ...(used === null ? { automatic: gate.scope === "holds" ? right : ("shares" as const) } : {}),
       };
       gated = {
         op: id,
@@ -10774,7 +10795,7 @@ export class Kitshn extends DurableObject<Env> {
           mode: null,
           shares: null,
           inAgentCircle: false,
-          scope: true,
+          scope: "holds",
           approved: false,
         },
         OWNER_CIRCLE_ID,
@@ -10869,7 +10890,7 @@ export class Kitshn extends DurableObject<Env> {
     }
   }
 
-  /** K-1777: whether the target of a call fits the scope of its operation for this machine. */
+  /** K-1777: whether the target of a call fits the scope of its operation for this caller. */
   private opScope(
     op: Operation,
     target: string,
@@ -10877,9 +10898,46 @@ export class Kitshn extends DurableObject<Env> {
     visitor: Visitor,
     now: number,
     attested: Attested | null,
+  ): ScopeResult {
+    if (isPersonGate(op.gate)) return "fails";
+    if (op.gate.scope === "rule") return this.ruleScope(body, visitor, now, attested);
+    return this.targetInScope(op.gate.scope, target, body, visitor, now, attested) ? "holds" : "fails";
+  }
+
+  /**
+   * K-715, K-718, K-1778: edits that pass the rule hold. Edits beyond it that only move cards that the caller manages
+   * follow "shares". Any other edit, or one that does not resolve, is out of scope, so the Owner decides.
+   */
+  private ruleScope(body: unknown, visitor: Visitor, now: number, attested: Attested | null): ScopeResult {
+    const edits =
+      isRecord(body) && Array.isArray(body["edits"]) ? (body["edits"] as ReadonlyArray<Edit>) : [];
+    try {
+      const changes = resolveEdits(this.state, edits);
+      const refusal = agentRefusal(
+        this.state,
+        applyChanges(this.state, changes),
+        visitor,
+        changes,
+        now,
+        this.addedBy(visitor.clientId),
+        attested,
+      );
+      if (refusal === null) return "holds";
+      return sharesReach(this.state, visitor, changes, now, attested) ? "shares" : "fails";
+    } catch {
+      return "fails";
+    }
+  }
+
+  private targetInScope(
+    scope: Exclude<Scope, "rule">,
+    target: string,
+    body: unknown,
+    visitor: Visitor,
+    now: number,
+    attested: Attested | null,
   ): boolean {
-    if (isPersonGate(op.gate)) return false;
-    switch (op.gate.scope) {
+    switch (scope) {
       case "any":
         return true;
       // K-1777: settings of the whole kitshn and actions with no target that a caller controls; "shares" decides.
@@ -10920,27 +10978,6 @@ export class Kitshn extends DurableObject<Env> {
           isRecord(body) && typeof body[name] === "string" ? (body[name] as string) : "";
         const managed = cardsControlledBy(this.state, visitor, now, attested);
         return managed.has(field("machine")) && (field("relay") === "" || managed.has(field("relay")));
-      }
-      case "rule": {
-        const edits =
-          isRecord(body) && Array.isArray(body["edits"]) ? (body["edits"] as ReadonlyArray<Edit>) : [];
-        try {
-          const changes = resolveEdits(this.state, edits);
-          return (
-            agentRefusal(
-              this.state,
-              applyChanges(this.state, changes),
-              visitor,
-              changes,
-              now,
-              this.addedBy(visitor.clientId),
-              attested,
-            ) === null
-          );
-        } catch {
-          // An edit that does not resolve cannot pass the rule, so the Owner decides.
-          return false;
-        }
       }
     }
   }
@@ -11151,8 +11188,9 @@ export class Kitshn extends DurableObject<Env> {
     const move = (edits: ReadonlyArray<Edit>, named: string | null = null) => {
       try {
         const changes = resolveEdits(this.state, edits);
-        // K-1778: "shares" automatic, or an approval of it, lets an edit raise access; the rules of K-105 still hold.
-        const refusal = agentHas(this.state, caller.visitor, "shares", now, attested, approved)
+        // K-1778: an approval of "shares" lets any edit run. "shares" automatic reaches past the rule only for moves of
+        // cards that the agent manages. The rules of K-105 still hold.
+        const refusal = approved.includes("shares")
           ? null
           : agentRefusal(
               this.state,
@@ -11164,7 +11202,10 @@ export class Kitshn extends DurableObject<Env> {
               attested,
               approved,
             );
-        if (refusal) return Response.json({ error: refusal }, { status: 403 });
+        const reached =
+          agentHas(this.state, caller.visitor, "shares", now, attested) &&
+          sharesReach(this.state, caller.visitor, changes, now, attested);
+        if (refusal && !reached) return Response.json({ error: refusal }, { status: 403 });
         return Response.json({ revision: this.commit(agent.actor, changes, null, named) });
       } catch (error) {
         if (error instanceof RuleError) return Response.json({ error: error.message }, { status: 409 });
@@ -11777,12 +11818,22 @@ export class Kitshn extends DurableObject<Env> {
       // "shares" automatic took an edit beyond the rule, so "shares" decided it and "changes" does not ask.
       raises = typeof edits !== "string" && this.askRuleRefusal(machine, edits, now, attested, []) !== null;
       if (typeof edits === "string") {
-        // K-1778: an edit beyond the rule of K-718 raises access, so "shares" decides it. At "automatic" askEdits
-        // already took it; a rule that binds the owner too (K-105) refuses also with "shares".
+        // K-1778: an edit beyond the rule of K-718 raises access. "shares" decides a move of cards that the machine
+        // manages; at "automatic" askEdits already took it. Any other edit asks the Owner, whatever "shares" says. A
+        // rule that binds the owner too (K-105) refuses also with "shares".
         const withShares = this.askEdits(machine, action, target, raw["body"], now, attested, ["shares"]);
         if (typeof withShares === "string") return event({ outcome: "refused", reason: edits });
         const shares = machineEffectiveMode(this.state, machine.id, "shares", now, attested);
-        if (shares.mode !== "ask") return event(offRight("shares"));
+        if (shares.mode === "off") return event(offRight("shares"));
+        const reach =
+          shares.mode === "ask" &&
+          sharesReach(
+            this.state,
+            { email: null, clientId: machine.clientId, ip: null },
+            resolveEdits(this.state, withShares),
+            now,
+            attested,
+          );
         return event(
           await this.propose(
             machineAsker(machine),
@@ -11792,7 +11843,7 @@ export class Kitshn extends DurableObject<Env> {
             reason,
             labels,
             "shares",
-            shares.circleId,
+            reach && shares.mode === "ask" ? shares.circleId : OWNER_CIRCLE_ID,
             now,
           ),
         );
@@ -11855,12 +11906,15 @@ export class Kitshn extends DurableObject<Env> {
       }
     }
     try {
-      // K-1778: "shares" automatic, or an approval of it, lets an edit raise access; the rules of K-105 still hold.
-      if (agentHas(this.state, visitor, "shares", now, attested, approved)) {
-        resolveEdits(this.state, edits);
-        return edits;
-      }
-      return this.askRuleRefusal(machine, edits, now, attested, approved) ?? edits;
+      // K-1778: an approval of "shares" lets any edit raise access. "shares" automatic reaches past the rule only for
+      // moves of cards that the machine manages. The rules of K-105 still hold.
+      const changes = resolveEdits(this.state, edits);
+      if (approved.includes("shares")) return edits;
+      const refusal = this.askRuleRefusal(machine, edits, now, attested, approved);
+      const reached =
+        agentHas(this.state, visitor, "shares", now, attested) &&
+        sharesReach(this.state, visitor, changes, now, attested);
+      return refusal === null || reached ? edits : refusal;
     } catch (error) {
       if (error instanceof RuleError) return error.message;
       throw error;

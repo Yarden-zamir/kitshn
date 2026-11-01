@@ -12,7 +12,14 @@ import {
   opRequest,
 } from "../src/core/operations.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
-import { ACTOR_ROW, actorRows, insertActors, machine as machineChip, tokenActor } from "./actors.ts";
+import {
+  ACTOR_ROW,
+  actorRows,
+  insertActors,
+  key as keyChip,
+  machine as machineChip,
+  tokenActor,
+} from "./actors.ts";
 import { forwarded, setup, withDaemon } from "./machine-http.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -432,7 +439,8 @@ it("runs each gated row through the owner code: it fails only where the owner fa
 
 /**
  * The rows of scope "never" before effects (K-1730): each asked the Owner always. `desired-set` is now two rows. Each
- * has a real scope or the scope "owner", so a target out of scope still waits while "shares" asks.
+ * has a real scope or the scope "owner", so a target out of scope still waits, whatever "shares" says (K-1778).
+ * `desired` has the scope "any" now, because desired state holds no secret (K-709).
  */
 const FORMER_NEVER: ReadonlyArray<OpId> = [
   "organize",
@@ -464,80 +472,148 @@ const FORMER_NEVER: ReadonlyArray<OpId> = [
   "audience-remove",
   "state-export",
   "jobs",
-  "desired",
   "desired-set-machine",
   "desired-set-shared",
   "sign-out",
 ];
 
-it("still asks the Owner for each former never row out of scope, with every effect automatic but shares (K-1730)", async () => {
+it.each([
+  ["ask", { mode: "ask", circleId: OWNER_CIRCLE_ID }],
+  ["automatic", { mode: "automatic" }],
+] as const)(
+  "still asks the Owner for each former never row out of scope, with shares %s and every other effect automatic (K-1730, K-1778)",
+  async (name, shares) => {
+    stubAccessCerts();
+    const key = await newMachineKey();
+    const automatic = { mode: "automatic" } as const;
+    await setup(
+      {
+        reads: automatic,
+        maintains: automatic,
+        creates: automatic,
+        changes: automatic,
+        runs: automatic,
+        destroys: automatic,
+        secrets: automatic,
+        shares,
+      },
+      key,
+    );
+    const stub = env.KITSHN.getByName("kitshn");
+    // The machine card of vps sits in the Owner circle only, so a card or machine target is out of scope.
+    await runInDurableObject(stub, (_, state) => {
+      const owner = JSON.parse(
+        state.storage.sql
+          .exec<{ body: string }>("SELECT body FROM circles WHERE id = ?", OWNER_CIRCLE_ID)
+          .one().body,
+      ) as Circle;
+      const card: Resource = {
+        id: "vps",
+        kind: "machine",
+        name: "vps",
+        addresses: [],
+        status: "running",
+        group: null,
+        machine: "vps",
+      };
+      state.storage.sql.exec(
+        "INSERT OR REPLACE INTO resources (id, body) VALUES ('vps', ?)",
+        JSON.stringify(card),
+      );
+      state.storage.sql.exec(
+        "INSERT OR REPLACE INTO places (id, x, y) VALUES ('vps', ?, ?)",
+        owner.x,
+        owner.y,
+      );
+    });
+    await evictDurableObject(stub);
+    const bodies: Partial<Record<OpId, unknown>> = {
+      ...BODIES,
+      "machine-volume-remove": { command: { volume: "old" } },
+      "desired-set-machine": { kind: "t3.settings", value: {} },
+    };
+    const outcomes: Array<string> = [];
+    for (const id of FORMER_NEVER) {
+      const answer = await forwarded(
+        key,
+        "POST",
+        `/op/${id}`,
+        `never-${name}-${id}-0123456789abcdef`,
+        call(TARGETS[id] ?? "vps", bodies[id] ?? {}),
+        {},
+        ADMIN,
+      );
+      const result = (await answer.json()) as { outcome: string; reason?: string };
+      const [proposal] = await runInDurableObject(stub, (_, state) => {
+        const rows = state.storage.sql
+          .exec<{ right_name: string }>("SELECT right_name FROM proposals")
+          .toArray();
+        // At most 20 open asks per credential (K-1722): each row starts with none.
+        state.storage.sql.exec("DELETE FROM proposals");
+        return rows;
+      });
+      outcomes.push(`${id}: ${result.outcome} ${proposal?.right_name ?? result.reason ?? ""}`);
+    }
+    expect(outcomes).toEqual(FORMER_NEVER.map((id) => `${id}: waiting shares`));
+  },
+);
+
+it("never lets an actor set its own effects: with every effect automatic but secrets, the edit and the secrets wait for the Owner (K-1778)", async () => {
   stubAccessCerts();
   const key = await newMachineKey();
   const automatic = { mode: "automatic" } as const;
-  await setup(
-    {
-      reads: automatic,
-      maintains: automatic,
-      creates: automatic,
-      changes: automatic,
-      runs: automatic,
-      destroys: automatic,
-      secrets: automatic,
-      shares: { mode: "ask", circleId: OWNER_CIRCLE_ID },
-    },
-    key,
-  );
-  const stub = env.KITSHN.getByName("kitshn");
-  // The machine card of vps sits in the Owner circle only, so a card or machine target is out of scope.
-  await runInDurableObject(stub, (_, state) => {
-    const owner = JSON.parse(
-      state.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = ?", OWNER_CIRCLE_ID).one()
-        .body,
-    ) as Circle;
-    const card: Resource = {
-      id: "vps",
-      kind: "machine",
-      name: "vps",
-      addresses: [],
-      status: "running",
-      group: null,
-      machine: "vps",
-    };
-    state.storage.sql.exec(
-      "INSERT OR REPLACE INTO resources (id, body) VALUES ('vps', ?)",
-      JSON.stringify(card),
-    );
-    state.storage.sql.exec("INSERT OR REPLACE INTO places (id, x, y) VALUES ('vps', ?, ?)", owner.x, owner.y);
-  });
-  await evictDurableObject(stub);
-  const bodies: Partial<Record<OpId, unknown>> = {
-    ...BODIES,
-    "machine-volume-remove": { command: { volume: "old" } },
-    "desired-set-machine": { kind: "t3.settings", value: {} },
+  const rights = {
+    reads: automatic,
+    maintains: automatic,
+    creates: automatic,
+    changes: automatic,
+    runs: automatic,
+    destroys: automatic,
+    shares: automatic,
   };
+  await setup(rights, key);
+  const stub = env.KITSHN.getByName("kitshn");
+  const agents = await runInDurableObject(stub, (_, state) =>
+    state.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = 'agents'").one(),
+  );
+  const before = JSON.parse(agents.body) as Circle;
+  const own = call("", {
+    edits: [
+      {
+        _tag: "circle",
+        id: "agents",
+        after: { ...before, members: [machineChip("vps", { ...rights, secrets: automatic })] },
+      },
+    ],
+  });
+  const op = (id: string, nonce: string, body: string) =>
+    forwarded(key, "POST", `/op/${id}`, `${nonce}-0123456789abcdef`, body, {}, ADMIN);
   const outcomes: Array<string> = [];
-  for (const id of FORMER_NEVER) {
-    const answer = await forwarded(
-      key,
-      "POST",
-      `/op/${id}`,
-      `never-${id}-0123456789abcdef`,
-      call(TARGETS[id] ?? "vps", bodies[id] ?? {}),
-      {},
-      ADMIN,
-    );
-    const result = (await answer.json()) as { outcome: string; reason?: string };
+  for (const [id, body] of [
+    ["apply", own],
+    ["state-export", call("")],
+    ["device-token-add", call("", { name: "phone" })],
+  ] as const) {
+    const answer = await op(id, `escalate-${id}`, body);
+    const result = (await answer.json()) as { outcome: string };
     const [proposal] = await runInDurableObject(stub, (_, state) => {
       const rows = state.storage.sql
-        .exec<{ right_name: string }>("SELECT right_name FROM proposals")
+        .exec<{ right_name: string; circle_id: string }>("SELECT right_name, circle_id FROM proposals")
         .toArray();
-      // At most 20 open asks per credential (K-1722): each row starts with none.
       state.storage.sql.exec("DELETE FROM proposals");
       return rows;
     });
-    outcomes.push(`${id}: ${result.outcome} ${proposal?.right_name ?? result.reason ?? ""}`);
+    outcomes.push(`${id}: ${result.outcome} ${proposal?.right_name ?? ""} ${proposal?.circle_id ?? ""}`);
   }
-  expect(outcomes).toEqual(FORMER_NEVER.map((id) => `${id}: waiting shares`));
+  expect(outcomes).toEqual([
+    `apply: waiting shares ${OWNER_CIRCLE_ID}`,
+    `state-export: refused  `,
+    `device-token-add: refused  `,
+  ]);
+  const after = await runInDurableObject(stub, (_, state) =>
+    state.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = 'agents'").one(),
+  );
+  expect(after.body).toBe(agents.body);
 });
 
 it("sends the job of a gated call once its machine is online, and the right off or the pause ends it (K-1777)", async () => {
@@ -698,6 +774,16 @@ it("checks K-718 again when a job that no person approved goes out, and gives it
     output: expect.stringContaining("K-718"),
     life: 24 * HOUR,
   });
+
+  // K-1778: out of scope, "shares" automatic does not let a shell in, so K-718 never falls away; it waits for the Owner.
+  await setup({ runs: { mode: "automatic" }, shares: { mode: "automatic" } }, key);
+  const shared = await shell("shared");
+  expect(shared.status, await shared.clone().text()).toBe(409);
+  expect(await shared.json()).toMatchObject({ outcome: "waiting", circle: "Owner" });
+  await runInDurableObject(env.KITSHN.getByName("kitshn"), (_, state) =>
+    state.storage.sql.exec("DELETE FROM proposals"),
+  );
+  await setup({ runs: { mode: "automatic" } }, key);
 
   // Out of scope, the same call asks the Owner. The Owner's approval covers what they saw, for 1 hour.
   const asked = await shell("asked");
@@ -1030,4 +1116,84 @@ it("reads the map through the gate, and caps the open asks of each credential at
   expect(other.status).toBe(409);
   expect(await other.json()).toMatchObject({ outcome: "waiting" });
   await runInDurableObject(stub, (_, state) => state.storage.sql.exec("DELETE FROM proposals"));
+});
+
+it("allows a repo through /op only as an agent: a waiting repo under its own credential, never a blocked or taken one (K-819)", async () => {
+  stubAccessCerts();
+  const key = await newMachineKey();
+  await setup({ runs: { mode: "automatic" } }, key);
+  const stub = env.KITSHN.getByName("kitshn");
+  await runInDurableObject(stub, (_, state) =>
+    state.storage.sql.exec(
+      `INSERT OR REPLACE INTO repos (repo_id, name, state, first_seen, allowed_by_client, allowed_by_name) VALUES
+       ('2001', 'acme/waiting', 'waiting', 1, NULL, NULL),
+       ('2002', 'acme/blocked', 'blocked', 1, NULL, NULL),
+       ('2003', 'acme/taken', 'allowed', 1, 'other.access', 'other agent')`,
+    ),
+  );
+  await evictDurableObject(stub);
+  const outcomes: Array<string> = [];
+  for (const repo of ["2001", "2002", "2003"]) {
+    const answer = await forwarded(
+      key,
+      "POST",
+      "/op/repo-allow",
+      `repo-allow-${repo}-0123456789abcdef`,
+      call(repo),
+      {},
+      ADMIN,
+    );
+    outcomes.push(`${repo}: ${answer.status}`);
+  }
+  const rows = await runInDurableObject(stub, (_, state) =>
+    state.storage.sql
+      .exec<{ repo_id: string; state: string; allowed_by_client: string | null }>(
+        "SELECT repo_id, state, allowed_by_client FROM repos WHERE repo_id IN ('2001', '2002', '2003') ORDER BY repo_id",
+      )
+      .toArray(),
+  );
+  expect({ outcomes, rows }).toEqual({
+    outcomes: ["2001: 200", "2002: 409", "2003: 409"],
+    rows: [
+      { repo_id: "2001", state: "allowed", allowed_by_client: "vps.access" },
+      { repo_id: "2002", state: "blocked", allowed_by_client: null },
+      { repo_id: "2003", state: "allowed", allowed_by_client: "other.access" },
+    ],
+  });
+});
+
+it("lets an agent key with shares automatic move its own card into another circle on /agent/apply, but never edit a circle (K-1778)", async () => {
+  stubAccessCerts();
+  await setup({}, null, { x: 5000, y: 5000 }, [keyChip("t-key", "key.access", "kit key", { shares: true })]);
+  const stub = env.KITSHN.getByName("kitshn");
+  const owner = await runInDurableObject(stub, (_, state) => {
+    const card: Resource = {
+      id: "key-card",
+      kind: "site.static",
+      name: "key card",
+      addresses: [],
+      status: "unknown",
+      group: null,
+      machine: null,
+    };
+    state.storage.sql.exec(
+      "INSERT OR REPLACE INTO resources (id, body) VALUES ('key-card', ?)",
+      JSON.stringify(card),
+    );
+    state.storage.sql.exec("INSERT OR REPLACE INTO places (id, x, y) VALUES ('key-card', 5000, 5000)");
+    return JSON.parse(
+      state.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = ?", OWNER_CIRCLE_ID).one()
+        .body,
+    ) as Circle;
+  });
+  await evictDurableObject(stub);
+  const jwt = await accessToken("agent-aud", { common_name: "key.access" });
+  const apply = (edits: ReadonlyArray<object>) => post(jwt, "/agent/apply", JSON.stringify({ edits }));
+  const agents = await runInDurableObject(stub, (_, state) =>
+    state.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = 'agents'").one(),
+  );
+  const renamed = { ...(JSON.parse(agents.body) as Circle), name: "Mine" };
+  const rename = await apply([{ _tag: "circle", id: "agents", after: renamed }]);
+  const share = await apply([{ _tag: "place", id: "key-card", after: { x: owner.x, y: owner.y } }]);
+  expect([rename.status, share.status]).toEqual([403, 200]);
 });

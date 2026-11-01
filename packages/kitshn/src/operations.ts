@@ -18,7 +18,10 @@ export const EFFECTS = [
   "runs",
   /** Anything without Undo: remove an app, restore over data, delete volumes, forget a card. */
   "destroys",
-  /** Raises access (K-715): a card into a circle, a member, a level, public, deploy labels, passes and audiences. */
+  /**
+   * Shares what the actor manages (K-715): its cards into a circle or Everyone, audiences and passes. Out of scope, it
+   * asks the Owner. With "secrets" automatic too, an actor with control of the admin card acts as the owner (K-1778).
+   */
   "shares",
   /** Hands out a secret: invite codes, key codes, tokens. */
   "secrets",
@@ -39,17 +42,18 @@ export const EFFECT_DEFAULTS: Record<Effect, "automatic" | "ask the Owner" | "of
 
 /**
  * K-1777: what the target of a call must be for the caller, before the mode of the effect counts. A target out of
- * scope reaches beyond the caller's circles, so the effect "shares" decides it (K-1778).
+ * scope reaches beyond the caller's circles, so it asks the Owner, whatever "shares" says (K-1778).
  * - `any`: no check.
  * - `card`: a card that the caller controls (K-718).
  * - `own`: a card that the caller added or published.
  * - `machine`: a machine where the caller may run a shell (K-718).
- * - `rule`: the edits pass `agentRefusal` (K-715, K-718).
+ * - `rule`: the edits pass `agentRefusal` (K-715, K-718). Edits beyond it that only move cards that the caller manages
+ *   follow "shares".
  * - `job`: a job that the caller queued, or a job on a machine card that the caller controls.
  * - `ports`: the body fields `machine` and `relay` name cards that the caller controls (K-2007).
  * - `self`: the machine of the caller.
- * - `owner`: never holds, so "shares" decides every call: settings of the whole kitshn and actions with no target that
- *   a caller controls.
+ * - `owner`: never holds, so every call asks the Owner: settings of the whole kitshn and actions with no target that a
+ *   caller controls.
  * A target that does not exist refuses. An edit that does not resolve does not pass the rule.
  */
 export type Scope = "any" | "card" | "own" | "machine" | "rule" | "job" | "ports" | "self" | "owner";
@@ -131,7 +135,7 @@ export const OPERATIONS = {
   // Cards and circles. `apply` carries every map edit: places, shares, levels, stacks, circles, members and the pause.
   apply: {
     group: "circles",
-    title: `edit the map: --body '{"edits":[...]}'. An edit that raises access needs "shares" (K-715)`,
+    title: `edit the map: --body '{"edits":[...]}'. A move of cards that you manage beyond the rule needs "shares"; any other edit that raises access asks the Owner (K-715)`,
     method: "POST",
     route: "/api/apply",
     pick: ["edits"],
@@ -222,7 +226,8 @@ export const OPERATIONS = {
     method: "POST",
     route: "/api/cards/:target/take-address",
     effect: "changes",
-    gate: { scope: "card" },
+    // It rewrites a DNS record outside every circle.
+    gate: { scope: "owner" },
   },
   "card-give-address-back": {
     group: "cards",
@@ -802,7 +807,8 @@ export const OPERATIONS = {
     method: "GET",
     route: "/api/desired/:target",
     effect: "reads",
-    gate: { scope: "owner" },
+    // K-709: a provider never puts a secret in desired state.
+    gate: { scope: "any" },
   },
   // K-709: the part of one machine and the shared part are two rows, so the scope checks the machine that the call writes.
   "desired-set-machine": {

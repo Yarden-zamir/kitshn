@@ -36,20 +36,26 @@ export interface GateInput {
   readonly paused: boolean;
   /** The caller's mode of the row's effect: null when no chip sets it. */
   readonly mode: RightMode | null;
-  /** K-1778: the caller's mode of "shares", which decides a target out of scope. */
+  /** K-1778: the caller's mode of "shares": it decides an edit beyond the rule, and "off" refuses a target out of scope. */
   readonly shares: RightMode | null;
   /** The caller is in at least one agent circle (K-1730), so the defaults of `EFFECT_DEFAULTS` count. */
   readonly inAgentCircle: boolean;
-  /** The scope of the row holds for this target. */
-  readonly scope: boolean;
+  /**
+   * `holds`: the scope of the row holds for this target. `shares`: an edit beyond the rule of K-718 that moves only
+   * cards that the caller manages, so "shares" decides it (K-1778). `fails`: the target is out of scope.
+   */
+  readonly scope: ScopeResult;
   /** An approval of exactly this call is open (K-1714). It waives the scope and the mode, but not "off". */
   readonly approved: boolean;
 }
 
+export type ScopeResult = "holds" | "shares" | "fails";
+
 /**
  * K-1777: the one decision of every call. A call runs, waits for a circle, or refuses. It refuses for a person gate,
- * the pause, and an effect that is "off". A target out of scope reaches beyond the caller's circles, so the caller's
- * "shares" decides it (K-1778). Else the mode of the row's effect decides, and an unset mode takes its default.
+ * the pause, and an effect that is "off". A target out of scope reaches beyond the caller's circles, so it asks the
+ * Owner, whatever "shares" says (K-1778). An edit beyond the rule on cards that the caller manages follows "shares".
+ * Else the mode of the row's effect decides, and an unset mode takes its default.
  */
 export function decide(op: Operation, input: GateInput, ownerCircleId: string): Decision {
   if (isPersonGate(op.gate))
@@ -57,15 +63,16 @@ export function decide(op: Operation, input: GateInput, ownerCircleId: string): 
   if (input.admin) return { outcome: "run" };
   if (input.paused)
     return { outcome: "refuse", reason: "kitshn is paused, so agents wait until Resume (K-1504)." };
-  // "off" wins over an approval that the owner gave before they set it (K-1776). A default "off" counts too, so a
-  // target out of scope never gets a secret by "shares" alone.
+  // "off" wins over an approval that the owner gave before they set it (K-1776). A default "off" counts too.
   if (input.mode?.mode === "off") return offDecision(op.effect);
   if (input.mode === null && EFFECT_DEFAULTS[op.effect] === "off")
     return byMode(op.effect, null, false, ownerCircleId);
-  // A target out of scope needs "shares"; "off" there refuses also an approval of this call.
-  if (!input.scope && input.shares?.mode === "off") return offDecision("shares");
+  // Beyond the scope or the rule, "shares" off refuses also an approval of this call.
+  if (input.scope !== "holds" && input.shares?.mode === "off") return offDecision("shares");
   if (input.approved) return { outcome: "run" };
-  if (!input.scope) return byMode("shares", input.shares, input.inAgentCircle, ownerCircleId);
+  // K-1778: out of scope never runs more easily than in scope, so only the Owner lets it in.
+  if (input.scope === "fails") return { outcome: "ask", circleId: ownerCircleId };
+  if (input.scope === "shares") return byMode("shares", input.shares, input.inAgentCircle, ownerCircleId);
   return byMode(op.effect, input.mode, input.inAgentCircle, ownerCircleId);
 }
 

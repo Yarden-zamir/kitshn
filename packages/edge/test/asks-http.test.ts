@@ -63,6 +63,14 @@ it("takes a call that the daemon forwarded and signed, with the right of its pat
   const off = await forwarded(key, "POST", address, "nonce-off-4123456789");
   expect(off.status).toBe(403);
   expect(await off.json()).toEqual({ error: expect.stringContaining("is off"), need: "changes" });
+  // The previous version of a library card follows "changes" too, as the row library-previous.
+  const previous = await forwarded(
+    key,
+    "POST",
+    "/agent/library/no-such-card/previous",
+    "nonce-off-5123456789",
+  );
+  expect(await previous.json()).toEqual({ error: expect.stringContaining("is off"), need: "changes" });
   await setup({ creates: { mode: "automatic" }, changes: { mode: "automatic" } }, key);
   const passed = await forwarded(
     key,

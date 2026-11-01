@@ -1,6 +1,7 @@
 import type { Change } from "./changes.ts";
 import type { Command } from "./machine.ts";
 import {
+  ADMIN_RESOURCE_ID,
   CIRCLE_ALONE_KEY,
   type Circle,
   type Directory,
@@ -379,6 +380,24 @@ export function agentRefusal(
     }
   }
   return null;
+}
+
+/**
+ * K-1778: whether "shares" reaches these changes beyond the rule above: each one moves a card that the caller manages,
+ * other than the admin card (K-104). So "shares" puts the caller's own cards into any circle or Everyone, and an edit of
+ * a circle, a member, a level, a stack, the chip effects or the pause stays with the Owner.
+ */
+export function sharesReach(
+  state: State,
+  visitor: Visitor,
+  changes: ReadonlyArray<Change>,
+  now: number,
+  attested: Attested | null,
+) {
+  const controlled = cardsControlledBy(state, visitor, now, attested);
+  return changes.every(
+    (change) => change._tag === "place" && change.id !== ADMIN_RESOURCE_ID && controlled.has(change.id),
+  );
 }
 
 /** K-718: why a published card would leave every agent circle of the key. */

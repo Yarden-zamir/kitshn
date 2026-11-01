@@ -89,7 +89,7 @@ describe("operations (K-1777)", () => {
   it("lets an agent reach every owner action: each call runs, waits for a person, or refuses as for the owner", () => {
     const refusals: Array<string> = [];
     for (const [id, op] of rows)
-      for (const scope of [true, false])
+      for (const scope of ["holds", "shares", "fails"] as const)
         for (const inAgentCircle of [true, false]) {
           const decision = decide(op, { ...unset, inAgentCircle, scope }, OWNER);
           if (decision.outcome === "refuse") refusals.push(id);
@@ -126,7 +126,7 @@ describe("operations (K-1777)", () => {
     const outcome = (effect: Effect, inAgentCircle: boolean) => {
       const row = byEffect(effect);
       if (!row) throw new Error(`No row has the effect ${effect}.`);
-      return decide(row[1], { ...unset, scope: true, inAgentCircle }, OWNER).outcome;
+      return decide(row[1], { ...unset, scope: "holds", inAgentCircle }, OWNER).outcome;
     };
     expect(EFFECTS.map((effect) => [effect, outcome(effect, true), outcome(effect, false)])).toEqual([
       ["reads", "run", "ask"],
@@ -140,60 +140,65 @@ describe("operations (K-1777)", () => {
     ]);
   });
 
-  it("decides a target out of scope by the caller's shares, whatever the mode, and runs an approved call", () => {
+  it("asks the Owner for a target out of scope whatever shares says, and lets shares decide an edit beyond the rule (K-1778)", () => {
     const shell = OPERATIONS["machine-shell"];
+    const apply = OPERATIONS.apply;
     const base = { ...unset, inAgentCircle: true } as const;
-    expect(decide(shell, { ...base, mode: { mode: "automatic" }, scope: false }, OWNER)).toEqual({
-      outcome: "ask",
-      circleId: OWNER,
+    const automatic = { mode: "automatic" } as const;
+    const owner = { outcome: "ask", circleId: OWNER };
+    // Out of scope, also every mode of "shares" but off waits for the Owner (H1).
+    for (const shares of [null, automatic, { mode: "ask", circleId: "admins" } as const])
+      expect(decide(shell, { ...base, mode: automatic, shares, scope: "fails" }, OWNER)).toEqual(owner);
+    expect(decide(shell, { ...base, shares: { mode: "off" }, scope: "fails" }, OWNER).outcome).toBe("refuse");
+    // An edit beyond the rule on cards that the caller manages follows "shares", not the mode of "changes".
+    expect(decide(apply, { ...base, mode: automatic, shares: automatic, scope: "shares" }, OWNER)).toEqual({
+      outcome: "run",
     });
     expect(
       decide(
-        shell,
-        { ...base, mode: { mode: "automatic" }, shares: { mode: "automatic" }, scope: false },
+        apply,
+        { ...base, mode: automatic, shares: { mode: "ask", circleId: "admins" }, scope: "shares" },
         OWNER,
       ),
-    ).toEqual({ outcome: "run" });
-    expect(
-      decide(shell, { ...base, shares: { mode: "ask", circleId: "admins" }, scope: false }, OWNER),
     ).toEqual({ outcome: "ask", circleId: "admins" });
-    expect(decide(shell, { ...base, shares: { mode: "off" }, scope: false }, OWNER).outcome).toBe("refuse");
-    expect(decide(shell, { ...base, mode: { mode: "automatic" }, scope: true }, OWNER)).toEqual({
-      outcome: "run",
-    });
-    expect(decide(shell, { ...base, mode: { mode: "ask", circleId: "c" }, scope: true }, OWNER)).toEqual({
+    expect(decide(apply, { ...base, mode: automatic, scope: "shares" }, OWNER)).toEqual(owner);
+    expect(
+      decide(apply, { ...base, shares: { mode: "off" }, scope: "shares", approved: true }, OWNER).outcome,
+    ).toBe("refuse");
+    expect(decide(shell, { ...base, mode: automatic, scope: "holds" }, OWNER)).toEqual({ outcome: "run" });
+    expect(decide(shell, { ...base, mode: { mode: "ask", circleId: "c" }, scope: "holds" }, OWNER)).toEqual({
       outcome: "ask",
       circleId: "c",
     });
-    expect(decide(shell, { ...base, mode: { mode: "off" }, scope: true }, OWNER).outcome).toBe("refuse");
+    expect(decide(shell, { ...base, mode: { mode: "off" }, scope: "holds" }, OWNER).outcome).toBe("refuse");
     // An approval from before the owner set the effect "off" no longer runs.
     expect(
-      decide(shell, { ...base, mode: { mode: "off" }, scope: false, approved: true }, OWNER).outcome,
+      decide(shell, { ...base, mode: { mode: "off" }, scope: "fails", approved: true }, OWNER).outcome,
     ).toBe("refuse");
-    expect(decide(shell, { ...base, scope: false, approved: true }, OWNER)).toEqual({ outcome: "run" });
+    expect(decide(shell, { ...base, scope: "fails", approved: true }, OWNER)).toEqual({ outcome: "run" });
     // A target out of scope with "shares" off refuses, also with an approval of this call.
     expect(
-      decide(shell, { ...base, shares: { mode: "off" }, scope: false, approved: true }, OWNER).outcome,
+      decide(shell, { ...base, shares: { mode: "off" }, scope: "fails", approved: true }, OWNER).outcome,
     ).toBe("refuse");
-    // The default "off" of "secrets" holds out of scope too: "shares" alone never hands out a secret.
-    const shares = { mode: "automatic" } as const;
-    expect(decide(OPERATIONS["machine-add"], { ...base, shares, scope: false }, OWNER).outcome).toBe(
-      "refuse",
-    );
+    // "secrets" by its default "off" refuses; at automatic its rows of scope "owner" still ask the Owner.
     expect(
-      decide(OPERATIONS["machine-add"], { ...base, shares, mode: shares, scope: false }, OWNER).outcome,
-    ).toBe("run");
-    expect(decide(shell, { ...base, scope: true, paused: true, approved: true }, OWNER).outcome).toBe(
+      decide(OPERATIONS["machine-add"], { ...base, shares: automatic, scope: "fails" }, OWNER).outcome,
+    ).toBe("refuse");
+    expect(
+      decide(
+        OPERATIONS["machine-add"],
+        { ...base, shares: automatic, mode: automatic, scope: "fails" },
+        OWNER,
+      ),
+    ).toEqual(owner);
+    expect(decide(shell, { ...base, scope: "holds", paused: true, approved: true }, OWNER).outcome).toBe(
       "refuse",
     );
     // A person gate stays a person gate, also with every effect automatic.
     for (const id of ["resume", "restore-time", "notifications", "push"] as const)
       expect(
-        decide(
-          OPERATIONS[id],
-          { ...base, scope: true, mode: { mode: "automatic" }, shares: { mode: "automatic" } },
-          OWNER,
-        ).outcome,
+        decide(OPERATIONS[id], { ...base, scope: "holds", mode: automatic, shares: automatic }, OWNER)
+          .outcome,
       ).toBe("refuse");
   });
 
@@ -217,6 +222,24 @@ describe("operations (K-1777)", () => {
     expect(
       rows.filter(([id, op]) => raisesAccess.includes(id) && op.effect !== "shares").map(([id]) => id),
     ).toEqual([]);
+    expect(rows.filter(([, op]) => op.effect === "secrets").map(([id]) => id)).toEqual([
+      "machine-reset-key",
+      "machine-add",
+      "device-token-add",
+      "device-invite",
+      "state-export",
+      "jobs",
+    ]);
+    // K-1124: taking an address rewrites a DNS record outside every circle; giving it back stays on the card. K-709:
+    // desired state holds no secret, so any caller reads it.
+    expect(
+      (["card-take-address", "card-give-address-back", "desired"] as const).map((id) => OPERATIONS[id].gate),
+    ).toEqual([{ scope: "owner" }, { scope: "card" }, { scope: "any" }]);
+    // K-1777: a new address and the previous version change an existing card, so neither is "creates".
+    expect([OPERATIONS["library-previous"].effect, OPERATIONS["card-address"].effect]).toEqual([
+      "changes",
+      "changes",
+    ]);
   });
 
   it("keeps the fixed command of a row, so a caller cannot turn one operation into another", () => {

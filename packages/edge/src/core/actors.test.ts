@@ -420,7 +420,7 @@ describe("the migration of members into actors (K-1778, migration 44)", () => {
           mode,
           shares: null,
           inAgentCircle: true,
-          scope: true,
+          scope: "holds",
           approved: false,
         },
         OWNER_CIRCLE_ID,

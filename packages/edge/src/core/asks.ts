@@ -274,12 +274,24 @@ const isAgentMember = (member: Circle["members"][number], directory: Directory) 
 };
 
 /** K-1725: the effects that the map warns about at "automatic", with what they do with no person. */
-export const AUTOMATIC_WARNING: Readonly<Partial<Record<Effect, string>>> = {
-  shares: `"shares" runs at once: the actor raises access, such as a card into any circle or a new member, with no person.`,
-  secrets: `"secrets" runs at once: the actor gets invite codes, key codes and tokens with no person.`,
+const AUTOMATIC_WARNING: Readonly<Partial<Record<Effect, string>>> = {
+  shares: `"shares" runs at once: the actor shares what this actor manages, such as its cards into any circle or Everyone, audiences and passes, with no person. Circles, members, levels and effects still ask the Owner.`,
+  secrets: `"secrets" alone gives nothing at once: each secret still asks the Owner. With "shares" automatic too, the actor acts as you, the owner.`,
   runs: `"runs" runs at once: the actor runs shell commands on its machines with no person.`,
   destroys: `"destroys" runs at once: the actor removes data that has no Undo with no person.`,
 };
+
+/** K-1778: "shares" and "secrets" automatic together make an actor with control of the admin card the owner (K-104). */
+const OWNER_WARNING = `"shares" and "secrets" run at once: where the actor has control of the admin card, it acts as you, the owner, with no person.`;
+
+/** K-1725: the warning of one effect at "automatic", which for "shares" and "secrets" depends on the other one. */
+export function automaticWarning(
+  effect: Effect,
+  rights: Readonly<Partial<Record<Effect, RightMode>>>,
+): string | undefined {
+  const owner = rights.shares?.mode === "automatic" && rights.secrets?.mode === "automatic";
+  return owner && (effect === "shares" || effect === "secrets") ? OWNER_WARNING : AUTOMATIC_WARNING[effect];
+}
 
 /**
  * K-1725: the warnings of the effect modes of one actor in a circle. The map shows them and refuses nothing: all configurations
@@ -295,7 +307,7 @@ export function rightWarnings(
     if (!mode || mode.mode === "off") continue;
     const name = right;
     if (mode.mode === "automatic") {
-      const warning = AUTOMATIC_WARNING[right];
+      const warning = automaticWarning(right, rights);
       if (warning !== undefined) warnings.push(warning);
       if (right === "changes" && machineIdOf(actor) !== null && (actor.conditions ?? []).length === 0)
         warnings.push(

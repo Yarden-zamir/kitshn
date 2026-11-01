@@ -1,4 +1,4 @@
-import { AUTOMATIC_WARNING, formatConditions, rightWarnings } from "../core/asks.ts";
+import { automaticWarning, formatConditions, rightWarnings } from "../core/asks.ts";
 import {
   type Actor,
   EFFECTS,
@@ -25,7 +25,7 @@ const EFFECT_HELP: Record<Effect, string> = {
   destroys:
     "Destroys: anything without Undo: remove an app, restore over data, delete volumes, forget a card.",
   shares:
-    "Shares: raises access: a card into a circle, a member, a higher level, public, deploy labels, passes and audiences. A person approves an ask of it with a passkey.",
+    "Shares: shares what this actor manages: its cards into a circle or Everyone, audiences and passes. Circles, members, levels, effects and targets out of scope ask the Owner. With Secrets automatic too, it acts as the owner. A person approves an ask of it with a passkey.",
   secrets:
     "Secrets: hands out a secret: invite codes, key reset codes and tokens. A person approves an ask of it with a passkey.",
 };
@@ -125,7 +125,8 @@ export function RightStickers(props: { readonly member: ActorMember }) {
       {EFFECTS.flatMap((right) => {
         const mode = props.member.rights?.[right];
         if (!mode || mode.mode === "off") return [];
-        const warning = mode.mode === "automatic" ? AUTOMATIC_WARNING[right] : undefined;
+        const warning =
+          mode.mode === "automatic" ? automaticWarning(right, props.member.rights ?? {}) : undefined;
         return [
           <span
             key={right}
