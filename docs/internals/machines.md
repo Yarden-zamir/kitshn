@@ -58,7 +58,7 @@ Each machine runs one `kitshn` daemon. This file holds the rules for machines, j
 
 ## Updates
 
-- **K-626** Each machine has the setting "Update daemon automatically", on by default. It needs control on the kitshn admin, as the labels do. Each change is a revision with Undo. Turning it off ends that machine's step and failure in the rollout, so a machine that sleeps or broke never holds the others.
+- **K-626** Each machine has the setting "Update daemon automatically", on by default. It needs control on the kitshn admin, or the right "maintains" of an agent (K-1777), as the labels do. Each change is a revision with Undo. Turning it off ends that machine's step and failure in the rollout, so a machine that sleeps or broke never holds the others.
 - **K-627** kitshn queues "update the daemon" by itself, one machine at a time. Hibernating daemon sockets can survive a Worker deploy without a reconnect, so once per release a wake of the Durable Object also checks the saved statuses of signed sockets. It picks the first machine in the owner's order that is online with a key, has the setting on, reports the `update` capability and runs another release than the Worker's. kitshn keeps one rollout in `meta`. The step ends well only when its job is `done` and the machine is online on the new release. A failure stops the rest of that release. "Update daemon" by hand on the machine that holds or stopped the rollout becomes its step. Rules:
   - A Windows daemon without `task-restart` (K-622) updates only by hand.
   - A machine whose provider reports `busy` (K-1608) holds nothing: kitshn goes on to the next machine and comes back when it is idle. After 2 hours of `busy`, it updates anyway. So `whenIdle` stays a preference and never a block.

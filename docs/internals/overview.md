@@ -82,7 +82,7 @@ The repo is "KitSHn 2". Code, packages, the CLI and the MCP tools use `kitshn`. 
 5. **A visitor opens a page.** The Worker serves a public page from R2. For another page, it reads the Access JWT, sends a visitor without one through `/login`, then checks the circles (K-1004).
 6. **An app deploys.** Actions turns the recipe into JSON and sends it with its OIDC token. For a Compose app, the Durable Object picks a machine (K-610), takes the source archive through R2, and sends the job to the daemon. For a static or Worker app, Actions uploads the files, and the Worker uploads the script.
 7. **T3 Code asks for a level.** T3 passes the Access headers of a request to the daemon with `check`. The daemon decides from the grant tables that kitshn pushed (K-721), with no call to kitshn.
-8. **An agent on a machine acts.** The agent calls `kitshn`, which asks the daemon over the local socket. The daemon adds the labels that the provider vouched for and sends the ask over its signed connection. kitshn checks the right and its mode, then runs it, asks a circle, or refuses (K-1710).
+8. **An agent on a machine acts.** The agent calls `kitshn`, which asks the daemon over the local socket. The daemon adds the labels that the provider vouched for and sends the ask over its signed connection, or the operation as a signed call to `/op` (K-1777). kitshn checks the right and its mode, then runs it, asks a circle, or refuses (K-1710).
 
 ## Free plan budget
 

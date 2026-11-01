@@ -116,6 +116,10 @@ export const MACHINE_RIGHTS = [
   "getsPasses",
   "addsPages",
   "restores",
+  /** K-1777: restart, update, diagnostics, tunnel restart, labels, order, automatic update, cancel, rotate key. */
+  "maintains",
+  /** K-1777: the full map read of `kitshn state`, through AGENT_READ. */
+  "readsMap",
 ] as const;
 export type MachineRight = (typeof MACHINE_RIGHTS)[number];
 export const MACHINE_RIGHT_NAMES: Record<MachineRight, string> = {
@@ -129,6 +133,8 @@ export const MACHINE_RIGHT_NAMES: Record<MachineRight, string> = {
   getsPasses: "gets passes",
   addsPages: "adds pages",
   restores: "restores",
+  maintains: "maintains",
+  readsMap: "reads the map",
 };
 /** K-1725: the rights that the map warns about when no person approves them. */
 export const HIGH_RISK_RIGHTS: ReadonlySet<MachineRight> = new Set([

@@ -1,12 +1,15 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { Actor } from "../core/changes.ts";
 import type { ContentVisitor } from "../core/library.ts";
+import type { OpId } from "../core/operations.ts";
 import type { Visitor } from "../core/visitor.ts";
 import type { Env } from "./env.ts";
 
 export interface Caller {
   readonly visitor: Visitor;
   readonly actor: Actor;
+  /** K-1777: the operation whose gate let this call run. Only the Durable Object sets it, never a header. */
+  readonly gated?: OpId;
 }
 
 let jwks: { readonly team: string; readonly set: ReturnType<typeof createRemoteJWKSet> } | null = null;

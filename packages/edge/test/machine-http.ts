@@ -64,6 +64,7 @@ export async function forwarded(
   nonce: string,
   body = "{}",
   extra: Record<string, string> = {},
+  audience = "agent-aud",
 ) {
   const at = Date.now();
   const labels = "{}";
@@ -76,7 +77,7 @@ export async function forwarded(
   return send(path, {
     method,
     headers: {
-      "cf-access-jwt-assertion": await accessToken("agent-aud", { common_name: "vps.access" }),
+      "cf-access-jwt-assertion": await accessToken(audience, { common_name: "vps.access" }),
       "content-type": "application/json",
       [FORWARD_HEADERS.signature]: signature,
       [FORWARD_HEADERS.at]: String(at),

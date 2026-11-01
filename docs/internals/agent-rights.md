@@ -9,9 +9,9 @@ kitshn reaches an outside service in one of four ways, in this order of preferen
 3. Action relay: kitshn makes the call with a credential that stays in kitshn. Only for a short, named list of actions, each with its own design check. None exists yet.
 4. Not kitshn: the machine uses its own credentials.
 
-Agent parity: every action of the owner has an agent path. A call runs, waits for a person, or refuses because the rule also refuses the owner. What stays different: a person proves things with a passkey, and raising access always needs a person (K-715). Check this in every new feature.
+Agent parity: every action of the owner has an agent path (K-1777). A call runs, waits for a person, or refuses because the rule also refuses the owner. What stays different: a person proves things with a passkey, and raising access always needs a person (K-715). Check this in every new feature.
 
-Every new right starts off for every existing machine and agent key, so a new right never gives access by itself.
+Every new right starts off for every existing machine and agent key, so a new right never gives access by itself. The one exception is the closed care of "maintains" and the read of "reads the map" (K-1777).
 
 ## Machine key pairs
 
@@ -27,11 +27,11 @@ Every new right starts off for every existing machine and agent key, so a new ri
 ## Asks
 
 - **K-1710** An agent asks its daemon with `ask` on the local socket: one action, one target, an optional reason and optional labels. `kitshn agent <action> <target>` asks and prints the answer. The daemon accepts an ask only from an allowed local user (K-701), adds the attested labels (K-1752), and sends it over its signed connection. kitshn answers with the result, with "waiting" and a proposal id, or with a refusal and its reason. kitshn makes no token for its own actions: no JWT, no pass, no stored pass id.
-- **K-1711** The actions match the agent paths of K-718: `state`, `apply`, `publish`, `organize`, `allow`, `deploy`, `job`, `job-read`, `github-token`, `audience-add`, `pass`, `approve`, `deny`, `history`, `backup` and `restore`. `state`, `job-read` and `history` need no right. `approve` and `deny` need membership of the approver circle (K-1723). Each other action needs one right of K-1730.
+- **K-1711** Owner actions are operations (K-1777). The asks match the agent paths of K-718: `state`, `apply`, `publish`, `organize`, `allow`, `deploy`, `job`, `job-read`, `github-token`, `audience-add`, `pass`, `approve`, `deny`, `history`, `backup` and `restore`. `state`, `job-read` and `history` need no right. `approve` and `deny` need membership of the approver circle (K-1723). Each other action needs one right of K-1730.
 - **K-1712** kitshn runs an ask only when all of these hold at that moment: the connection passed the challenge, the machine has the right through its circles, every condition of the right holds on attested labels, K-819 and K-718 allow the action (or an Owner approval covers it, K-1776), and kitshn is not paused. It checks them again when an approval runs the ask.
 - **K-1713** Known limit: every process of an allowed local user can ask, and labels that no provider vouched for are claims. The unit of trust is the machine, plus the thread that its provider vouches for. Revisit when agents run as their own users.
 - **K-1714** Agent keys keep their HTTP paths `/agent/<path>`. A machine asks the actions of K-1711 only over `/connect`. The CLI commands `publish`, `address`, `redirect`, `logs` and `repo` send their `/agent` call through the daemon as a `forward` request. Rules:
-  - The daemon sends only a normalized path below `/agent/`, signed with the machine key over the method, the path, the time, a nonce and the hash of the labels. kitshn takes a machine token on `/agent` only for a forward path with a valid signature from the last minute and an unseen nonce. It keeps the nonces in storage, so a restart does not let a copied call run again. The body is not signed; TLS covers it.
+  - The daemon sends only a normalized path below `/agent/` or `/op/` (K-1777), signed with the machine key over the method, the path, the time, a nonce and the hash of the labels. kitshn takes a machine token on `/agent` only for a forward path with a valid signature from the last minute and an unseen nonce. It keeps the nonces in storage, so a restart does not let a copied call run again. The body is not signed; TLS covers it.
   - A forwarded call whose right is unset or "ask <circle>" waits like an ask: kitshn answers 409 with a proposal, and the CLI sends the same call again after the approval. The same call of the same machine and thread runs once within 1 hour after the approval.
   - `kitshn version --json` prints `{"product":"kitshn","generation":2,...}`, so a tool can tell kitshn 2 from a KitSHn 1 `kitshn`.
   - Known limit: a forwarded body is at most 12 MiB each way. Revisit when an agent needs more.
@@ -63,15 +63,28 @@ Every new right starts off for every existing machine and agent key, so a new ri
   - "writes code" is "automatic" with no thread condition (K-1754).
 - **K-1726** An agent that answers for a circle uses `kitshn agent approve` or `kitshn agent deny` with a reason. It sees in `state` the proposals of its circles, in a passkey circle only while "machines may approve" is on.
 - **K-1727** kitshn takes an approve or a deny from the machine that asked when the rules let it: the owner decided that what the rules allow, kitshn allows. The circle editor warns at once when such a rule starts (K-1725).
-- **K-1776** A call that no right covers asks the Owner, and its approval runs that one call. Rules:
+- **K-1776** A call that no right covers, or whose target fails the scope of its operation (K-1777), asks the Owner, and its approval runs that one call. Rules:
   - A right set to "off" refuses with one line that names the right. "Off" counts only for its own right.
   - A `job` or `deploy` outside the limit of K-718 asks the Owner also when its right is "automatic" or "ask <circle>".
   - A job that no approval can run, a volume removal, a command that does not parse, and a backup or restore of a card that the machine does not manage refuse at once, with no proposal.
   - A `kitshn gh` token ask with `auto` asks for write, because gh cannot say whether it writes.
 
+## Operations
+
+- **K-1777** One table, `OPERATIONS` in `packages/edge/src/core/operations.ts`, names each owner action once, with its owner route and its gate. Every caller uses the same path and the same gate: a person in the map or the CLI, an agent through MCP or the CLI, a script through the CLI. Only the proof differs. Rules:
+  - `POST /op/<operation>` takes `{ target, body, reason }` and answers `done` with the result, `waiting` with the proposal, or `refused` with the reason. `GET /op/state` is the read.
+  - A gate is a right and a scope, or "only a person" with its reason. Scopes: any, a card that the caller controls, a card that it added, a machine of K-718, the edit rule of K-715 and K-718, and never.
+  - The gate: a person gate refuses. The admin runs. The pause refuses. An approval of exactly this call runs. A right "off" refuses. A failed scope asks the Owner. A row without a right runs. Else the mode decides, and "default" asks the Owner.
+  - "Maintains" covers restart, update, diagnostics, tunnel restart, labels, order, automatic update, job cancel, key rotation and the health check. Their commands are closed, so its default runs at once. "Reads the map" gives `kitshn state` the owner snapshot through `AGENT_READ`, which hides History text, jobs, queued jobs and icons, because they can quote what a person typed.
+  - A call that runs goes through the owner code of its route, with the machine as the caller, so History names the machine. The rules that also bind the owner (K-105, K-1504) stay in the handlers.
+  - An approval runs nothing. The same call of the same machine and thread runs once within 1 hour, as K-1714. So a secret answer (a join code, a key code, an invite link, a device secret) never sits in a proposal row.
+  - The admin application lets in the owner logins and, while a machine is joined, every service token, so `/op` has one Access application. A machine proves its key on each call (K-1714). A service token of no machine and without the admin is refused (K-1732).
+  - `kitshn ops` prints the table, `kitshn state` the read, and `kitshn <operation> [target] --body <json> --reason <text>` one call. A script on a joined machine uses the daemon and acts as the machine.
+  - `src/core/operations.test.ts` fails when an owner route or a call of the map has no row, and when a row refuses a machine with unset rights for a reason other than a person gate.
+
 ## Rights on machines
 
-- **K-1730** Agent rights belong to machines. The agent circles of a machine are the circles of devices and machines only that name the machine with at least one right set and have not ended. K-718 holds for a machine in its agent circles, with the machine in place of the key. The rights: "adds apps", "publishes", "deploys", "runs commands", "reads code", "writes code", "adds audiences", "gets passes", "adds pages" and "restores". Planned: "removes apps it added". Every right starts at "default". A member whose rights are all "off" still reads `state`, logs and page content of its cards.
+- **K-1730** Agent rights belong to machines. The agent circles of a machine are the circles of devices and machines only that name the machine with at least one right set and have not ended. K-718 holds for a machine in its agent circles, with the machine in place of the key. The rights: "adds apps", "publishes", "deploys", "runs commands", "reads code", "writes code", "adds audiences", "gets passes", "adds pages", "restores", "maintains" and "reads the map". Planned: "removes apps it added". Every right starts at "default". "Default" of "maintains" and "reads the map" runs at once for a machine in an agent circle (K-1777). A member whose rights are all "off" still reads `state`, logs and page content of its cards.
 - **K-1731** A machine in an agent circle is also an Access member of that circle (K-107), so its service token opens the sites of the circle.
 - **K-1732** An agent key (K-718) is only an exception for an agent that runs on no joined machine. Every new right starts off for keys too. The map marks each key with an "exception" sticker.
 - **K-1733** A repo group is a card of the kind `repo.group`. It matches repos by owner or by a name pattern with one `*`. A right on a repo group covers every repo that it matches, also one that kitshn has not seen yet. Known limit: a pattern matches by name, while the gate of K-819 matches by id, so a repo that someone renames into a pattern gets the rights of the group.

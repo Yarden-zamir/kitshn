@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ASK_APP, circlePolicies, desiredAccess } from "./access.ts";
+import { ASK_APP, OP_TOKENS_POLICY, circlePolicies, desiredAccess } from "./access.ts";
 import {
   type Actor,
   applyChanges,
@@ -512,6 +512,24 @@ describe("Access compile (K-401 to K-403)", () => {
       desiredAccess(state, 0, [], old).apps.get("app:riffle:old-riffle.example.com")?.policyKeys,
     ).toEqual(["policy:owner:people"]);
     expect(access.apps.get("app:riffle:riffle.example.com")).not.toHaveProperty("custom_pages");
+    // K-1777: with a machine joined, every service token reaches the gate of `/op`, except during a pause.
+    const joined: State = {
+      ...state,
+      machines: new Map([
+        [
+          "m1",
+          { id: "m1", name: "m1", labels: [], order: 0, serviceTokenId: "t", clientId: "c", tunnelId: "u" },
+        ],
+      ]),
+    };
+    expect(desiredAccess(joined, 0).apps.get("app:kitshn-admin:kit.example.com")?.policyKeys).toEqual([
+      OP_TOKENS_POLICY,
+      "policy:owner:people",
+    ]);
+    expect(
+      desiredAccess({ ...joined, paused: "lockdown" }, 0).apps.get("app:kitshn-admin:kit.example.com")
+        ?.policyKeys,
+    ).toEqual(["policy:owner:people"]);
   });
 });
 

@@ -11,7 +11,7 @@ A card inside a circle is shared with that circle. This file holds the rules for
 - **K-205** A share uses the default level of its circle. One card can override the level for one circle.
 - **K-206** A level that the resource kind does not have becomes the next lower level of that kind. A circle with the default `control` thus gives a file `view`.
 - **K-207** When several circles match a visitor, the visitor gets the highest level of those shares.
-- **K-208** A card outside every circle is private. Only the admin (K-104) sees it on the map.
+- **K-208** A card outside every circle is private. Only the admin (K-104) sees it on the map, and an agent with "reads the map" in `kitshn state` (K-1777).
 - **K-209** A share can have an end date. At the end date, kitshn moves the card out of that circle as a new revision. An Undo of the expiry puts the card back without the passed end date, so the share stays. Any other Undo that brings back a passed end date keeps it, so the share ends at once.
 - **K-210** A circle with "everyone" asks for a confirm the first time that a card enters it.
 - **K-211** The Owner circle and the Everyone circle exist from the start. The owner can rename them, and cannot delete the Owner circle. A delete of another circle runs at once, without a confirm, and Undo restores it (K-1502).

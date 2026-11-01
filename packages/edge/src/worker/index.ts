@@ -473,6 +473,18 @@ export default {
       headers.set("x-kitshn-caller", JSON.stringify(caller));
       return env.KITSHN.getByName("kitshn").fetch(new Request(request, { headers }));
     }
+    // K-1777: one path for every caller. The admin application lets in the owner logins and every service token;
+    // the Durable Object gate decides each call. A browser may call only from the map's own page.
+    if (url.pathname.startsWith("/op/")) {
+      const origin = request.headers.get("origin");
+      if (origin !== null && origin !== url.origin)
+        return Response.json({ error: `kitshn refuses requests from ${origin}.` }, { status: 403 });
+      const caller = await callerOf(request, env, env.ACCESS_ADMIN_AUD);
+      if (typeof caller === "string") return Response.json({ error: caller }, { status: 401 });
+      const headers = new Headers(request.headers);
+      headers.set("x-kitshn-caller", JSON.stringify(caller));
+      return env.KITSHN.getByName("kitshn").fetch(new Request(request, { headers }));
+    }
     // K-1132: a refused person asks the owner for access. The Durable Object checks the token of the `/ask` application.
     if (url.pathname === "/ask") {
       const headers = new Headers(request.headers);

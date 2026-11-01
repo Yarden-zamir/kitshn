@@ -200,6 +200,7 @@ import {
   unexposeRefusal,
 } from "./cli.ts";
 import { CliError } from "kitshn/cli-error";
+import { isOpCommand, runOpCommand } from "./ops.ts";
 import { checkSkill, installGlobalSkill, installRepoSkill, refreshGlobalSkill } from "./skill.ts";
 import { appSocketFolder, removeOldSockets, socketPathProblem, upOnSocket } from "./sockets.ts";
 
@@ -2397,7 +2398,8 @@ async function forwardOnce(request: Extract<Request, { type: "forward" }>): Prom
   if (!key)
     throw new Error("this machine has no key, so it cannot forward a call (K-1714). Run kitshn rekey.");
   const url = forwardTarget(joined.server, request.path);
-  if (typeof url === "string") throw new Error(`the daemon forwards only /agent calls: ${url} (K-1714)`);
+  if (typeof url === "string")
+    throw new Error(`the daemon forwards only /agent and /op calls: ${url} (K-1714)`);
   const body = request.body === undefined ? undefined : Buffer.from(request.body, "base64");
   if (body && body.length > MAX_FORWARD_BYTES)
     throw new Error(
@@ -3675,6 +3677,17 @@ if (command === undefined || command === "help" || command === "--help" || comma
 }
 if (command === "--version" || command === "-v") {
   console.log(VERSION);
+  process.exit(0);
+}
+// K-1777: an operation id is never a machine or agent command (`ops.test.ts`).
+if (isOpCommand(command)) {
+  try {
+    await runOpCommand(command, args, daemonTransport);
+  } catch (error) {
+    if (!(error instanceof CliError)) throw error;
+    console.error(`kitshn: ${error.message}`);
+    process.exit(1);
+  }
   process.exit(0);
 }
 if (!isMachineCommand(command) && !isAgentCommand(command) && command !== "git-credential")

@@ -36,7 +36,8 @@
     "./backups": "./src/core/backups.ts",
     "./sites": "./src/core/sites.ts",
     "./port": "./src/core/port.ts",
-    "./visitor": "./src/core/visitor.ts"
+    "./visitor": "./src/core/visitor.ts",
+    "./operations": "./src/core/operations.ts"
   },
   "version": "0.0.0"
 }
