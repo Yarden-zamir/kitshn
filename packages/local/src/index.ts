@@ -502,7 +502,7 @@ export const Answer = Schema.Union([
             name: Schema.String,
           }),
           levels: Schema.Record(Schema.String, Schema.String),
-          /** `exec` when the subject is a machine whose "runs commands" covers this machine at automatic. */
+          /** `exec` when the subject is a machine whose "runs" covers this machine at automatic. */
           rights: Schema.Array(Schema.Literal("exec")),
           until: Schema.Number,
         }),

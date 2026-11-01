@@ -54,14 +54,14 @@ const owner = {
 };
 
 /** mac's agent circle holds the machine card of vps at control, with "runs commands" as given. */
-async function setup(runsCommands: RightMode) {
+async function setup(runs: RightMode) {
   const stub = env.KITSHN.getByName("kitshn-exec");
   const agents: Circle = {
     id: "agents",
     name: "Agents",
     color: "#ffcc00",
     level: "control",
-    members: [machineChip("mac", { runsCommands })],
+    members: [machineChip("mac", { runs })],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -304,23 +304,23 @@ it("runs the t3.agents step of migration 42 once, by its own mark, so a later st
     }
     sql.exec(
       "INSERT OR REPLACE INTO circles (id, body) VALUES ('machines', ?)",
-      JSON.stringify(circle({ readsCode: { mode: "automatic" } })),
+      JSON.stringify(circle({ reads: { mode: "automatic" } })),
     );
     insertActors(sql, circle({}).members);
     sql.exec("DELETE FROM meta WHERE key = 'agents-migrated'");
   });
   await evictDurableObject(stub);
-  expect((await machinesCircle()).members[0].rights).toMatchObject({ runsCommands: { mode: "automatic" } });
+  expect((await machinesCircle()).members[0].rights).toMatchObject({ runs: { mode: "automatic" } });
   expect(await revisions()).toBe(1);
   // The owner takes the right back, as an Undo does; a second start must not set it again.
   await runInDurableObject(stub, (_, state) =>
     state.storage.sql.exec(
       "UPDATE circles SET body = ? WHERE id = 'machines'",
-      JSON.stringify(circle({ readsCode: { mode: "automatic" } })),
+      JSON.stringify(circle({ reads: { mode: "automatic" } })),
     ),
   );
   await evictDurableObject(stub);
-  expect((await machinesCircle()).members[0].rights).not.toHaveProperty("runsCommands");
+  expect((await machinesCircle()).members[0].rights).not.toHaveProperty("runs");
   expect(await revisions()).toBe(1);
 });
 

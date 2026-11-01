@@ -10,7 +10,7 @@ import {
 } from "./agent.ts";
 
 const state: AgentState = {
-  rights: [{ id: "addsPages", name: "adds pages", mode: "ask", circle: { id: "owner", name: "Owner" } }],
+  rights: [{ id: "creates", name: "creates", mode: "ask", circle: { id: "owner", name: "Owner" } }],
   circles: [{ id: "agents", name: "Agents", level: "control" }],
   cards: [
     {

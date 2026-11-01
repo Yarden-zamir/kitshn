@@ -96,14 +96,14 @@ export const keyRemoved = (gate: RepoGate, hasAgentCircle: (clientId: string) =>
 export function agentAllowRefusal(
   gate: RepoGate | undefined,
   state: unknown,
-  addsApps: boolean,
+  creates: boolean,
   goneOnGitHub: boolean,
 ): { readonly status: 400 | 403 | 404 | 409; readonly error: string } | null {
   if (state !== "allowed") return { status: 400, error: 'Send {"state": "allowed"}.' };
-  if (!addsApps)
+  if (!creates)
     return {
       status: 403,
-      error: 'This key may not add apps. The owner turns on "may add apps" for it (K-718).',
+      error: 'The effect "creates" is not automatic for this agent. The owner sets it (K-718).',
     };
   if (!gate)
     return { status: 404, error: "kitshn knows no such repo. Its first deploy step records it (K-819)." };
@@ -124,7 +124,7 @@ export function agentAllowRefusal(
  * K-819: why the owner may not forget this repo, or null. A forgotten repo waits again on its next deploy. A
  * repo with cards keeps its row, so each card keeps its "Deploys" switch and its agent redeploys stay refused
  * for the right reason; the owner removes the apps first (K-909). A blocked repo is forgotten only once GitHub
- * deleted it: otherwise its next deploy would wait, and an agent key with "adds apps" could then allow a repo
+ * deleted it: otherwise its next deploy would wait, and an agent key with "creates" could then allow a repo
  * that the owner blocked.
  */
 export function forgetRefusal(

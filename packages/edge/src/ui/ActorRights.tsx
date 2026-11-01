@@ -1,50 +1,45 @@
-import { formatConditions, rightWarnings } from "../core/asks.ts";
+import { AUTOMATIC_WARNING, formatConditions, rightWarnings } from "../core/asks.ts";
 import {
   type Actor,
+  EFFECTS,
   EVERYONE_CIRCLE_ID,
-  RIGHTS,
-  RIGHT_NAMES,
-  type Right,
+  type Effect,
   type Member,
   type RightMode,
   type State,
 } from "../core/model.ts";
+import { EFFECT_DEFAULTS } from "../core/operations.ts";
 import { Radio } from "./controls.tsx";
 
 type ActorMember = Extract<Member, { _tag: "actor" }>;
 
-const RIGHT_HELP: Record<Right, string> = {
-  addsApps: "Adds apps: the actor allows a waiting repo (K-819).",
-  publishes: "Publishes: the actor moves a card that it added into Everyone.",
-  deploys: "Deploys: the actor redeploys or builds a card that it manages.",
-  runsCommands: "Runs commands: the actor runs jobs on a machine that it manages.",
-  readsCode: "Reads code: a GitHub token that reads one repo.",
-  writesCode:
-    "Writes code: a GitHub token that pushes to one repo and opens pull requests. It never deploys.",
-  addsAudiences: "Adds audiences: the actor adds an outside service that may receive its passes.",
-  getsPasses: "Gets passes: a 5-minute pass for an outside service of the audience list.",
-  addsPages:
-    "Adds pages: the actor publishes pages, files and folder sites into its agent circles, and sets their addresses and redirects.",
-  restores:
-    "Restores: the actor writes a backup run of a Compose card back, after a backup of the current data (K-1820).",
+const EFFECT_HELP: Record<Effect, string> = {
+  reads: "Reads: the map, logs, History, job output and repo read tokens.",
   maintains:
-    "Maintains: machine care (restart, update, diagnostics, order, its own key), and closing device invites and asks (K-1777). Default: automatic.",
-  readsMap:
-    "Reads the map: kitshn state shows the whole map, without job output and History text (K-1777). Default: automatic.",
-  raisesAccess:
-    "Raises access: the calls that the Owner decides, such as a share, a new member or a higher level (K-715). Automatic acts as the owner. Default: a person approves with a passkey (K-1778).",
+    "Maintains: closed machine care (restart, update, tunnel restart, diagnostics, order, automatic update), and closing invites and asks.",
+  creates:
+    "Creates: new cards (apps, pages, sites, ports, repos). They land only in the actor's own circles, so creating never shares.",
+  changes:
+    "Changes: existing cards in scope: deploys, settings, desired state, repo push tokens and backups.",
+  runs: "Runs: shell and exec on machines in scope.",
+  destroys:
+    "Destroys: anything without Undo: remove an app, restore over data, delete volumes, forget a card.",
+  shares:
+    "Shares: raises access: a card into a circle, a member, a higher level, public, deploy labels, passes and audiences. A person approves an ask of it with a passkey.",
+  secrets:
+    "Secrets: hands out a secret: invite codes, key reset codes and tokens. A person approves an ask of it with a passkey.",
 };
 
 /**
- * K-1720: the mode of each right of an actor chip in an agent circle: default, off, automatic, or ask one circle.
- * K-1725: the warnings below it; every configuration is allowed. K-1754: the conditions belong to the actor, not to a
- * right, so they show here and do not change here.
+ * K-1720, K-1730: the mode of each effect of an actor chip: default, off, automatic, or ask one circle. K-1725: the
+ * warnings below it; every configuration is allowed. K-1754: the conditions belong to the actor, not to an effect, so
+ * they show here and do not change here.
  */
 export function ActorRights(props: {
   readonly member: ActorMember;
   readonly actor: Actor;
   readonly state: Pick<State, "circles" | "actors" | "machines">;
-  readonly onChange: (right: Right, mode: RightMode | null) => void;
+  readonly onChange: (effect: Effect, mode: RightMode | null) => void;
 }) {
   const rights = props.member.rights ?? {};
   const approvers = [...props.state.circles.values()].filter((circle) => circle.id !== EVERYONE_CIRCLE_ID);
@@ -60,24 +55,24 @@ export function ActorRights(props: {
           Only calls with {conditions}
         </p>
       ) : null}
-      {RIGHTS.map((right) => {
+      {EFFECTS.map((right) => {
         const mode = rights[right] ?? null;
         const name = `right-${props.member.actorId}-${right}`;
         return (
           <fieldset key={right} class="right-mode">
-            <legend data-tip={RIGHT_HELP[right]}>{RIGHT_NAMES[right]}</legend>
+            <legend data-tip={EFFECT_HELP[right]}>{right}</legend>
             <Radio
               name={name}
               checked={mode === null}
               label="default"
-              tip="Default: each call asks the Owner, and one approval runs that call (K-1776)."
+              tip={`Default: ${EFFECT_DEFAULTS[right]} in an agent circle; outside one, automatic asks the Owner (K-1730).`}
               onSelect={() => props.onChange(right, null)}
             />
             <Radio
               name={name}
               checked={mode?.mode === "off"}
               label="off"
-              tip={`Off: the actor never ${RIGHT_NAMES[right]}, and no call asks.`}
+              tip={`Off: the actor never ${right}, and no call asks.`}
               onSelect={() => props.onChange(right, { mode: "off" })}
             />
             <Radio
@@ -106,34 +101,39 @@ export function ActorRights(props: {
         </p>
       ))}
       <span class="help">
-        A right counts from any agent circle of this actor; automatic from any matched actor wins over ask.
+        An effect counts from every circle of this actor; automatic from any matched actor wins over ask.
       </span>
     </div>
   );
 }
 
-/** K-1720: a right that is default has no key, so the member stays as short as it was. */
-export function withMode(member: ActorMember, right: Right, mode: RightMode | null): ActorMember {
+/** K-1720: an effect that is default has no key, so the member stays as short as it was. */
+export function withMode(member: ActorMember, right: Effect, mode: RightMode | null): ActorMember {
   const { [right]: _, ...others } = member.rights ?? {};
   const rights = mode === null ? others : { ...others, [right]: mode };
   const { rights: _old, ...rest } = member;
   return Object.keys(rights).length === 0 ? rest : { ...rest, rights };
 }
 
-/** K-1730: a sticker for each open right of an actor chip in an agent circle; "ask" rights carry a "?". */
+/**
+ * K-1730: a sticker for each open effect of an actor chip; "ask" effects carry a "?". K-1725: "shares", "secrets",
+ * "runs" and "destroys" at automatic carry a warning.
+ */
 export function RightStickers(props: { readonly member: ActorMember }) {
   return (
     <>
-      {RIGHTS.flatMap((right) => {
+      {EFFECTS.flatMap((right) => {
         const mode = props.member.rights?.[right];
         if (!mode || mode.mode === "off") return [];
+        const warning = mode.mode === "automatic" ? AUTOMATIC_WARNING[right] : undefined;
         return [
           <span
             key={right}
-            class="sticker right"
-            data-tip={`${RIGHT_HELP[right]} ${mode.mode === "ask" ? "Each call waits for its approver circle." : "Runs at once."}`}
+            class={warning === undefined ? "sticker right" : "sticker right warn"}
+            data-tip={`${EFFECT_HELP[right]} ${warning ?? (mode.mode === "ask" ? "Each call waits for its approver circle." : "Runs at once.")}`}
           >
-            {RIGHT_NAMES[right]}
+            {warning === undefined ? "" : "⚠️ "}
+            {right}
             {mode.mode === "ask" ? " ?" : ""}
           </span>,
         ];

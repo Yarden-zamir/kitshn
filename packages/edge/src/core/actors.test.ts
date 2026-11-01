@@ -16,7 +16,8 @@ import {
 import { agentMayCommand, cardsControlledBy, circlesOf, rightMode } from "./agent.ts";
 import { OPERATIONS, decide } from "./operations.ts";
 import { grantsOf } from "./providers.ts";
-import { keyRights, login, machineKey, token } from "./testkit.ts";
+import { LEGACY_RIGHTS, type LegacyRight, migrateRights } from "./effects.ts";
+import { login, machineKey, token } from "./testkit.ts";
 import { type Visitor, visitorLevel } from "./visitor.ts";
 
 const machineOf = (id: string, name: string): Machine => ({
@@ -140,8 +141,29 @@ const legacy: ReadonlyArray<LegacyCircle> = [
 
 const migrated = () => migrateMembers(legacy, machines, { x: 0, y: 0 }, settings);
 
+/** The rights that migration 44 gives an agent key: its flags automatic, "raises access" unset, others off (K-1732). */
+const legacyKeyRights = (on: Partial<Record<"addsApps" | "publishes", true>>) =>
+  Object.fromEntries(
+    LEGACY_RIGHTS.filter((right) => right !== "raisesAccess").map((right: LegacyRight) => [
+      right,
+      right === "addsApps" || right === "publishes"
+        ? on[right]
+          ? { mode: "automatic" }
+          : { mode: "off" }
+        : { mode: "off" },
+    ]),
+  );
+
+/** The state after migration 44 and the move of its rights to effects (migration 46). */
 const stateOf = (migration: ActorMigration): State => ({
-  circles: new Map(migration.circles.map((each) => [each.id, each])),
+  circles: new Map(
+    migrateRights(
+      migration.circles,
+      new Map(migration.actors.map((actor) => [actor.id, actor])),
+      () => false,
+      0,
+    ).circles.map((each) => [each.id, each]),
+  ),
   resources: new Map([admin, site, machineCard, strictSite].map((each) => [each.id, each])),
   places,
   shareSettings: new Map([...settings, ...migration.shareSettings]),
@@ -259,11 +281,22 @@ describe("the migration of members into actors (K-1778, migration 44)", () => {
     ]);
     for (const clientId of ["mac.access", "test.access", "phone.access", "vps.access", "ops.access"])
       expect(visitorLevel(state, admin, { email: null, clientId, ip: null }, 0)).toBe("control");
+    // K-1730: migration 46 gives each of them "shares" and "secrets" automatic, so they keep the admin of today.
+    const owners = [...state.circles.values()].flatMap((each) =>
+      each.members.flatMap((member) =>
+        member._tag === "actor" &&
+        member.rights?.shares?.mode === "automatic" &&
+        member.rights.secrets?.mode === "automatic"
+          ? [[each.name, member.actorId] as const]
+          : [],
+      ),
+    );
+    expect(owners).toEqual(holders.map(([name, actorId]) => [name, actorId]));
     // The agent key "Bot" in "agents" holds no admin there, so its key rights stay as before.
     expect(byId(migration.circles, "agents").members[0]).toEqual({
       _tag: "actor",
       actorId: botId,
-      rights: keyRights({ publishes: true }),
+      rights: legacyKeyRights({ publishes: true }),
     });
     expect(visitorLevel(state, admin, { email: null, clientId: "bot.access", ip: null }, 0)).toBeNull();
     for (const name of ["Mac", "kitshn test agent", "Yarden's phone", "VPS", "Ops"])
@@ -294,7 +327,7 @@ describe("the migration of members into actors (K-1778, migration 44)", () => {
     expect(byId(circles, "agents").members[0]).toEqual({
       _tag: "actor",
       actorId: actorIdOf(token("t-bot", "bot.access", "Bot")),
-      rights: keyRights({ publishes: true }),
+      rights: legacyKeyRights({ publishes: true }),
     });
   });
 
@@ -385,7 +418,7 @@ describe("the migration of members into actors (K-1778, migration 44)", () => {
           admin: false,
           paused: false,
           mode,
-          raisesAccess: null,
+          shares: null,
           inAgentCircle: true,
           scope: true,
           approved: false,

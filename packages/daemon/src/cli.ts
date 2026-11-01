@@ -19,7 +19,7 @@ import type { SiteEntry } from "./sites.ts";
  * exec request of a provider starts a run on another machine (K-722).
  */
 export const ASK_ACTION_HELP: Record<Exclude<AskAction, "exec">, string> = {
-  state: `the cards, circles, rights and open asks of this machine; --body '{"all":true}' adds servers and link events`,
+  state: `the cards, circles, effects and open asks of this machine; --body '{"all":true}' adds servers and link events`,
   apply: `move a card or change a share: --body '{"edits":[...]}'`,
   organize: "tidy the cards that you manage into a grid, as one Undo (K-532)",
   publish: `move a card into Everyone, or out with --body '{"public":false}'`,
@@ -57,7 +57,7 @@ kitshn service uninstall                stop and remove the user service`,
   rekey:
     "kitshn rekey <code>                     make a new machine key with the key code of its panel (K-1706, K-1708)",
   status:
-    "kitshn status                           the machine, its map name, server, rights, key, connection and tunnel",
+    "kitshn status                           the machine, its map name, server, effects, key, connection and tunnel",
   health:
     "kitshn health [--now] [--json]          the last check of the providers and links of this machine (K-630)",
   "local-users": `kitshn local-users list|add|remove <u>  who else may use the local socket, as the daemon user (K-701);
@@ -126,7 +126,7 @@ export function helpText(command: string | null, version: string): string {
   ].join("\n");
 }
 
-/** C11 of the UX audit: one line for each right of the machine, by its name on the map. */
+/** C11 of the UX audit: one line for each effect of the machine, with its mode. */
 export function rightLines(rights: ReadonlyArray<StateRight>): Array<string> {
   return rights.map(
     (right) =>

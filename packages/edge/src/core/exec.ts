@@ -5,7 +5,7 @@ import { type Change, applyChanges } from "./changes.ts";
 import {
   type Circle,
   type Level,
-  type Right,
+  type Effect,
   type Member,
   type Point,
   type ShareSetting,
@@ -16,11 +16,11 @@ import {
   shareKey,
 } from "./model.ts";
 
-const RUNS_COMMANDS: Right = "runsCommands";
+const RUNS: Effect = "runs";
 
 /**
  * K-722: machine A may run commands on machine B when an agent circle of A holds B's machine card, or a provider card
- * on B, at `control`. The mode of "runs commands" then decides: automatic, ask a circle, or off.
+ * on B, at `control`. The mode of "runs" then decides: automatic, ask a circle, or off.
  */
 export function mayExecOn(state: State, sourceId: string, targetId: string, now: number): boolean {
   const source = state.machines.get(sourceId);
@@ -66,7 +66,7 @@ export function execProviderOn(
 }
 
 /**
- * K-721, K-722: the machines whose "runs commands" covers `targetId` at automatic with no label conditions, sorted.
+ * K-721, K-722: the machines whose "runs" covers `targetId` at automatic with no label conditions, sorted.
  * `check` gives their tokens the `exec` right, so one rule covers exec and a terminal that another machine starts.
  */
 export function execMachinesOf(state: State, targetId: string, now: number): Array<string> {
@@ -74,7 +74,7 @@ export function execMachinesOf(state: State, targetId: string, now: number): Arr
     .filter((sourceId) => {
       if (!mayExecOn(state, sourceId, targetId, now)) return false;
       // A bare machine call carries no labels, so only a chip of the machine actor itself counts (K-1778).
-      return machineRightMode(state, sourceId, RUNS_COMMANDS, now, null)?.mode === "automatic";
+      return machineRightMode(state, sourceId, RUNS, now, null)?.mode === "automatic";
     })
     .sort();
 }
@@ -154,7 +154,7 @@ function pointIn(state: State, wanted: ReadonlySet<string>, start: Point): Point
  * K-722, migration 42: each circle of machines only that holds a `t3.agents` card now holds the `t3.app` card of the
  * same machine, at the same level, so each link stays. A circle that also holds people, devices, networks or
  * Everyone gets nothing, because `t3.app` would give them T3 itself. Where the share was at `control` (the old
- * `exec` level), a machine of the circle gets "runs commands" at automatic only when the right is unset there, and
+ * `exec` level), a machine of the circle gets "runs" at automatic only when the right is unset there, and
  * only when that covers no machine but the old targets; the right belongs to the source machine, not to one target.
  * A card in a stack does not move, because its stack shares one point. `unmet` names each share and right that it
  * left, for the owner.
@@ -220,7 +220,7 @@ export function migrateAgentShares(state: State): AgentsMigration {
           member._tag === "actor" &&
           source !== null &&
           source !== target &&
-          member.rights?.runsCommands === undefined
+          member.rights?.runs === undefined
         ) {
           const entry = rights.get(source) ?? { circles: new Set(), targets: new Set() };
           entry.circles.add(circle.id);
@@ -250,7 +250,7 @@ export function migrateAgentShares(state: State): AgentsMigration {
       ...circle,
       members: circle.members.map((member): Member =>
         member._tag === "actor" && machineOfMember(state, member) === source
-          ? { ...member, rights: { ...member.rights, runsCommands: { mode: "automatic" } } }
+          ? { ...member, rights: { ...member.rights, runs: { mode: "automatic" } } }
           : member,
       ),
     });

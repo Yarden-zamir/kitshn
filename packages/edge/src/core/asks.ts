@@ -3,9 +3,8 @@ import {
   type Actor,
   type Circle,
   type Directory,
-  HIGH_RISK_RIGHTS,
-  RIGHT_NAMES,
-  type Right,
+  type Effect,
+  HIGH_RISK_EFFECTS,
   type RightCondition,
   type RightMode,
   type State,
@@ -47,28 +46,28 @@ export const isAskAction = (value: unknown): value is AskAction =>
   typeof value === "string" && (ASK_ACTIONS as ReadonlyArray<string>).includes(value);
 
 /**
- * K-1711: the right that an action needs. `none` needs no right; `member` needs membership of the approver circle
- * (K-1723); `apply` needs "publishes" only for a move into Everyone, which agentRefusal decides.
+ * K-1711: the effect of an action. `none` needs none; `member` needs membership of the approver circle (K-1723);
+ * `apply` checks the edits with agentRefusal, and an edit that raises access follows "shares" (K-1778).
  */
-export const ASK_RIGHT: Record<AskAction, Right | "none" | "member" | "apply"> = {
+export const ASK_RIGHT: Record<AskAction, Effect | "none" | "member" | "apply"> = {
   state: "none",
   apply: "apply",
   organize: "apply",
   publish: "apply",
-  allow: "addsApps",
-  deploy: "deploys",
-  job: "runsCommands",
+  allow: "creates",
+  deploy: "changes",
+  job: "runs",
   "job-read": "none",
-  "github-token": "readsCode",
-  "audience-add": "addsAudiences",
+  "github-token": "reads",
+  "audience-add": "shares",
   "audience-remove": "none",
-  pass: "getsPasses",
+  pass: "shares",
   approve: "member",
   deny: "member",
   history: "none",
-  backup: "deploys",
-  restore: "restores",
-  exec: "runsCommands",
+  backup: "changes",
+  restore: "destroys",
+  exec: "runs",
 };
 
 /** K-1750: at most 10 labels, each key with a prefix, of `a-z`, `0-9`, `.` and `-`, at most 64 characters. */
@@ -208,8 +207,8 @@ export interface Proposal {
   readonly body: unknown;
   readonly reason: string | null;
   readonly labels: Readonly<Record<string, string>>;
-  /** K-1778: a call that the Owner decides asks for "raises access". */
-  readonly right: Right;
+  /** K-1730: the effect that the ask is for; a target out of scope asks for "shares" (K-1778). */
+  readonly right: Effect;
   readonly circleId: string;
   /** What the approver reads, and its SHA-256 hex (shownAsk). */
   readonly shown: string;
@@ -230,6 +229,9 @@ export const APPROVED_WINDOW_MS = 60 * 60_000;
  * machine gets the secret, so no proposal row ever holds one.
  */
 export const WINDOW_ACTIONS: ReadonlySet<AskAction> = new Set(["github-token", "pass"]);
+
+/** K-1723: an approval of an ask for these effects needs a passkey proof, because they raise access or hand out secrets. */
+export const PASSKEY_EFFECTS: ReadonlySet<Effect> = new Set(["shares", "secrets"]);
 
 /** K-1727: a proof without a passkey answers the asks of this circle; in a passkey circle only with the setting on. */
 export const approvesWithoutPasskey = (circle: Circle) =>
@@ -271,23 +273,33 @@ const isAgentMember = (member: Circle["members"][number], directory: Directory) 
   return actor !== undefined && !isPerson(actor);
 };
 
+/** K-1725: the effects that the map warns about at "automatic", with what they do with no person. */
+export const AUTOMATIC_WARNING: Readonly<Partial<Record<Effect, string>>> = {
+  shares: `"shares" runs at once: the actor raises access, such as a card into any circle or a new member, with no person.`,
+  secrets: `"secrets" runs at once: the actor gets invite codes, key codes and tokens with no person.`,
+  runs: `"runs" runs at once: the actor runs shell commands on its machines with no person.`,
+  destroys: `"destroys" runs at once: the actor removes data that has no Undo with no person.`,
+};
+
 /**
- * K-1725: the warnings of the rights of one actor in a circle. The map shows them and refuses nothing: all configurations
+ * K-1725: the warnings of the effect modes of one actor in a circle. The map shows them and refuses nothing: all configurations
  * are allowed.
  */
 export function rightWarnings(
   state: Pick<State, "circles" | "actors" | "machines">,
   actor: Actor,
-  rights: Readonly<Partial<Record<Right, RightMode>>>,
+  rights: Readonly<Partial<Record<Effect, RightMode>>>,
 ): Array<string> {
   const warnings: Array<string> = [];
-  for (const [right, mode] of Object.entries(rights) as Array<[Right, RightMode | undefined]>) {
+  for (const [right, mode] of Object.entries(rights) as Array<[Effect, RightMode | undefined]>) {
     if (!mode || mode.mode === "off") continue;
-    const name = RIGHT_NAMES[right];
+    const name = right;
     if (mode.mode === "automatic") {
-      if (right === "writesCode" && machineIdOf(actor) !== null && (actor.conditions ?? []).length === 0)
+      const warning = AUTOMATIC_WARNING[right];
+      if (warning !== undefined) warnings.push(warning);
+      if (right === "changes" && machineIdOf(actor) !== null && (actor.conditions ?? []).length === 0)
         warnings.push(
-          `"${name}" runs at once for an actor with no thread condition, so any process of the machine writes code.`,
+          `"changes" runs at once for an actor with no thread condition, so any process of the machine pushes code and deploys.`,
         );
       continue;
     }
@@ -306,7 +318,7 @@ export function rightWarnings(
       warnings.push(
         `"${name}" asks ${circle.name}, which holds only this actor, and an actor never approves its own ask.`,
       );
-    if (HIGH_RISK_RIGHTS.has(right) && !circle.members.some((member) => isPersonMember(member, state)))
+    if (HIGH_RISK_EFFECTS.has(right) && !circle.members.some((member) => isPersonMember(member, state)))
       warnings.push(
         `"${name}" asks ${circle.name}, which has no person, so no person sees it before it runs.`,
       );

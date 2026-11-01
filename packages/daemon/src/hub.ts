@@ -27,7 +27,7 @@ type ExecStart = Extract<Answer, { type: "exec" }>;
 export interface KitshnState {
   readonly syncedAt: number | null;
   readonly paused: boolean;
-  /** K-722: the machines whose "runs commands" covers this machine at automatic. */
+  /** K-722: the machines whose "runs" covers this machine at automatic. */
   readonly execMachines: ReadonlyArray<string>;
 }
 

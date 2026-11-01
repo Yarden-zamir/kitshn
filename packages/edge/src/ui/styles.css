@@ -2275,7 +2275,7 @@ a > code {
   padding: 1px 6px;
 }
 
-/* K-718: an agent key among the members of a circle, and its rights. */
+/* K-718: an agent key among the members of a circle, and its effects. */
 .chip .sticker.agent,
 .chip .sticker.right {
   margin-left: 4px;
@@ -2286,6 +2286,10 @@ a > code {
 }
 .sticker.right {
   background: var(--green);
+}
+/* K-1725: an effect that raises access, hands out secrets, runs shells or destroys data at automatic. */
+.sticker.right.warn {
+  background: var(--warning);
 }
 
 /* K-521: an owner's stack, as one card with a list of its cards. */

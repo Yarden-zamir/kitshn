@@ -1,7 +1,9 @@
 /// <reference types="vite/client" />
 import { describe, expect, it } from "vitest";
-import { RIGHTS } from "./model.ts";
 import {
+  EFFECTS,
+  EFFECT_DEFAULTS,
+  type Effect,
   OPERATIONS,
   OP_IDS,
   type OpId,
@@ -82,28 +84,20 @@ function names(path: string, route: string): boolean {
 }
 
 describe("operations (K-1777)", () => {
+  const unset = { admin: false, paused: false, mode: null, shares: null, approved: false } as const;
+
   it("lets an agent reach every owner action: each call runs, waits for a person, or refuses as for the owner", () => {
     const refusals: Array<string> = [];
     for (const [id, op] of rows)
       for (const scope of [true, false])
         for (const inAgentCircle of [true, false]) {
-          const decision = decide(
-            op,
-            {
-              admin: false,
-              paused: false,
-              mode: null,
-              raisesAccess: null,
-              inAgentCircle,
-              scope,
-              approved: false,
-            },
-            OWNER,
-          );
+          const decision = decide(op, { ...unset, inAgentCircle, scope }, OWNER);
           if (decision.outcome === "refuse") refusals.push(id);
         }
-    // Only a person gate refuses a machine whose rights are unset; a review sees each in this list.
-    expect([...new Set(refusals)]).toEqual(rows.filter(([, op]) => isPersonGate(op.gate)).map(([id]) => id));
+    // With every effect unset, only a person gate and a secret (default off) refuse; a review sees each in this list.
+    expect([...new Set(refusals)]).toEqual(
+      rows.filter(([, op]) => isPersonGate(op.gate) || op.effect === "secrets").map(([id]) => id),
+    );
     expect(rows.filter(([, op]) => isPersonGate(op.gate)).map(([id]) => id)).toEqual([
       "resume",
       "restore-time",
@@ -112,19 +106,58 @@ describe("operations (K-1777)", () => {
     ]);
   });
 
-  it("asks the Owner for a failed scope, whatever the mode, and runs an approved call", () => {
+  it("gives each row exactly one effect of EFFECTS (K-1730)", () => {
+    expect(rows.filter(([, op]) => !EFFECTS.includes(op.effect)).map(([id]) => id)).toEqual([]);
+  });
+
+  it("starts each effect at its default: reads, maintains and creates run in an agent circle (K-1730)", () => {
+    expect(EFFECT_DEFAULTS).toEqual({
+      reads: "automatic",
+      maintains: "automatic",
+      creates: "automatic",
+      changes: "ask the Owner",
+      runs: "ask the Owner",
+      destroys: "ask the Owner",
+      shares: "ask the Owner",
+      secrets: "off",
+    });
+    const byEffect = (effect: Effect) =>
+      rows.find(([, op]) => op.effect === effect && !isPersonGate(op.gate));
+    const outcome = (effect: Effect, inAgentCircle: boolean) => {
+      const row = byEffect(effect);
+      if (!row) throw new Error(`No row has the effect ${effect}.`);
+      return decide(row[1], { ...unset, scope: true, inAgentCircle }, OWNER).outcome;
+    };
+    expect(EFFECTS.map((effect) => [effect, outcome(effect, true), outcome(effect, false)])).toEqual([
+      ["reads", "run", "ask"],
+      ["maintains", "run", "ask"],
+      ["creates", "run", "ask"],
+      ["changes", "ask", "ask"],
+      ["runs", "ask", "ask"],
+      ["destroys", "ask", "ask"],
+      ["shares", "ask", "ask"],
+      ["secrets", "refuse", "refuse"],
+    ]);
+  });
+
+  it("decides a target out of scope by the caller's shares, whatever the mode, and runs an approved call", () => {
     const shell = OPERATIONS["machine-shell"];
-    const base = {
-      admin: false,
-      paused: false,
-      inAgentCircle: true,
-      approved: false,
-      raisesAccess: null,
-    } as const;
+    const base = { ...unset, inAgentCircle: true } as const;
     expect(decide(shell, { ...base, mode: { mode: "automatic" }, scope: false }, OWNER)).toEqual({
       outcome: "ask",
       circleId: OWNER,
     });
+    expect(
+      decide(
+        shell,
+        { ...base, mode: { mode: "automatic" }, shares: { mode: "automatic" }, scope: false },
+        OWNER,
+      ),
+    ).toEqual({ outcome: "run" });
+    expect(
+      decide(shell, { ...base, shares: { mode: "ask", circleId: "admins" }, scope: false }, OWNER),
+    ).toEqual({ outcome: "ask", circleId: "admins" });
+    expect(decide(shell, { ...base, shares: { mode: "off" }, scope: false }, OWNER).outcome).toBe("refuse");
     expect(decide(shell, { ...base, mode: { mode: "automatic" }, scope: true }, OWNER)).toEqual({
       outcome: "run",
     });
@@ -133,111 +166,45 @@ describe("operations (K-1777)", () => {
       circleId: "c",
     });
     expect(decide(shell, { ...base, mode: { mode: "off" }, scope: true }, OWNER).outcome).toBe("refuse");
-    // An approval from before the owner set the right "off" no longer runs.
+    // An approval from before the owner set the effect "off" no longer runs.
     expect(
       decide(shell, { ...base, mode: { mode: "off" }, scope: false, approved: true }, OWNER).outcome,
     ).toBe("refuse");
-    expect(decide(shell, { ...base, mode: null, scope: false, approved: true }, OWNER)).toEqual({
-      outcome: "run",
-    });
-    expect(
-      decide(shell, { ...base, mode: null, scope: true, paused: true, approved: true }, OWNER).outcome,
-    ).toBe("refuse");
-  });
-
-  it("decides each call that the Owner decides by the caller's raises access (K-1778)", () => {
-    const base = {
-      admin: false,
-      paused: false,
-      inAgentCircle: true,
-      approved: false,
-      mode: null,
-    } as const;
-    // An `apply` edit that raises access fails its rule scope (K-715); a row of scope "never" is the same.
-    for (const [op, scope] of [
-      [OPERATIONS.apply, false],
-      [OPERATIONS["machine-labels"], true],
-    ] as const) {
-      expect(decide(op, { ...base, scope, raisesAccess: null }, OWNER)).toEqual({
-        outcome: "ask",
-        circleId: OWNER,
-      });
-      expect(decide(op, { ...base, scope, raisesAccess: { mode: "automatic" } }, OWNER)).toEqual({
-        outcome: "run",
-      });
-      expect(
-        decide(op, { ...base, scope, raisesAccess: { mode: "ask", circleId: "admins" } }, OWNER),
-      ).toEqual({ outcome: "ask", circleId: "admins" });
-      expect(decide(op, { ...base, scope, raisesAccess: { mode: "off" } }, OWNER).outcome).toBe("refuse");
-    }
-    // A person gate stays a person gate, also with the right automatic.
+    expect(decide(shell, { ...base, scope: false, approved: true }, OWNER)).toEqual({ outcome: "run" });
+    expect(decide(shell, { ...base, scope: true, paused: true, approved: true }, OWNER).outcome).toBe(
+      "refuse",
+    );
+    // A person gate stays a person gate, also with every effect automatic.
     for (const id of ["resume", "restore-time", "notifications", "push"] as const)
       expect(
-        decide(OPERATIONS[id], { ...base, scope: true, raisesAccess: { mode: "automatic" } }, OWNER).outcome,
+        decide(
+          OPERATIONS[id],
+          { ...base, scope: true, mode: { mode: "automatic" }, shares: { mode: "automatic" } },
+          OWNER,
+        ).outcome,
       ).toBe("refuse");
   });
 
-  it("runs machine care at once for a machine in an agent circle, and asks for one in the tray (Y2)", () => {
-    const update = OPERATIONS["machine-update"];
-    const base = {
-      admin: false,
-      paused: false,
-      mode: null,
-      raisesAccess: null,
-      scope: true,
-      approved: false,
-    } as const;
-    expect(decide(update, { ...base, inAgentCircle: true }, OWNER)).toEqual({ outcome: "run" });
-    expect(decide(update, { ...base, inAgentCircle: false }, OWNER)).toEqual({
-      outcome: "ask",
-      circleId: OWNER,
-    });
-    expect(decide(OPERATIONS["machine-shell"], { ...base, inAgentCircle: true }, OWNER)).toEqual({
-      outcome: "ask",
-      circleId: OWNER,
-    });
-    // K-610, K-614: the label "deploy" is the owner's consent, so no right lets an agent set labels.
-    expect(
-      decide(
-        OPERATIONS["machine-labels"],
-        { ...base, inAgentCircle: true, mode: { mode: "automatic" } },
-        OWNER,
-      ),
-    ).toEqual({ outcome: "ask", circleId: OWNER });
-  });
-
-  it("gives a right to each row that runs for any target, so the owner can turn it off", () => {
-    const open = rows.filter(
-      ([, op]) =>
-        !isPersonGate(op.gate) && op.shortOnly !== true && op.gate.scope === "any" && op.gate.right === null,
-    );
-    expect(open.map(([id]) => id)).toEqual([]);
-  });
-
-  it("asks the Owner for every row that answers with a secret or can raise access (K-715, K-1723)", () => {
-    // `apply` raises access only by circle and member edits, and its rule scope sends those to the Owner.
+  it("gives secrets to every row that answers with a secret, and shares to every row that raises access (K-715)", () => {
+    // `apply` raises access only by edits that fail its rule scope, which "shares" then decides.
     const raisesAccess: ReadonlyArray<OpId> = [
-      "organize", // moves cards, also into circles
       "undo", // an Undo can bring back a share or a member
       "undo-item",
-      "card-take-address",
-      "card-give-address-back",
       "machine-labels", // the label deploy is the owner's consent (K-610)
-      "machine-compose-allow",
-      "site-live-add",
-      "bot-run-deploy",
-      "repo-group-add", // a repo group gives its rights to every repo that it matches (K-1733)
+      "site-live-add", // it may name any circle
+      "repo-group-add", // a repo group gives its effects to every repo that it matches (K-1733)
       "repo-group-edit",
       "github-way",
       "passes-set",
+      "audience-add",
       "audience-labels",
-      "desired-set",
     ];
-    const loose = rows
-      .filter(([id, op]) => op.secret === true || raisesAccess.includes(id))
-      .filter(([, op]) => isPersonGate(op.gate) || op.gate.scope !== "never")
-      .map(([id]) => id);
-    expect(loose).toEqual([]);
+    expect(rows.filter(([, op]) => op.secret === true && op.effect !== "secrets").map(([id]) => id)).toEqual(
+      [],
+    );
+    expect(
+      rows.filter(([id, op]) => raisesAccess.includes(id) && op.effect !== "shares").map(([id]) => id),
+    ).toEqual([]);
   });
 
   it("keeps the fixed command of a row, so a caller cannot turn one operation into another", () => {
@@ -278,11 +245,6 @@ describe("operations (K-1777)", () => {
     expect(opRequest(OPERATIONS["provider-forget"], "m1", {})).toBe(
       'This operation needs the body field "provider".',
     );
-  });
-
-  it("names every right of RIGHTS that a row uses", () => {
-    for (const [, op] of rows)
-      if (!isPersonGate(op.gate) && op.gate.right !== null) expect(RIGHTS).toContain(op.gate.right);
   });
 
   it("has a row for every owner route of the Durable Object", () => {

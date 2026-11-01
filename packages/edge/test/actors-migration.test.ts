@@ -97,13 +97,17 @@ describe("migration 44 on a database of migration 43 (K-1778)", () => {
       { _tag: "actor", actorId: actorIdOf({ _tag: "login", email: "owner@example.com" }) },
     ]);
     // M1: the devices circle holds only the token, so the login opens nothing new there without a passkey. The token
-    // held the admin through Owner, so it keeps it with "raises access" automatic.
+    // held the admin through Owner, so migration 46 gives it "shares" and "secrets" automatic (K-1730).
     expect(after.circles).toContain("Phone's devices");
     expect(after.devices).toEqual([
       {
         _tag: "actor",
         actorId: actorIdOf({ ...phone, _tag: "token" }),
-        rights: { raisesAccess: { mode: "automatic" } },
+        rights: {
+          creates: { mode: "ask", circleId: "owner" },
+          shares: { mode: "automatic" },
+          secrets: { mode: "automatic" },
+        },
       },
     ]);
     expect(after.violation).toBeNull();

@@ -17,8 +17,6 @@ import {
 import { isAgentCircle } from "../core/agent.ts";
 import { ipInRange } from "../core/visitor.ts";
 
-export { isAgentCircle };
-
 /**
  * K-1778: what the map calls a member. The icon comes from the credentials (person, token, machine, agent); no rule
  * reads it.
@@ -205,7 +203,7 @@ export function joinPlan(
   const holdsAdmin = circlesHolding(state, ADMIN_RESOURCE_ID).some((held) => held.id === circle.id);
   return {
     edits: [...actors, { _tag: "circle", id: circle.id, after }],
-    done: `${names} joined ${circle.name}. ${opens} ${agents ? "No agent rights yet." : "A circle with people gives no agent rights."}`,
+    done: `${names} joined ${circle.name}. ${opens} ${agents ? "Its effects take their defaults." : "Outside an agent circle, an unset effect asks the Owner."}`,
     rightsIn: agents ? circle.id : null,
     ask: holdsAdmin
       ? `${circle.name} holds kitshn itself, so ${names} would change everything in kitshn. Add ${one ? "it" : "them"} anyway?`

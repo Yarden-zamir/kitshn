@@ -24,7 +24,7 @@ it("lets an agent do owner actions through /op: care runs, a circle edit waits f
   stubAccessCerts();
   const key = await newMachineKey();
   // A right set makes "agents" an agent circle of the machine (K-1730).
-  await setup({ deploys: { mode: "automatic" } }, key);
+  await setup({ changes: { mode: "automatic" } }, key);
   const op = (id: string, nonce: string, body: string) =>
     forwarded(key, "POST", `/op/${id}`, `${nonce}-0123456789abcdef`, body, {}, ADMIN);
 
@@ -33,13 +33,13 @@ it("lets an agent do owner actions through /op: care runs, a circle edit waits f
   expect(care.status, await care.clone().text()).toBe(200);
   expect(await care.json()).toMatchObject({ outcome: "done", result: { id: "vps", autoUpdate: false } });
 
-  // A circle edit raises access, so it asks the Owner (K-715) for the right "raises access" (K-1778).
+  // A circle edit raises access, so it asks the Owner (K-715) for the effect "shares" (K-1778).
   const renamed: Circle = {
     id: "agents",
     name: "Builders",
     color: "#ffcc00",
     level: "control",
-    members: [machineChip("vps", { deploys: { mode: "automatic" } })],
+    members: [machineChip("vps", { changes: { mode: "automatic" } })],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -58,7 +58,7 @@ it("lets an agent do owner actions through /op: care runs, a circle edit waits f
       .exec<{ right_name: string }>("SELECT right_name FROM proposals WHERE id = ?", waiting.proposalId)
       .one(),
   );
-  expect(right.right_name).toBe("raisesAccess");
+  expect(right.right_name).toBe("shares");
   // K-1723, K-1778: an ask that raises access needs a passkey proof, also where the Owner circle lets a token approve.
   const script = tokenActor("t-script", "script.access", "Script");
   const ownerBody = await runInDurableObject(stub, (_, state) => {
@@ -85,7 +85,10 @@ it("lets an agent do owner actions through /op: care runs, a circle edit waits f
       reason: null,
     }),
   );
-  expect(byToken).toMatchObject({ ok: false, error: expect.stringMatching(/raises access/) });
+  expect(byToken).toMatchObject({
+    ok: false,
+    error: expect.stringMatching(/"shares", so only a person approves/),
+  });
   await runInDurableObject(stub, (_, state) =>
     state.storage.sql.exec("UPDATE circles SET body = ? WHERE id = ?", ownerBody, OWNER_CIRCLE_ID),
   );
@@ -313,7 +316,7 @@ it("runs each gated row through the owner code: it fails only where the owner fa
   const key = await newMachineKey();
   // The machine is in an agent circle that controls no card, so only the gate lets its calls run. The owner controls
   // the machine card and the provider card, so a refusal of the agent alone shows.
-  await setup({ deploys: { mode: "automatic" } }, key);
+  await setup({ changes: { mode: "automatic" } }, key);
   const stub = env.KITSHN.getByName("kitshn");
   const owner = await runInDurableObject(stub, (_, state) => {
     const owner = JSON.parse(
@@ -361,7 +364,7 @@ it("runs each gated row through the owner code: it fails only where the owner fa
         // A queued job of the owner, for job-cancel; no delivery runs before the cancel.
         if (id === "job-cancel") queueOwnerJob(state, 9001);
         const op: Operation = OPERATIONS[id];
-        const right = isPersonGate(op.gate) ? null : op.gate.right;
+        const right = op.effect;
         const onCard = !isPersonGate(op.gate) && (op.gate.scope === "card" || op.gate.scope === "own");
         const built = opRequest(op, TARGETS[id] ?? (onCard ? appId : "vps"), bodies[id] ?? {});
         if (typeof built === "string") {
@@ -416,7 +419,7 @@ it("runs each gated row through the owner code: it fails only where the owner fa
 it("sends the job of a gated call once its machine is online, and the right off or the pause ends it (K-1777)", async () => {
   stubAccessCerts();
   const key = await newMachineKey();
-  await setup({ deploys: { mode: "automatic" } }, key);
+  await setup({ changes: { mode: "automatic" } }, key);
   const restart = async (nonce: string) => {
     const answer = await forwarded(
       key,
@@ -440,10 +443,10 @@ it("sends the job of a gated call once its machine is online, and the right off 
   // The machine is offline at the call, so the job waits, and goes out when the daemon is back.
   expect(await deliver(await restart("sent"))).toMatchObject({ state: "sent" });
   const off = await restart("off");
-  await setup({ deploys: { mode: "automatic" }, maintains: { mode: "off" } }, key);
+  await setup({ changes: { mode: "automatic" }, maintains: { mode: "off" } }, key);
   expect(await deliver(off)).toMatchObject({ state: "failed", output: expect.stringContaining("off") });
 
-  await setup({ deploys: { mode: "automatic" } }, key);
+  await setup({ changes: { mode: "automatic" } }, key);
   const paused = await restart("paused");
   const pause = await send("/api/apply", {
     method: "POST",
@@ -529,7 +532,7 @@ const approveAsOwner = (proposalId: string) =>
 it("checks K-718 again when a job that no person approved goes out, and gives it the normal expiry (K-613, K-1777)", async () => {
   stubAccessCerts();
   const key = await newMachineKey();
-  await setup({ runsCommands: { mode: "automatic" } }, key);
+  await setup({ runs: { mode: "automatic" } }, key);
   const shell = async (nonce: string) =>
     forwarded(
       key,
@@ -579,7 +582,7 @@ it("checks K-718 again when a job that no person approved goes out, and gives it
 it("never runs an Owner ask on an approval of a right that came without a passkey (K-1723)", async () => {
   stubAccessCerts();
   const key = await newMachineKey();
-  await setup({ runsCommands: { mode: "ask", circleId: OWNER_CIRCLE_ID } }, key);
+  await setup({ runs: { mode: "ask", circleId: OWNER_CIRCLE_ID } }, key);
   await placeMachineCards("agents");
   const stub = env.KITSHN.getByName("kitshn");
   // The Owner circle lets the token "script" approve without a passkey (K-1725 warns).
@@ -630,8 +633,15 @@ it("never runs an Owner ask on an approval of a right that came without a passke
 it("asks the Owner when the scope fails or a secret goes out, and the Owner's approval runs the call (K-1777)", async () => {
   stubAccessCerts();
   const key = await newMachineKey();
-  // Both rights run at once, so only a failed scope asks.
-  await setup({ maintains: { mode: "automatic" }, addsApps: { mode: "automatic" } }, key);
+  // These effects run at once, so only a failed scope asks; "secrets" asks the Owner instead of its default off.
+  await setup(
+    {
+      maintains: { mode: "automatic" },
+      creates: { mode: "automatic" },
+      secrets: { mode: "ask", circleId: OWNER_CIRCLE_ID },
+    },
+    key,
+  );
   await placeMachineCards("owner");
   const stub = env.KITSHN.getByName("kitshn");
   const op = (id: string, nonce: string, body: string) =>
@@ -672,8 +682,8 @@ it("asks the Owner when the scope fails or a secret goes out, and the Owner's ap
     );
   const reset = await waits(await op("machine-reset-key", "reset", call("vps")));
   expect(await shown(reset)).toContain("gives: a key code that can act as the machine vps");
-  const jobs = await waits(await op("jobs", "jobs", call("")));
-  expect(await shown(jobs)).toContain("gives: the commands and output of the last 100 jobs");
+  // K-1730: the job output is a read, so "reads" runs it at once in an agent circle.
+  expect((await op("jobs", "jobs", call(""))).status).toBe(200);
 
   // A target that does not exist refuses, because no approval could run the call.
   for (const [id, target, kind] of [
@@ -773,7 +783,7 @@ it("lets a token actor call /op: an unset right waits for the Owner, and another
   expect(await second.json()).toMatchObject({ outcome: "done", result: { order: 5 } });
 });
 
-it("lets a token raise access only by its right: automatic runs, default waits, off refuses, and a person gate stays (K-1778)", async () => {
+it("lets a token raise access only by its shares: automatic runs, ask and default wait, off refuses, and a person gate stays (K-1778)", async () => {
   stubAccessCerts();
   const jwt = await scriptToken();
   const stub = env.KITSHN.getByName("kitshn");
@@ -781,12 +791,14 @@ it("lets a token raise access only by its right: automatic runs, default waits, 
   const atAdmin = { x: 0, y: 40 };
   const added = tokenActor("t-new", "new.access", "new phone");
   const outcomes: Array<[string, number, unknown, boolean, boolean]> = [];
-  for (const mode of ["automatic", "default", "off"] as const) {
+  for (const mode of ["automatic", "ask", "default", "off"] as const) {
     const script = tokenActor("t-script", "script.access", "nightly backup");
     const chip =
       mode === "default"
         ? { ...script, rights: { maintains: { mode: "automatic" as const } } }
-        : { ...script, rights: { raisesAccess: { mode } } };
+        : mode === "ask"
+          ? { ...script, rights: { shares: { mode, circleId: OWNER_CIRCLE_ID } } }
+          : { ...script, rights: { shares: { mode }, secrets: { mode } } };
     await setup({}, null, atAdmin, [chip]);
     await runInDurableObject(stub, (_, state) => {
       insertActors(state.storage.sql, [added]);
@@ -813,7 +825,7 @@ it("lets a token raise access only by its right: automatic runs, default waits, 
         .toArray(),
     }));
     const body = (await answer.json()) as { outcome: string; reason?: string };
-    // K-104, K-1778: the map path holds the admin for a token only with the right automatic.
+    // K-104, K-1778: the map path holds the admin for a token only with "shares" and "secrets" automatic.
     const map = await send("/api/state", { headers: { "cf-access-jwt-assertion": jwt } });
     const resume = await post(jwt, "/op/resume", call(""));
     outcomes.push([
@@ -826,13 +838,13 @@ it("lets a token raise access only by its right: automatic runs, default waits, 
   }
   expect(outcomes).toEqual([
     ["automatic", 200, { outcome: "done", members: 1, asks: [] }, true, true],
-    [
-      "default",
+    ...(["ask", "default"] as const).map((mode) => [
+      mode,
       409,
-      { outcome: "waiting", members: 0, asks: [{ right_name: "raisesAccess", circle_id: OWNER_CIRCLE_ID }] },
+      { outcome: "waiting", members: 0, asks: [{ right_name: "shares", circle_id: OWNER_CIRCLE_ID }] },
       false,
       true,
-    ],
+    ]),
     ["off", 403, { outcome: "refused", members: 0, asks: [] }, false, true],
   ]);
 });
@@ -872,7 +884,7 @@ it("reads the map through the gate, and caps the open asks of each credential at
   });
   // Another credential keeps its own 20.
   const key = await newMachineKey();
-  await setup({ deploys: { mode: "automatic" } }, key);
+  await setup({ changes: { mode: "automatic" } }, key);
   const other = await forwarded(
     key,
     "POST",

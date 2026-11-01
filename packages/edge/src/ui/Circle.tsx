@@ -26,7 +26,6 @@ import {
   type TypedKind,
   actorMember,
   deleteActorEdits,
-  isAgentCircle,
   machineMember,
   memberFrom,
   memberKind,
@@ -683,7 +682,6 @@ export function CircleEditor(props: {
     circlesHolding(state, resource.id).includes(circle),
   );
   // K-718, K-1778: rights count only in an agent circle: actors that are not people, and no rule.
-  const agentCircle = isAgentCircle(circle, state);
   const hasPeople = circle.members.some((member) => {
     const actor = memberActor(member, state);
     return member._tag === "domain" || (actor !== undefined && isPerson(actor));
@@ -747,7 +745,7 @@ export function CircleEditor(props: {
               extra={
                 member._tag === "actor" && actor ? (
                   <>
-                    {agentCircle && !isPerson(actor) ? (
+                    {!circle.needsPasskey || isPerson(actor) ? (
                       <ActorRights
                         member={member}
                         actor={actor}

@@ -1,7 +1,6 @@
 import {
   ADMIN_RESOURCE_ID,
-  RIGHTS,
-  RIGHT_NAMES,
+  EFFECTS,
   type Actor,
   type Circle,
   type Directory,
@@ -1002,7 +1001,7 @@ export function withAutoUpdate(machine: Machine, on: boolean): Machine {
 /** K-212: an end time in History, which every reader reads in UTC: "2026-10-29 15:40 UTC". */
 export const endText = (time: number) => `${new Date(time).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 
-/** K-1720: "Set runs commands of vps to ask Owner in Agents" for each right that a circle edit changes. */
+/** K-1720: "Set runs of vps to ask Owner in Agents" for each effect that a circle edit changes. */
 function rightChanges(state: State, before: Circle | null, after: Circle | null): Array<string> {
   if (!before || !after) return [];
   return after.members.flatMap((member) => {
@@ -1010,14 +1009,14 @@ function rightChanges(state: State, before: Circle | null, after: Circle | null)
     const old = before.members.find((other) => other._tag === "actor" && other.actorId === member.actorId);
     if (old?._tag !== "actor") return [];
     const name = state.actors.get(member.actorId)?.name ?? member.actorId;
-    return RIGHTS.filter((right) => !deepEqual(old.rights?.[right], member.rights?.[right])).map((right) => {
+    return EFFECTS.filter((right) => !deepEqual(old.rights?.[right], member.rights?.[right])).map((right) => {
       const mode = member.rights?.[right];
       const text = !mode
-        ? "default (asks the Owner)"
+        ? "default"
         : mode.mode === "ask"
           ? `ask ${state.circles.get(mode.circleId)?.name ?? mode.circleId}`
           : mode.mode;
-      return `Set ${RIGHT_NAMES[right]} of ${name} to ${text} in ${after.name}`;
+      return `Set ${right} of ${name} to ${text} in ${after.name}`;
     });
   });
 }
@@ -1134,7 +1133,7 @@ export function refuseRaiseWhilePaused(before: State, after: State): void {
     const rights = (members: ReadonlyArray<Member>) =>
       members.flatMap((member) =>
         member._tag === "actor"
-          ? RIGHTS.flatMap((right) => {
+          ? EFFECTS.flatMap((right) => {
               const mode = member.rights?.[right];
               return mode && mode.mode !== "off" ? [`${key(member)}/${right}/${JSON.stringify(mode)}`] : [];
             })

@@ -293,16 +293,14 @@ describe("changes and undo (K-1501, K-1502)", () => {
       {
         _tag: "circle",
         id: "owner",
-        after: { ...owner, members: [...owner.members, chip(BOT, { publishes: { mode: "automatic" } })] },
+        after: { ...owner, members: [...owner.members, chip(BOT, { shares: { mode: "automatic" } })] },
       },
     ]);
-    expect(summarize(withBot, gave.after, gave.changes)).toBe("Set publishes of Bot to automatic in Owner");
+    expect(summarize(withBot, gave.after, gave.changes)).toBe("Set shares of Bot to automatic in Owner");
     const took = edit(gave.after, [
       { _tag: "circle", id: "owner", after: { ...owner, members: [...owner.members, chip(BOT)] } },
     ]);
-    expect(summarize(gave.after, took.after, took.changes)).toBe(
-      "Set publishes of Bot to default (asks the Owner) in Owner",
-    );
+    expect(summarize(gave.after, took.after, took.changes)).toBe("Set shares of Bot to default in Owner");
   });
 
   it("uses a share override over the circle default (K-205)", () => {
@@ -1026,8 +1024,8 @@ describe("emergency pause (K-1504)", () => {
     };
     expect(() => refuseRaiseWhilePaused(placed, tray)).not.toThrow();
     // K-718: a right that opens raises access; one that turns off lowers it.
-    const off = chip(BOT, { publishes: { mode: "off" } });
-    const on = chip(BOT, { publishes: { mode: "automatic" } });
+    const off = chip(BOT, { shares: { mode: "off" } });
+    const on = chip(BOT, { shares: { mode: "automatic" } });
     const withDevice = (member: Circle["members"][number]) => ({
       ...paused,
       circles: new Map(paused.circles).set("owner", { ...owner, members: [...owner.members, member] }),

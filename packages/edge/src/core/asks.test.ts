@@ -71,10 +71,10 @@ describe("warnings of machine rights (K-1725)", () => {
   const state = { circles, actors: ACTORS, machines: new Map() };
 
   it("warns and allows: an approver circle of the asker alone, no person for a high-risk right, agent approvers, automatic code writes", () => {
-    expect(rightWarnings(state, VPS, { runsCommands: { mode: "ask", circleId: "owner" } })).toEqual([]);
+    expect(rightWarnings(state, VPS, { runs: { mode: "ask", circleId: "owner" } })).toEqual([]);
     const warnings = rightWarnings(state, VPS, {
-      runsCommands: { mode: "ask", circleId: "bots" },
-      writesCode: { mode: "automatic" },
+      runs: { mode: "ask", circleId: "bots" },
+      changes: { mode: "automatic" },
     });
     expect(warnings).toHaveLength(4);
     expect(warnings.join(" ")).toMatch(/never approves its own ask/);

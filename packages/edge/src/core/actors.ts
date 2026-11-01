@@ -1,17 +1,20 @@
 // K-1778: the one migration of circle members into actors (migration 44). Pure, for tests: it reads the stored circle
 // bodies of before the actor model and gives the actors and the new circle bodies.
+import {
+  LEGACY_NAMES,
+  LEGACY_RIGHTS,
+  type LegacyChip,
+  type LegacyRight,
+  type LegacyRightsCircle,
+} from "./effects.ts";
 import type { Machine } from "./machine.ts";
 import {
   ADMIN_RESOURCE_ID,
   OWNER_CIRCLE_ID,
-  RIGHTS,
-  RIGHT_NAMES,
   type Actor,
   type Circle,
   type Credential,
-  type Member,
   type Point,
-  type Right,
   type RightCondition,
   type RightMode,
   type ShareSetting,
@@ -42,11 +45,11 @@ export type LegacyMember =
   | {
       readonly _tag: "machine";
       readonly machineId: string;
-      readonly rights?: Readonly<Partial<Record<Right, LegacyMode>>>;
+      readonly rights?: Readonly<Partial<Record<LegacyRight, LegacyMode>>>;
     }
   | { readonly _tag: "everyone" }
   // A chip of after migration 44 stays as it is.
-  | Extract<Member, { _tag: "actor" }>;
+  | LegacyChip;
 
 export type LegacyCircle = Omit<Circle, "members" | "approvesWithoutPasskey"> & {
   readonly members: ReadonlyArray<LegacyMember>;
@@ -55,8 +58,8 @@ export type LegacyCircle = Omit<Circle, "members" | "approvesWithoutPasskey"> & 
 
 export interface ActorMigration {
   readonly actors: ReadonlyArray<Actor>;
-  /** The stored circles, then each new devices circle of a token that left a passkey circle. */
-  readonly circles: ReadonlyArray<Circle>;
+  /** The stored circles, then each new devices circle of a token that left a passkey circle. Migration 46 maps the rights. */
+  readonly circles: ReadonlyArray<LegacyRightsCircle>;
   /** The share settings of the new devices circles, by `shareKey`. */
   readonly shareSettings: ReadonlyArray<readonly [string, ShareSetting]>;
   /** What the owner reads in History: each token that joined a person, each new agent actor, each devices circle. */
@@ -123,14 +126,14 @@ export function migrateMembers(
   const givesAdmin = (circle: Pick<Circle, "id" | "level">) =>
     holdsAdmin(circle as LegacyCircle) &&
     (shareSettings.get(shareKey(ADMIN_RESOURCE_ID, circle.id))?.level ?? circle.level) === "control";
-  const ACTS_AS_OWNER: Partial<Record<Right, RightMode>> = { raisesAccess: { mode: "automatic" } };
+  const ACTS_AS_OWNER: Partial<Record<LegacyRight, RightMode>> = { raisesAccess: { mode: "automatic" } };
   // K-1777: the rights whose default ran at once for a machine in an agent circle. A set mode stays as it is.
-  const RAN_AT_ONCE: Partial<Record<Right, RightMode>> = {
+  const RAN_AT_ONCE: Partial<Record<LegacyRight, RightMode>> = {
     maintains: { mode: "automatic" },
     readsMap: { mode: "automatic" },
   };
   const keptAgentCircles = new Set<string>();
-  const machineDefaults = (circle: LegacyCircle): Partial<Record<Right, RightMode>> => {
+  const machineDefaults = (circle: LegacyCircle): Partial<Record<LegacyRight, RightMode>> => {
     if (circle.needsPasskey || !isAgentCircle(circle)) return {};
     keptAgentCircles.add(circle.name);
     return RAN_AT_ONCE;
@@ -184,13 +187,13 @@ export function migrateMembers(
   }
 
   // Agent actors: one per machine and set of conditions, named after the rights that need them.
-  const agentRights = new Map<string, Set<Right>>();
+  const agentRights = new Map<string, Set<LegacyRight>>();
   const agentId = (machineId: string, conditions: ReadonlyArray<RightCondition>) =>
     actorIdOf({ _tag: "machine", machineId }, conditions);
   for (const circle of circles)
     for (const member of circle.members) {
       if (member._tag !== "machine") continue;
-      for (const right of RIGHTS) {
+      for (const right of LEGACY_RIGHTS) {
         const mode = member.rights?.[right];
         if (!mode || mode.mode === "off" || (mode.conditions ?? []).length === 0) continue;
         const id = agentId(member.machineId, mode.conditions ?? []);
@@ -211,7 +214,7 @@ export function migrateMembers(
     const actor = actors.get(id);
     const machineId = actor?.credentials[0]?._tag === "machine" ? actor.credentials[0].machineId : id;
     const name =
-      `${machines.get(machineId)?.name ?? machineId} ${[...rights].map((right) => RIGHT_NAMES[right]).join(", ")}`.slice(
+      `${machines.get(machineId)?.name ?? machineId} ${[...rights].map((right) => LEGACY_NAMES[right]).join(", ")}`.slice(
         0,
         80,
       );
@@ -223,13 +226,13 @@ export function migrateMembers(
 
   /** By passkey circle id: the actors of the tokens that left it, each with the names of those tokens. */
   const tokensLeft = new Map<string, Map<string, Array<string>>>();
-  const migrated = circles.map((circle): Circle => {
-    const members: Array<Member> = [];
-    const chips = new Map<string, Extract<Member, { _tag: "actor" }>>();
-    const chip = (actorId: string, rights: Partial<Record<Right, RightMode>>) => {
+  const migrated = circles.map((circle): LegacyRightsCircle => {
+    const members: Array<LegacyRightsCircle["members"][number]> = [];
+    const chips = new Map<string, LegacyChip>();
+    const chip = (actorId: string, rights: Partial<Record<LegacyRight, RightMode>>) => {
       const old = chips.get(actorId);
       const merged = { ...rights, ...old?.rights };
-      const next: Extract<Member, { _tag: "actor" }> =
+      const next: LegacyChip =
         Object.keys(merged).length === 0
           ? { _tag: "actor", actorId }
           : { _tag: "actor", actorId, rights: merged };
@@ -271,14 +274,16 @@ export function migrateMembers(
             break;
           }
           if (owner) break;
-          const rights: Partial<Record<Right, RightMode>> = givesAdmin(circle) ? { ...ACTS_AS_OWNER } : {};
+          const rights: Partial<Record<LegacyRight, RightMode>> = givesAdmin(circle)
+            ? { ...ACTS_AS_OWNER }
+            : {};
           if (givesAdmin(circle)) actsAsOwner(id, circle.name);
           // A key never raised access by itself, so "raises access" stays at default: it asks the Owner, as before.
           if (keys.has(member.tokenId) && isAgentCircle(circle))
-            for (const right of RIGHTS)
+            for (const right of LEGACY_RIGHTS)
               if (right !== "raisesAccess")
                 rights[right] =
-                  (KEY_RIGHTS as ReadonlyArray<Right>).includes(right) &&
+                  (KEY_RIGHTS as ReadonlyArray<LegacyRight>).includes(right) &&
                   member[right as (typeof KEY_RIGHTS)[number]]
                     ? { mode: "automatic" }
                     : { mode: "off" };
@@ -286,9 +291,9 @@ export function migrateMembers(
           break;
         }
         case "machine": {
-          const own: Partial<Record<Right, RightMode>> = {};
-          const byAgent = new Map<string, Partial<Record<Right, RightMode>>>();
-          for (const right of RIGHTS) {
+          const own: Partial<Record<LegacyRight, RightMode>> = {};
+          const byAgent = new Map<string, Partial<Record<LegacyRight, RightMode>>>();
+          for (const right of LEGACY_RIGHTS) {
             const mode = member.rights?.[right];
             if (!mode) continue;
             const plain: RightMode =
@@ -301,7 +306,9 @@ export function migrateMembers(
             byAgent.set(id, { ...byAgent.get(id), [right]: plain });
             own[right] = { mode: "ask", circleId: OWNER_CIRCLE_ID };
           }
-          for (const [right, mode] of Object.entries(machineDefaults(circle)) as Array<[Right, RightMode]>)
+          for (const [right, mode] of Object.entries(machineDefaults(circle)) as Array<
+            [LegacyRight, RightMode]
+          >)
             own[right] ??= mode;
           if (givesAdmin(circle)) {
             Object.assign(own, ACTS_AS_OWNER);
@@ -334,7 +341,7 @@ export function migrateMembers(
     taken.add(value);
     return value;
   };
-  const added: Array<Circle> = [];
+  const added: Array<LegacyRightsCircle> = [];
   const settings: Array<readonly [string, ShareSetting]> = [];
   for (const circle of migrated) {
     const keepsAdmin = givesAdmin(circle);

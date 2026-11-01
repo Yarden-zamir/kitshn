@@ -428,11 +428,11 @@ export const SCENARIOS: ReadonlyArray<Scenario> = [
       assert.deepEqual([echoed, fedExit.exitCode], ["piped", 0]);
       const timeout = await exec(client, { command: "sleep 30", timeoutSeconds: 1 });
       assert.deepEqual([timeout.exit.exitCode, timeout.exit.signal], [null, "SIGKILL"]);
-      daemon.edge.exec = { mode: "refuse", reason: 'the right "runs commands" is off' };
+      daemon.edge.exec = { mode: "refuse", reason: 'the effect "runs" is off' };
       const refused = await exec(client, { command: "true" });
       assert.deepEqual(
         [refused.answer.state, refused.exit.reason],
-        ["ended", 'refused: the right "runs commands" is off'],
+        ["ended", 'refused: the effect "runs" is off'],
       );
       daemon.edge.exec = { mode: "offline" };
       assert.equal((await exec(client, { command: "true" })).exit.reason, "the target is offline");

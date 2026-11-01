@@ -332,6 +332,9 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
     "CREATE INDEX proposals_credential ON proposals (credential, state)",
     "UPDATE proposals SET right_name = 'raisesAccess' WHERE right_name = 'owner'",
   ],
+  // 46: effects (K-1730). Its code step (`migrateRights`) moves the rights of each chip, the proposals and the approvals
+  // of deploys and handovers to effects, once, in the transaction of the migration.
+  ["UPDATE github_tokens SET right_name = CASE right_name WHEN 'writesCode' THEN 'changes' ELSE 'reads' END"],
 ];
 
 /** K-819: the migration after which the Durable Object derives the repo ids of older deploy rows. */
@@ -340,6 +343,8 @@ export const REPO_GATE_MIGRATION = 6;
 export const AGENTS_MIGRATION = 42;
 /** K-1778: the migration of the actors; a database or an import from before it runs `migrateMembers`. */
 export const ACTORS_MIGRATION = 44;
+/** K-1730: the migration of the effects; a database or an import from before it runs `migrateRights`. */
+export const EFFECTS_MIGRATION = 46;
 
 /**
  * Runs the migrations after `from`, up to `to` (K-1833 stops at the schema of an export). Returns the new version.

@@ -10,9 +10,9 @@ afterEach(() => vi.restoreAllMocks());
 it("takes a call that the daemon forwarded and signed, with the right of its path, once per nonce (K-1714)", async () => {
   stubAccessCerts();
   const key = await newMachineKey();
-  await setup({ deploys: { mode: "automatic" } }, key);
+  await setup({ changes: { mode: "automatic" }, creates: { mode: "ask", circleId: "owner" } }, key);
   const address = "/agent/cards/no-such-card/address";
-  // K-1776: an unset right asks the Owner, and the same call again gets the same proposal, not a second one.
+  // K-1776: an effect that asks the Owner waits, and the same call again gets the same proposal, not a second one.
   const unset = await forwarded(key, "POST", address, "nonce-off-0123456789");
   expect(unset.status).toBe(409);
   const waiting = (await unset.json()) as {
@@ -58,11 +58,11 @@ it("takes a call that the daemon forwarded and signed, with the right of its pat
   });
   await runInDurableObject(stub, (_, state) => state.storage.sql.exec("DELETE FROM ask_events"));
   // "off" still refuses at once, with the right for the CLI's offer.
-  await setup({ deploys: { mode: "automatic" }, addsPages: { mode: "off" } }, key);
+  await setup({ changes: { mode: "automatic" }, creates: { mode: "off" } }, key);
   const off = await forwarded(key, "POST", address, "nonce-off-4123456789");
   expect(off.status).toBe(403);
-  expect(await off.json()).toEqual({ error: expect.stringContaining("is off"), need: "addsPages" });
-  await setup({ deploys: { mode: "automatic" }, addsPages: { mode: "automatic" } }, key);
+  expect(await off.json()).toEqual({ error: expect.stringContaining("is off"), need: "creates" });
+  await setup({ changes: { mode: "automatic" }, creates: { mode: "automatic" } }, key);
   const passed = await forwarded(
     key,
     "POST",
@@ -99,7 +99,7 @@ it("takes a call that the daemon forwarded and signed, with the right of its pat
 
 it("refuses the machine's own token on every agent path over HTTP without the daemon's signature (K-1714)", async () => {
   stubAccessCerts();
-  await setup({ runsCommands: { mode: "automatic" }, deploys: { mode: "automatic" } });
+  await setup({ runs: { mode: "automatic" }, changes: { mode: "automatic" } });
   const token = await accessToken("agent-aud", { common_name: "vps.access" });
   const headers = { "cf-access-jwt-assertion": token, "content-type": "application/json" };
   for (const [method, path] of [

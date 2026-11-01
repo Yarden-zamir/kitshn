@@ -70,7 +70,7 @@ async function patchSnapshots(page: Page) {
             reason: "share the preview with Her for the review",
             labels: { thread: "Review riffle" },
             verified: ["thread"],
-            right: "publishes",
+            right: "shares",
             circleId: "owner",
             shown: "Share riffle with the circle Her at view",
             shownHash: "h",

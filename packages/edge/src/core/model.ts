@@ -1,5 +1,5 @@
 import type { Machine } from "./machine.ts";
-import type { Right } from "kitshn/operations";
+import type { Effect } from "kitshn/operations";
 import type {
   ProviderCardSetting,
   ProviderFact,
@@ -139,22 +139,23 @@ export type Member =
   | {
       readonly _tag: "actor";
       readonly actorId: string;
-      readonly rights?: Readonly<Partial<Record<Right, RightMode>>>;
+      /** K-1730: the mode of each effect that this chip sets. */
+      readonly rights?: Readonly<Partial<Record<Effect, RightMode>>>;
     }
   | { readonly _tag: "domain"; readonly domain: string }
   | { readonly _tag: "ip"; readonly range: string }
   | { readonly _tag: "everyone" };
 
-export { RIGHTS, RIGHT_NAMES, type Right } from "kitshn/operations";
+export { EFFECTS, type Effect } from "kitshn/operations";
 
-/** K-1725: the rights that the map warns about when no person approves them. */
-export const HIGH_RISK_RIGHTS: ReadonlySet<Right> = new Set([
-  "raisesAccess",
-  "runsCommands",
-  "deploys",
-  "writesCode",
-  "addsApps",
-  "restores",
+/** K-1725: the effects that the map warns about when no person approves them. */
+export const HIGH_RISK_EFFECTS: ReadonlySet<Effect> = new Set([
+  "creates",
+  "changes",
+  "runs",
+  "destroys",
+  "shares",
+  "secrets",
 ]);
 
 /** K-1754: an attested label must have one of these values. */

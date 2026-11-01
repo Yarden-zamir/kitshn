@@ -78,11 +78,10 @@ import {
   actorIdOf,
   credentialKey,
   machineActorId,
-  RIGHTS,
+  EFFECTS,
   OWNER_CIRCLE_ID,
   shareKey,
-  RIGHT_NAMES,
-  type Right,
+  type Effect,
   type GitHubWay,
   GITHUB_WAYS,
   type Circle,
@@ -235,15 +234,17 @@ import {
   mayDeployOn,
   agentUploadPlace,
   codeRightMode,
+  codeInScope,
   codeRightOff,
+  effectiveMode,
+  machineEffectiveMode,
   machineOf,
-  machineRightMode,
-  machineRightOff,
   rightMode,
   rightOff,
 } from "../core/agent.ts";
 import { DEMO_MACHINES, DEMO_ICONS, demo, demoUsage } from "../core/demo.ts";
 import { type LegacyCircle, migrateMembers } from "../core/actors.ts";
+import { EFFECT_OF, LEGACY_RIGHTS, type LegacyRightsCircle, migrateRights } from "../core/effects.ts";
 import { type Usage, type UsageRow, usageLevel } from "../core/usage.ts";
 import {
   HOUR_MS,
@@ -287,6 +288,7 @@ import {
   labelProblem,
   shownAsk,
   shownHash,
+  PASSKEY_EFFECTS,
   WINDOW_ACTIONS,
   answerRefusal,
 } from "../core/asks.ts";
@@ -297,6 +299,7 @@ import {
   type SecretOpId,
   agentRead,
   decide,
+  effectDefault,
   isOpId,
   isPersonGate,
   isSecretOp,
@@ -446,7 +449,13 @@ import {
   openToken,
 } from "./github.ts";
 import { REPLACED, dropLiveSite, failQueuedDowns, removalDown, requeueDowns } from "./downs.ts";
-import { ACTORS_MIGRATION, AGENTS_MIGRATION, REPO_GATE_MIGRATION, migrate } from "./migrations.ts";
+import {
+  ACTORS_MIGRATION,
+  AGENTS_MIGRATION,
+  EFFECTS_MIGRATION,
+  REPO_GATE_MIGRATION,
+  migrate,
+} from "./migrations.ts";
 import {
   BADGE_DEPLOY_QUERY,
   DEPLOY_MS,
@@ -1423,6 +1432,7 @@ export class Kitshn extends DurableObject<Env> {
       // The rest of migration 6 needs code: the repo id comes out of each card id.
       if (from < REPO_GATE_MIGRATION) this.backfillRepoIds();
       if (from < ACTORS_MIGRATION) this.migrateActors();
+      if (from < EFFECTS_MIGRATION) this.migrateEffects();
       this.migrateAgents();
     });
   }
@@ -2208,7 +2218,7 @@ export class Kitshn extends DurableObject<Env> {
   private undo(actor: Author, revisionId: number, source: UndoSource | null) {
     if (revisionId <= Number(this.meta(ACTORS_UNDO_FLOOR) ?? 0))
       throw new RuleError(
-        `Revision #${revisionId} is from before migration 44, which moved the circle members to actors (K-1778), so it has no Undo.`,
+        `Revision #${revisionId} is from before migration 44 or 46, which moved the circle members to actors and their rights to effects (K-1778, K-1730), so it has no Undo.`,
       );
     const target = undoTarget(this.state, this.storedRevisions(), actor, { revision: revisionId });
     return this.commitUndo(actor, target.changes, { revision: target.revision, item: null, source });
@@ -2788,6 +2798,7 @@ export class Kitshn extends DurableObject<Env> {
         writeImport(this.ctx.storage.sql, state, (from) => {
           if (from < REPO_GATE_MIGRATION) this.backfillRepoIds();
           if (from < ACTORS_MIGRATION) this.migrateActors();
+          if (from < EFFECTS_MIGRATION) this.migrateEffects();
           // An export from before migration 42 still holds `t3.agents` shares, so its step runs again.
           if (from < AGENTS_MIGRATION) this.sql("DELETE FROM meta WHERE key = ?", AGENTS_MIGRATED);
           this.migrateAgents();
@@ -3850,16 +3861,18 @@ export class Kitshn extends DurableObject<Env> {
 
   /**
    * K-104, K-1778: control on the admin card. Only a login proves a person; any other proof holds the admin only with
-   * "raises access" automatic, so a token in a circle of the admin acts as the owner only when the owner set that.
+   * "shares" and "secrets" automatic, because the admin raises access and hands out secrets. So a token in a circle of
+   * the admin acts as the owner only when the owner set both.
    */
   private hasAdmin(visitor: Visitor, attested: Attested | null = null) {
     const admin = this.state.resources.get(ADMIN_RESOURCE_ID);
     const now = Date.now();
+    const automatic = (effect: Effect) =>
+      effectiveMode(this.state, visitor, effect, now, attested).mode === "automatic";
     return (
       admin !== undefined &&
       visitorLevel(this.state, admin, visitor, now) === "control" &&
-      (visitor.email !== null ||
-        rightMode(this.state, visitor, "raisesAccess", now, attested)?.mode === "automatic")
+      (visitor.email !== null || (automatic("shares") && automatic("secrets")))
     );
   }
 
@@ -6004,28 +6017,28 @@ export class Kitshn extends DurableObject<Env> {
     kind: Command["kind"],
     now: number,
   ) {
+    // K-1778: the verified labels of the call go with the approval, so its agent actors count again at delivery.
+    let attested: Attested | null = null;
     if ("credential" in approval) {
-      // K-1778: a token or a login asked; it ends when no actor holds the credential, or when its right is off.
+      // K-1778: a token or a login asked; it ends when no actor holds the credential, or when its effect is off.
       const held = [...this.state.actors.values()].some((actor) =>
         actor.credentials.some((credential) => credentialKey(credential) === approval.credential),
       );
       if (!held) return `${NO_LONGER_ALLOWED} no actor holds the credential that asked.`;
-      if (approval.right !== null && rightOff(this.state, visitor, approval.right, now, null))
-        return `${NO_LONGER_ALLOWED} the owner set the right "${RIGHT_NAMES[approval.right]}" to off.`;
     } else {
       const asker = this.state.machines.get(approval.machineId);
       if (!asker) return `${NO_LONGER_ALLOWED} the machine that asked is gone.`;
       if (keyMark(asker) !== approval.key)
         return `${NO_LONGER_ALLOWED} the key of the machine that asked changed.`;
-      // The approval keeps no labels, so delivery checks the chips of the machine actor itself (K-1778).
-      if (approval.right !== null && machineRightOff(this.state, asker.id, approval.right, now, null))
-        return `${NO_LONGER_ALLOWED} the owner set the right "${RIGHT_NAMES[approval.right]}" to off.`;
+      attested = this.attestedOf(asker.id, approval.labels ?? {});
     }
-    // K-1778: "raises access" let it past the scope, so the right must still be automatic. The approval keeps no labels.
+    if (approval.right !== null && rightOff(this.state, visitor, approval.right, now, attested))
+      return `${NO_LONGER_ALLOWED} the owner set the effect "${approval.right}" to off.`;
+    // K-1778: "shares" let it past the scope, so the effect must still be automatic.
     if (approval.raises === true)
-      return rightMode(this.state, visitor, "raisesAccess", now, null)?.mode === "automatic"
+      return effectiveMode(this.state, visitor, "shares", now, attested).mode === "automatic"
         ? null
-        : `${NO_LONGER_ALLOWED} the right "${RIGHT_NAMES.raisesAccess}" of the caller is no longer automatic.`;
+        : `${NO_LONGER_ALLOWED} the effect "shares" of the caller is no longer automatic.`;
     // K-718: only the gate let this job in, so a command that gives a shell needs the whole machine again now.
     if (
       !approval.person &&
@@ -8588,8 +8601,59 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
+   * K-1730: the code step of migration 46. The rights of each chip move to effects (`migrateRights`), and so do the
+   * rights of the proposals and of the approvals of deploys and handovers, as one History entry with no Undo, because
+   * the revisions before it hold rights of before.
+   */
+  private migrateEffects() {
+    const effectOf = (right: string) => {
+      const legacy = LEGACY_RIGHTS.find((each) => each === right);
+      return legacy === undefined ? right : EFFECT_OF[legacy];
+    };
+    for (const row of this.sql<{ id: string; right_name: string }>("SELECT id, right_name FROM proposals"))
+      this.sql("UPDATE proposals SET right_name = ? WHERE id = ?", effectOf(row.right_name), row.id);
+    for (const [table, key] of [
+      ["deploys", "id"],
+      ["handovers", "repo_id"],
+    ] as const)
+      for (const row of this.sql<{ key: string; approved: string }>(
+        `SELECT ${key} AS key, approved FROM ${table} WHERE approved != '[]'`,
+      )) {
+        const parsed: unknown = JSON.parse(row.approved);
+        const approved = Array.isArray(parsed)
+          ? [...new Set(parsed.map((right) => effectOf(String(right))))]
+          : [];
+        this.sql(`UPDATE ${table} SET approved = ? WHERE ${key} = ?`, JSON.stringify(approved), row.key);
+      }
+    const circles = this.sql<{ body: string }>("SELECT body FROM circles").map(
+      (row) => JSON.parse(row.body) as LegacyRightsCircle,
+    );
+    if (circles.length === 0) return;
+    this.load();
+    const repoCircles = new Set(
+      [...this.state.resources.values()]
+        .filter((resource) => resource.kind === "repo" || resource.kind === "repo.group")
+        .flatMap((resource) => circlesHolding(this.state, resource.id).map((circle) => circle.id)),
+    );
+    const migrated = migrateRights(circles, this.state.actors, (id) => repoCircles.has(id), Date.now());
+    for (const circle of migrated.circles)
+      this.sql("UPDATE circles SET body = ? WHERE id = ?", JSON.stringify(circle), circle.id);
+    this.load();
+    const floor = this.insertRevision(
+      { _tag: "kitshn", reason: "effects (K-1730)" },
+      `Moved the rights to effects (K-1730)${migrated.notes.length > 0 ? `. ${migrated.notes.join(" ")}` : ""}`.slice(
+        0,
+        4000,
+      ),
+      [],
+      null,
+    );
+    this.setMeta(ACTORS_UNDO_FLOOR, String(floor));
+  }
+
+  /**
    * K-722: the code step of migration 42. Each `t3.agents` share moves to the `t3.app` card of its machine, and an
-   * exec share turns on "runs commands" (`migrateAgentShares`), as one History revision that the owner can undo. A
+   * exec share turns on "runs" (`migrateAgentShares`), as one History revision that the owner can undo. A
    * share that it cannot move goes to the log and into the revision text, for the owner.
    */
   private migrateAgents() {
@@ -8747,7 +8811,7 @@ export class Kitshn extends DurableObject<Env> {
   /**
    * K-819: the owner allows, blocks or forgets one repo. Allow starts the first refused push through the
    * GitHub App, except during the pause. Block fails the repo's deploys and jobs that have not finished.
-   * An agent key with "adds apps" allows a waiting repo too (K-718); `allowedBy` then names it.
+   * An agent key with "creates" allows a waiting repo too (K-718); `allowedBy` then names it.
    */
   private async setRepoState(
     caller: Caller,
@@ -10389,7 +10453,7 @@ export class Kitshn extends DurableObject<Env> {
     const url = new URL(request.url);
     const call = { method: request.method, path: `${url.pathname}${url.search}` };
     // A refusal drops the body that it does not read, so the connection does not wait on it.
-    const refuse = async (status: number, error: string, need?: Right) => {
+    const refuse = async (status: number, error: string, need?: Effect) => {
       if (!request.bodyUsed) await request.body?.cancel().catch(() => undefined);
       return Response.json({ error, ...(need ? { need } : {}) }, { status });
     };
@@ -10427,7 +10491,7 @@ export class Kitshn extends DurableObject<Env> {
           machine.clientId,
           isRecord(input) ? String(input["deployId"] ?? "") : "",
         )[0]?.public === 1;
-      // A page or a folder site into Everyone also needs "publishes", as `apply` does (K-1754).
+      // A page or a folder site into Everyone also needs "shares", as `apply` does (K-1754).
       const publishes =
         (path === "/agent/library" && request.headers.get("x-kitshn-public") === "true") ||
         (path === "/agent/sites/plan" && isRecord(input) && input["public"] === true) ||
@@ -10445,45 +10509,40 @@ export class Kitshn extends DurableObject<Env> {
               )[0]?.approved ?? "[]",
             )
           : [];
-      // A new folder site also needs "adds apps" (K-1123); its finish uses what the plan was approved for.
+      // A new folder site also needs "creates" (K-1123); its finish uses what the plan was approved for.
       const newSite =
         path === "/agent/sites/plan" &&
         isRecord(input) &&
         !this.folderSiteKnown(machine.clientId, String(input["folder"] ?? "").trim(), now);
-      const portCard =
-        request.method === "DELETE" &&
-        path.startsWith("/agent/cards/") &&
-        this.portRows("card_id = ?", decodeURIComponent(path.slice("/agent/cards/".length))).length > 0;
       const needed = [
-        ...new Set<Right>([
-          ...(right === null ? [] : [right]),
-          ...(portCard ? (["addsApps"] as const) : []),
-          ...(newSite ? (["addsApps"] as const) : []),
-          ...(publishes ? (["publishes"] as const) : []),
+        ...new Set<Effect>([
+          right,
+          ...(newSite ? (["creates"] as const) : []),
+          ...(publishes ? (["shares"] as const) : []),
         ]),
       ];
       const { shown, body: shownBody } = await forwardShown(target, request.headers, bytes);
       const hash = await shownHash(shown);
-      const approved: Array<Right> = [];
+      const approved: Array<Effect> = [];
       // K-1714: an approval binds the machine and the thread that asked (an attested label), and runs one call.
       const thread = labels["t3.thread.id"] ?? null;
       const used = new Set<string>();
-      let wait: { readonly right: Right; readonly circleId: string } | null = null;
+      let wait: { readonly right: Effect; readonly circleId: string } | null = null;
       for (const need of needed) {
-        const mode = machineRightMode(this.state, machine.id, need, now, attested);
-        if (mode === null && machineRightOff(this.state, machine.id, need, now, attested))
+        const mode = machineEffectiveMode(this.state, machine.id, need, now, attested);
+        if (mode.mode === "off")
           return refuse(
             403,
-            `The right "${RIGHT_NAMES[need]}" is off for this machine (K-1720). Ask the owner to turn it on.`,
+            `The effect "${need}" is off for this machine (K-1720). Ask the owner to turn it on.`,
             need,
           );
-        if (mode?.mode === "automatic") continue;
+        if (mode.mode === "automatic") continue;
         if (planned.includes(need)) {
           approved.push(need);
           continue;
         }
-        // K-1776: an unset right asks the Owner; "ask <circle>" asks that circle.
-        const circleId = mode?.circleId ?? OWNER_CIRCLE_ID;
+        // K-1776: "ask <circle>" asks that circle; an unset effect takes its default (K-1730).
+        const circleId = mode.circleId;
         const approval = this.forwardApproval(
           machineAsker(machine).credential,
           hash,
@@ -10579,7 +10638,7 @@ export class Kitshn extends DurableObject<Env> {
     }
     const attested = machine ? { labels, prefixes: this.labelPrefixesOf(machine.id) } : null;
     // K-1778: the admin runs as the owner: a login with the passkey of the admin, or another proof of the admin with
-    // "raises access" automatic. A login without that passkey goes through the gate.
+    // "shares" and "secrets" automatic. A login without that passkey goes through the gate.
     const admin =
       this.hasAdmin(caller.visitor, attested) &&
       (caller.visitor.email === null || adminPasskey(this.state, caller.visitor, now));
@@ -10617,20 +10676,17 @@ export class Kitshn extends DurableObject<Env> {
     let used: { readonly id: string; readonly person: boolean } | null = null;
     let gated: Caller["gated"] = undefined;
     if (!admin && asker !== null) {
-      const right = isPersonGate(op.gate) ? null : op.gate.right;
-      const open = right === null ? null : rightMode(this.state, caller.visitor, right, now, attested);
-      const off =
-        right !== null && open === null && rightOff(this.state, caller.visitor, right, now, attested);
+      const right = op.effect;
+      const setMode = (effect: Effect) =>
+        rightMode(this.state, caller.visitor, effect, now, attested) ??
+        (rightOff(this.state, caller.visitor, effect, now, attested) ? ({ mode: "off" } as const) : null);
       const missing = this.opMissing(op, target, built.body);
       if (missing !== null) return refused(404, missing);
-      const raises = rightMode(this.state, caller.visitor, "raisesAccess", now, attested);
-      const raisesOff =
-        raises === null && rightOff(this.state, caller.visitor, "raisesAccess", now, attested);
       const gate = {
         admin: false,
         paused: this.state.paused !== null,
-        mode: off ? ({ mode: "off" } as const) : open,
-        raisesAccess: raisesOff ? ({ mode: "off" } as const) : raises,
+        mode: setMode(right),
+        shares: setMode("shares"),
         inAgentCircle: circlesOf(this.state, caller.visitor, now, attested).size > 0,
         scope: this.opScope(op, target, built.body, caller.visitor, now, attested),
       };
@@ -10642,15 +10698,15 @@ export class Kitshn extends DurableObject<Env> {
       if (decision.outcome === "ask") {
         const opTarget = `op ${id} ${target}`.slice(0, 512);
         // K-1777: the approver reads what the answer gives, not only the fields of the call.
-        const effect = isSecretOp(id) ? this.secretEffect(id, target, built.body) : (op.gives ?? null);
+        const gives = isSecretOp(id) ? this.secretEffect(id, target, built.body) : (op.gives ?? null);
         const shownBody = {
-          headers: effect === null ? {} : { gives: effect },
+          headers: gives === null ? {} : { gives },
           body: JSON.stringify({ target, body, reason }),
         };
         const hash = await shownHash(shownAsk("forward", opTarget, shownBody));
         const thread = labels["t3.thread.id"] ?? null;
-        // K-1778: a call out of scope waits by "raises access", whatever the mode of the row's right.
-        const askRight: Right = gate.scope ? (right ?? "raisesAccess") : "raisesAccess";
+        // K-1778: a call out of scope waits by "shares", whatever the mode of the row's effect.
+        const askRight: Effect = gate.scope ? right : "shares";
         used = this.forwardApproval(asker.credential, hash, decision.circleId, askRight, thread, now);
         if (used !== null) decision = decide(op, { ...gate, approved: true }, OWNER_CIRCLE_ID);
         else {
@@ -10686,6 +10742,7 @@ export class Kitshn extends DurableObject<Env> {
       }
       const passed = {
         right,
+        labels,
         person: used?.person === true,
         ...(!gate.scope && used === null ? { raises: true as const } : {}),
       };
@@ -10703,7 +10760,7 @@ export class Kitshn extends DurableObject<Env> {
           admin: true,
           paused: this.state.paused !== null,
           mode: null,
-          raisesAccess: null,
+          shares: null,
           inAgentCircle: false,
           scope: true,
           approved: false,
@@ -10795,7 +10852,6 @@ export class Kitshn extends DurableObject<Env> {
       }
       case "any":
       case "rule":
-      case "never":
         return null;
     }
   }
@@ -10813,8 +10869,6 @@ export class Kitshn extends DurableObject<Env> {
     switch (op.gate.scope) {
       case "any":
         return true;
-      case "never":
-        return false;
       case "card":
         return cardsControlledBy(this.state, visitor, now, attested).has(target);
       case "machine":
@@ -10925,26 +10979,27 @@ export class Kitshn extends DurableObject<Env> {
 
   /**
    * K-1714, K-1776: the unused approval of exactly this forwarded call (its shown hash) of this machine and thread, from
-   * this circle, within the hour, and whether a person gave it; null when there is none. An ask of "raises access" takes
-   * only an approval of "raises access", because only that one passed the passkey check (K-1723).
+   * this circle, within the hour, and whether a person gave it; null when there is none. An ask of "shares" or "secrets"
+   * takes only an approval of the same effect, because only that one passed the passkey check (K-1723).
    */
   private forwardApproval(
     credential: string,
     hash: string,
     circleId: string,
-    right: Right,
+    right: Effect,
     thread: string | null,
     now: number,
   ): { readonly id: string; readonly person: boolean } | null {
     const [row] = this.sql<{ id: string; person: number }>(
       `SELECT id, json_extract(decided_by, '$.actor._tag') = 'person' AS person FROM proposals
-       WHERE credential = ? AND action = 'forward' AND shown_hash = ? AND circle_id = ? AND (? = 0 OR right_name = 'raisesAccess')
+       WHERE credential = ? AND action = 'forward' AND shown_hash = ? AND circle_id = ? AND (? = 0 OR right_name = ?)
        AND state = 'approved' AND used_at IS NULL AND decided_at > ? AND json_extract(labels, '$."t3.thread.id"') IS ?
        LIMIT 1`,
       credential,
       hash,
       circleId,
-      right === "raisesAccess" ? 1 : 0,
+      PASSKEY_EFFECTS.has(right) ? 1 : 0,
+      right,
       now - APPROVED_WINDOW_MS,
       thread,
     );
@@ -10960,7 +11015,7 @@ export class Kitshn extends DurableObject<Env> {
     target: string,
     body: unknown,
     labels: Readonly<Record<string, string>>,
-    wait: { readonly right: Right; readonly circleId: string },
+    wait: { readonly right: Effect; readonly circleId: string },
     hash: string,
     thread: string | null,
     now: number,
@@ -10999,7 +11054,7 @@ export class Kitshn extends DurableObject<Env> {
       proposalId: made.proposalId,
       circle,
       expiresAt,
-      line: `waiting: ${circle} must approve this call (right "${RIGHT_NAMES[wait.right]}", proposal ${made.proposalId}, expires in ${hours} h). After the approval, run the same command once more within 1 hour, from the same thread; a changed call asks again (K-1776).`,
+      line: `waiting: ${circle} must approve this call (right "${wait.right}", proposal ${made.proposalId}, expires in ${hours} h). After the approval, run the same command once more within 1 hour, from the same thread; a changed call asks again (K-1776).`,
     };
   }
 
@@ -11007,7 +11062,7 @@ export class Kitshn extends DurableObject<Env> {
     path: string,
     request: Request,
     caller: Caller,
-    approved: ReadonlyArray<Right> = [],
+    approved: ReadonlyArray<Effect> = [],
     /** K-1776: a person of the Owner circle approved this one job or deploy, so K-718 does not refuse it. */
     ownerApproved: JobApproval | null = null,
   ) {
@@ -11017,13 +11072,13 @@ export class Kitshn extends DurableObject<Env> {
     if (machine && caller.actor._tag !== "machine")
       return this.forwardedRequest(path, request, caller, machine);
     const attested = caller.attested ?? null;
-    // K-1712: a machine's job and deploy need their right now: automatic, or the approval of this ask.
-    const machineMay = (right: Right) => {
+    // K-1712: a machine's job and deploy need their effect now: automatic, or the approval of this ask.
+    const machineMay = (right: Effect) => {
       if (!machine) return true;
       // An approval of this call (K-1723, K-1776) counts also when the right is off.
       return (
         approved.includes(right) ||
-        machineRightMode(this.state, machine.id, right, now, attested)?.mode === "automatic"
+        machineEffectiveMode(this.state, machine.id, right, now, attested).mode === "automatic"
       );
     };
     const machinePaths = ["/agent/state", "/agent/apply", "/agent/organize", "/agent/jobs", "/agent/deploy"];
@@ -11059,15 +11114,13 @@ export class Kitshn extends DurableObject<Env> {
       caller.actor._tag === "device" && tokenActor
         ? { ...caller, actor: { ...caller.actor, name: tokenActor.name } }
         : caller;
-    const rights = RIGHTS.filter((right) =>
+    const rights = EFFECTS.filter((right) =>
       agentHas(this.state, caller.visitor, right, now, attested, approved),
     );
-    // A key that publishes also sees the Everyone circle, where its published cards sit.
+    // A key that shares also sees the Everyone circle, where its published cards sit.
     const visible = (id: string) => {
       const circle = this.state.circles.get(id);
-      return (
-        own.has(id) || (rights.includes("publishes") && circle !== undefined && isEveryoneCircle(circle))
-      );
+      return own.has(id) || (rights.includes("shares") && circle !== undefined && isEveryoneCircle(circle));
     };
     // K-718: the cards of repos that this key allowed (K-819); only these may become public.
     const added = new Set(
@@ -11082,16 +11135,19 @@ export class Kitshn extends DurableObject<Env> {
     const move = (edits: ReadonlyArray<Edit>, named: string | null = null) => {
       try {
         const changes = resolveEdits(this.state, edits);
-        const refusal = agentRefusal(
-          this.state,
-          applyChanges(this.state, changes),
-          caller.visitor,
-          changes,
-          now,
-          added,
-          attested,
-          approved,
-        );
+        // K-1778: "shares" automatic, or an approval of it, lets an edit raise access; the rules of K-105 still hold.
+        const refusal = agentHas(this.state, caller.visitor, "shares", now, attested, approved)
+          ? null
+          : agentRefusal(
+              this.state,
+              applyChanges(this.state, changes),
+              caller.visitor,
+              changes,
+              now,
+              added,
+              attested,
+              approved,
+            );
         if (refusal) return Response.json({ error: refusal }, { status: 403 });
         return Response.json({ revision: this.commit(agent.actor, changes, null, named) });
       } catch (error) {
@@ -11108,16 +11164,14 @@ export class Kitshn extends DurableObject<Env> {
       const all = new URL(request.url).searchParams.get("all") === "1";
       const circleRef = (id: string) => ({ id, name: this.state.circles.get(id)?.name ?? id });
       return Response.json({
-        // The names of the map, with the mode of each right (K-1720), and its circle for "ask". "reads code" and
-        // "writes code" hold per repo (K-1733), so they are not one mode of the actor.
-        rights: RIGHTS.filter((right) => right !== "readsCode" && right !== "writesCode").map((right) => {
-          const mode = rightMode(this.state, caller.visitor, right, now, attested);
-          const base = { id: right, name: RIGHT_NAMES[right] };
-          if (mode?.mode === "automatic") return { ...base, mode: "automatic" as const };
-          // K-1776: a right that no circle sets asks the Owner; only "off" refuses.
-          if (mode === null && rightOff(this.state, caller.visitor, right, now, attested))
-            return { ...base, mode: "off" as const };
-          return { ...base, mode: "ask" as const, circle: circleRef(mode?.circleId ?? OWNER_CIRCLE_ID) };
+        // The mode of each effect (K-1720, K-1730), with its default, and its circle for "ask". On a repo, "reads" and
+        // "changes" count the chips of the circles that hold it (K-1733).
+        rights: EFFECTS.map((right) => {
+          const mode = effectiveMode(this.state, caller.visitor, right, now, attested);
+          const base = { id: right, name: right };
+          return mode.mode === "ask"
+            ? { ...base, mode: "ask" as const, circle: circleRef(mode.circleId) }
+            : { ...base, mode: mode.mode };
         }),
         ...(machine ? { proposals: answerable } : {}),
         // K-619: a machine sees its own listening ports, the list of the site wizard.
@@ -11126,8 +11180,8 @@ export class Kitshn extends DurableObject<Env> {
         ...(machine && all ? { linkEvents: this.recentLinkEvents(machine.id) } : {}),
         // K-631: the health cells from and to this machine, from the reports in the socket attachments.
         ...(machine ? { health: this.healthOf(machine.id) } : {}),
-        // K-819: with "may add apps", the waiting repos that the key may allow.
-        repos: rights.includes("addsApps")
+        // K-819: with "creates", the waiting repos that the key may allow.
+        repos: rights.includes("creates")
           ? this.sql<RepoRow>(
               "SELECT * FROM repos WHERE state = 'waiting' AND gone_at IS NULL ORDER BY first_seen DESC",
             ).map((row) => ({
@@ -11193,7 +11247,7 @@ export class Kitshn extends DurableObject<Env> {
         const place = this.state.places.get(id);
         if (!managed.has(id) || !place) return false;
         const probe: Change = { _tag: "place", id, before: place, after: place };
-        // A separate after state, so a published card in Everyone needs "publishes" now, as the real move does.
+        // A separate after state, so a published card in Everyone needs "shares" now, as the real move does.
         const after = applyChanges(this.state, [probe]);
         return agentRefusal(this.state, after, caller.visitor, [probe], now, added, attested) === null;
       };
@@ -11221,11 +11275,11 @@ export class Kitshn extends DurableObject<Env> {
       const body: unknown = await request.json().catch(() => null);
       const machineId = isRecord(body) && typeof body["machine"] === "string" ? body["machine"] : "";
       const relay = isRecord(body) && typeof body["relay"] === "string" ? body["relay"] : "";
-      if (!agentHas(this.state, caller.visitor, "addsApps", now, caller.attested ?? null, approved))
+      if (!agentHas(this.state, caller.visitor, "creates", now, caller.attested ?? null, approved))
         return Response.json(
           {
-            error: 'The right "adds apps" is off for this agent. Ask the owner to turn it on.',
-            need: "addsApps",
+            error: 'The effect "creates" is not automatic for this agent. Ask the owner to set it.',
+            need: "creates",
           },
           { status: 403 },
         );
@@ -11236,12 +11290,24 @@ export class Kitshn extends DurableObject<Env> {
         );
       return this.createPortCard(agent.actor, body);
     }
-    // K-1117, K-1123: an agent takes down a page, a file or a folder site that it published, and needs no right,
-    // because that lowers access (K-715). A port card goes on below, with "adds apps".
+    // K-1117, K-1123: an agent takes down a page, a file or a folder site that it published. It has no Undo, so it
+    // needs "destroys" (K-1730). A port card goes on below.
     const removed =
       path.startsWith("/agent/cards/") && request.method === "DELETE"
         ? decodeURIComponent(path.slice("/agent/cards/".length))
         : null;
+    if (
+      removed !== null &&
+      !removed.includes("/") &&
+      !agentHas(this.state, caller.visitor, "destroys", now, caller.attested ?? null, approved)
+    )
+      return Response.json(
+        {
+          error: 'The effect "destroys" is not automatic for this agent. Ask the owner to set it.',
+          need: "destroys",
+        },
+        { status: 403 },
+      );
     if (removed !== null && !removed.includes("/") && this.portRows("card_id = ?", removed).length === 0) {
       const card = this.agentCard(agent, removed, now);
       if (card === null)
@@ -11269,7 +11335,7 @@ export class Kitshn extends DurableObject<Env> {
         );
       return this.rollbackResponse(agent, card, back.deployId);
     }
-    // K-2007: an agent removes a port card on a machine that it controls, with "adds apps", as it adds one.
+    // K-2007: an agent removes a port card on a machine that it controls, with "destroys" (checked above).
     if (
       path.startsWith("/agent/cards/") &&
       request.method === "DELETE" &&
@@ -11281,14 +11347,6 @@ export class Kitshn extends DurableObject<Env> {
         return Response.json(
           { error: `An agent removes only port cards; ${card} is none.` },
           { status: 404 },
-        );
-      if (!agentHas(this.state, caller.visitor, "addsApps", now, caller.attested ?? null, approved))
-        return Response.json(
-          {
-            error: 'The right "adds apps" is off for this agent. Ask the owner to turn it on.',
-            need: "addsApps",
-          },
-          { status: 403 },
         );
       if (!managed.has(row.machine_id) || (row.relay_id !== null && !managed.has(row.relay_id)))
         return Response.json(
@@ -11349,9 +11407,9 @@ export class Kitshn extends DurableObject<Env> {
     if (path.startsWith("/agent/library/") && path.endsWith("/previous") && request.method === "POST")
       return this.restorePrevious(agent, path.slice("/agent/library/".length, -"/previous".length), "agent");
     if (path === "/agent/jobs" && request.method === "POST") {
-      if (!machineMay("runsCommands"))
+      if (!machineMay("runs"))
         return Response.json(
-          { error: 'The right "runs commands" is off for this machine (K-1720).' },
+          { error: 'The effect "runs" is not automatic for this machine (K-1720).' },
           { status: 403 },
         );
       const body: unknown = await request.json().catch(() => null);
@@ -11414,7 +11472,7 @@ export class Kitshn extends DurableObject<Env> {
       const refusal = agentAllowRefusal(
         row ? repoGateOf(row) : undefined,
         isRecord(body) ? body["state"] : null,
-        agentHas(this.state, caller.visitor, "addsApps", Date.now(), caller.attested ?? null, approved),
+        agentHas(this.state, caller.visitor, "creates", Date.now(), caller.attested ?? null, approved),
         row?.gone_at !== null && row?.gone_at !== undefined,
       );
       if (refusal) return Response.json({ error: refusal.error }, { status: refusal.status });
@@ -11450,9 +11508,9 @@ export class Kitshn extends DurableObject<Env> {
       return await this.logsResponse(card, body);
     }
     if (path === "/agent/deploy" && request.method === "POST") {
-      if (!machineMay("deploys"))
+      if (!machineMay("changes"))
         return Response.json(
-          { error: 'The right "deploys" is off for this machine (K-1720).' },
+          { error: 'The effect "changes" is not automatic for this machine (K-1720).' },
           { status: 403 },
         );
       const body: unknown = await request.json().catch(() => null);
@@ -11656,52 +11714,22 @@ export class Kitshn extends DurableObject<Env> {
     if (needs === "member")
       throw new Error(`The action ${action} needs membership, and only approve and deny do.`);
     if (needs !== "none" && needs !== "apply") {
-      const mode = machineRightMode(this.state, machine.id, needs, now, attested);
-      // K-1776: a right that no circle sets asks the Owner for this one call; a right set to "off" refuses.
-      if (mode === null) {
-        if (machineRightOff(this.state, machine.id, needs, now, attested)) return event(offRight(needs));
-        const owned =
-          WINDOW_ACTIONS.has(action) &&
-          this.inApprovedWindow(machine.id, action, target, needs, OWNER_CIRCLE_ID, now);
-        if (!owned)
-          return event(
-            await this.propose(
-              machineAsker(machine),
-              action,
-              target,
-              raw["body"],
-              reason,
-              labels,
-              needs,
-              OWNER_CIRCLE_ID,
-              now,
-            ),
-          );
-        return event(await this.runAsk(machine, action, target, raw["body"], [needs], labels, attested));
-      }
-      // K-718: a call outside the limit of the machine asks the Owner, whatever the mode of its right.
+      const mode = machineEffectiveMode(this.state, machine.id, needs, now, attested);
+      if (mode.mode === "off") return event(offRight(needs));
+      // K-718: a call outside the limit of the machine asks the Owner, whatever the mode of its effect.
       const visitor = { email: null, clientId: machine.clientId, ip: null };
-      if (this.outsideAgentLimit(visitor, action, target, raw["body"], attested) !== null)
-        return event(
-          await this.propose(
-            machineAsker(machine),
-            action,
-            target,
-            raw["body"],
-            reason,
-            labels,
-            needs,
-            OWNER_CIRCLE_ID,
-            now,
-          ),
-        );
-      if (
-        mode.mode === "ask" &&
-        !(
+      const asked = mode.mode === "ask" ? mode.circleId : null;
+      const circleId =
+        asked !== OWNER_CIRCLE_ID &&
+        this.outsideAgentLimit(visitor, action, target, raw["body"], attested) !== null
+          ? OWNER_CIRCLE_ID
+          : asked;
+      if (circleId !== null) {
+        if (
           WINDOW_ACTIONS.has(action) &&
-          this.inApprovedWindow(machine.id, action, target, needs, mode.circleId, now)
+          this.inApprovedWindow(machine.id, action, target, needs, circleId, now)
         )
-      )
+          return event(await this.runAsk(machine, action, target, raw["body"], [needs], labels, attested));
         return event(
           await this.propose(
             machineAsker(machine),
@@ -11711,52 +11739,35 @@ export class Kitshn extends DurableObject<Env> {
             reason,
             labels,
             needs,
-            mode.circleId,
+            circleId,
             now,
           ),
         );
+      }
     }
-    // K-532: Organize keeps every share, so it never moves a card into Everyone and needs no "publishes".
+    // K-532: Organize keeps every share, so it never moves a card into Everyone and needs no "shares".
     if (needs === "apply" && action !== "organize") {
       const edits = this.askEdits(machine, action, target, raw["body"], now, attested, []);
       if (typeof edits === "string") {
-        // K-1720: a move into Everyone needs "publishes"; with "ask <circle>" it waits for an approval.
-        const mode = machineRightMode(this.state, machine.id, "publishes", now, attested);
-        const withApproval = this.askEdits(machine, action, target, raw["body"], now, attested, [
-          "publishes",
-        ]);
-        if (mode?.mode === "ask" && typeof withApproval !== "string")
-          return event(
-            await this.propose(
-              machineAsker(machine),
-              action,
-              target,
-              raw["body"],
-              reason,
-              labels,
-              "publishes",
-              mode.circleId,
-              now,
-            ),
-          );
-        // K-1776: only "publishes" stands in the way, and no circle sets it.
-        if (mode === null && typeof withApproval !== "string")
-          return event(
-            !machineRightOff(this.state, machine.id, "publishes", now, attested)
-              ? await this.propose(
-                  machineAsker(machine),
-                  action,
-                  target,
-                  raw["body"],
-                  reason,
-                  labels,
-                  "publishes",
-                  OWNER_CIRCLE_ID,
-                  now,
-                )
-              : offRight("publishes"),
-          );
-        return event({ outcome: "refused", reason: edits });
+        // K-1778: an edit beyond the rule of K-718 raises access, so "shares" decides it. At "automatic" askEdits
+        // already took it; a rule that binds the owner too (K-105) refuses also with "shares".
+        const withShares = this.askEdits(machine, action, target, raw["body"], now, attested, ["shares"]);
+        if (typeof withShares === "string") return event({ outcome: "refused", reason: edits });
+        const shares = machineEffectiveMode(this.state, machine.id, "shares", now, attested);
+        if (shares.mode !== "ask") return event(offRight("shares"));
+        return event(
+          await this.propose(
+            machineAsker(machine),
+            action,
+            target,
+            raw["body"],
+            reason,
+            labels,
+            "shares",
+            shares.circleId,
+            now,
+          ),
+        );
       }
     }
     return event(await this.runAsk(machine, action, target, raw["body"], [], labels, attested));
@@ -11773,7 +11784,7 @@ export class Kitshn extends DurableObject<Env> {
     body: unknown,
     now: number,
     attested: Attested | null,
-    approved: ReadonlyArray<Right>,
+    approved: ReadonlyArray<Effect>,
   ): ReadonlyArray<Edit> | string {
     const visitor = { email: null, clientId: machine.clientId, ip: null };
     let edits: ReadonlyArray<Edit>;
@@ -11803,6 +11814,8 @@ export class Kitshn extends DurableObject<Env> {
     }
     try {
       const changes = resolveEdits(this.state, edits);
+      // K-1778: "shares" automatic, or an approval of it, lets an edit raise access; the rules of K-105 still hold.
+      if (agentHas(this.state, visitor, "shares", now, attested, approved)) return edits;
       const refusal = agentRefusal(
         this.state,
         applyChanges(this.state, changes),
@@ -11839,7 +11852,7 @@ export class Kitshn extends DurableObject<Env> {
     action: AskAction,
     target: string,
     body: unknown,
-    approved: ReadonlyArray<Right>,
+    approved: ReadonlyArray<Effect>,
     labels: Readonly<Record<string, string>>,
     attested: Attested | null,
     ownerApproved: JobApproval | null = null,
@@ -12141,7 +12154,7 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-1762: a token for one repo. The owner's way decides first (K-1760); then "writes code" or "reads code" on a card
+   * K-1762: a token for one repo. The owner's way decides first (K-1760); then "changes" or "reads" on a card
    * that covers the repo, with its mode. `permission` "auto" (kitshn gh) asks for write when the machine may write (K-1764).
    */
   private async askGitHubToken(
@@ -12162,25 +12175,31 @@ export class Kitshn extends DurableObject<Env> {
       };
     const wanted = isRecord(body) ? body["permission"] : "auto";
     // K-1764, K-1776: gh cannot say whether it writes, so "auto" asks for write when the machine may write, when an Owner
-    // approval of write is open, and when no code right is set at all (the Owner then approves write).
+    // approval of write is open, and when neither effect is set at all (the Owner then approves write).
     const attested = this.attestedOf(machine.id, labels);
     const unset =
-      codeRightMode(this.state, machine.id, "readsCode", fullName, now, attested) === null &&
-      !codeRightOff(this.state, machine.id, "readsCode", fullName, now, attested) &&
-      !codeRightOff(this.state, machine.id, "writesCode", fullName, now, attested);
+      codeRightMode(this.state, machine.id, "reads", fullName, now, attested) === null &&
+      !codeRightOff(this.state, machine.id, "reads", fullName, now, attested) &&
+      !codeRightOff(this.state, machine.id, "changes", fullName, now, attested);
     const write =
       wanted === "write" ||
       (wanted !== "read" &&
-        (codeRightMode(this.state, machine.id, "writesCode", fullName, now, attested) !== null ||
-          this.inApprovedWindow(machine.id, "github-token", fullName, "writesCode", OWNER_CIRCLE_ID, now) ||
+        (codeRightMode(this.state, machine.id, "changes", fullName, now, attested) !== null ||
+          this.inApprovedWindow(machine.id, "github-token", fullName, "changes", OWNER_CIRCLE_ID, now) ||
           unset));
-    const right: Right = write ? "writesCode" : "readsCode";
+    const right: Effect = write ? "changes" : "reads";
     const mode = codeRightMode(this.state, machine.id, right, fullName, now, attested);
-    // K-1776: a code right that no card sets asks the Owner for this token; one set to "off" refuses.
+    // K-1776: an effect that no card sets takes its default for a repo in scope, else asks the Owner for this token;
+    // one set to "off" refuses.
     if (mode === null) {
       const permission = write ? "write" : "read";
       if (codeRightOff(this.state, machine.id, right, fullName, now, attested))
         return offRight(right, `for ${fullName} (K-1733)`);
+      if (
+        effectDefault(right, true) === "automatic" &&
+        codeInScope(this.state, machine.id, fullName, now, attested)
+      )
+        return this.mintToken(machine, fullName, permission);
       if (this.inApprovedWindow(machine.id, "github-token", fullName, right, OWNER_CIRCLE_ID, now))
         return this.mintToken(machine, fullName, permission);
       return this.propose(
@@ -12221,7 +12240,7 @@ export class Kitshn extends DurableObject<Env> {
     machineId: string,
     action: AskAction,
     target: string,
-    right: Right,
+    right: Effect,
     circleId: string,
     now: number,
   ) {
@@ -12276,7 +12295,7 @@ export class Kitshn extends DurableObject<Env> {
         crypto.randomUUID(),
         machine.id,
         fullName,
-        permission === "write" ? "writesCode" : "readsCode",
+        permission === "write" ? "changes" : "reads",
         Date.parse(minted.expiresAt),
         await sealToken(key, minted.token),
       );
@@ -12308,9 +12327,13 @@ export class Kitshn extends DurableObject<Env> {
     const key = this.env.GITHUB_APP_KEY;
     for (const row of rows) {
       if (machineId !== null && row.machine_id !== machineId) continue;
-      const right = row.right_name === "writesCode" ? "writesCode" : "readsCode";
-      // The token row keeps no labels, so a right that only an agent actor gives counts as lost (K-1778).
-      if (onlyLost && codeRightMode(this.state, row.machine_id, right, row.repo, now, null) !== null)
+      const right = row.right_name === "changes" ? "changes" : "reads";
+      // The token row keeps no labels, so an effect that only an agent actor gives counts as lost (K-1778).
+      if (
+        onlyLost &&
+        (codeRightMode(this.state, row.machine_id, right, row.repo, now, null) !== null ||
+          (right === "reads" && codeInScope(this.state, row.machine_id, row.repo, now, null)))
+      )
         continue;
       this.sql("DELETE FROM github_tokens WHERE id = ?", row.id);
       const socket = this.openSocket(row.machine_id);
@@ -12332,7 +12355,7 @@ export class Kitshn extends DurableObject<Env> {
     body: unknown,
     reason: string | null,
     labels: Readonly<Record<string, string>>,
-    right: Right,
+    right: Effect,
     circleId: string,
     now: number,
   ): Promise<AskOutcome> {
@@ -12425,12 +12448,12 @@ export class Kitshn extends DurableObject<Env> {
         ok: false,
         error: `${circle.name} needs a passkey: approve through the passkey check (K-1723).`,
       };
-    // K-1723, K-1778: an ask of "raises access" needs a person's passkey, also where the circle lets a token or a machine
-    // approve. An actor whose "raises access" is automatic never asks.
-    if (decision === "approved" && proposal.right === "raisesAccess" && via !== "passkey")
+    // K-1723, K-1778: an ask of "shares" or "secrets" needs a person's passkey, also where the circle lets a token or a
+    // machine approve. An actor whose effect is automatic never asks.
+    if (decision === "approved" && PASSKEY_EFFECTS.has(proposal.right) && via !== "passkey")
       return {
         ok: false,
-        error: "This ask raises access, so only a person approves it, through the passkey check (K-1723).",
+        error: `This ask is for "${proposal.right}", so only a person approves it, through the passkey check (K-1723).`,
       };
     if (proposal.state !== "pending")
       return { ok: false, error: `This ask is already decided (${proposal.state}).` };
@@ -12511,13 +12534,13 @@ export class Kitshn extends DurableObject<Env> {
           proposal.action,
           proposal.target,
           proposal.body,
-          proposal.right === "raisesAccess" ? [] : [proposal.right],
+          [proposal.right],
           proposal.labels,
           this.attestedOf(machine.id, proposal.labels),
           proposal.circleId === OWNER_CIRCLE_ID &&
             by.machineId === null &&
             (proposal.action === "job" || proposal.action === "deploy") &&
-            proposal.right !== "raisesAccess"
+            proposal.right !== "shares"
             ? { machineId: machine.id, key: keyMark(machine), right: proposal.right, person: true }
             : null,
         )
@@ -12585,22 +12608,22 @@ export class Kitshn extends DurableObject<Env> {
     // K-1778: a token or a login asked, so its rights come from the chips of its actor.
     const asker = this.proposalVisitor(proposal);
     if (asker === null) return "no actor holds the credential that asked.";
-    const mode =
-      proposal.right === "readsCode" || proposal.right === "writesCode"
-        ? codeRightMode(this.state, proposal.machineId, proposal.right, proposal.target, now, attested)
-        : rightMode(this.state, asker, proposal.right, now, attested);
-    // K-1776: "off" wins also over an Owner ask that waits; an unset right keeps its Owner ask.
-    const off =
-      proposal.right === "readsCode" || proposal.right === "writesCode"
-        ? codeRightOff(this.state, proposal.machineId, proposal.right, proposal.target, now, attested)
-        : rightOff(this.state, asker, proposal.right, now, attested);
-    if (off) return `the owner set the right "${RIGHT_NAMES[proposal.right]}" to off.`;
-    // K-718: a job or a deploy outside the limit of the machine waits for the Owner, whatever the mode of its right.
+    const code =
+      proposal.action === "github-token" && (proposal.right === "reads" || proposal.right === "changes");
+    const mode = code
+      ? codeRightMode(this.state, proposal.machineId, proposal.right, proposal.target, now, attested)
+      : rightMode(this.state, asker, proposal.right, now, attested);
+    // K-1776: "off" wins also over an Owner ask that waits; an unset effect keeps its Owner ask.
+    const off = code
+      ? codeRightOff(this.state, proposal.machineId, proposal.right, proposal.target, now, attested)
+      : rightOff(this.state, asker, proposal.right, now, attested);
+    if (off) return `the owner set the effect "${proposal.right}" to off.`;
+    // K-718: a job or a deploy outside the limit of the machine waits for the Owner, whatever the mode of its effect.
     const ownerAsk =
       proposal.circleId === OWNER_CIRCLE_ID &&
       (mode === null || proposal.action === "job" || proposal.action === "deploy");
     if (!ownerAsk && (mode?.mode !== "ask" || mode.circleId !== proposal.circleId))
-      return `the right "${RIGHT_NAMES[proposal.right]}" no longer asks this circle.`;
+      return `the effect "${proposal.right}" no longer asks this circle.`;
     const circle = this.state.circles.get(proposal.circleId);
     if (!circle || (circle.endsAt !== null && circle.endsAt <= now)) return "the approver circle ended.";
     if (proposal.machineId !== "" && !this.state.machines.has(proposal.machineId))
@@ -12704,8 +12727,8 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-722: the exec start of machine A. kitshn checks that A controls a card of the target, then the right "runs
-   * commands" decides like an ask: the run starts, waits for an approval, or ends at once with an `exit` frame.
+   * K-722: the exec start of machine A. kitshn checks that A controls a card of the target, then the effect "runs"
+   * decides like an ask: the run starts, waits for an approval, or ends at once with an `exit` frame.
    */
   private async execStart(
     socket: WebSocket,
@@ -13407,7 +13430,7 @@ export class Kitshn extends DurableObject<Env> {
     agent: Caller,
     request: Request,
     now: number,
-    approved: ReadonlyArray<Right> = [],
+    approved: ReadonlyArray<Effect> = [],
   ) {
     const clientId = agent.visitor.clientId;
     if (!clientId) return Response.json({ error: "Only an agent publishes here (K-1116)." }, { status: 403 });
@@ -13643,7 +13666,7 @@ export class Kitshn extends DurableObject<Env> {
     step: string,
     input: Record<string, unknown>,
     now: number,
-    approved: ReadonlyArray<Right> = [],
+    approved: ReadonlyArray<Effect> = [],
   ) {
     const fail = (status: number, error: string) => Response.json({ error }, { status });
     const api = this.api();
@@ -13700,8 +13723,8 @@ export class Kitshn extends DurableObject<Env> {
     } else {
       // The right can go between the plan and the files; an approval of the plan counts for its finish (K-1776).
       const planned = approvedRights(row.approved);
-      if (!agentHas(this.state, agent.visitor, "addsApps", now, agent.attested ?? null, planned))
-        return fail(403, 'A folder site needs the right "may add apps" (K-718, K-1123).');
+      if (!agentHas(this.state, agent.visitor, "creates", now, agent.attested ?? null, planned))
+        return fail(403, 'A folder site needs "creates" (K-718, K-1123).');
       // The rights and the circles can change between the plan and the files, so the spot counts now.
       const spot = agentUploadPlace(
         this.state,
@@ -13732,7 +13755,7 @@ export class Kitshn extends DurableObject<Env> {
     clientId: string,
     input: Record<string, unknown>,
     now: number,
-    approved: ReadonlyArray<Right>,
+    approved: ReadonlyArray<Effect>,
   ) {
     const fail = (status: number, error: string) => Response.json({ error }, { status });
     const text = (key: string) => (typeof input[key] === "string" ? (input[key] as string).trim() : "");
@@ -13770,8 +13793,8 @@ export class Kitshn extends DurableObject<Env> {
         updated: true,
       });
     }
-    if (!agentHas(this.state, agent.visitor, "addsApps", now, agent.attested ?? null, approved))
-      return fail(403, 'A folder site needs the right "may add apps" (K-718, K-1123).');
+    if (!agentHas(this.state, agent.visitor, "creates", now, agent.attested ?? null, approved))
+      return fail(403, 'A folder site needs "creates" (K-718, K-1123).');
     const spot = agentUploadPlace(
       this.state,
       agent.visitor,
@@ -13813,7 +13836,7 @@ export class Kitshn extends DurableObject<Env> {
     site: Pick<AgentSiteRow, "card_id" | "folder">,
     address: string,
     now: number,
-    approved: ReadonlyArray<Right> = [],
+    approved: ReadonlyArray<Effect> = [],
   ) {
     const deployId = crypto.randomUUID();
     this.sql(
@@ -13846,7 +13869,7 @@ export class Kitshn extends DurableObject<Env> {
     site: AgentSiteRow,
     now: number,
     replaces?: string,
-    approved: ReadonlyArray<Right> = [],
+    approved: ReadonlyArray<Effect> = [],
   ) {
     const deployId = this.ctx.storage.transactionSync(() => {
       if (replaces) this.sql("DELETE FROM agent_sites WHERE card_id = ?", replaces);
@@ -14095,7 +14118,7 @@ export class Kitshn extends DurableObject<Env> {
     named: string,
     input: Record<string, unknown>,
     now: number,
-    approved: ReadonlyArray<Right> = [],
+    approved: ReadonlyArray<Effect> = [],
   ) {
     const fail = (status: number, error: string) => Response.json({ error }, { status });
     const repo = typeof input["repo"] === "string" ? input["repo"].trim() : "";
@@ -14116,8 +14139,8 @@ export class Kitshn extends DurableObject<Env> {
         409,
         "Only a page or a folder site becomes a repo; put a file into a folder site first (K-1127).",
       );
-    if (!agentHas(this.state, agent.visitor, "addsApps", now, agent.attested ?? null, approved))
-      return fail(403, 'A repo adds an app, so it needs the right "may add apps" (K-718, K-1127).');
+    if (!agentHas(this.state, agent.visitor, "creates", now, agent.attested ?? null, approved))
+      return fail(403, 'A repo adds an app, so it needs "creates" (K-718, K-1127).');
     if (this.sql("SELECT 1 FROM repos WHERE repo_id = ?", repoId).length > 0)
       return fail(409, `kitshn knows ${repo} already; a handover is for a new repo (K-1127).`);
     // K-817: a repo's main address is under the kitshn zone. A folder site on another zone keeps that address as
@@ -14201,7 +14224,7 @@ export class Kitshn extends DurableObject<Env> {
 
   /**
    * K-1127: the handover of this repo, by its GitHub ids, while it lasts and while it still fits: the card exists and
-   * is still a page or a folder site, and the key still may change it and still may add apps. A handover that no
+   * is still a page or a folder site, and the key still may change it and still creates. A handover that no
    * longer fits ends unused, and History says why.
    */
   private usableHandover(deployer: Deployer): Handover | null {
@@ -14221,14 +14244,7 @@ export class Kitshn extends DurableObject<Env> {
     const fits =
       card !== undefined &&
       (card.kind === "page" || this.isFolderSite(card.id)) &&
-      agentHas(
-        this.state,
-        key.visitor,
-        "addsApps",
-        now,
-        key.attested ?? null,
-        approvedRights(row.approved),
-      ) &&
+      agentHas(this.state, key.visitor, "creates", now, key.attested ?? null, approvedRights(row.approved)) &&
       (this.agentMayChange(key, row.card_id, now) === null ||
         this.agentSiteMayChange(key, row.card_id, now) === null);
     if (!fits) {
@@ -16376,7 +16392,7 @@ export class Kitshn extends DurableObject<Env> {
         recipients: { _tag: "approvers", circle: proposal.circleId },
         level: "warn",
         priority: "high",
-        title: clip(`${proposal.machineName} asks: ${RIGHT_NAMES[proposal.right]}`, TITLE_MAX),
+        title: clip(`${proposal.machineName} asks: ${proposal.right}`, TITLE_MAX),
         text: clip(`${proposal.shown}${proposal.reason ? ` · ${proposal.reason}` : ""}`, TEXT_MAX),
         actions: [
           {
@@ -17406,12 +17422,12 @@ interface AgentSiteRow extends Record<string, SqlStorageValue> {
   created_at: number;
 }
 
-/** K-1776: the rights that a stored approval gave; anything else in the column counts for nothing. */
-const approvedRights = (text: string): ReadonlyArray<Right> => {
+/** K-1776: the effects that a stored approval gave; anything else in the column counts for nothing. */
+const approvedRights = (text: string): ReadonlyArray<Effect> => {
   try {
     const parsed: unknown = JSON.parse(text);
     return Array.isArray(parsed)
-      ? parsed.filter((right): right is Right => typeof right === "string" && right in RIGHT_NAMES)
+      ? parsed.filter((right): right is Effect => EFFECTS.some((effect) => effect === right))
       : [];
   } catch {
     return [];
@@ -17550,28 +17566,26 @@ async function readStart(stream: ReadableStream<Uint8Array>, limit: number): Pro
 
 /** K-1722: a row of the proposals table. */
 /**
- * K-1714: the right that a call forwarded by a daemon needs: a machine right, null for a call that needs only a card
- * that the machine manages (K-718 checks it), or undefined for a path that a machine never forwards.
+ * K-1714, K-1730: the effect of a call forwarded by a daemon, as the operation row of the same call has it, or undefined
+ * for a path that a machine never forwards. K-718 also checks that the machine manages the card.
  */
-export function forwardRight(path: string, method: string): Right | null | undefined {
+export function forwardRight(path: string, method: string): Effect | undefined {
   const card = path.startsWith("/agent/cards/") ? path.slice("/agent/cards/".length) : null;
-  if (path === "/agent/library" && method === "POST") return "addsPages";
-  if (path.startsWith("/agent/library/") && path.endsWith("/previous") && method === "POST")
-    return "addsPages";
-  if (path.startsWith("/agent/library/") && path.endsWith("/content") && method === "GET") return null;
-  if (path.startsWith("/agent/sites/") && method === "POST") return "addsPages";
-  if (card !== null && card.endsWith("/address") && method === "POST") return "addsPages";
-  // K-212: the time of a card needs only a card that the machine manages.
-  if (card !== null && card.endsWith("/time") && method === "POST") return null;
-  if (card !== null && card.includes("/redirects") && (method === "POST" || method === "DELETE"))
-    return "addsPages";
-  if (card !== null && card.endsWith("/handover") && method === "POST") return "addsApps";
-  if (path === "/agent/ports" && method === "POST") return "addsApps";
-  // A removal lowers access (K-715), so it needs only a card that the machine manages; a port card also "adds apps".
-  if (card !== null && !card.includes("/") && method === "DELETE") return null;
-  if (card !== null && card.endsWith("/previous") && method === "POST") return "addsPages";
-  if (card !== null && card.includes("/doors") && (method === "GET" || method === "DELETE")) return null;
-  if (path === "/agent/logs" && method === "POST") return null;
+  if (path === "/agent/library" && method === "POST") return "creates";
+  if (path.startsWith("/agent/library/") && path.endsWith("/previous") && method === "POST") return "creates";
+  if (path.startsWith("/agent/library/") && path.endsWith("/content") && method === "GET") return "reads";
+  if (path.startsWith("/agent/sites/") && method === "POST") return "creates";
+  if (card !== null && card.endsWith("/address") && method === "POST") return "creates";
+  if (card !== null && card.endsWith("/time") && method === "POST") return "changes";
+  if (card !== null && card.includes("/redirects") && method === "POST") return "creates";
+  if (card !== null && card.includes("/redirects") && method === "DELETE") return "changes";
+  if (card !== null && card.endsWith("/handover") && method === "POST") return "creates";
+  if (path === "/agent/ports" && method === "POST") return "creates";
+  if (card !== null && !card.includes("/") && method === "DELETE") return "destroys";
+  if (card !== null && card.endsWith("/previous") && method === "POST") return "creates";
+  if (card !== null && card.includes("/doors") && method === "GET") return "reads";
+  if (card !== null && card.includes("/doors") && method === "DELETE") return "maintains";
+  if (path === "/agent/logs" && method === "POST") return "reads";
   return undefined;
 }
 
@@ -17581,9 +17595,9 @@ const sha256Hex = async (text: string) =>
     .join("");
 
 /** K-1776: the refusal of a right that is off: one line that names the right, and the right for the CLI's offer. */
-const offRight = (right: Right, scope = "for this machine (K-1720)"): AskOutcome => ({
+const offRight = (right: Effect, scope = "for this machine (K-1720)"): AskOutcome => ({
   outcome: "refused",
-  reason: `The right "${RIGHT_NAMES[right]}" is off ${scope}. Ask the owner to turn it on.`,
+  reason: `The effect "${right}" is off ${scope}. Ask the owner to turn it on.`,
   need: right,
 });
 
@@ -17634,7 +17648,7 @@ const proposalOf = (row: ProposalRow): Proposal => ({
   body: JSON.parse(row.body) as unknown,
   reason: row.reason,
   labels: JSON.parse(row.labels) as Record<string, string>,
-  right: row.right_name as Right,
+  right: row.right_name as Effect,
   circleId: row.circle_id,
   shown: row.shown,
   shownHash: row.shown_hash,

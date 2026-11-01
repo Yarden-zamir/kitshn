@@ -1404,7 +1404,7 @@ describe("the approve applications (K-1723)", () => {
       ...state.circles.get("owner")!,
       id: "agents",
       name: "Agents",
-      members: [chip(machineKey("vps"), { deploys: { mode: "ask", circleId: "owner" } })],
+      members: [chip(machineKey("vps"), { changes: { mode: "ask", circleId: "owner" } })],
     };
     const desired = desiredAccess({ ...state, circles: new Map(state.circles).set("agents", agents) }, 0);
     expect(desired.apps.get("app:approve:passkey")).toMatchObject({

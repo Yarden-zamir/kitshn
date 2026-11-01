@@ -780,7 +780,7 @@ function Lists(props: { state: State }) {
     reason: "Release 2.4",
     labels: { agent: "claude", repo: "tick3d" },
     verified: ["repo"],
-    right: "publishes",
+    right: "shares",
     circleId: "owner",
     shown: "publish tick3d",
     shownHash: "0",

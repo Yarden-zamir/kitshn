@@ -1,17 +1,20 @@
 // K-1777: every owner action is one operation. The map, the CLI and an agent call the same id, and one gate decides.
-import { type Operation, RIGHT_NAMES, type Right, isPersonGate } from "kitshn/operations";
+import { EFFECT_DEFAULTS, type Effect, type Operation, isPersonGate } from "kitshn/operations";
 import type { RightMode } from "./model.ts";
 import type { Snapshot } from "./protocol.ts";
 
 export {
+  type Effect,
   type Gate,
   type OpGroup,
   type OpId,
   type Operation,
   type PersonGate,
-  type RightGate,
+  type ScopeGate,
   type Scope,
   type SecretOpId,
+  EFFECTS,
+  EFFECT_DEFAULTS,
   OPERATIONS,
   OP_IDS,
   isOpId,
@@ -22,23 +25,20 @@ export {
   shownOp,
 } from "kitshn/operations";
 
-/** K-1777: the rights that start "automatic" for a machine in an agent circle: their commands are closed (Y1, Y2). */
-export const AUTOMATIC_BY_DEFAULT: ReadonlySet<Right> = new Set(["maintains", "readsMap"]);
-
 export type Decision =
   | { readonly outcome: "run" }
   | { readonly outcome: "ask"; readonly circleId: string }
   | { readonly outcome: "refuse"; readonly reason: string };
 
 export interface GateInput {
-  /** The caller holds the admin card (K-104), so every right is "automatic". */
+  /** The caller holds the admin card (K-104) as the owner, so every effect is "automatic". */
   readonly admin: boolean;
   readonly paused: boolean;
-  /** The caller's mode of the row's right: null when no circle sets it. Unused when the row has no right. */
+  /** The caller's mode of the row's effect: null when no chip sets it. */
   readonly mode: RightMode | null;
-  /** K-1778: the caller's mode of "raises access", which decides each call that the Owner decides otherwise. */
-  readonly raisesAccess: RightMode | null;
-  /** The caller is in at least one agent circle (K-1730). */
+  /** K-1778: the caller's mode of "shares", which decides a target out of scope. */
+  readonly shares: RightMode | null;
+  /** The caller is in at least one agent circle (K-1730), so the defaults of `EFFECT_DEFAULTS` count. */
   readonly inAgentCircle: boolean;
   /** The scope of the row holds for this target. */
   readonly scope: boolean;
@@ -47,10 +47,9 @@ export interface GateInput {
 }
 
 /**
- * K-1777: the one decision of every call. A call runs, waits for a circle, or refuses. It refuses only for a person gate,
- * the pause, and a right that is "off": the owner sees the same refusal in the first two, and set the third. A call
- * that the Owner decides (scope "never", or a target out of scope, such as an access raise of K-715) follows the
- * caller's "raises access" (K-1778): automatic runs, "ask <circle>" asks that circle, and default asks the Owner.
+ * K-1777: the one decision of every call. A call runs, waits for a circle, or refuses. It refuses for a person gate,
+ * the pause, and an effect that is "off". A target out of scope reaches beyond the caller's circles, so the caller's
+ * "shares" decides it (K-1778). Else the mode of the row's effect decides, and an unset mode takes its default.
  */
 export function decide(op: Operation, input: GateInput, ownerCircleId: string): Decision {
   if (isPersonGate(op.gate))
@@ -58,38 +57,46 @@ export function decide(op: Operation, input: GateInput, ownerCircleId: string): 
   if (input.admin) return { outcome: "run" };
   if (input.paused)
     return { outcome: "refuse", reason: "kitshn is paused, so agents wait until Resume (K-1504)." };
-  const { right, scope } = op.gate;
   // "off" wins over an approval that the owner gave before they set it (K-1776).
-  if (right !== null && input.mode?.mode === "off")
-    return {
-      outcome: "refuse",
-      reason: `The right "${RIGHT_NAMES[right]}" is off for this machine (K-1720). Ask the owner to turn it on.`,
-    };
+  if (input.mode?.mode === "off") return offDecision(op.effect);
   if (input.approved) return { outcome: "run" };
-  if (!input.scope || scope === "never") return ownerDecides(input.raisesAccess, ownerCircleId);
-  if (right === null) return { outcome: "run" };
-  if (input.mode?.mode === "automatic") return { outcome: "run" };
-  if (input.mode?.mode === "ask") return { outcome: "ask", circleId: input.mode.circleId };
-  if (AUTOMATIC_BY_DEFAULT.has(right) && input.inAgentCircle) return { outcome: "run" };
-  return { outcome: "ask", circleId: ownerCircleId };
+  if (!input.scope) return byMode("shares", input.shares, input.inAgentCircle, ownerCircleId);
+  return byMode(op.effect, input.mode, input.inAgentCircle, ownerCircleId);
 }
 
-/** K-1778: the decision of a call that the Owner decides, by the caller's mode of "raises access". */
-function ownerDecides(mode: RightMode | null, ownerCircleId: string): Decision {
-  switch (mode?.mode) {
+/** K-1720, K-1730: a set mode decides; an unset mode takes the default of the effect. */
+function byMode(
+  effect: Effect,
+  mode: RightMode | null,
+  inAgentCircle: boolean,
+  ownerCircleId: string,
+): Decision {
+  if (mode?.mode === "automatic") return { outcome: "run" };
+  if (mode?.mode === "ask") return { outcome: "ask", circleId: mode.circleId };
+  if (mode?.mode === "off") return offDecision(effect);
+  switch (effectDefault(effect, inAgentCircle)) {
     case "automatic":
       return { outcome: "run" };
-    case "ask":
-      return { outcome: "ask", circleId: mode.circleId };
+    case "ask the Owner":
+      return { outcome: "ask", circleId: ownerCircleId };
     case "off":
       return {
         outcome: "refuse",
-        reason: `The right "${RIGHT_NAMES.raisesAccess}" is off for this actor, so the Owner gets no ask for this call (K-1778).`,
+        reason: `The effect "${effect}" is off by default (K-1730). Ask the owner to set it for this actor.`,
       };
-    case undefined:
-      return { outcome: "ask", circleId: ownerCircleId };
   }
 }
+
+/** K-1730: the default of an effect counts only in an agent circle; outside one, "automatic" asks the Owner. */
+export const effectDefault = (effect: Effect, inAgentCircle: boolean) => {
+  const mode = EFFECT_DEFAULTS[effect];
+  return mode === "automatic" && !inAgentCircle ? "ask the Owner" : mode;
+};
+
+const offDecision = (effect: Effect): Decision => ({
+  outcome: "refuse",
+  reason: `The effect "${effect}" is off for this actor (K-1720). Ask the owner to turn it on.`,
+});
 
 /**
  * K-1777, K-208: what an agent reads of the owner snapshot. A new snapshot field needs a decision here, or this does

@@ -21,7 +21,7 @@ import { type KindInfo, LEVEL_COLORS, LEVEL_TILTS, MEMBER_ICONS, kindInfo } from
 import { KeySticker, MachineLive, PresenceSticker, QueuedSticker } from "./Machines.tsx";
 import { type MenuTarget, untilText } from "./actions.ts";
 import { type DropTarget, dropHover, landingPoints, shareLines } from "./drop.ts";
-import { isAgentCircle, memberKind } from "./members.ts";
+import { memberKind } from "./members.ts";
 import type { DrawnWire } from "../core/organize.ts";
 import { USER_STACK, headAngle, stacksOf } from "../core/place.ts";
 import { parseSiteInput } from "../core/sites.ts";
@@ -992,8 +992,6 @@ export function CircleView(props: {
 }) {
   const { circle } = props;
   const shown = circle.members.slice(0, 4);
-  // K-718, K-1778: rights count only in an agent circle: actors that are not people, and no rule.
-  const agentCircle = isAgentCircle(circle, props.state);
   const extra = circle.members.length - shown.length;
   const counts = new Map<CardKind, { readonly count: number; readonly info: KindInfo }>();
   if (props.zoomedOut) {
@@ -1067,7 +1065,7 @@ export function CircleView(props: {
             return (
               <span class="chip" key={index} data-tip={MEMBER_HELP[kind]}>
                 {MEMBER_ICONS[kind]} {memberLabel(member, props.state)}
-                {member._tag === "actor" && agentCircle ? <RightStickers member={member} /> : null}
+                {member._tag === "actor" ? <RightStickers member={member} /> : null}
               </span>
             );
           })}

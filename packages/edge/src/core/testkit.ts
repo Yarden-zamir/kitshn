@@ -1,10 +1,10 @@
 // Fixtures of actors and chips for tests. The Worker and the map never import this file.
 import {
-  RIGHTS,
+  EFFECTS,
   type Actor,
   type Credential,
   type Member,
-  type Right,
+  type Effect,
   type RightMode,
   type State,
   actorIdOf,
@@ -27,25 +27,20 @@ export function actorOf(credential: Credential, name?: string): Actor {
 }
 
 /** The chip of the actor of a credential, with these rights. */
-export const chip = (credential: Credential, rights?: Partial<Record<Right, RightMode>>): Member => ({
+export const chip = (credential: Credential, rights?: Partial<Record<Effect, RightMode>>): Member => ({
   _tag: "actor",
   actorId: actorIdOf(credential),
   ...(rights ? { rights } : {}),
 });
 
-/**
- * The rights that migration 44 gives an agent key: its flags automatic, "raises access" at default, every other right
- * off (K-1732).
- */
-export const keyRights = (on: { readonly addsApps?: true; readonly publishes?: true } = {}) =>
+/** A key in its agent circle: the effects that it names automatic, every other effect off (K-1732). */
+export const keyRights = (on: Readonly<Partial<Record<Effect, true>>> = {}) =>
   Object.fromEntries(
-    RIGHTS.filter((right) => right !== "raisesAccess").map((right): [Right, RightMode] => [
-      right,
-      (right === "addsApps" && on.addsApps) || (right === "publishes" && on.publishes)
-        ? { mode: "automatic" }
-        : { mode: "off" },
+    EFFECTS.map((effect): [Effect, RightMode] => [
+      effect,
+      on[effect] ? { mode: "automatic" } : { mode: "off" },
     ]),
-  ) as Partial<Record<Right, RightMode>>;
+  );
 
 /** The state with these actors added. */
 export const withActors = (state: State, actors: ReadonlyArray<Actor>): State => ({

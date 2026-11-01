@@ -71,10 +71,10 @@ An app repo holds a recipe, `kitshn.config.ts`, and a workflow file. This file h
   - "Block" cuts a repo off at once, also after a rename or a transfer, because the gate keys on the id. A blocked repo still tears down its previews.
   - "Forget" deletes the gate row, so the next deploy waits again. kitshn refuses it while the repo has cards, and for a blocked repo or a repo of a removed key, because an agent key could then allow it.
   - The repo list asks GitHub whether each repo still exists, at most once per repo per day. The daily run does not ask, because its alarm already spends 40 of the 50 calls (K-406). A repo is "deleted on GitHub" only when every installation answers 404 and one of them holds all repos of the owner. Known limit: a private repo that moved to an account without the App also reads as deleted. Revisit when kitshn stores the owner id of each repo.
-  - An agent key with "may add apps" allows only a waiting repo, never during the pause, and never unblocks. While the key that allowed a repo has no agent circle, the repo counts as waiting until the owner takes it over or blocks it.
+  - An agent key with "creates" allows only a waiting repo, never during the pause, and never unblocks. While the key that allowed a repo has no agent circle, the repo counts as waiting until the owner takes it over or blocks it.
   - A key never writes allow entries (K-818), so the daemon refuses every risky Compose setting of a repo that a key allowed. Known limit: the allow list keys on the repo name, so a new repo under a freed name gets the old entries. Revisit when the allow list keys on the repo id.
   - A Compose app of a key's repo goes only to a machine where the key may run jobs (K-718). Its new cards start in the key's first agent circle, not in `startsIn`.
-  - Planned (K-1730): a machine with the right "adds apps" allows a repo as a key does.
+  - Planned (K-1730): a machine with "creates" allows a repo as a key does.
 
 ## Order and rollback
 

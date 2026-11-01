@@ -1,7 +1,7 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { Author } from "../core/changes.ts";
 import type { ContentVisitor } from "../core/library.ts";
-import type { Right } from "../core/model.ts";
+import type { Effect } from "../core/model.ts";
 import type { OpId } from "../core/operations.ts";
 import type { Attested, Visitor } from "../core/visitor.ts";
 import type { Env } from "./env.ts";
@@ -14,16 +14,18 @@ import type { Env } from "./env.ts";
 export type JobApproval = (
   { readonly machineId: string; readonly key: string | null } | { readonly credential: string }
 ) & {
-  /** The right that the approval or the gate used; null when no right lets an agent run the call (K-1777). */
-  readonly right: Right | null;
+  /** The effect that the approval or the gate used (K-1730); null for an approval with no effect to check again. */
+  readonly right: Effect | null;
+  /** K-1778: the verified labels of a machine call, so its agent actors count again at delivery. */
+  readonly labels?: Readonly<Record<string, string>>;
   /**
    * A person approved this call. Without one, only the gate let it run, so its delivery checks K-718 again for a command
    * that is not closed, and its job keeps the normal expiry (K-613).
    */
   readonly person: boolean;
   /**
-   * K-1778: "raises access" automatic let the call run past its scope. Its delivery checks that the right stays
-   * automatic, and not K-718.
+   * K-1778: "shares" automatic let the call run past its scope. Its delivery checks that the effect stays automatic,
+   * and not K-718.
    */
   readonly raises?: true;
 };
