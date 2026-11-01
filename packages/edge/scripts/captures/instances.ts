@@ -23,16 +23,11 @@ export default {
                   machine: "vps",
                   addresses: [...card.addresses, ...instances.map((instance) => instance.address)],
                   instances,
+                  // K-828: the snapshot names the machine that the main address goes to now.
+                  primary: "vps",
                 }
               : card,
           );
-        // Both machines are online, so the primary is the first running instance in the order (K-828).
-        const machines = data.snapshot?.["machines"];
-        if (data.type === "snapshot" && Array.isArray(machines))
-          data.snapshot!["machines"] = machines.map((view: Record<string, unknown>) => ({
-            ...view,
-            online: true,
-          }));
         socket.send(JSON.stringify(data));
       });
     });

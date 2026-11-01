@@ -10,6 +10,8 @@ export interface Instance {
   readonly address: string;
   /** K-827: from the live site of its machine, as the card status comes from the home one. */
   readonly status: (typeof RESOURCE_STATUSES)[number];
+  /** K-827: its last job failed or expired, so it may run an old build until the next deploy. */
+  readonly stale?: true;
 }
 
 /**
@@ -140,14 +142,41 @@ export function cardInstances(
 }
 
 /**
- * K-828: the primary: the first healthy instance in the owner's order of machines, healthy being an online machine
- * and a running instance. With none healthy, the first in the order keeps the main address.
+ * K-828: the primary, the instance that the main address goes to. Without failover, the home one. With failover, the
+ * current one while it stays healthy, else the first healthy one in the owner's order of machines. Healthy is an
+ * online machine and a running instance that is not stale. With none healthy, the records stay where they are.
  */
-export function primaryInstance<T extends Pick<Instance, "machine" | "status">>(
+export function primaryInstance<T extends Pick<CardInstance, "machine" | "status" | "stale" | "home">>(
   instances: ReadonlyArray<T>,
   order: (machineId: string) => number,
   online: (machineId: string) => boolean,
+  options: { readonly failover: boolean; readonly current: string | null },
 ): T | undefined {
+  const home = instances.find((instance) => instance.home) ?? instances[0];
+  if (!options.failover) return home;
+  const healthy = (instance: T) =>
+    online(instance.machine) && instance.status === "running" && instance.stale !== true;
+  const current = instances.find((instance) => instance.machine === options.current);
+  if (current && healthy(current)) return current;
   const sorted = [...instances].sort((a, b) => order(a.machine) - order(b.machine));
-  return sorted.find((instance) => online(instance.machine) && instance.status === "running") ?? sorted[0];
+  return sorted.find(healthy) ?? current ?? home;
+}
+
+/**
+ * K-826: why a spread deploy cannot go to these machines: one of them has a daemon that does not check for volumes.
+ * Null for any other placement, or when every machine has the capability `compose-spread`.
+ */
+export function spreadRefusal(
+  placement: Placement,
+  candidates: ReadonlyArray<Pick<Candidate, "id" | "spreadReady">>,
+  machineIds: ReadonlyArray<string>,
+  nameOf: (machineId: string) => string,
+): string | null {
+  if (typeof placement === "string") return null;
+  const old = machineIds.filter(
+    (id) => !candidates.some((candidate) => candidate.id === id && candidate.spreadReady),
+  );
+  return old.length === 0
+    ? null
+    : `A spread app runs only where the daemon checks that it has no volumes; update the daemon on ${old.map(nameOf).join(", ")} first (K-826).`;
 }

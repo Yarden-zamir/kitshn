@@ -35,6 +35,7 @@ const phone = { _tag: "device", tokenId: "t-phone", clientId: "phone.access", na
 const dropMigration47 = (sql: SqlStorage) => {
   sql.exec("DROP TABLE deploy_instances");
   sql.exec("ALTER TABLE deploys DROP COLUMN compose");
+  sql.exec("ALTER TABLE backups DROP COLUMN repository");
 };
 
 const migrateFrom43 = (name: string, members: LegacyCircle["members"]) =>

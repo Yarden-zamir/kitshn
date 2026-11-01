@@ -323,6 +323,7 @@ import {
   placementDrift,
   placementOf,
   primaryInstance,
+  spreadRefusal,
 } from "../core/instances.ts";
 import {
   contentSecurityPolicy,
@@ -498,6 +499,7 @@ import { DEFAULT_APP } from "kitshn/names";
 import {
   AppKey,
   ComposeApp,
+  MAX_SPREAD,
   type Recipe,
   WorkerApp,
   decodeRecipe,
@@ -2689,15 +2691,12 @@ export class Kitshn extends DurableObject<Env> {
   private latestBackups(): Map<string, BackupRun> {
     if (this.backupMemory) return this.backupMemory;
     const memory = new Map<string, BackupRun>();
-    // K-827: the newest run of each instance; the card panel shows the home one.
+    // K-827: the card panel shows the newest run of the card's own repository, the home instance.
     for (const row of this.sql<BackupRow>(
-      `SELECT * FROM backups WHERE (card, machine_id, at) IN
-       (SELECT card, machine_id, MAX(at) FROM backups GROUP BY card, machine_id)`,
-    )) {
-      const home = this.state.resources.get(row.card)?.machine;
-      if (home === undefined || home === null || home === row.machine_id)
-        memory.set(row.card, backupRun(row));
-    }
+      `SELECT * FROM backups WHERE repository IS NULL AND (card, at) IN
+       (SELECT card, MAX(at) FROM backups WHERE repository IS NULL GROUP BY card)`,
+    ))
+      memory.set(row.card, backupRun(row));
     this.backupMemory = memory;
     return memory;
   }
@@ -2752,15 +2751,17 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /** K-1818, K-1820: a restore passes the size guard, because it is the step that the owner needs most. */
-  private restoreRefusal(card: string): string | null {
+  private restoreRefusal(card: string, machineId?: string | null): string | null {
     const resource = this.state.resources.get(card);
     if (resource?.kind !== "site.compose") return `The card "${card}" is no Compose app (K-1811).`;
-    if (!resource.machine) return `${resource.name} runs on no machine.`;
+    // K-827: the machine of the instance that runs the job; the home one by default.
+    const machine = machineId === undefined ? resource.machine : machineId;
+    if (!machine) return `${resource.name} runs on no machine.`;
     if (!this.env.BUCKET) return "R2 is off on this account.";
     if (!this.env.KITSHN_BACKUP_KEY)
       return "Backups are off: kitshn has no KITSHN_BACKUP_KEY. Run the bootstrap with KITSHN_BACKUP_KEY_NOW=1 (K-1815).";
     // K-1817: an online daemon says whether it can back up; an offline one gets the job when it connects.
-    const socket = this.checkedSockets(resource.machine).at(-1);
+    const socket = this.checkedSockets(machine).at(-1);
     const attachment = socket ? attachmentOf(socket) : null;
     if (
       attachment?.kind === "machine" &&
@@ -2769,14 +2770,17 @@ export class Kitshn extends DurableObject<Env> {
     )
       return missingFeature(
         attachment.status,
-        this.state.machines.get(resource.machine)?.name ?? resource.machine,
+        this.state.machines.get(machine)?.name ?? machine,
         "backups",
-        `Update the daemon of ${this.state.machines.get(resource.machine)?.name ?? resource.machine} to back up (K-1817).`,
+        `Update the daemon of ${this.state.machines.get(machine)?.name ?? machine} to back up (K-1817).`,
       );
     return null;
   }
 
-  /** K-1816: the hard limit of the next paused pass of a card, from the pause of its last run. */
+  /**
+   * K-1816: the hard limit of the next paused pass of a card, from the pause of its last run. Known limit (K-827): one
+   * limit for every instance of the card. Revisit when instances of one card pause for very different times.
+   */
   private pauseLimitOf(card: string) {
     const [row] = this.sql<{ pause_ms: number }>(
       "SELECT pause_ms FROM backups WHERE card = ? AND state = 'done' AND pause_ms IS NOT NULL ORDER BY at DESC LIMIT 1",
@@ -2942,7 +2946,7 @@ export class Kitshn extends DurableObject<Env> {
           actor,
           now + DAY,
         );
-        this.insertBackup(instanceRun, card, machineId, now, instanceJob);
+        this.insertBackup(instanceRun, card, machineId, now, instanceJob, repository);
       }
       return queued;
     });
@@ -2956,17 +2960,25 @@ export class Kitshn extends DurableObject<Env> {
     return attachment?.kind === "machine" ? attachment.status : null;
   }
 
-  private insertBackup(run: string, card: string, machineId: string, at: number, jobId: number) {
+  private insertBackup(
+    run: string,
+    card: string,
+    machineId: string,
+    at: number,
+    jobId: number,
+    repository: string | null = null,
+  ) {
     this.sql(
-      "INSERT INTO backups (run, card, machine_id, at, state, job_id) VALUES (?, ?, ?, ?, 'running', ?)",
+      "INSERT INTO backups (run, card, machine_id, at, state, job_id, repository) VALUES (?, ?, ?, ?, 'running', ?, ?)",
       run,
       card,
       machineId,
       at,
       jobId,
+      repository,
     );
     // K-1819, K-827: the card panel shows the newest backup of the home instance; "Backups…" lists every instance.
-    if (machineId !== this.state.resources.get(card)?.machine) return;
+    if (repository !== null) return;
     this.latestBackups().set(card, {
       run,
       card,
@@ -3009,26 +3021,29 @@ export class Kitshn extends DurableObject<Env> {
 
   /** K-1820: a backup as the way back, then the run written back. */
   private restoreBackup(actor: Author, card: string, run: string) {
-    const refusal = this.restoreRefusal(card);
-    if (refusal) return Response.json({ error: refusal }, { status: 409 });
     const [row] = this.sql<BackupRow>("SELECT * FROM backups WHERE run = ? AND card = ?", run, card);
-    if (row?.state !== "done" || row.sources === null)
+    // K-827: a run goes back to the instance of its repository: the home one for the card's own repository.
+    const target =
+      row?.repository == null
+        ? (this.state.resources.get(card)?.machine ?? null)
+        : repositoryParts(row.repository).machineId;
+    const refusal = this.restoreRefusal(card, target);
+    if (refusal) return Response.json({ error: refusal }, { status: 409 });
+    if (row?.state !== "done" || row.sources === null || target === null)
       return Response.json({ error: "kitshn has no finished backup run like this." }, { status: 404 });
     const sources = JSON.parse(row.sources) as Array<string>;
     const resource = this.state.resources.get(card)!;
-    // K-827: a run goes back to the instance that made it, from that instance's repository.
-    const home = row.machine_id === resource.machine;
-    if (!home && !runsOnMachine(resource, row.machine_id))
+    if (!runsOnMachine(resource, target))
       return Response.json(
         { error: "The instance of this backup no longer runs; kitshn cannot move data yet (K-826)." },
         { status: 409 },
       );
-    const repository = home ? {} : { repository: instanceRepository(card, row.machine_id) };
+    const repository = row.repository === null ? {} : { repository: row.repository };
     const before = crypto.randomUUID();
     const now = Date.now();
     const jobId = this.ctx.storage.transactionSync(() => {
       const queued = this.queueKitshnJob(
-        row.machine_id,
+        target,
         {
           kind: "backup-restore",
           card,
@@ -3041,7 +3056,7 @@ export class Kitshn extends DurableObject<Env> {
         actor,
         now + DAY,
       );
-      this.insertBackup(before, card, row.machine_id, now, queued);
+      this.insertBackup(before, card, target, now, queued, row.repository);
       return queued;
     });
     this.startBackupAction(card, jobId, "Restore", "Back up the app as it is, then write the backup back");
@@ -3055,7 +3070,6 @@ export class Kitshn extends DurableObject<Env> {
     command: Extract<Command, { kind: "backup" | "backup-restore" }>,
     actor: Author,
     result: Record<string, unknown>,
-    machineId: string,
   ) {
     const run = command.kind === "backup" ? command.run : command.before;
     const report = isRecord(result["backup"]) ? result["backup"] : null;
@@ -3083,9 +3097,9 @@ export class Kitshn extends DurableObject<Env> {
       const kept = new Set(report["kept"].filter((item): item is string => typeof item === "string"));
       // K-827: one repository holds the runs of one instance only.
       for (const row of this.sql<{ run: string }>(
-        "SELECT run FROM backups WHERE card = ? AND machine_id = ? AND state = 'done'",
+        "SELECT run FROM backups WHERE card = ? AND repository IS ? AND state = 'done'",
         command.card,
-        machineId,
+        command.repository ?? null,
       ))
         if (!kept.has(row.run)) this.sql("DELETE FROM backups WHERE run = ?", row.run);
     }
@@ -4050,7 +4064,9 @@ export class Kitshn extends DurableObject<Env> {
       resources: [...this.state.resources.values()].map((card) =>
         card.provider && card.machine !== null && this.presence.get(card.machine)?.online !== true
           ? { ...card, status: "offline" as const }
-          : card,
+          : (card.instances ?? []).length > 0 && card.machine !== null
+            ? { ...card, primary: this.primaryOf(card) ?? card.machine }
+            : card,
       ),
       places: Object.fromEntries(this.state.places) as Record<string, Point>,
       shareSettings: Object.fromEntries(this.state.shareSettings) as Record<string, ShareSetting>,
@@ -5434,13 +5450,15 @@ export class Kitshn extends DurableObject<Env> {
 
   /** K-827: the instances of a Compose card, the home one first, as `/agent/state` shows them. */
   private instanceViews(card: Resource) {
+    // K-827: the newest run of each repository: the card's own is the home instance's.
     const newest = new Map(
-      this.sql<{ machine_id: string; at: number; state: string; error: string | null }>(
-        `SELECT machine_id, at, state, error FROM backups WHERE card = ? AND (machine_id, at) IN
-         (SELECT machine_id, MAX(at) FROM backups WHERE card = ? GROUP BY machine_id)`,
+      this.sql<{ repository: string; at: number; state: string; error: string | null }>(
+        `SELECT COALESCE(repository, '') AS repository, at, state, error FROM backups WHERE card = ? AND
+         (COALESCE(repository, ''), at) IN
+         (SELECT COALESCE(repository, ''), MAX(at) FROM backups WHERE card = ? GROUP BY COALESCE(repository, ''))`,
         card.id,
         card.id,
-      ).map((row) => [row.machine_id, { at: row.at, state: row.state, error: row.error }]),
+      ).map((row) => [row.repository, { at: row.at, state: row.state, error: row.error }]),
     );
     const instances = cardInstances(card);
     const primary = this.primaryOf(card);
@@ -5448,7 +5466,7 @@ export class Kitshn extends DurableObject<Env> {
       ...instance,
       primary: instance.machine === primary,
       machineName: this.state.machines.get(instance.machine)?.name ?? instance.machine,
-      backup: newest.get(instance.machine) ?? null,
+      backup: newest.get(instance.home ? "" : instanceRepository(card.id, instance.machine)) ?? null,
     }));
   }
 
@@ -5464,17 +5482,20 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-827: the status of the instance of a Compose card on a machine: a failed job marks it, and its live site
-   * (updateLiveSites) sets it after a job that came up. The home instance keeps the card status.
+   * K-827: the end of a Compose job of an instance that is not the home one. A failed or expired job makes it stale, so
+   * it may run an old build and is never the primary (K-828); a job that came up clears that. Its live site sets the
+   * status otherwise (updateLiveSites).
    */
-  private setInstanceStatus(cardId: string, machineId: string, status: Instance["status"] | null) {
+  private settleInstance(cardId: string, machineId: string, ok: boolean) {
     const card = this.state.resources.get(cardId);
-    if (status === null || !card?.instances?.some((instance) => instance.machine === machineId)) return;
+    if (!card || card.machine === machineId || !runsOnMachine(card, machineId)) return;
     this.putResource({
       ...card,
-      instances: card.instances.map((instance) =>
-        instance.machine === machineId ? { ...instance, status } : instance,
-      ),
+      instances: (card.instances ?? []).map((instance) => {
+        if (instance.machine !== machineId) return instance;
+        const { stale: _stale, ...fresh } = instance;
+        return ok ? fresh : { ...instance, status: "failed" as const, stale: true as const };
+      }),
     });
     this.load();
   }
@@ -6001,8 +6022,10 @@ export class Kitshn extends DurableObject<Env> {
         command?.kind === "compose" ||
         command?.kind === "compose-redeploy" ||
         command?.kind === "compose-rollback"
-      )
+      ) {
         this.settleNotifyToken(`job:${message.id}`, result.ok === true);
+        this.settleInstance(command.project, machine.id, result.ok === true);
+      }
       // K-909: undo never brings a deleted volume back, so History records the delete as an action once it ran.
       if (job && command?.kind === "compose-volume-remove" && result.ok === true) {
         this.insertRevision(
@@ -6045,7 +6068,6 @@ export class Kitshn extends DurableObject<Env> {
             settled === "done" ? null : error,
             row.id,
           );
-        this.setInstanceStatus(command.project, machine.id, result.ok === true ? null : "failed");
         // K-821, K-827: a rollback of a run goes on once this card settled on every instance.
         if (command.kind === "compose-rollback" && command.group && row && settled !== "running")
           this.continueRollback(command.group, settled === "done" ? null : error);
@@ -6072,7 +6094,7 @@ export class Kitshn extends DurableObject<Env> {
         this.autoUpdate();
       }
       if (job && (command?.kind === "backup" || command?.kind === "backup-restore"))
-        this.backupResult(command, JSON.parse(job.actor) as Author, result, machine.id);
+        this.backupResult(command, JSON.parse(job.actor) as Author, result);
       // K-827: the files stay while another instance of the deploy still waits for them.
       if (command?.kind === "compose" && this.env.BUCKET && !this.deployJobsLeft(command.deployId)) {
         void this.env.BUCKET.delete([
@@ -7486,6 +7508,21 @@ export class Kitshn extends DurableObject<Env> {
       now,
     );
     this.jobsEnded(rows.map((row) => row.id));
+    // K-827: an instance whose Compose job expired keeps its old build, so it is stale.
+    for (const { id } of rows) {
+      const [job] = this.sql<{ command: string; machine_id: string | null }>(
+        "SELECT command, machine_id FROM jobs WHERE id = ?",
+        id,
+      );
+      const command = job ? (JSON.parse(job.command) as Command) : null;
+      if (
+        job?.machine_id &&
+        (command?.kind === "compose" ||
+          command?.kind === "compose-redeploy" ||
+          command?.kind === "compose-rollback")
+      )
+        this.settleInstance(command.project, job.machine_id, false);
+    }
     const expired = rows.length;
     // K-627: an expired step ends without a failure, and the next machine can go.
     if (expired > 0) this.autoUpdate();
@@ -7620,13 +7657,27 @@ export class Kitshn extends DurableObject<Env> {
     return { _tag: "forget", id, before: null, after: null };
   }
 
-  /** K-828: the machine of the primary instance of a card, or its home machine for a card without instances. */
+  /**
+   * K-828: the machine of the primary instance of a card, or its home machine for a card without instances. Only a
+   * spread app fails over; the current primary is the machine whose tunnel the record of the main address names.
+   */
   private primaryOf(card: Resource) {
+    const done = this.lastDone(card.id);
+    const failover = typeof placementOf(done ? composeOf(done) : null) !== "string";
+    const [record] = this.sql<{ content: string }>(
+      "SELECT content FROM dns_objects WHERE address = ? AND error IS NULL",
+      card.addresses[0] ?? "",
+    );
+    const current =
+      [...this.state.machines.values()].find(
+        (machine) => `${machine.tunnelId}.cfargotunnel.com` === record?.content,
+      )?.id ?? null;
     const online = this.onlineMachines();
     const primary = primaryInstance(
       cardInstances(card),
       (machineId) => this.state.machines.get(machineId)?.order ?? Number.MAX_SAFE_INTEGER,
       (machineId) => online.has(machineId),
+      { failover, current },
     );
     return primary?.machine ?? card.machine;
   }
@@ -7874,6 +7925,16 @@ export class Kitshn extends DurableObject<Env> {
         changed = true;
         continue;
       }
+      // K-825: the site of a dropped instance waits for its stop and never becomes a card of its own.
+      const dropped =
+        this.sql("SELECT 1 FROM old_addresses WHERE address = ?", site.address).length > 0 ||
+        this.sql(
+          `SELECT 1 FROM jobs WHERE machine_id = ? AND state IN ('queued', 'sent')
+           AND json_extract(command, '$.kind') = 'compose-down' AND json_extract(command, '$.name') = ?`,
+          site.machineId,
+          site.name,
+        ).length > 0;
+      if (dropped) continue;
       if ((this.checkRetryAt.get(site.id) ?? 0) > Date.now()) continue;
       if (calls + 2 > budget) break;
       calls += 2;
@@ -9909,6 +9970,21 @@ export class Kitshn extends DurableObject<Env> {
             { status: 409 },
           );
         }
+        // K-823, K-406: each new instance address costs Cloudflare calls in this request, as K-817 counts them.
+        if (others.length + 1 > MAX_SPREAD)
+          return Response.json(
+            {
+              error: `This placement wants ${others.length + 1} instances; kitshn runs at most ${MAX_SPREAD} of one app. Narrow it with runsOn labels (K-823).`,
+            },
+            { status: 409 },
+          );
+        const spreadOld = spreadRefusal(
+          placement,
+          candidates,
+          [home, ...others],
+          (id) => this.state.machines.get(id)?.name ?? id,
+        );
+        if (spreadOld) return Response.json({ error: spreadOld }, { status: 409 });
         machineId = home;
         // K-824: an instance keeps its address; a new one takes a name that no address of the card has.
         const taken = [...result.addresses, ...(existing?.addresses ?? [])];
@@ -13900,8 +13976,9 @@ export class Kitshn extends DurableObject<Env> {
     if (!home) throw new Error("agentRedeploy needs the home instance.");
     // K-827: one job per instance; the answer names the job of the home instance.
     const ids = this.ctx.storage.transactionSync(() => {
-      failQueuedDowns(this.query, home.command.project, REPLACED);
       const queued = targets.map((target) => {
+        // K-825: only the stop on this machine; the stop of a dropped instance elsewhere stays.
+        failQueuedDowns(this.query, target.command.project, REPLACED, target.machineId);
         const [inserted] = this.sql<{ id: number }>(
           `INSERT INTO jobs (machine_id, labels, command, state, created_at, expires_at, actor, visitor, exit_code, output)
            VALUES (?, '[]', ?, 'queued', ?, ?, ?, ?, NULL, '') RETURNING id`,
@@ -17671,6 +17748,8 @@ interface BackupRow extends Record<string, SqlStorageValue> {
   /** K-1820: the sources of the run, as JSON. */
   sources: string | null;
   pause_ms: number | null;
+  /** K-827: `<card>@<machine id>` for a run of an instance that is not the home one; null for the card's own. */
+  repository: string | null;
 }
 
 const backupRun = (row: BackupRow): BackupRun => ({

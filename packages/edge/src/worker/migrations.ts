@@ -348,6 +348,8 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
     `CREATE TABLE deploy_instances (deploy_id TEXT NOT NULL, machine_id TEXT NOT NULL, address TEXT NOT NULL,
       job_id INTEGER, deferred INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (deploy_id, machine_id))`,
     "CREATE INDEX deploy_instances_job ON deploy_instances (job_id)",
+    // K-827: the repository of an instance that is not the home one; null for the card's own repository.
+    "ALTER TABLE backups ADD COLUMN repository TEXT",
   ],
 ];
 

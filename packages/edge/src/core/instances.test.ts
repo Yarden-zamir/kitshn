@@ -6,6 +6,7 @@ import {
   placeMachines,
   placementDrift,
   primaryInstance,
+  spreadRefusal,
 } from "./instances.ts";
 
 const machine = (id: string, order: number, more: Partial<Candidate> = {}): Candidate => ({
@@ -114,10 +115,45 @@ describe("the primary (K-828)", () => {
     expect(cardInstances({ ...card, instances: [] })[0]?.address).toBe("app.example.com");
   });
 
-  it("is the first healthy instance in the owner's order, else the first in the order", () => {
+  it("stays on a healthy current primary, else takes the first healthy one in the owner's order", () => {
     const instances = cardInstances({ ...card, status: "running" });
-    expect(primaryInstance(instances, order, () => true)?.machine).toBe("b");
-    expect(primaryInstance(instances, order, (id) => id !== "b")?.machine).toBe("a");
-    expect(primaryInstance(cardInstances(card), order, (id) => id !== "b")?.machine).toBe("b");
+    const pick = (online: (id: string) => boolean, current: string | null) =>
+      primaryInstance(instances, order, online, { failover: true, current })?.machine;
+    expect(pick(() => true, null)).toBe("b");
+    // Sticky: an order that favours another healthy instance does not move a healthy primary.
+    expect(pick(() => true, "a")).toBe("a");
+    expect(pick((id) => id !== "a", "a")).toBe("b");
+    // With none healthy, the records stay where they are.
+    expect(pick(() => false, "a")).toBe("a");
+    expect(
+      primaryInstance(cardInstances(card), order, () => false, { failover: true, current: null })?.machine,
+    ).toBe("a");
+  });
+
+  it("never takes a stale instance, and stays home without failover (K-827, K-828)", () => {
+    const stale = cardInstances({
+      ...card,
+      status: "running",
+      instances: [card.instances[0]!, { ...card.instances[1]!, stale: true as const }],
+    });
+    expect(primaryInstance(stale, order, () => true, { failover: true, current: null })?.machine).toBe("a");
+    const instances = cardInstances(card);
+    expect(primaryInstance(instances, order, () => true, { failover: false, current: "b" })?.machine).toBe(
+      "a",
+    );
+  });
+});
+
+describe("spread on old daemons (K-826)", () => {
+  const candidates = [
+    { id: "a", spreadReady: true },
+    { id: "b", spreadReady: false },
+  ];
+  it("refuses a spread deploy to a kept machine whose daemon does not check for volumes", () => {
+    expect(spreadRefusal({ spread: 2 }, candidates, ["a", "b"], (id) => id.toUpperCase())).toMatch(
+      /update the daemon on B first/,
+    );
+    expect(spreadRefusal({ spread: 1 }, candidates, ["a"], (id) => id)).toBeNull();
+    expect(spreadRefusal("every", candidates, ["a", "b"], (id) => id)).toBeNull();
   });
 });

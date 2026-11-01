@@ -1997,7 +1997,7 @@ describe("placement (K-823, K-824, K-827, K-828)", () => {
         arch: "x64",
         hostname: "host",
         tunnel: "running",
-        capabilities: ["compose-guard"],
+        capabilities: ["compose-guard", "compose-spread"],
       };
       const pair = new WebSocketPair();
       durable.acceptWebSocket(pair[1], [machineId, "machines"]);
@@ -2102,7 +2102,7 @@ describe("placement (K-823, K-824, K-827, K-828)", () => {
     for (const socket of sockets) await disconnect(socket);
   });
 
-  it("moves the main address to the first healthy instance in the owner's order, and back", async () => {
+  it("keeps a healthy primary, and fails a spread app over to the first healthy instance in the owner's order", async () => {
     fakeCloudflare();
     const app = repo("72", "failover");
     await allow(app);
@@ -2111,7 +2111,9 @@ describe("placement (K-823, K-824, K-827, K-828)", () => {
       { id: "m-72b", name: "VPS", order: 1 },
     ]);
     const sockets = [await connect("m-72a"), await connect("m-72b")];
-    const planned = await step(app, "/deploy/plan", { recipe: composeRecipe, event: {} });
+    // K-828: only a spread app fails over, because it keeps no data (K-826).
+    const spread = { ...composeRecipe, compose: { placement: { spread: 2 } } };
+    const planned = await step(app, "/deploy/plan", { recipe: spread, event: {} });
     const deployId = String(planned.body["deployId"]);
     let started = await step(app, "/deploy/start", { deployId });
     for (let attempt = 0; attempt < 10 && started.status === 503; attempt++)
@@ -2182,18 +2184,112 @@ describe("placement (K-823, K-824, K-827, K-828)", () => {
     // Each own address stays on its own machine.
     expect(await record("failover-mac.example.com")).toBe("tunnel-m-72a.cfargotunnel.com");
     expect(await record("failover-vps.example.com")).toBe("tunnel-m-72b.cfargotunnel.com");
+    // A new order alone does not move a healthy primary.
     await setOrder("m-72a", 2);
-    expect(await record(app.address)).toBe("tunnel-m-72b.cfargotunnel.com");
-    await setOrder("m-72a", 0);
     expect(await record(app.address)).toBe("tunnel-m-72a.cfargotunnel.com");
+    await setOrder("m-72a", 0);
     // The primary's site goes down and its machine goes offline: the record moves to the next healthy instance.
     await report(0, false);
     await disconnect(sockets[0]!);
     expect(await record(app.address)).toBe("tunnel-m-72b.cfargotunnel.com");
-    // The first machine comes back with its site up: the record moves back.
+    // The first machine comes back: the record stays on the healthy primary.
     sockets[0] = await connect("m-72a");
     await report(0, true);
+    expect(await record(app.address)).toBe("tunnel-m-72b.cfargotunnel.com");
+    // The primary goes down: the first healthy instance in the order takes the main address again.
+    await report(1, false);
     expect(await record(app.address)).toBe("tunnel-m-72a.cfargotunnel.com");
     for (const socket of sockets) await disconnect(socket);
+  });
+
+  it("marks an instance whose job expired as stale (K-827)", async () => {
+    fakeCloudflare();
+    const app = repo("73", "stale");
+    await allow(app);
+    await addMachines([
+      { id: "m-73a", name: "Mac", order: 0 },
+      { id: "m-73b", name: "VPS", order: 1 },
+    ]);
+    const sockets = [await connect("m-73a"), await connect("m-73b")];
+    const planned = await step(app, "/deploy/plan", { recipe: composeRecipe, event: {} });
+    const deployId = String(planned.body["deployId"]);
+    let started = await step(app, "/deploy/start", { deployId });
+    for (let attempt = 0; attempt < 10 && started.status === 503; attempt++)
+      started = await step(app, "/deploy/start", { deployId });
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    const card = await runInDurableObject(stub, (instance, durable) => {
+      durable.storage.sql.exec(
+        `UPDATE jobs SET expires_at = 1 WHERE machine_id = 'm-73b' AND json_extract(command, '$.project') = ?`,
+        app.card,
+      );
+      (instance as unknown as { expireJobs(now: number): number }).expireJobs(Date.now());
+      return JSON.parse(
+        durable.storage.sql.exec<{ body: string }>("SELECT body FROM resources WHERE id = ?", app.card).one()
+          .body,
+      ) as Resource;
+    });
+    expect(card.instances?.find((item) => item.machine === "m-73b")).toMatchObject({
+      status: "failed",
+      stale: true,
+    });
+    expect((await step(app, "/deploy/status", { deployId })).body["state"]).toBe("expired");
+    for (const socket of sockets) await disconnect(socket);
+  });
+
+  it("an agent redeploy keeps the stop of an instance on another machine (K-825)", async () => {
+    const down = (machineId: string) =>
+      runInDurableObject(
+        stub,
+        (_instance, durable) =>
+          durable.storage.sql
+            .exec<{ id: number }>(
+              `INSERT INTO jobs (machine_id, labels, command, state, created_at, expires_at, actor, visitor, output)
+             VALUES (?, '[]', ?, 'queued', 0, ?, '{}', '{}', '') RETURNING id`,
+              machineId,
+              JSON.stringify({
+                kind: "compose-down",
+                project: "redeploy-card",
+                name: "x",
+                removeData: false,
+              }),
+              Number.MAX_SAFE_INTEGER,
+            )
+            .one().id,
+      );
+    const here = await down("m-74a");
+    const elsewhere = await down("m-74b");
+    const states = await runInDurableObject(stub, (instance, durable) => {
+      const command = {
+        kind: "compose-redeploy",
+        allowed: [],
+        project: "redeploy-card",
+        name: "x",
+        environment: "prod",
+        repo: "owner/x",
+        file: null,
+      };
+      (
+        instance as unknown as {
+          agentRedeploy(caller: object, targets: Array<object>, approval: null): Response;
+        }
+      ).agentRedeploy(
+        { actor: { _tag: "kitshn", reason: "test" }, visitor: { email: null, clientId: null, ip: null } },
+        [{ machineId: "m-74a", command }],
+        null,
+      );
+      const states = durable.storage.sql
+        .exec<{ id: number; state: string }>(
+          "SELECT id, state FROM jobs WHERE id IN (?, ?) ORDER BY id",
+          here,
+          elsewhere,
+        )
+        .toArray();
+      durable.storage.sql.exec("DELETE FROM jobs WHERE json_extract(command, '$.project') = 'redeploy-card'");
+      return states;
+    });
+    expect(states).toEqual([
+      { id: here, state: "failed" },
+      { id: elsewhere, state: "queued" },
+    ]);
   });
 });

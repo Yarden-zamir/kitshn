@@ -202,6 +202,8 @@ export interface Resource {
   readonly machine: string | null;
   /** K-824: the instances of a Compose card beyond the home one on `machine`; their addresses are in `addresses`. */
   readonly instances?: ReadonlyArray<Instance>;
+  /** K-828: the machine that the main address goes to now. Only the snapshot sets it; kitshn never stores it. */
+  readonly primary?: string;
   /** K-1733: what a `repo.group` card matches: an owner (`Yarden-zamir`) or a pattern with one `*`. */
   readonly match?: string;
   /** K-1760: the GitHub way of an owner group (a match with no `/`). */

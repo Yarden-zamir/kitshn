@@ -147,7 +147,7 @@ import {
 } from "./Pause.tsx";
 import { playResumeSound, pressSound, showPanic, unlockAudio } from "./panic.ts";
 import { GONE_STICKER, REPO_STICKERS, RepoList, setRepoState } from "./Repos.tsx";
-import { cardInstances, primaryInstance } from "../core/instances.ts";
+import { cardInstances } from "../core/instances.ts";
 import { AskEvents, LinkEvents, BotRuns, approveFromHash } from "./Asks.tsx";
 import { PassSettingsPanel } from "./Passes.tsx";
 import { LibraryView } from "./Library.tsx";
@@ -2599,7 +2599,6 @@ function Panel(props: {
         deployNote={props.deployNotes[cards[0].id] ?? null}
         uptime={props.uptime[cards[0].id] ?? null}
         machine={props.machines.get(cards[0].id) ?? null}
-        machineOnline={(id) => props.machines.get(id)?.online === true}
         providerMachine={props.machines.get(cards[0].machine ?? "") ?? null}
         cardSettings={props.cardSettings[cards[0].id] ?? {}}
         providerCommands={props.providerCommands}
@@ -2943,14 +2942,9 @@ const INSTANCE_STICKER: Record<Resource["status"], string> = {
 };
 
 /** K-824, K-827, K-828: each instance of a Compose card: its machine, its status, its own address, and the primary. */
-function InstanceList(props: { resource: Resource; state: State; online: (machineId: string) => boolean }) {
+function InstanceList(props: { resource: Resource; state: State }) {
   const { resource, state } = props;
   const rows = cardInstances(resource);
-  const primary = primaryInstance(
-    rows,
-    (id) => state.machines.get(id)?.order ?? Number.MAX_SAFE_INTEGER,
-    props.online,
-  );
   return (
     <section aria-label="Instances">
       <div
@@ -2969,7 +2963,7 @@ function InstanceList(props: { resource: Resource; state: State; online: (machin
             >
               {row.status}
             </span>
-            {row.machine === primary?.machine ? (
+            {row.machine === resource.primary ? (
               <span
                 class="sticker info"
                 data-tip={`Primary: ${resource.addresses[0] ?? "the main address"} goes to this instance now (K-828).`}
@@ -3042,8 +3036,6 @@ function CardPanel(props: {
   /** K-1125: up or down, when kitshn checks this card. */
   uptime: Snapshot["uptime"][string] | null;
   machine: MachineView | null;
-  /** K-828: whether a machine is online, for the primary of a Compose card. */
-  machineOnline: (machineId: string) => boolean;
   /** K-1625: the machine of a provider card, for the commands of its list rows. */
   providerMachine: MachineView | null;
   cardSettings: Readonly<Record<string, string>>;
@@ -3115,7 +3107,7 @@ function CardPanel(props: {
         </div>
       ) : null}
       {resource.kind === "site.compose" && (resource.instances ?? []).length > 0 ? (
-        <InstanceList resource={resource} state={state} online={props.machineOnline} />
+        <InstanceList resource={resource} state={state} />
       ) : null}
       {props.peek && peekable(resource) ? (
         <PeekRow key={resource.id} resource={resource} state={state} zone={props.zone} />
