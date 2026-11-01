@@ -29,12 +29,16 @@ export PATH
 child=
 trap '[ -n "$child" ] && kill -KILL -$child 2>/dev/null; exit 137' TERM INT HUP
 # Its own process group: setsid on Linux (dash ignores set -m in a script), set -m where setsid is missing.
+# A background command gets /dev/null as stdin without job control, before its own redirections, so the stdin of
+# the run waits on fd 3 and the command takes it from there (K-722).
+exec 3<&0
 if command -v setsid >/dev/null 2>&1; then
-  setsid /bin/sh -c "$2" &
+  setsid /bin/sh -c "$2" <&3 3<&- &
 else
   set -m
-  /bin/sh -c "$2" &
+  /bin/sh -c "$2" <&3 3<&- &
 fi
+exec 3<&-
 child=$!
 wait $child
 status=$?
