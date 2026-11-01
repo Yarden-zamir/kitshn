@@ -262,7 +262,7 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
   // that actor, so its Undo works (K-1506). Null when an undo brought the time back.
   ["CREATE TABLE card_ends (id TEXT PRIMARY KEY, ends_at INTEGER NOT NULL, set_by TEXT)"],
   // 37: section 20. A game card (K-2001) with the last public addresses of its machine, so its records stay while the
-  // machine is offline; the open doors (K-2004) with the address that opened each (K-2005); and the A, AAAA and SRV records that kitshn made for it (K-2007).
+  // machine is offline; the open doors (K-2005) with the address that opened each (K-2006); and the A, AAAA and SRV records that kitshn made for it (K-2008).
   [
     `CREATE TABLE games (card_id TEXT PRIMARY KEY, machine_id TEXT NOT NULL, name TEXT NOT NULL UNIQUE, ports TEXT NOT NULL,
       door_ms INTEGER NOT NULL, srv TEXT, relay_id TEXT, v4 TEXT, v6 TEXT)`,
@@ -306,6 +306,12 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
     `CREATE TABLE exec_runs (exec_id TEXT PRIMARY KEY, source TEXT NOT NULL, target TEXT NOT NULL, provider TEXT,
       command TEXT NOT NULL, cwd TEXT, thread TEXT, proposal_id TEXT, state TEXT NOT NULL, started_at INTEGER NOT NULL)`,
     "CREATE TABLE desired_revs (kind TEXT PRIMARY KEY, rev TEXT NOT NULL)",
+  ],
+  // 43: section 20 is "Ports" (K-2001): the kind `game` becomes `port`, and its tables follow the name.
+  [
+    "ALTER TABLE games RENAME TO port_cards",
+    "ALTER TABLE game_records RENAME TO port_records",
+    `UPDATE resources SET body = json_set(body, '$.kind', 'port') WHERE json_extract(body, '$.kind') = 'game'`,
   ],
 ];
 

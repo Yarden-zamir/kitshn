@@ -157,10 +157,10 @@ it("runs the later alarm steps when one throws, skips it with backoff, and tells
     kitshn.sql("INSERT INTO card_ends (id, ends_at) VALUES ('timer', ?)", t0 + 16.5 * 60_000);
     kitshn.load();
     let ran: Array<string> = [];
-    const fails = new Set(["syncGameDns"]);
+    const fails = new Set(["syncPortDns"]);
     kitshn["api"] = () => async () => [];
-    // Game records wait, as on 2026-10-29: this work woke the alarm at once while the step threw.
-    kitshn["gameDnsWork"] = () => true;
+    // PortCard records wait, as on 2026-10-29: this work woke the alarm at once while the step threw.
+    kitshn["portDnsWork"] = () => true;
     const step = (name: string, calls: number) => async () => {
       ran.push(name);
       if (fails.has(name)) throw new Error("zonePath takes one label.");
@@ -168,7 +168,7 @@ it("runs the later alarm steps when one throws, skips it with backoff, and tells
     };
     for (const name of ["fillAudiences", "refreshForeignPaths", "syncTunnels", "checkSites", "syncDns"])
       kitshn[name] = step(name, 0);
-    kitshn["syncGameDns"] = step("syncGameDns", 4);
+    kitshn["syncPortDns"] = step("syncPortDns", 4);
     kitshn["syncRoutes"] = step("syncRoutes", 0);
     kitshn["syncRedirects"] = step("syncRedirects", 0);
     kitshn["syncLauncher"] = step("syncLauncher", 0);
@@ -199,10 +199,10 @@ it("runs the later alarm steps when one throws, skips it with backoff, and tells
   });
   const later = ["syncRoutes", "syncRedirects", "syncLauncher", "syncAccessLocked", "syncLauncher"];
   const before = ["fillAudiences", "refreshForeignPaths", "syncTunnels", "checkSites", "syncDns"];
-  expect(result.failed.ran).toEqual([...before, "syncGameDns", ...later]);
+  expect(result.failed.ran).toEqual([...before, "syncPortDns", ...later]);
   // The failed step counts its whole budget of 4, so Access keeps 40 - 4 - 16 - 3.
   expect(result.failed.accessBudget).toBe(17);
-  expect(result.failed.rows).toEqual([{ key: "game DNS", state: "open" }]);
+  expect(result.failed.rows).toEqual([{ key: "port card DNS", state: "open" }]);
   // The next second sends the push of the new notification (K-1907).
   expect(result.failed.alarm).toBe(t0 + 1_000);
   // Until its retry time the step is skipped, spends nothing, and its waiting records wake no alarm.
@@ -210,14 +210,14 @@ it("runs the later alarm steps when one throws, skips it with backoff, and tells
   expect(result.skipped.accessBudget).toBe(21);
   expect(result.skipped.alarm).toBe(t0 + 5 * 60_000);
   // The second failure waits twice as long.
-  expect(result.again.ran).toContain("syncGameDns");
+  expect(result.again.ran).toContain("syncPortDns");
   expect(result.again.alarm).toBe(t0 + 15 * 60_000);
-  expect(result.works.ran).toContain("syncGameDns");
-  expect(result.rows).toEqual([{ key: "game DNS", state: "closed" }]);
+  expect(result.works.ran).toContain("syncPortDns");
+  expect(result.rows).toEqual([{ key: "port card DNS", state: "closed" }]);
   // The end of the card is a map change, so the waiting Access step runs in the same alarm and closes.
   expect(result.ended.ran).toContain("syncAccessLocked");
   expect(result.endedRows).toEqual([
-    { key: "game DNS", state: "closed" },
+    { key: "port card DNS", state: "closed" },
     { key: "Access", state: "closed" },
   ]);
 });

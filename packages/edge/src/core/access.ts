@@ -213,8 +213,8 @@ export function circlePolicies(
 }
 
 /** Resource kinds that the Worker serves and checks itself (K-404) get no Access application. */
-// K-2003: a game card has no Access application; the Worker checks its join page like a page.
-const WORKER_CHECKED = new Set(["page", "file", "game"]);
+// K-2004: a port card has no Access application; the Worker checks its connect page like a page.
+const WORKER_CHECKED = new Set(["page", "file", "port"]);
 
 /** K-909: the address of a removed app that its machine still serves; `id` was its card id. */
 export interface RemovedSite {
@@ -254,9 +254,9 @@ export function desiredAccess(
   const policies = new Map<string, PolicyBody>();
   const apps = new Map<string, AppBody>();
   for (const resource of state.resources.values()) {
-    // K-2008: the relay host of a game behind NAT lets in only the service token of its relay machine; a pause
+    // K-2009: the relay host of a port card behind NAT lets in only the service token of its relay machine; a pause
     // closes it, as it closes every device.
-    const relay = resource.kind === "game" && resource.relay ? state.machines.get(resource.relay) : undefined;
+    const relay = resource.kind === "port" && resource.relay ? state.machines.get(resource.relay) : undefined;
     const relayAddress = resource.addresses[1];
     if (relay && relayAddress && !state.paused) {
       const key = `policy:relay:${relay.id}`;

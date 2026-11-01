@@ -1,8 +1,8 @@
-// Section 20: the rows, records and status fields of game cards, for the Durable Object.
-import { type Door, type Game, type GamePort, doorAddress, doorMachine } from "../core/game.ts";
+// Section 20: the rows, records and status fields of port cards, for the Durable Object.
+import { type Door, type PortCard, type ServicePort, doorAddress, doorMachine } from "../core/port.ts";
 import type { MachineStatus } from "../core/machine.ts";
 
-export interface GameRow extends Record<string, SqlStorageValue> {
+export interface PortRow extends Record<string, SqlStorageValue> {
   card_id: string;
   machine_id: string;
   name: string;
@@ -20,11 +20,11 @@ export interface DoorRow extends Record<string, SqlStorageValue> {
   address: string;
   opened_at: number;
   ends_at: number;
-  /** K-2005: the address that opened the door, for the share check of `closeLostDoors`. */
+  /** K-2006: the address that opened the door, for the share check of `closeLostDoors`. */
   seen_ip: string | null;
 }
 
-export interface GameRecordRow extends Record<string, SqlStorageValue> {
+export interface PortRecordRow extends Record<string, SqlStorageValue> {
   type: string;
   name: string;
   card_id: string;
@@ -34,11 +34,11 @@ export interface GameRecordRow extends Record<string, SqlStorageValue> {
   retry_at: number;
 }
 
-export const gameOf = (row: GameRow): Game => ({
+export const portOf = (row: PortRow): PortCard => ({
   card: row.card_id,
   machine: row.machine_id,
   name: row.name,
-  ports: JSON.parse(row.ports) as Array<GamePort>,
+  ports: JSON.parse(row.ports) as Array<ServicePort>,
   doorMs: row.door_ms,
   srv: row.srv,
   relay: row.relay_id,
@@ -55,10 +55,10 @@ export const doorOf = (row: DoorRow): Door => ({
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
-/** K-2002, K-2006: the game fields of a daemon status, checked; a bad field is left out. */
-export function gameStatus(
+/** K-2003, K-2007: the port card fields of a daemon status, checked; a bad field is left out. */
+export function portStatus(
   raw: Record<string, unknown>,
-): Pick<MachineStatus, "publicAddresses" | "doorsProblem" | "listening"> {
+): Pick<MachineStatus, "publicAddresses" | "doorsProblem" | "listening" | "hostFirewall" | "relays"> {
   const address = (value: unknown, family: 4 | 6) => {
     if (typeof value !== "string" || value.length > 45) return null;
     const door = doorAddress(value);
@@ -72,6 +72,14 @@ export function gameStatus(
       ? { publicAddresses: { v4: address(found["v4"], 4), v6: address(found["v6"], 6) } }
       : {}),
     ...(typeof problem === "string" ? { doorsProblem: problem.slice(0, 200) } : {}),
+    ...(typeof raw["hostFirewall"] === "string" ? { hostFirewall: raw["hostFirewall"].slice(0, 400) } : {}),
+    ...(Array.isArray(raw["relays"])
+      ? {
+          relays: raw["relays"]
+            .filter((item): item is string => typeof item === "string" && item.length <= 300)
+            .slice(0, 40),
+        }
+      : {}),
     ...(Array.isArray(listening)
       ? {
           listening: listening
@@ -82,19 +90,19 @@ export function gameStatus(
   };
 }
 
-/** K-2007: one DNS record of a game card. `content` of an SRV record is `priority weight port target`. */
-export interface GameRecord {
+/** K-2008: one DNS record of a port card. `content` of an SRV record is `priority weight port target`. */
+export interface PortRecord {
   readonly type: "A" | "AAAA" | "SRV";
   readonly name: string;
   readonly card: string;
   readonly content: string;
 }
 
-/** K-2007: the records that the game cards want: A and AAAA to the door machine, and SRV to the first TCP port. */
-export function gameRecords(rows: ReadonlyArray<GameRow>, zone: string): Array<GameRecord> {
-  return rows.flatMap((row): Array<GameRecord> => {
+/** K-2008: the records that the port cards want: A and AAAA to the door machine, and SRV to the first TCP port. */
+export function portRecords(rows: ReadonlyArray<PortRow>, zone: string): Array<PortRecord> {
+  return rows.flatMap((row): Array<PortRecord> => {
     const host = `${row.name}.${zone}`;
-    const tcp = gameOf(row).ports.find((port) => port.proto === "tcp");
+    const tcp = portOf(row).ports.find((port) => port.proto === "tcp");
     return [
       ...(row.v4 ? [{ type: "A" as const, name: host, card: row.card_id, content: row.v4 }] : []),
       // A relay listens on IPv4 only (cloudflared access tcp has one listener); revisit if players need IPv6 there.
@@ -115,9 +123,9 @@ export function gameRecords(rows: ReadonlyArray<GameRow>, zone: string): Array<G
   });
 }
 
-/** K-2007: the Cloudflare body of a record. Game traffic is not HTTP, so no record is proxied. */
-export function recordBody(record: GameRecord) {
-  const comment = `kitshn game ${record.card} (K-2007)`;
+/** K-2008: the Cloudflare body of a record. Port traffic is not HTTP, so no record is proxied. */
+export function recordBody(record: PortRecord) {
+  const comment = `kitshn port card ${record.card} (K-2008)`;
   if (record.type !== "SRV")
     return {
       type: record.type,
@@ -137,6 +145,6 @@ export function recordBody(record: GameRecord) {
   };
 }
 
-/** K-2002: the game rows whose door machine is `machineId`, so a new public address moves their records. */
-export const gamesOn = (rows: ReadonlyArray<GameRow>, machineId: string) =>
-  rows.filter((row) => doorMachine(gameOf(row)) === machineId);
+/** K-2003: the port card rows whose door machine is `machineId`, so a new public address moves their records. */
+export const portsOn = (rows: ReadonlyArray<PortRow>, machineId: string) =>
+  rows.filter((row) => doorMachine(portOf(row)) === machineId);

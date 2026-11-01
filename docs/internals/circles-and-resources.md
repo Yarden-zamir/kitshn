@@ -33,7 +33,7 @@ A card inside a circle is shared with that circle. This file holds the rules for
   | `file`         | view               | a file in R2                                                |
   | `repo`         | view               | a repo that has a recipe; its environments are its children |
   | `repo.group`   | view               | the repos of one owner or of a name pattern (K-1733)        |
-  | `game`         | view               | a game server on a machine (K-2001)                         |
+  | `port`         | view               | ports of a service on a machine (K-2001)                    |
 
 - **K-302** A provider adds kinds through the daemon (K-704). Each kind has an id with the provider prefix (for example `t3.thread`), its levels, and how it is enforced (K-405).
 - **K-303** Each environment of an app is its own resource and its own card, for example "riffle" and "riffle pr-41". A preview card (a `pr-<n>` environment, K-821) links its pull request. New environments start in the circle that the recipe names (K-807).

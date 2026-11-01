@@ -1,20 +1,25 @@
-// Section 20: the door of game servers on this machine. The daemon has no privilege, so one root helper writes the
-// nftables table; the daemon sends it the game ports and the open doors as plain lines.
+// Section 20: the door of port cards on this machine. The daemon has no privilege, so one root helper writes the
+// nftables table; the daemon sends it the gated ports and the open doors as plain lines.
 import { type ChildProcess, type SpawnSyncReturns, spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { networkInterfaces } from "node:os";
 import { dirname } from "node:path";
-import { type DoorPlan, type GamePort, doorAddress, portKey } from "@kitshn/edge/game";
+import { type DoorPlan, type ServicePort, doorAddress, portKey } from "@kitshn/edge/port";
 
 export const HELPER_PATH = "/usr/local/lib/kitshn/doors";
 export const SUDOERS_PATH = "/etc/sudoers.d/kitshn-doors";
 export const TABLE = "kitshn_doors";
 export const STATE_PATH = "/var/lib/kitshn/doors.ports";
 export const BOOT_UNIT_PATH = "/etc/systemd/system/kitshn-doors.service";
+/** K-2003: the public IPv4 address that root declared for a cloud machine whose provider translates the address. */
+export const DECLARED_ADDRESS_PATH = "/usr/local/lib/kitshn/public-address";
+/** K-2003: the INPUT rules that the helper saves with each apply. */
+export const INPUT_RULES_PATH = "/var/lib/kitshn/input-rules";
 
-/** K-2005: loads the last game ports with no door before the network and Docker start, so a reboot opens nothing. */
+/** K-2006: loads the last gated ports with no door before the network and Docker start, so a reboot opens nothing. */
 export const BOOT_UNIT = `[Unit]
-Description=kitshn game doors: game ports start closed (K-2005)
+Description=kitshn doors: gated ports start closed (K-2006)
 DefaultDependencies=no
 # After nftables.service, whose \`flush ruleset\` would delete the table again.
 After=local-fs.target nftables.service
@@ -31,13 +36,13 @@ WantedBy=multi-user.target
 `;
 
 /**
- * K-2005: the root helper. It reads `port`, `open4` and `open6` lines, checks each field, and replaces the table
+ * K-2006: the root helper. It reads `port`, `open4` and `open6` lines, checks each field, and replaces the table
  * `inet kitshn_doors` in one nft transaction. `off` removes the table. It touches no other table.
  */
 export const HELPER = `#!/bin/sh
-# kitshn doors (K-2005): the one root step of kitshn game servers. Installed by \`kitshn doors install\`.
+# kitshn doors (K-2006): the one root step of kitshn port cards. Installed by \`kitshn doors install\`.
 # Usage: doors apply < lines | doors boot | doors off. It changes only the nftables table inet ${TABLE}.
-# \`boot\` runs before the network at each start: it loads the last game ports with no door, so they start closed.
+# \`boot\` runs before the network at each start: it loads the last gated ports with no door, so they start closed.
 set -eu
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 table=${TABLE}
@@ -74,7 +79,7 @@ ipv6net() {
 ports="" portlines="" open4="" open6="" lines=0
 while IFS=' ' read -r kind a b c d extra; do
   lines=$((lines + 1))
-  # At boot a bad line costs only itself: the good game ports still load, so a damaged file fails closed.
+  # At boot a bad line costs only itself: the good gated ports still load, so a damaged file fails closed.
   if [ "$mode" = boot ]; then
     [ "$lines" -le 4000 ] || break
     if [ "$kind" = port ] && proto "$a" && port "$b" && [ -z "\${c:-}" ] && [ -z "\${extra:-}" ]; then
@@ -115,7 +120,7 @@ cat >"$script" <<EOF
 table inet $table
 delete table inet $table
 table inet $table {
-  set game_ports { type inet_proto . inet_service; elements = { $ports } }
+  set gated_ports { type inet_proto . inet_service; elements = { $ports } }
   set open4 { type ipv4_addr . inet_proto . inet_service; flags timeout; $elements4 }
   set open6 { type ipv6_addr . inet_proto . inet_service; flags timeout; $elements6 }
   chain input {
@@ -125,9 +130,9 @@ table inet $table {
     meta l4proto != { tcp, udp } accept
     ip saddr . meta l4proto . th dport @open4 accept
     ip6 saddr and ffff:ffff:ffff:ffff:0:0:0:0 . meta l4proto . th dport @open6 accept
-    meta l4proto . th dport @game_ports drop
+    meta l4proto . th dport @gated_ports drop
   }
-  # "End now" cuts both ways: the game server's own packets to a closed address go too.
+  # "End now" cuts both ways: the service's own packets to a closed address go too.
   chain output {
     type filter hook output priority filter - 10; policy accept;
     oifname "lo" accept
@@ -135,7 +140,7 @@ table inet $table {
     meta l4proto != { tcp, udp } accept
     ip daddr . meta l4proto . th sport @open4 accept
     ip6 daddr and ffff:ffff:ffff:ffff:0:0:0:0 . meta l4proto . th sport @open6 accept
-    meta l4proto . th sport @game_ports drop
+    meta l4proto . th sport @gated_ports drop
   }
   # A port that system Docker publishes goes DNAT and through here, in both directions.
   chain forward {
@@ -146,15 +151,18 @@ table inet $table {
     ct direction original ip6 saddr and ffff:ffff:ffff:ffff:0:0:0:0 . meta l4proto . ct original proto-dst @open6 accept
     ct direction reply ip daddr . meta l4proto . ct original proto-dst @open4 accept
     ct direction reply ip6 daddr and ffff:ffff:ffff:ffff:0:0:0:0 . meta l4proto . ct original proto-dst @open6 accept
-    meta l4proto . ct original proto-dst @game_ports drop
+    meta l4proto . ct original proto-dst @gated_ports drop
   }
 }
 EOF
 nft -c -f "$script"
 nft -f "$script"
-# The game ports alone, for \`boot\`; root's file, so the daemon user cannot change what loads before the network.
+# The gated ports alone, for \`boot\`; root's file, so the daemon user cannot change what loads before the network.
 if [ "$mode" = apply ]; then
   mkdir -p "\${state%/*}"
+  # K-2003: the INPUT rules of the host firewall, for the daemon to read (it cannot list them itself).
+  rules="\${state%/*}/input-rules"
+  (umask 022; { iptables -S INPUT 2>/dev/null || true; echo "---- nft"; nft list ruleset 2>/dev/null | head -c 200000 || true; } >"$rules.new" && mv "$rules.new" "$rules")
   umask 077
   printf '%s' "$portlines" >"$state.new"
   mv "$state.new" "$state"
@@ -164,7 +172,7 @@ fi
 /** The daemon only applies plans; `off` and `boot` run as root through the install command and the boot unit. */
 export const sudoersLine = (user: string) => `${user} ALL=(root) NOPASSWD: ${HELPER_PATH} apply\n`;
 
-/** K-2005: the helper's input for a plan. A door that has ended is left out; the kernel ends the rest. */
+/** K-2006: the helper's input for a plan. A door that has ended is left out; the kernel ends the rest. */
 export function helperInput(plan: DoorPlan, now: number): string {
   const lines = plan.ports.map(({ proto, port }) => `port ${proto} ${port}`);
   for (const door of plan.doors) {
@@ -178,19 +186,28 @@ export function helperInput(plan: DoorPlan, now: number): string {
 }
 
 /**
- * K-2008: one `cloudflared access tcp` per game that this machine relays. It listens on the game port, so the door
- * table gates it like a local game; the service token goes in the environment, never into the process arguments.
+ * K-2009: one `cloudflared access tcp` per port card that this machine relays. It listens on the gated port, so the door
+ * table gates it like a local port; the service token goes in the environment, never into the process arguments.
  */
 export class Relays {
   private readonly running = new Map<string, ChildProcess>();
   private wanted = new Set<string>();
+  private readonly started = new Map<string, number>();
 
   constructor(
     private readonly log: (line: string) => void,
     private readonly restartMs = 5000,
   ) {}
 
-  /** K-2008: the relays end with the daemon; a service manager that kills only the daemon leaves no listener. */
+  /** K-2009: the relays end with the daemon; a service manager that kills only the daemon leaves no listener. */
+  /**
+   * K-2009: the relays that still run after 10 seconds, as `<hostname> <port>`. cloudflared exits at once on a busy port,
+   * so one of these holds the port.
+   */
+  serving(now: number): Array<string> {
+    return [...this.running.keys()].filter((key) => now - (this.started.get(key) ?? now) >= 10_000);
+  }
+
   stopAll() {
     this.wanted = new Set();
     for (const child of this.running.values()) child.kill();
@@ -226,6 +243,7 @@ export class Relays {
       stdio: "ignore",
     });
     this.running.set(key, child);
+    this.started.set(key, Date.now());
     this.log(`relay ${hostname} listens on ${port}`);
     child.on("exit", (code) => {
       if (this.running.get(key) !== child) return;
@@ -238,8 +256,12 @@ export class Relays {
   }
 }
 
-/** K-2002: the public addresses on this machine's interfaces. A machine behind NAT has none. */
-export function publicAddresses(interfaces: ReturnType<typeof networkInterfaces> = networkInterfaces()): {
+/** K-2003: the public addresses on this machine's interfaces. A machine behind NAT has none. */
+export function publicAddresses(
+  interfaces: ReturnType<typeof networkInterfaces> = networkInterfaces(),
+  declared: string | null = declaredAddress(),
+  seen: string | null = seenV4,
+): {
   readonly v4: string | null;
   readonly v6: string | null;
 } {
@@ -255,10 +277,144 @@ export function publicAddresses(interfaces: ReturnType<typeof networkInterfaces>
       else v6 ??= entry.address;
     }
   }
+  // K-2003: a declared address counts until the internet sees the machine at another address; no answer says nothing.
+  if (v4 === null && declared !== null && (seen === null || declared === seen)) v4 = declared;
   return { v4, v6 };
 }
 
-/** K-2006: which game ports listen now, from `ss -H -ltnu` (the local address is the fifth field). */
+/** K-2003: the address that `ipv4.icanhazip.com` gave last, refreshed by the daemon every minute; null before an answer. */
+let seenV4: string | null = null;
+export async function refreshSeenV4() {
+  const text = await fetch("https://ipv4.icanhazip.com", { signal: AbortSignal.timeout(5000) })
+    .then((answer) => (answer.ok ? answer.text() : ""))
+    .catch(() => "");
+  // A 5xx, a timeout or an error page is no answer, so the last address stays.
+  const answer = text.trim();
+  if (isIP(answer) === 4) seenV4 = answer;
+}
+
+/** K-2003: the declared public address, or null. */
+export function declaredAddress(file = DECLARED_ADDRESS_PATH): string | null {
+  try {
+    const text = readFileSync(file, "utf8").trim();
+    const door = doorAddress(text);
+    return "error" in door || door.family !== 4 ? null : text;
+  } catch {
+    return null;
+  }
+}
+
+/** K-2003: why a declared address does not count, or null. */
+export function declaredProblem(declared: string | null, seen: string | null): string | null {
+  if (declared === null || seen === null) return null;
+  return seen === declared
+    ? null
+    : `the declared address ${declared} is not the address of the machine (the internet sees ${seen})`;
+}
+
+const NFT_SPLIT = "---- nft";
+
+/**
+ * K-2003: the host firewall rules that reject or drop a new connection to one of `ports` before it could pass, from
+ * `iptables -S INPUT` and `nft list ruleset`. Only rules that kitshn can read with certainty count: a rule that jumps
+ * to another chain ends the check for that port with no finding (a rule there may accept it).
+ */
+export function hostFirewallRules(saved: string, ports: ReadonlyArray<ServicePort>): Array<string> {
+  const [iptables = "", nft = ""] = saved.split(NFT_SPLIT);
+  const found = new Set<string>();
+  const rules = iptables
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("-A INPUT") || line.startsWith("-P INPUT"));
+  const policy = rules.find((line) => line.startsWith("-P INPUT"))?.split(" ")[2];
+  for (const { port, proto } of ports) {
+    let decided = false;
+    for (const rule of rules.filter((line) => line.startsWith("-A INPUT"))) {
+      const words = rule.split(/\s+/);
+      const value = (flag: string) => {
+        const index = words.indexOf(flag);
+        return index >= 0 ? words[index + 1] : undefined;
+      };
+      if (value("-i") === "lo" || value("-s") !== undefined || value("--source") !== undefined) continue;
+      const state = value("--state") ?? value("--ctstate");
+      if (state !== undefined && !state.split(",").includes("NEW")) continue;
+      const protocol = value("-p");
+      if (protocol !== undefined && protocol !== proto) continue;
+      const dportFlag = words.includes("--dport") ? "--dport" : "--dports";
+      const dport = value(dportFlag);
+      // `! --dport 22` matches every port except 22.
+      const negated = words[words.indexOf(dportFlag) - 1] === "!";
+      if (
+        dport !== undefined &&
+        negated ===
+          dport.split(",").some((part) => {
+            const [low = "", high = low] = part.split(":");
+            return Number(low) <= port && port <= Number(high);
+          })
+      )
+        continue;
+      const target = value("-j");
+      if (target === "ACCEPT") {
+        decided = true;
+        break;
+      }
+      if (target === "REJECT" || target === "DROP") {
+        found.add(rule);
+        decided = true;
+        break;
+      }
+      // A jump to another chain (ufw, firewalld, Docker): kitshn cannot tell.
+      decided = true;
+      break;
+    }
+    if (!decided && (policy === "DROP" || policy === "REJECT")) found.add(`-P INPUT ${policy}`);
+  }
+  // nftables: a native input chain (not iptables' own, not kitshn's) that drops by default.
+  // Its policy counts only for a port that no rule of the chain names.
+  let table = "";
+  let chain: { readonly line: string; readonly rules: Array<string> } | null = null;
+  const names = (rule: string, { port, proto }: ServicePort) =>
+    rule.includes(`${proto} dport`) &&
+    rule.includes(" accept") &&
+    !rule.includes("!=") &&
+    rule.split(/[\s{},]+/).some((word) => {
+      const [low = "", high = low] = word.split("-");
+      return /^\d/.test(word) && Number(low) <= port && port <= Number(high);
+    });
+  for (const line of nft.split("\n").map((text) => text.trim())) {
+    if (line.startsWith("table ")) table = line.replace(/\s*\{$/, "");
+    if (table.endsWith(TABLE) || /^table ip6? filter$/.test(table)) continue;
+    if (/hook input/.test(line) && /policy drop/.test(line)) chain = { line, rules: [] };
+    else if (chain !== null && line === "}") {
+      const { line: head, rules: chainRules } = chain;
+      // A jump to another chain: kitshn cannot tell, as with iptables.
+      const unread = chainRules.some((rule) => /\b(jump|goto)\b/.test(rule));
+      if (!unread && ports.some((port) => !chainRules.some((rule) => names(rule, port))))
+        found.add(`${table}: ${head}`);
+      chain = null;
+    } else chain?.rules.push(line);
+  }
+  return [...found];
+}
+
+/** K-2003: the status line of the host firewall check, or null. */
+export const hostFirewallText = (rules: ReadonlyArray<string>) =>
+  rules.length === 0
+    ? null
+    : `the host firewall may reject new connections: allow the ports (${rules.join("; ")})`;
+
+/**
+ * K-2003: the host firewall line of the status. An old helper saves no rules, so the check says that it did not run. A
+ * new helper saves them at its next apply, within a minute.
+ */
+export const hostFirewallStatus = (saved: string | null, ports: ReadonlyArray<ServicePort>) =>
+  ports.length === 0
+    ? null
+    : saved === null
+      ? "the host firewall was not checked: run `kitshn doors install` as root"
+      : hostFirewallText(hostFirewallRules(saved, ports));
+
+/** K-2007: which gated ports listen now, from `ss -H -ltnu` (the local address is the fifth field). */
 export function listening(ssOutput: string): ReadonlySet<string> {
   const found = new Set<string>();
   for (const line of ssOutput.split("\n")) {
@@ -273,11 +429,11 @@ export function listening(ssOutput: string): ReadonlySet<string> {
 }
 
 /**
- * K-2002: the full path of a system tool, so a root shell whose PATH has no /usr/sbin (`su` without `-`) finds it.
+ * K-2003: the full path of a system tool, so a root shell whose PATH has no /usr/sbin (`su` without `-`) finds it.
  * Falls back to the bare name, which the PATH resolves.
  */
 export function systemTool(
-  name: "sudo" | "visudo" | "systemctl" | "ss",
+  name: "sudo" | "visudo" | "systemctl" | "ss" | "iptables" | "nft",
   exists: (path: string) => boolean = existsSync,
 ): string {
   return ["/usr/sbin", "/usr/bin", "/sbin", "/bin"].map((dir) => `${dir}/${name}`).find(exists) ?? name;
@@ -291,9 +447,9 @@ export function toolProblem(name: string, run: SpawnSyncReturns<string>, failed 
   return `${name} ${failed}: ${output || run.error?.message || `exit ${run.status ?? run.signal}`}`;
 }
 
-/** Why this machine cannot gate game ports, or null when it can (K-2002). */
+/** Why this machine cannot gate ports, or null when it can (K-2003). */
 export function doorsProblem(platform: NodeJS.Platform): string | null {
-  if (platform !== "linux") return "game servers need a Linux machine with nftables";
+  if (platform !== "linux") return "port cards need a Linux machine with nftables";
   if (!existsSync(HELPER_PATH))
     return `the door helper is not installed; run \`kitshn doors install\` as root`;
   const check = spawnSync(systemTool("sudo"), ["-n", "-l", HELPER_PATH, "apply"], { encoding: "utf8" });
@@ -301,11 +457,14 @@ export function doorsProblem(platform: NodeJS.Platform): string | null {
   if (check.status !== 0) return "the daemon user may not run the door helper (sudoers)";
   const { v4, v6 } = publicAddresses();
   if (v4 === null && v6 === null)
-    return "the machine has no public address on an interface (it is behind NAT)";
+    return (
+      declaredProblem(declaredAddress(), seenV4) ??
+      "the machine has no public address on an interface (it is behind NAT); for a cloud machine, declare it with `kitshn doors install --public-address <IPv4>`"
+    );
   return null;
 }
 
-/** K-2005: writes the plan into the firewall through the helper, and keeps it, so a restart writes it again. */
+/** K-2006: writes the plan into the firewall through the helper, and keeps it, so a restart writes it again. */
 export function applyDoors(plan: DoorPlan, keptFile: string, now: number): { ok: boolean; output: string } {
   const run = spawnSync(systemTool("sudo"), ["-n", HELPER_PATH, "apply"], {
     input: helperInput(plan, now),
@@ -320,11 +479,11 @@ export function applyDoors(plan: DoorPlan, keptFile: string, now: number): { ok:
   const doors = plan.doors.filter((door) => door.endsAt > now).length;
   return {
     ok: true,
-    output: `doors: ${plan.ports.map(portKey).join(" ") || "no game ports"}; ${doors} open`,
+    output: `doors: ${plan.ports.map(portKey).join(" ") || "no gated ports"}; ${doors} open`,
   };
 }
 
-/** K-2005: the plan that this daemon wrote last, or null. A reboot empties the table; the daemon writes it again. */
+/** K-2006: the plan that this daemon wrote last, or null. A reboot empties the table; the daemon writes it again. */
 export function keptPlan(keptFile: string): DoorPlan | null {
   let text: string;
   try {
@@ -339,20 +498,20 @@ export function keptPlan(keptFile: string): DoorPlan | null {
   }
 }
 
-const isGamePort = (value: unknown): value is GamePort =>
+const isServicePort = (value: unknown): value is ServicePort =>
   typeof value === "object" &&
   value !== null &&
-  Number.isInteger((value as GamePort).port) &&
-  ((value as GamePort).proto === "tcp" || (value as GamePort).proto === "udp");
+  Number.isInteger((value as ServicePort).port) &&
+  ((value as ServicePort).proto === "tcp" || (value as ServicePort).proto === "udp");
 
 /**
- * K-2005: a door plan from JSON, or null when its shape is not this daemon's, such as a plan that an older daemon
+ * K-2006: a door plan from JSON, or null when its shape is not this daemon's, such as a plan that an older daemon
  * kept. The daemon then waits for kitshn's plan instead of stopping.
  */
 export function planOf(value: unknown): DoorPlan | null {
   if (typeof value !== "object" || value === null) return null;
   const { ports, doors, relays } = value as Record<string, unknown>;
-  if (!Array.isArray(ports) || !ports.every(isGamePort) || !Array.isArray(doors)) return null;
+  if (!Array.isArray(ports) || !ports.every(isServicePort) || !Array.isArray(doors)) return null;
   const doorsOk = doors.every(
     (door: unknown) =>
       typeof door === "object" &&
@@ -360,7 +519,7 @@ export function planOf(value: unknown): DoorPlan | null {
       typeof (door as { address?: unknown }).address === "string" &&
       typeof (door as { endsAt?: unknown }).endsAt === "number" &&
       Array.isArray((door as { ports?: unknown }).ports) &&
-      (door as { ports: Array<unknown> }).ports.every(isGamePort),
+      (door as { ports: Array<unknown> }).ports.every(isServicePort),
   );
   const relaysOk =
     relays === undefined ||
@@ -378,9 +537,13 @@ export function planOf(value: unknown): DoorPlan | null {
 
 /**
  * `kitshn doors install|uninstall`, as root: the helper and its one sudoers line for the daemon user. Nothing else
- * changes; the table appears with the first game card.
+ * changes; the table appears with the first port card.
  */
-export function doorsCommand(action: string | undefined, user: string | undefined): void {
+export function doorsCommand(
+  action: string | undefined,
+  user: string | undefined,
+  publicAddress: string | undefined = undefined,
+): void {
   if (process.getuid?.() !== 0) throw new Error("run `kitshn doors install|uninstall` as root");
   if (action === "uninstall") {
     spawnSync("/bin/sh", ["-c", `[ -x ${HELPER_PATH} ] && ${HELPER_PATH} off || true`], { stdio: "inherit" });
@@ -411,6 +574,24 @@ export function doorsCommand(action: string | undefined, user: string | undefine
     throw new Error(problem);
   }
   renameSync(staged, SUDOERS_PATH);
+  // K-2003: the declared address states the machine as it is now, so an install without it removes an old one.
+  if (publicAddress === undefined) rmSync(DECLARED_ADDRESS_PATH, { force: true });
+  else {
+    const door = doorAddress(publicAddress);
+    if ("error" in door || door.family !== 4)
+      throw new Error(`--public-address takes a public IPv4 address, not ${publicAddress}`);
+    writeFileSync(DECLARED_ADDRESS_PATH, `${publicAddress}\n`, { mode: 0o644 });
+  }
+  // K-2003: the rules of the host firewall that would stop a new connection, named now; kitshn changes no firewall.
+  const saved = [
+    spawnSync(systemTool("iptables"), ["-S", "INPUT"], { encoding: "utf8" }).stdout ?? "",
+    NFT_SPLIT,
+    spawnSync(systemTool("nft"), ["list", "ruleset"], { encoding: "utf8" }).stdout ?? "",
+  ].join("\n");
+  for (const rule of hostFirewallRules(saved, [{ port: 30000, proto: "tcp" }]))
+    console.log(
+      `kitshn: the host firewall rejects new connections before a port card's ports could pass: ${rule}`,
+    );
   writeFileSync(BOOT_UNIT_PATH, BOOT_UNIT, { mode: 0o644 });
   for (const argv of [["daemon-reload"], ["enable", "kitshn-doors.service"]]) {
     const problem = toolProblem(

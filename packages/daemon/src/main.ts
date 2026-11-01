@@ -19,7 +19,7 @@ import {
   type AskOutcome,
   type AppAccess,
 } from "@kitshn/edge/machine";
-import type { DoorPlan } from "@kitshn/edge/game";
+import type { DoorPlan } from "@kitshn/edge/port";
 import type { BackupReport } from "@kitshn/edge/backups";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -107,6 +107,25 @@ import {
   runStep,
   writeMarker,
 } from "./update.ts";
+import {
+  MEASURE_EVERY_MS,
+  type ReadyWatch,
+  READY_CHECK_MS,
+  afterMeasure,
+  afterReadyCheck,
+  bindMetricsPort,
+  chooseMetricsPort,
+  clearTunnelRemoved,
+  markTunnelRemoved,
+  readyFrom,
+  unlessTunnelRemoved,
+  locationsText,
+  measureRegions,
+  pinArgs,
+  readPin,
+  serverLocations,
+  writePin,
+} from "./pin.ts";
 import { ownSid } from "./winpipe.ts";
 import {
   type PathFacts,
@@ -144,13 +163,16 @@ import { lastHour, lastSamples } from "./samples.ts";
 import { pushKey } from "@kitshn/local";
 import { MAX_FORWARDS, forwardTarget, passedHeaders, readBounded } from "./forward.ts";
 import {
+  INPUT_RULES_PATH,
   Relays,
   applyDoors,
   doorsCommand,
   doorsProblem,
+  hostFirewallStatus,
   keptPlan,
   listening,
   publicAddresses,
+  refreshSeenV4,
   systemTool,
 } from "./doors.ts";
 import {
@@ -295,6 +317,7 @@ async function joinCommand(code: string | undefined, server: string | undefined)
   if (existsSync(paths.config)) chmodSync(paths.config, 0o600);
   writeFileSync(paths.config, `${JSON.stringify(secrets, null, 2)}\n`, { mode: 0o600 });
   renameSync(codeKeyFile, keyFile);
+  clearTunnelRemoved(paths.data);
   console.log(`Joined as machine ${secrets.machineId} with the key ${await fingerprintOf(key.x)}.`);
 }
 
@@ -853,9 +876,13 @@ function writeChanged(file: string, text: string | Buffer, mode: number): boolea
 
 /**
  * K-603: installs the tunnel as its own user service and starts it. It restarts the tunnel only when cloudflared,
- * its token or its service file changed, so a daemon restart or update never stops the tunnel.
+ * its token or its service file changed, so a daemon restart or update never stops the tunnel. A `background` call comes
+ * from a timer, so a failed step must not end the daemon. A removed machine gets no service back (K-615).
  */
-async function ensureTunnel(config: JoinSecrets) {
+const ensureTunnel = (config: JoinSecrets, background = false) =>
+  unlessTunnelRemoved(paths.data, () => installTunnel(config, background));
+
+async function installTunnel(config: JoinSecrets, background: boolean) {
   const { file: binary, fresh } = await ensureCloudflared();
   const tokenFile = join(paths.data, "tunnel-token");
   const tokenChanged = writeChanged(tokenFile, config.tunnelToken, 0o600);
@@ -869,11 +896,17 @@ async function ensureTunnel(config: JoinSecrets) {
     );
   const unitChanged = writeChanged(
     paths.tunnelService,
-    serviceBytes(tunnelServiceFile(platform, binary, tokenFile)),
+    serviceBytes(
+      tunnelServiceFile(platform, binary, tokenFile, process.env, [
+        "--metrics",
+        `127.0.0.1:${await tunnelMetricsPort()}`,
+        ...pinArgs(readPin(pinFile())),
+      ]),
+    ),
     0o644,
   );
   const steps = fresh || tokenChanged || unitChanged ? tunnel.restart : tunnel.start;
-  for (const step of steps) run(step.argv, step.mayFail);
+  for (const step of steps) run(step.argv, step.mayFail || background);
 }
 
 /**
@@ -1870,6 +1903,90 @@ function runJob(
 }
 
 let tunnelState: "starting" | "running" | "stopped" = "stopped";
+/** K-632: the data centers of the tunnel's connections, from its metrics. */
+let tunnelLocations: string | null = null;
+const pinFile = () => join(paths.data, "tunnel-pin.json");
+const metricsPortFile = () => join(paths.data, "tunnel-metrics-port");
+/** K-632: cloudflared's own word on its connection; null until it answers. */
+let tunnelReady: boolean | null = null;
+let readyWatch: ReadyWatch = { notReadySince: null, checkedAt: Date.now() };
+
+const readTunnelPath = (port: number, path: "ready" | "metrics") =>
+  fetch(`http://127.0.0.1:${port}/${path}`, { signal: AbortSignal.timeout(2000) })
+    .then((answer) => answer.text())
+    .catch(() => null);
+
+const keptMetricsPort = () => {
+  const port = Number(readText(metricsPortFile()).trim());
+  return Number.isInteger(port) && port > 0 && port < 65536 ? port : null;
+};
+
+/** K-632: a free port once, kept in the data folder; see `chooseMetricsPort`. */
+async function tunnelMetricsPort() {
+  const port = await chooseMetricsPort(
+    keptMetricsPort(),
+    readTunnelState() === "running",
+    async (kept) => (await bindMetricsPort(kept)) !== null,
+    async () => {
+      const free = await bindMetricsPort(0);
+      if (free === null) throw new Error("no free port for the metrics of the tunnel");
+      return free;
+    },
+  );
+  writeChanged(metricsPortFile(), String(port), 0o600);
+  return port;
+}
+
+/** K-632: at start and every 6 hours, measure the two edge regions and pin the near one. */
+async function measurePin(config: JoinSecrets) {
+  const started = readPin(pinFile());
+  const measurement = await measureRegions();
+  const current = readPin(pinFile());
+  const next = afterMeasure(started, current, measurement);
+  writePin(pinFile(), next);
+  if (JSON.stringify(pinArgs(next)) === JSON.stringify(pinArgs(current))) return;
+  log(next.pin ? `tunnel: pinned to ${next.pin.region} (${next.pin.edges.join(", ")})` : "tunnel: no pin");
+  readyWatch = { notReadySince: null, checkedAt: Date.now() };
+  await ensureTunnel(config, true);
+}
+
+/**
+ * K-632: every 30 seconds: a tunnel that cannot start on its metrics port gets a new one, a pinned tunnel that stays not
+ * ready loses the pin, and the status follows. A read with no answer changes nothing.
+ */
+function watchReady(config: JoinSecrets) {
+  const check = async () => {
+    const port = keptMetricsPort();
+    if (port === null) return;
+    if (tunnelState !== "running" && (await bindMetricsPort(port)) === null) await ensureTunnel(config, true);
+    const ready = readyFrom(await readTunnelPath(port, "ready"));
+    const before = readPin(pinFile());
+    const after = afterReadyCheck(before, ready, readyWatch, Date.now());
+    readyWatch = after.watch;
+    if (after.state !== before) {
+      log(
+        "tunnel: the pinned tunnel has no connection for 60 seconds; it runs without the pin until the next measure",
+      );
+      writePin(pinFile(), after.state);
+      await ensureTunnel(config, true);
+    }
+    if (ready === null) return;
+    const metrics = ready ? await readTunnelPath(port, "metrics") : null;
+    const text = !ready
+      ? null
+      : metrics === null
+        ? tunnelLocations
+        : locationsText(serverLocations(metrics), after.state);
+    if (text === tunnelLocations && ready === tunnelReady) return;
+    tunnelLocations = text;
+    tunnelReady = ready;
+    report();
+  };
+  const logFailure = (error: unknown) => log(`tunnel check failed: ${String(error)}`);
+  void check().catch(logFailure);
+  setInterval(() => void check().catch(logFailure), READY_CHECK_MS);
+}
+
 let socket: WebSocket | null = null;
 
 function report() {
@@ -1909,8 +2026,12 @@ function report() {
       arch: arch(),
       hostname: hostname(),
       tunnel: tunnelState,
+      ...(tunnelLocations === null ? {} : { tunnelLocations }),
+      ...(tunnelReady === null ? {} : { tunnelReady }),
+      ...(doorState.relays.length === 0 ? {} : { relays: doorState.relays }),
       publicAddresses: publicAddresses(),
       ...(doorState.problem === null ? {} : { doorsProblem: doorState.problem }),
+      ...(doorState.firewall === null ? {} : { hostFirewall: doorState.firewall }),
       listening: [...doorState.listening],
       refusedProviders: registry().refused(),
       offlineProviders: registry().offline(),
@@ -1933,23 +2054,30 @@ function report() {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
 }
 
-/** K-2002, K-2006: whether this machine can gate game ports, and which game ports listen. */
-const doorState: { problem: string | null; listening: ReadonlySet<string> } = {
+/** K-2003, K-2007: whether this machine can gate ports, and which gated ports listen. */
+const doorState: {
+  problem: string | null;
+  listening: ReadonlySet<string>;
+  firewall: string | null;
+  relays: ReadonlyArray<string>;
+} = {
   problem: "not checked yet",
   listening: new Set(),
+  firewall: null,
+  relays: [],
 };
 const doorsFile = () => join(paths.data, "doors.json");
 const relays = new Relays(log);
 process.on("exit", () => relays.stopAll());
 
-/** K-2008: the relays of a plan, after its doors are in the table. */
+/** K-2009: the relays of a plan, after its doors are in the table. */
 function syncRelays(plan: DoorPlan) {
   void ensureCloudflared()
     .then(({ file }) => relays.sync(plan.relays, file, readConfig()))
     .catch((error: unknown) => log(`the relays could not start: ${String(error)}`));
 }
 
-/** K-2006: the game ports of the kept plan that something listens on; a change goes out in the status. */
+/** K-2007: the gated ports of the kept plan that something listens on; a change goes out in the status. */
 function checkListening() {
   const plan = keptPlan(doorsFile());
   const wanted = new Set((plan?.ports ?? []).map(({ port, proto }) => `${port}/${proto}`));
@@ -1961,31 +2089,51 @@ function checkListening() {
             ...listening(spawnSync(systemTool("ss"), ["-H", "-ltnu"], { encoding: "utf8" }).stdout ?? ""),
           ].filter((key) => wanted.has(key)),
         );
-  if ([...found].sort().join() === [...doorState.listening].sort().join()) return;
+  const serving = relays.serving(Date.now());
+  const same = (a: Iterable<string>, b: Iterable<string>) => [...a].sort().join() === [...b].sort().join();
+  if (same(found, doorState.listening) && same(serving, doorState.relays)) return;
   doorState.listening = found;
+  doorState.relays = serving;
   report();
 }
 
-/** K-2005: after a restart or a reboot the table is empty or old; the kept plan goes in again before kitshn sends one. */
+/** K-2006: after a restart or a reboot the table is empty or old; the kept plan goes in again before kitshn sends one. */
 function startDoors() {
   doorState.problem = doorsProblem(platform);
   checkListening();
   setInterval(checkListening, 30_000);
   if (platform !== "linux") return;
-  if (doorState.problem === null) applyKeptPlan();
-  // K-2005: each minute, a start problem is checked again (the network was not up yet, or sudo failed once), and
-  // the kept plan goes in again, because a \`flush ruleset\` (nftables.service, a reload) can delete the table at
-  // any time and the daemon user cannot list it. The apply is idempotent.
-  setInterval(() => {
-    if (doorState.problem === null) return applyKeptPlan(true);
+  // K-2006: each minute the problem is checked again (the network was not up yet, sudo failed once, or a declared
+  // address of K-2003 no longer matches), and the kept plan goes in again, because a \`flush ruleset\`
+  // (nftables.service, a reload) can delete the table and the daemon user cannot list it. The apply is idempotent.
+  const check = async (start: boolean) => {
+    await refreshSeenV4();
+    const before = doorState.problem;
     doorState.problem = doorsProblem(platform);
-    if (doorState.problem !== null) return;
-    applyKeptPlan();
-    report();
-  }, 60_000);
+    if (doorState.problem === null) applyKeptPlan(!start && before === null);
+    const firewall = hostFirewallStatus(
+      existsSync(INPUT_RULES_PATH) ? readText(INPUT_RULES_PATH) : null,
+      keptPlan(doorsFile())?.ports ?? [],
+    );
+    if (start || doorState.problem !== before || firewall !== doorState.firewall) {
+      doorState.firewall = firewall;
+      report();
+    }
+  };
+  void check(true);
+  setInterval(() => void check(false), 60_000);
 }
 
-/** K-2005: the plan that this daemon wrote last goes into the table again before kitshn sends a new one. */
+/** A file's text, or "" when it cannot be read. */
+const readText = (file: string) => {
+  try {
+    return readFileSync(file, "utf8");
+  } catch {
+    return "";
+  }
+};
+
+/** K-2006: the plan that this daemon wrote last goes into the table again before kitshn sends a new one. */
 function applyKeptPlan(quiet = false) {
   const plan = keptPlan(doorsFile());
   if (plan === null) {
@@ -2000,11 +2148,14 @@ function applyKeptPlan(quiet = false) {
 }
 
 /** K-605: the tunnel state comes from its service manager; a change goes out in the status. */
+function readTunnelState() {
+  const [program = "", ...rest] = tunnel.state;
+  return tunnelStateOf(platform, spawnSync(program, rest, { encoding: "utf8" }).stdout ?? "");
+}
+
 function watchTunnel() {
   const check = () => {
-    const [program = "", ...rest] = tunnel.state;
-    const result = spawnSync(program, rest, { encoding: "utf8" });
-    const state = tunnelStateOf(platform, result.stdout ?? "");
+    const state = readTunnelState();
     if (state === tunnelState) return;
     tunnelState = state;
     report();
@@ -2620,6 +2771,7 @@ function connect(config: JoinSecrets) {
         log(
           "the owner removed this machine; removing the tunnel service. Run kitshn service uninstall to stop the daemon.",
         );
+        markTunnelRemoved(paths.data);
         removeTunnel();
       }
       if (current === ws) current = null;
@@ -2935,6 +3087,13 @@ async function runCommand() {
   if (process.env["KITSHN_TUNNEL"] !== "off") {
     await ensureTunnel(config);
     watchTunnel();
+    watchReady(config);
+    const pinning = () =>
+      void measurePin(config).catch((error: unknown) =>
+        log(`tunnel: the edge measure failed: ${String(error)}`),
+      );
+    pinning();
+    setInterval(pinning, MEASURE_EVERY_MS);
   }
   // K-821: the machine card shows what the kept builds take on disk.
   void countKept();
@@ -3540,7 +3699,7 @@ switch (command) {
   case "repo":
   case "redirect":
   case "time":
-  case "game":
+  case "port":
     await runAgentCommand(command, args, daemonTransport);
     break;
   case "local-users":
@@ -3550,7 +3709,7 @@ switch (command) {
     console.log(args.includes("--json") ? versionJson(VERSION) : VERSION);
     break;
   case "doors":
-    doorsCommand(args[0], flag("--user"));
+    doorsCommand(args[0], flag("--user"), flag("--public-address"));
     break;
   case "exec":
     execCommand(args[0], flag("--user"), flag("--daemon-user"));
