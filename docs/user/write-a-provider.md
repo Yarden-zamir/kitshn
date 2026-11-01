@@ -23,7 +23,7 @@ Send `register` on each new connection, with `protocol: 2` and `protocolVersion`
 - A bad item does not refuse the register. The answer names it in `problems`. Fix what it names.
 - A resource with `site: { port }` becomes a live site of the machine. The daemon names its address.
 - Skip an event type that you do not know, and ignore unknown fields.
-- Compare `protocolVersion` of the answer with `matchProtocol`. Another minor: log the warning and go on; gate a newer feature on `capabilities`. A refused `register` names both versions: show it once, and register again only when `kitshn version --json` names another `protocol`.
+- Compare `protocolVersion` of the answer with `matchProtocol`. Another minor: log the warning and go on; gate a newer feature on `capabilities`. A refused `register` names both versions: show it once, and register again at your normal reconnect cadence.
 
 ## Decide access
 
