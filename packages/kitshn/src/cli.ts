@@ -12,6 +12,7 @@ import { CliError, fail } from "./cli-error.ts";
 import { errorOutput } from "./output.ts";
 import { type Artifact, artifactsByApp } from "./artifacts.ts";
 import { RecipeError, readApps } from "./parse.ts";
+import { envLines } from "./params.ts";
 import {
   type AppResult,
   type Apps,
@@ -356,10 +357,6 @@ function params(): Map<string, string> {
   }
   return values;
 }
-
-/** K-808: Compose env lines `<NAME>="value"`, quoted as JSON like KitSHn 1, so a line break or a `#` survives. */
-const envLines = (values: ReadonlyMap<string, string>) =>
-  [...values].map(([key, value]) => `${key}=${JSON.stringify(value)}`).join("\n");
 
 async function upload(server: string, path: string, deployId: string, body: Buffer, type: string) {
   const response = await fetch(new URL(path, server), {
