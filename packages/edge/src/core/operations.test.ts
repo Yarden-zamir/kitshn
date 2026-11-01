@@ -1,7 +1,15 @@
 /// <reference types="vite/client" />
 import { describe, expect, it } from "vitest";
 import { MACHINE_RIGHTS } from "./model.ts";
-import { OPERATIONS, OP_IDS, type Operation, decide, isPersonGate, opRequest } from "./operations.ts";
+import {
+  OPERATIONS,
+  OP_IDS,
+  type OpId,
+  type Operation,
+  decide,
+  isPersonGate,
+  opRequest,
+} from "./operations.ts";
 
 const OWNER = "owner";
 const rows = OP_IDS.map((id) => [id, OPERATIONS[id] as Operation] as const);
@@ -152,6 +160,32 @@ describe("operations (K-1777)", () => {
         !isPersonGate(op.gate) && op.shortOnly !== true && op.gate.scope === "any" && op.gate.right === null,
     );
     expect(open.map(([id]) => id)).toEqual([]);
+  });
+
+  it("asks the Owner for every row that answers with a secret or can raise access (K-715, K-1723)", () => {
+    // `apply` raises access only by circle and member edits, and its rule scope sends those to the Owner.
+    const raisesAccess: ReadonlyArray<OpId> = [
+      "organize", // moves cards, also into circles
+      "undo", // an Undo can bring back a share or a member
+      "undo-item",
+      "card-take-address",
+      "card-give-address-back",
+      "machine-labels", // the label deploy is the owner's consent (K-610)
+      "machine-compose-allow",
+      "site-live-add",
+      "bot-run-deploy",
+      "repo-group-add", // a repo group gives its rights to every repo that it matches (K-1733)
+      "repo-group-edit",
+      "github-way",
+      "passes-set",
+      "audience-labels",
+      "desired-set",
+    ];
+    const loose = rows
+      .filter(([id, op]) => op.secret === true || raisesAccess.includes(id))
+      .filter(([, op]) => isPersonGate(op.gate) || op.gate.scope !== "never")
+      .map(([id]) => id);
+    expect(loose).toEqual([]);
   });
 
   it("keeps the fixed command of a row, so a caller cannot turn one operation into another", () => {

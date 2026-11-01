@@ -3,6 +3,7 @@ import {
   type AppBody,
   type DesiredAccess,
   ENROLLMENT_KEY,
+  OP_TOKENS_POLICY,
   type PolicyBody,
 } from "../core/access.ts";
 import { Schema } from "effect";
@@ -83,7 +84,7 @@ const lowers = (row: AccessRow, body: string) =>
   row.body === ""
     ? row.cfId !== ""
     : row.key.startsWith("policy:")
-      ? narrowsPolicy(row.body, body)
+      ? row.key !== OP_TOKENS_POLICY && narrowsPolicy(row.body, body)
       : removesPolicy(row.body, body);
 
 /**
@@ -274,9 +275,9 @@ const policyIds = (body: string) =>
       ) ?? [])
     : [];
 
-const removesPolicy = (before: string, after: string) => {
+const removesPolicy = (before: string, after: string, ignored = "") => {
   const kept = new Set(policyIds(after));
-  return policyIds(before).some((id) => !kept.has(id));
+  return policyIds(before).some((id) => id !== ignored && !kept.has(id));
 };
 
 interface Named {
@@ -667,13 +668,15 @@ export async function syncAccess(
       // back too. Page and file logins need no revoke: the Worker checks the shares on each request (K-404).
       const before = live !== null ? JSON.stringify(live) : (row?.body ?? "");
       const known = row !== undefined && (row.cfId !== "" || live !== null) && before !== "";
+      // K-615: removing a machine deletes its service token, which already ends its access, so the `/op` policy ends no
+      // session of the admin application.
       const ending = !known
         ? []
         : kind === "apps"
-          ? removesPolicy(before, body)
+          ? removesPolicy(before, body, store.rows.get(OP_TOKENS_POLICY)?.cfId)
             ? [result.id]
             : []
-          : narrowsPolicy(before, body)
+          : key !== OP_TOKENS_POLICY && narrowsPolicy(before, body)
             ? appsUsing(store.rows, result.id)
             : [];
       // Sessions that an earlier run of this same write already ended (`tried` is this body).

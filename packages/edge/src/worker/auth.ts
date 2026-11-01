@@ -13,6 +13,11 @@ export interface JobApproval {
   readonly key: string | null;
   /** The right that the approval or the gate used; null when no right lets an agent run the call (K-1777). */
   readonly right: MachineRight | null;
+  /**
+   * A person approved this call. Without one, only the gate let it run, so its delivery checks K-718 again for a command
+   * that is not closed, and its job keeps the normal expiry (K-613).
+   */
+  readonly person: boolean;
 }
 
 export interface Caller {

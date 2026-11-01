@@ -12,10 +12,11 @@ import type { Snapshot } from "./protocol.ts";
  * - `rule`: the edits pass `agentRefusal` (K-715, K-718).
  * - `job`: a job that the caller queued, or a job on a machine card that the caller controls.
  * - `ports`: the body fields `machine` and `relay` name cards that the caller controls (K-2007).
+ * - `self`: the machine of the caller.
  * - `never`: nothing passes, so every agent call asks the Owner.
- * A scope that kitshn cannot check, such as a target that does not exist, does not pass.
+ * A target that does not exist refuses. An edit that does not resolve does not pass the rule.
  */
-export type Scope = "any" | "card" | "own" | "machine" | "rule" | "job" | "ports" | "never";
+export type Scope = "any" | "card" | "own" | "machine" | "rule" | "job" | "ports" | "self" | "never";
 
 /** K-1777: only a person can do it, because only a person has the proof. The reason shows in review and in help. */
 export interface PersonGate {
@@ -53,6 +54,8 @@ export interface Operation {
   readonly gate: Gate;
   /** The answer holds a secret: an approval runs nothing, the same call again within 1 hour gets it (K-1723). */
   readonly secret?: true;
+  /** What the answer gives beyond the call, for the approver to read; a secret row names it per call instead. */
+  readonly gives?: string;
   /** The agent uses this command instead, because the call uploads files or needs the local machine. */
   readonly short?: string;
   /** `/op` does not take this call, because it uploads files or approves with its own proof; `short` does. */
@@ -247,12 +250,13 @@ export const OPERATIONS = {
     "allow",
     { right: null, scope: "never" },
   ),
+  // A rotation ends the approved jobs of the machine (K-1776), so another machine's key asks the Owner.
   "machine-rotate-key": {
     group: "machines",
     title: "replace the key of a machine over its live connection (K-1705)",
     method: "POST",
     route: "/api/machines/:target/rotate-key",
-    gate: { right: "maintains", scope: "any" },
+    gate: { right: "maintains", scope: "self" },
   },
   "machine-reset-key": {
     group: "machines",
@@ -656,6 +660,7 @@ export const OPERATIONS = {
     method: "GET",
     route: "/api/state/export",
     gate: { right: null, scope: "never" },
+    gives: "the whole state, with History text, which can quote what a person typed",
   },
   jobs: {
     group: "safety",
@@ -663,6 +668,7 @@ export const OPERATIONS = {
     method: "GET",
     route: "/api/jobs",
     gate: { right: null, scope: "never" },
+    gives: "the commands and output of the last 100 jobs, which can quote what a person typed",
   },
   usage: {
     group: "safety",

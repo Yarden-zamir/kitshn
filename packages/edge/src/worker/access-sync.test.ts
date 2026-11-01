@@ -842,6 +842,24 @@ describe("daily compare and sessions (K-408, K-409, K-110)", () => {
     ]);
   });
 
+  it("ends no admin session when a machine goes, because its service token goes with it (K-615, K-1777)", async () => {
+    const cf = fakeCloudflare();
+    const state = start();
+    const machine = (id: string) =>
+      [
+        id,
+        { id, name: id, labels: [], order: 0, serviceTokenId: `t-${id}`, clientId: `c-${id}`, tunnelId: id },
+      ] as const;
+    const two: State = { ...state, machines: new Map([machine("m1"), machine("m2")]) };
+    await syncAccess(desiredAccess(two, 0), cf.store, cf.api, "a");
+    for (const left of [new Map([machine("m1")]), new Map()]) {
+      cf.calls.length = 0;
+      await syncAccess(desiredAccess({ ...state, machines: left }, 0), cf.store, cf.api, "a");
+      expect(cf.calls.length).toBeGreaterThan(0);
+      expect(cf.calls.filter((call) => call.endsWith("/revoke_tokens"))).toEqual([]);
+    }
+  });
+
   it("retries a failed session revoke after the daily compare", async () => {
     const cf = fakeCloudflare();
     const state = start();

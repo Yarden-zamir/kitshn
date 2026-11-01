@@ -27,7 +27,7 @@ const RIGHT_HELP: Record<MachineRight, string> = {
   restores:
     "Restores: the machine writes a backup run of a Compose card back, after a backup of the current data (K-1820).",
   maintains:
-    "Maintains: the machine restarts and updates daemons, runs diagnostics and sets the order of machines (K-1777). Default: automatic.",
+    "Maintains: machine care (restart, update, diagnostics, order, its own key), and closing device invites and asks (K-1777). Default: automatic.",
   readsMap:
     "Reads the map: kitshn state shows the whole map, without job output and History text (K-1777). Default: automatic.",
 };
