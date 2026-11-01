@@ -306,7 +306,13 @@ import {
 import { badgeState } from "../core/badge.ts";
 import { listedApps } from "../core/listing.ts";
 import { commandsFor, machineBusy, providerCards, providerPushes, reachOf } from "../core/providers.ts";
-import { healthCell, healthNotices } from "../core/health.ts";
+import {
+  HEALTH_NOTIFY_AFTER,
+  TUNNEL_RESTART_GAP_MS,
+  healthCell,
+  healthNotices,
+  tunnelRestarts,
+} from "../core/health.ts";
 import {
   commandName,
   execMachinesOf,
@@ -5344,6 +5350,7 @@ export class Kitshn extends DurableObject<Env> {
         return;
       }
       saveMachine(socket, { ...attachment, health: report });
+      this.restartSilentTunnels(machine, report);
       this.notifyHealth(machine, report);
       // K-631: "Check now" ends with this report.
       if (this.progressRows().get(machine.id)?.source._tag === "health")
@@ -6553,6 +6560,20 @@ export class Kitshn extends DurableObject<Env> {
           job.id,
         );
         continue;
+      }
+      // K-634: an older daemon runs a job kind that it does not know as a shell command with no script.
+      if (command.kind === "tunnel-restart") {
+        const status = this.machineView(machine).status;
+        // The daemon sends its status just after it connects; the job waits for it.
+        if (!status) continue;
+        if (!status.capabilities?.includes("tunnel-restart")) {
+          this.sql(
+            "UPDATE jobs SET state = 'failed', output = ? WHERE id = ?",
+            `The daemon of ${machine.name} cannot restart its tunnel yet. Update daemon first.`,
+            job.id,
+          );
+          continue;
+        }
       }
       if (command.kind === "update") {
         // K-617: the version at delivery, so a job that waited never installs an older release.
@@ -15183,6 +15204,38 @@ export class Kitshn extends DurableObject<Env> {
       }
   }
 
+  /** K-634: when kitshn last restarted the tunnel of a machine by itself; a point read of `meta`, not a scan of `jobs`. */
+  private tunnelRestartedAt(machineId: string): number | null {
+    const value = this.meta(`tunnel-restart:${machineId}`);
+    return value === null ? null : Number(value);
+  }
+
+  /** K-634: restarts the tunnel of each online machine that the links of this report reach with no answer. */
+  private restartSilentTunnels(reporter: Machine, report: HealthReport) {
+    const now = Date.now();
+    const online = this.jobMachines();
+    const restartable = (id: string) =>
+      online.has(id) && (this.liveStatus(id)?.capabilities?.includes("tunnel-restart") ?? false);
+    const due = tunnelRestarts(reporter.id, report, restartable, (id) => this.tunnelRestartedAt(id), now);
+    for (const id of due) {
+      const target = this.state.machines.get(id);
+      if (!target) continue;
+      const actor: Actor = { _tag: "kitshn", reason: "links with no answer (K-634)" };
+      this.ctx.storage.transactionSync(() => {
+        // The job is worth nothing later, so it waits no longer than the gap until the next restart.
+        this.queueKitshnJob(id, { kind: "tunnel-restart" }, actor, now + TUNNEL_RESTART_GAP_MS);
+        this.setMeta(`tunnel-restart:${id}`, String(now));
+        this.insertRevision(
+          actor,
+          `Restarted the tunnel of ${target.name}: links of ${reporter.name} got no answer from it ${HEALTH_NOTIFY_AFTER} times in a row`,
+          [],
+          null,
+        );
+      });
+    }
+    if (due.length > 0) this.deliverJobs();
+  }
+
   /** K-704: one `provider` notification per refused provider of the machine; it closes when a registration passes. */
   /** K-631: opens the notification of each check that failed twice in a row, and closes the rest of this machine. */
   private notifyHealth(machine: Machine, report: HealthReport) {
@@ -15193,7 +15246,7 @@ export class Kitshn extends DurableObject<Env> {
       ]),
     );
     const keys = new Set<string>();
-    for (const input of healthNotices(machine, report, others)) {
+    for (const input of healthNotices(machine, report, others, (id) => this.tunnelRestartedAt(id))) {
       keys.add(input.key);
       this.notify(input);
     }

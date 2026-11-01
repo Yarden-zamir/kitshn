@@ -144,6 +144,7 @@ import {
   versionJson,
   pathsFor,
   releaseAsset,
+  restartTunnel,
   serviceCommands,
   serviceFile,
   tunnelCommands,
@@ -1887,6 +1888,7 @@ function runJob(
     checkListening();
     return Promise.resolve({ ...outcome, exitCode: outcome.ok ? 0 : 1 });
   }
+  if (command.kind === "tunnel-restart") return restartTunnelJob();
   if (command.kind === "restart") {
     restartSoon(platform, log);
     return Promise.resolve({ ok: true, exitCode: 0, output: "restarting" });
@@ -1987,6 +1989,24 @@ function watchReady(config: JoinSecrets) {
   setInterval(() => void check().catch(logFailure), READY_CHECK_MS);
 }
 
+/** K-634: restarts the tunnel service; a removed machine gets no tunnel back (K-615). */
+async function restartTunnelJob(): Promise<JobOutcome> {
+  let outcome: JobOutcome = {
+    ok: false,
+    exitCode: 1,
+    output: "this machine was removed, so it runs no tunnel (K-615)",
+  };
+  await unlessTunnelRemoved(paths.data, async () => {
+    outcome = restartTunnel(tunnel.restart, (argv) => {
+      const [program = "", ...rest] = argv;
+      return spawnSync(program, rest, { stdio: "ignore", windowsHide: true }).status === 0;
+    });
+    readyWatch = { notReadySince: null, checkedAt: Date.now() };
+  });
+  log(`tunnel: ${outcome.output}`);
+  return outcome;
+}
+
 let socket: WebSocket | null = null;
 
 function report() {
@@ -1998,7 +2018,17 @@ function report() {
         platform === "win32"
           ? // K-622: "task-restart": this daemon starts its task again from outside the task's run.
             // K-1608, K-721: pushes, `applied` and the exec relay are the same on every platform.
-            ["update", "update-gz", "provider", "applied", "access", "health", "protocol-2", "task-restart"]
+            [
+              "update",
+              "update-gz",
+              "provider",
+              "applied",
+              "access",
+              "health",
+              "protocol-2",
+              "task-restart",
+              "tunnel-restart",
+            ]
           : [
               "update",
               "update-gz",
@@ -2018,6 +2048,8 @@ function report() {
               "health",
               // K-721: this daemon speaks provider protocol 2 and applies the pause and exec rights pushes.
               "protocol-2",
+              // K-634: this daemon restarts its tunnel service as a job.
+              "tunnel-restart",
               ...(doorState.problem === null ? ["doors"] : []),
             ],
       ...(keptBytes === undefined ? {} : { keptBytes }),

@@ -1144,6 +1144,96 @@ it("opens a health notification after two failed checks in a row, and closes it 
   expect(await notifications()).toEqual([{ key: "vps:link:t3:laptop", state: "closed" }]);
 });
 
+it("restarts the tunnel of an online machine that gave no answer 2 times in a row, once per streak (K-634)", async () => {
+  const { stub } = await setup();
+  const laptop: Machine = { ...machine, id: "laptop", name: "laptop", clientId: "laptop.access" };
+  const sent: Array<unknown> = [];
+  const laptopSocket = {
+    ...daemonSocket("signed", sent),
+    deserializeAttachment: () => ({
+      ...daemonSocket("signed").deserializeAttachment(),
+      machineId: "laptop",
+      status: {
+        version: "dev",
+        os: "Darwin",
+        arch: "arm64",
+        hostname: "l",
+        tunnel: "running",
+        capabilities: ["tunnel-restart"],
+      },
+    }),
+  } as unknown as WebSocket;
+  await runInDurableObject(stub, (instance, state) => {
+    state.storage.sql.exec(
+      "INSERT OR REPLACE INTO machines (id, body) VALUES ('laptop', ?)",
+      JSON.stringify(laptop),
+    );
+    state.storage.sql.exec("DELETE FROM jobs");
+    state.storage.sql.exec("DELETE FROM meta WHERE key LIKE 'tunnel-restart:%'");
+    state.storage.sql.exec("DELETE FROM notifications WHERE source = 'health'");
+    const self = instance as unknown as { load(): void; openSocket(id: string): WebSocket | null };
+    self.load();
+    self.openSocket = (id) => (id === "laptop" ? laptopSocket : null);
+  });
+  const silent = (failures: number) =>
+    runInDurableObject(stub, (instance) =>
+      instance.webSocketMessage(
+        daemonSocket("signed"),
+        JSON.stringify({
+          type: "health",
+          report: {
+            at: 1,
+            providers: [],
+            links: [
+              {
+                provider: "t3",
+                machineId: "laptop",
+                status: null,
+                ms: 10_000,
+                failures,
+                since: Date.now() - 1000,
+                error: "no answer from l.example.com: TimeoutError",
+              },
+            ],
+          },
+        }),
+      ),
+    );
+  const read = () =>
+    runInDurableObject(stub, (_, state) => ({
+      jobs: state.storage.sql
+        .exec<{ command: string }>("SELECT command FROM jobs")
+        .toArray()
+        .map((row) => JSON.parse(row.command)),
+      revision: state.storage.sql
+        .exec<{ summary: string }>("SELECT summary FROM revisions ORDER BY id DESC LIMIT 1")
+        .one().summary,
+      notice: state.storage.sql
+        .exec<{ text: string }>("SELECT text FROM notifications WHERE source = 'health'")
+        .toArray()[0]?.text,
+    }));
+  await silent(1);
+  expect((await read()).jobs).toEqual([]);
+  await silent(2);
+  const after = await read();
+  expect(after.jobs).toEqual([{ kind: "tunnel-restart" }]);
+  expect(after.revision).toContain("Restarted the tunnel of laptop");
+  expect(after.notice).toContain("kitshn restarted the tunnel of laptop");
+  expect(sent).toContainEqual(expect.objectContaining({ type: "job", command: { kind: "tunnel-restart" } }));
+  // The same streak goes on: no second restart.
+  await silent(3);
+  expect((await read()).jobs).toHaveLength(1);
+  await runInDurableObject(stub, (_, state) => {
+    for (const query of [
+      "DELETE FROM machines WHERE id = 'laptop'",
+      "DELETE FROM jobs",
+      "DELETE FROM meta WHERE key LIKE 'tunnel-restart:%'",
+    ])
+      state.storage.sql.exec(query);
+  });
+  await evictDurableObject(stub);
+});
+
 it("opens one notification for a refused provider from a signed status, and closes it when one passes (K-704)", async () => {
   const { stub } = await setup();
   const status = (check: "signed" | "token", refusedProviders: Array<object>) =>

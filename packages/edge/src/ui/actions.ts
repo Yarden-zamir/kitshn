@@ -213,6 +213,8 @@ function undoItemAction(ctx: ActionContext, h: ActionHandlers, item: Item): Arra
 
 export const MACHINE_TIPS = {
   restart: "Restart the daemon. The tunnel keeps running, so apps and sites keep serving.",
+  tunnelRestart:
+    "Restart the tunnel. Apps and sites of this machine stop serving for a few seconds. kitshn does this by itself when other machines get no answer from this one (K-634).",
   update: (version: string) => `Update daemon: install the daemon of release ${version}.`,
   autoUpdate:
     "Update daemon automatically: kitshn installs each new release on this machine, one machine at a time, when no provider is busy (K-626).",
@@ -870,6 +872,12 @@ export function cardActions(ctx: ActionContext, h: ActionHandlers, resource: Res
             label: "Restart daemon",
             tip: MACHINE_TIPS.restart,
             run: () => h.runJob(machine, { kind: "restart" }),
+          },
+          {
+            id: "tunnel-restart",
+            label: "Restart tunnel",
+            tip: MACHINE_TIPS.tunnelRestart,
+            run: () => h.runJob(machine, { kind: "tunnel-restart" }),
           },
           ...(isRelease(ctx.version)
             ? [

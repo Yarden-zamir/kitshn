@@ -119,6 +119,8 @@ export type Command =
   | { readonly kind: "shell"; readonly script: string }
   | { readonly kind: "diagnostics" }
   | { readonly kind: "restart" }
+  /** K-634: restart the tunnel service of the machine; the daemon keeps running. */
+  | { readonly kind: "tunnel-restart" }
   /** K-612, K-617: replace the daemon with the release that the Worker names, then restart. */
   | { readonly kind: "update"; readonly version: string }
   /**
