@@ -52,11 +52,13 @@ export const EFFECT_DEFAULTS: Record<Effect, "automatic" | "ask the Owner" | "of
  * - `job`: a job that the caller queued, or a job on a machine card that the caller controls.
  * - `ports`: the body fields `machine` and `relay` name cards that the caller controls (K-2007).
  * - `self`: the machine of the caller.
+ * - `rollout`: holds while the rollout of kitshn runs or ended; a stopped rollout is the Owner's to end (K-636).
  * - `owner`: never holds, so every call asks the Owner: settings of the whole kitshn and actions with no target that a
  *   caller controls.
  * A target that does not exist refuses. An edit that does not resolve does not pass the rule.
  */
-export type Scope = "any" | "card" | "own" | "machine" | "rule" | "job" | "ports" | "self" | "owner";
+export type Scope =
+  "any" | "card" | "own" | "machine" | "rule" | "job" | "ports" | "self" | "rollout" | "owner";
 
 /** K-1777: only a person can do it, because only a person has the proof. The reason shows in review and in help. */
 export interface PersonGate {
@@ -353,6 +355,22 @@ export const OPERATIONS = {
     pick: ["card"],
     effect: "destroys",
     gate: { scope: "machine" },
+  },
+  rollout: {
+    group: "machines",
+    title: `update every online daemon to the release of kitshn, one at a time, and follow it: --body '{"version":"<12 hex>"}' checks the release first. kitshn rollout <version> on a machine with CLOUDFLARE_API_TOKEN deploys the Worker first (K-636)`,
+    method: "POST",
+    route: "/api/rollout",
+    effect: "maintains",
+    gate: { scope: "rollout" },
+  },
+  "rollout-state": {
+    group: "machines",
+    title: "where each daemon stands in the rollout of the release of kitshn (K-636)",
+    method: "GET",
+    route: "/api/rollout",
+    effect: "reads",
+    gate: { scope: "any" },
   },
   "health-check": {
     group: "machines",

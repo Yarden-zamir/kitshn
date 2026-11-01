@@ -530,6 +530,8 @@ export function expectedHash(sums: string, file: string): string | null {
 
 /**
  * K-1714: the one stable answer that marks kitshn 2 for tools that pick a `kitshn` binary. KitSHn 1 has no
- * `version --json`, so its failure or another answer marks it. Fields are only added, never renamed.
+ * `version --json`, so its failure or another answer marks it. Fields are only added, never renamed. `protocol` is
+ * the KITSHN_PROTOCOL of this binary (K-724); a binary before it omits it, which reads as 2.0.0.
  */
-export const versionJson = (version: string) => JSON.stringify({ product: "kitshn", generation: 2, version });
+export const versionJson = (version: string, protocol: string) =>
+  JSON.stringify({ product: "kitshn", generation: 2, version, protocol });

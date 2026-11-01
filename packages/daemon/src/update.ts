@@ -51,6 +51,8 @@ export interface UpdateMarker {
   readonly reason?: string;
   /** How the new daemon last ended, from its exit log (K-622), so the rollback names it. */
   readonly lastExit?: string;
+  /** K-636: the providers that were online before the swap; each must be online again before `done`. */
+  readonly providers?: ReadonlyArray<string>;
 }
 
 export function parseMarker(value: unknown): UpdateMarker | null {
@@ -75,6 +77,9 @@ export function parseMarker(value: unknown): UpdateMarker | null {
     state: marker["state"],
     ...(typeof marker["reason"] === "string" ? { reason: marker["reason"] } : {}),
     ...(typeof marker["lastExit"] === "string" ? { lastExit: marker["lastExit"] } : {}),
+    ...(Array.isArray(marker["providers"])
+      ? { providers: marker["providers"].filter((name): name is string => typeof name === "string") }
+      : {}),
   };
 }
 
@@ -144,6 +149,25 @@ export function runStep(marker: UpdateMarker | null, version: string): RunStep {
 }
 
 /**
+ * K-636: why the new daemon must not confirm its update: a provider that was online before the swap is refused or not
+ * online now. Null when each one is back. A provider refused only for its older major (`olderMajor`) counts as back:
+ * it connected again, and it waits for its own release after a major bump (K-724).
+ */
+export function providersBack(
+  before: ReadonlyArray<string>,
+  states: ReadonlyArray<{ readonly name: string; readonly online: boolean; readonly refusal: string | null }>,
+  olderMajor: ReadonlySet<string>,
+): string | null {
+  for (const provider of before) {
+    const state = states.find((item) => item.name === provider);
+    if (state?.online === true || olderMajor.has(provider)) continue;
+    if (state?.refusal) return `The new daemon refused the provider ${provider}: ${state.refusal}`;
+    return `The provider ${provider} did not register again within 3 minutes.`;
+  }
+  return null;
+}
+
+/**
  * K-629: puts the previous binary back in place of the running one. Unix replaces a running binary with one rename;
  * Windows renames the running .exe out of the way first (K-620).
  */
@@ -185,6 +209,8 @@ export async function installUpdate(
     readonly from: string;
     readonly to: string;
     readonly now: number;
+    /** K-636: the providers online now, which the new daemon checks before it confirms. */
+    readonly providers: ReadonlyArray<string>;
   },
 ): Promise<string | null> {
   // The previous binary is the way back, so the running release never replaces it.
@@ -206,6 +232,7 @@ export async function installUpdate(
     deadline: input.now + UPDATE_DEADLINE_MS,
     starts: 0,
     state: "pending",
+    providers: input.providers,
   });
   try {
     if (input.windows) await swapBinary(files, input.binary, input.next, previous);

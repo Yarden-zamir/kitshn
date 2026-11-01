@@ -1,6 +1,7 @@
 // K-723: the reference provider, the smallest one that keeps the contract: it starts `kitshn provider`, registers
 // with protocol 2, answers each ping, drops a daemon that sent nothing for the grace time, and starts again.
 import { spawn } from "node:child_process";
+import { KITSHN_PROTOCOL } from "@kitshn/local/protocol";
 
 function connect() {
   const bridge = spawn("kitshn", ["provider"], { stdio: ["pipe", "pipe", "inherit"] });
@@ -32,6 +33,7 @@ function connect() {
     id: "1",
     type: "register",
     protocol: 2,
+    protocolVersion: KITSHN_PROTOCOL,
     provider: "ref",
     instance: "reference",
     kinds: [{ id: "ref.app", name: "app", levels: { view: "view", use: "use", control: "control" } }],

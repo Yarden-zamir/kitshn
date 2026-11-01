@@ -2,6 +2,7 @@
 // the fake edge. The reference provider is the line client: each scenario sends the lines that a provider sends.
 import type { DaemonMessage } from "@kitshn/edge/machine";
 import type { Answer } from "@kitshn/local";
+import { KITSHN_PROTOCOL } from "@kitshn/local/protocol";
 import assert from "node:assert/strict";
 import { type LineClient, lineClient } from "./client.ts";
 import { type Daemon, GRACE_MS, MACHINE_ID, PING_MS } from "./daemon.ts";
@@ -31,6 +32,7 @@ const register = (client: LineClient, more: Record<string, unknown> = {}) =>
   client.request({
     type: "register",
     protocol: 2,
+    protocolVersion: KITSHN_PROTOCOL,
     provider: PROVIDER,
     instance: "i-1",
     kinds,
@@ -114,11 +116,13 @@ async function exec(client: LineClient, body: Record<string, unknown>) {
 export const SCENARIOS: ReadonlyArray<Scenario> = [
   {
     id: "C-1",
-    title: "register with protocol 2 gets the machine, the capabilities, syncedAt and the ping timing",
+    title:
+      "register with protocol 2 gets the machine, the kitshn protocol, the capabilities, syncedAt and the ping timing",
     run: async (daemon) => {
       const client = await lineClient(daemon.socket);
       const answer = ok(await register(client), "register");
       assert.equal(answer.protocol, 2);
+      assert.equal(answer.protocolVersion, KITSHN_PROTOCOL);
       assert.equal(answer.machine.id, MACHINE_ID);
       for (const capability of ["check", "exec", "attest", "ping"])
         assert.ok(answer.capabilities.includes(capability));
@@ -129,12 +133,15 @@ export const SCENARIOS: ReadonlyArray<Scenario> = [
   },
   {
     id: "C-2",
-    title: "register with protocol 3 is refused with both versions, and status shows it",
+    title: "register with another protocol major is refused with both versions, and status shows it (K-724)",
     run: async (daemon) => {
       const client = await lineClient(daemon.socket);
-      const answer = await register(client, { protocol: 3 });
+      const answer = await register(client, { protocol: 3, protocolVersion: "3.0.0" });
       assert.equal(answer.type, "error");
-      assert.match((answer as { error: string }).error, /protocol 2.*3/);
+      assert.match(
+        (answer as { error: string }).error,
+        /protocol 2\.\d+\.\d+ and the provider ref speaks 3\.0\.0/,
+      );
       assert.ok((await status(daemon)).refusedProviders?.some((item) => item.provider === PROVIDER));
     },
   },

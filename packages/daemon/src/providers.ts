@@ -17,7 +17,11 @@ import {
   decodeResources,
   isProviderName,
   PROVIDER_LIMITS,
-  PROVIDER_PROTOCOL,
+  KITSHN_PROTOCOL,
+  ROLLOUT_FIX,
+  legacyProtocol,
+  matchProtocol,
+  parseProtocol,
   pushKey,
   screenResources,
   shapeProblem,
@@ -119,6 +123,8 @@ export type ProviderOutcome =
       readonly problems: ReadonlyArray<ProviderProblem>;
       /** K-704: the connection that the same instance held before this register, which the caller closes. */
       readonly replaced: number | null;
+      /** K-724: the provider speaks another minor of the protocol; the daemon logs this line. */
+      readonly warning: string | null;
     };
 
 /** What a `register` or `upsert` needs from the daemon besides the request. */
@@ -138,6 +144,8 @@ export class Providers {
   private readonly entries = new Map<string, Entry>();
   // Known limit: memory only, so a daemon restart forgets a refusal until the provider tries again.
   private readonly refusals = new Map<string, ProviderRefusal>();
+  /** K-724: the providers whose last register was refused only because they speak an older major. */
+  private readonly olderMajor = new Set<string>();
   private pushed: Record<string, unknown>;
   private readonly owners: Map<string, number>;
   private readonly execUsers: Map<string, number>;
@@ -212,14 +220,36 @@ export class Providers {
 
   /**
    * K-704: one `register` of protocol 2. One bad item never refuses it: each bad resource, row, fact, sticker or
-   * client goes, named in `problems`. Only a broken shape, another protocol, another user or another live instance
-   * refuses the whole register.
+   * client goes, named in `problems`. Only a broken shape, another protocol major (K-724), another user or another
+   * live instance refuses the whole register.
    */
   register(request: Extract<ProviderRequest, { type: "register" }>, caller: ProviderCaller): ProviderOutcome {
     const now = caller.now ?? Date.now();
     const name = request.provider;
-    if (request.protocol !== PROVIDER_PROTOCOL) {
-      const error = `kitshn speaks provider protocol ${PROVIDER_PROTOCOL}; this register says ${request.protocol ?? "none"}. Update the provider (K-704).`;
+    const version =
+      request.protocolVersion ?? (request.protocol === undefined ? "none" : legacyProtocol(request.protocol));
+    const protocol = matchProtocol(
+      { name: "this daemon", version: KITSHN_PROTOCOL, update: ROLLOUT_FIX },
+      {
+        name: `the provider ${name}`,
+        version,
+        update: `install a release of ${name} that speaks kitshn protocol ${KITSHN_PROTOCOL}`,
+      },
+    );
+    if (protocol.outcome === "refuse") {
+      this.refuse(name, protocol.reason, now);
+      const major = parseProtocol(version)?.major;
+      if (major !== undefined && major < (parseProtocol(KITSHN_PROTOCOL)?.major ?? 0))
+        this.olderMajor.add(name);
+      return { ok: false, error: protocol.reason };
+    }
+    // K-724: the two fields of one register name one major, or the daemon cannot tell which one the provider speaks.
+    if (
+      request.protocolVersion !== undefined &&
+      request.protocol !== undefined &&
+      parseProtocol(request.protocolVersion)?.major !== request.protocol
+    ) {
+      const error = `the register names protocol ${request.protocol} and protocolVersion ${request.protocolVersion}, whose majors differ (K-724).`;
       this.refuse(name, error, now);
       return { ok: false, error };
     }
@@ -291,6 +321,7 @@ export class Providers {
       (id) => `resources[${indexOf.get(id) ?? "?"}]`,
     );
     problems.push(...screened.problems);
+    this.olderMajor.delete(name);
     if (this.refusals.delete(name)) this.refusalsChanged();
     const replaced = old?.connection != null && old.connection !== caller.connection ? old.connection : null;
     this.entries.set(name, {
@@ -309,7 +340,13 @@ export class Providers {
     if (bound) this.owners.set(name, caller.uid);
     const changed = JSON.stringify(old?.report) !== JSON.stringify(screened.report);
     if (changed || bound) this.persist();
-    return { ok: true, changed, problems, replaced };
+    return {
+      ok: true,
+      changed,
+      problems,
+      replaced,
+      warning: protocol.outcome === "tolerate" ? protocol.warning : null,
+    };
   }
 
   /** K-705: one `upsert` or `remove` of the connection that registered the provider; item by item, as `register`. */
@@ -345,7 +382,7 @@ export class Providers {
     this.entries.set(name, { ...old, report: screened.report, problems });
     const changed = JSON.stringify(old.report) !== JSON.stringify(screened.report);
     if (changed) this.persist();
-    return { ok: true, changed, problems, replaced: null };
+    return { ok: true, changed, problems, replaced: null, warning: null };
   }
 
   private othersThan(name: string): Array<ProviderReport> {
@@ -387,6 +424,7 @@ export class Providers {
    */
   refuse(provider: string, reason: string, now = Date.now()): void {
     if (!isProviderName(provider)) return;
+    this.olderMajor.delete(provider);
     const clipped = reason.slice(0, MAX_REFUSAL_LENGTH);
     if (this.refusals.get(provider)?.reason === clipped) return;
     this.refusals.delete(provider);
@@ -460,6 +498,11 @@ export class Providers {
       refusal: this.refusals.get(name)?.reason ?? entry.conflict,
       execUser: this.execUserOf(name),
     }));
+  }
+
+  /** K-724: the providers that wait refused for their own release, because they speak an older major. */
+  refusedForOlderMajor(): ReadonlySet<string> {
+    return this.olderMajor;
   }
 
   /** The connection of an online provider, or null. */

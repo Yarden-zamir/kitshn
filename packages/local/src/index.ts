@@ -14,10 +14,11 @@ import {
 } from "./provider.ts";
 import { HealthReport } from "./health.ts";
 
-/** K-704: the provider protocol that this package describes. */
+/** K-704, K-724: the major of `KITSHN_PROTOCOL`, which `register` names as `protocol` for peers before K-724. */
 export const PROVIDER_PROTOCOL = 2;
 
 export * from "./provider.ts";
+export * from "./protocol.ts";
 export * from "./health.ts";
 
 /** The longest line, in UTF-16 code units, that the daemon reads; a longer line ends the connection. */
@@ -193,6 +194,8 @@ export const Request = Schema.Union([
     id: Id,
     type: Schema.Literal("register"),
     protocol: Schema.optionalKey(Schema.Number),
+    /** K-724: the provider's `KITSHN_PROTOCOL`; without it, the daemon reads `protocol` as `<protocol>.0.0`. */
+    protocolVersion: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(40))),
     provider: ProviderName,
     instance: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64))),
     kinds: Schema.Array(ProviderKind).check(Schema.isMaxLength(PROVIDER_LIMITS.kinds)),
@@ -461,6 +464,8 @@ export const Answer = Schema.Union([
     id: Id,
     type: Schema.Literal("register"),
     protocol: Schema.Literal(2),
+    /** K-724: the daemon's `KITSHN_PROTOCOL`; a daemon before K-724 omits it, which reads as 2.0.0. */
+    protocolVersion: Schema.optionalKey(Schema.String),
     machine: Schema.Struct({ id: Schema.String, name: Schema.NullOr(Schema.String) }),
     capabilities: Schema.Array(Schema.String),
     /** K-721: the request headers that `check` needs, lowercase. */

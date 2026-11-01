@@ -1,5 +1,5 @@
 import type { ProviderRequest } from "@kitshn/local";
-import { pushKey } from "@kitshn/local";
+import { KITSHN_PROTOCOL, pushKey } from "@kitshn/local";
 import { describe, expect, it } from "vitest";
 import { NEVER_CONNECTED, type ProviderCaller, Providers, type SavedFile, parseSaved } from "./providers.ts";
 
@@ -64,11 +64,27 @@ describe("the providers of a machine (K-704, K-705)", () => {
     expect(restarted.states()).toMatchObject([{ online: false, since: null }]);
   });
 
-  it("refuses another protocol with a reason that names both, and a register without an instance (C-2)", () => {
+  it("refuses another protocol major with a reason that names both, tolerates a minor, and needs an instance (C-2, K-724)", () => {
     const { registry } = providers();
     expect(registry.register(register([], { protocol: 3 }), caller(1))).toMatchObject({
       ok: false,
-      error: /protocol 2; this register says 3/,
+      error: new RegExp(
+        `this daemon speaks kitshn protocol ${KITSHN_PROTOCOL} and the provider t3 speaks 3.0.0`,
+      ),
+    });
+    // A newer major is not an older one, so the update check of K-636 still counts it as refused.
+    expect(registry.refusedForOlderMajor().has("t3")).toBe(false);
+    registry.register(register([], { protocol: 1, protocolVersion: "1.4.0" }), caller(1));
+    expect(registry.refusedForOlderMajor().has("t3")).toBe(true);
+    expect(registry.register(register([], { protocolVersion: "2.0.9" }), caller(1))).toMatchObject({
+      ok: true,
+      warning: /the provider t3 speaks 2.0.9: the provider t3 ignores what it does not know/,
+    });
+    expect(
+      registry.register(register([], { protocol: 3, protocolVersion: "2.1.0" }), caller(1)),
+    ).toMatchObject({
+      ok: false,
+      error: /protocol 3 and protocolVersion 2.1.0, whose majors differ/,
     });
     const { instance: _instance, ...noInstance } = register([]);
     expect(registry.register(noInstance, caller(1))).toMatchObject({

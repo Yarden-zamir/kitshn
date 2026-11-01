@@ -15,6 +15,13 @@ import type {
 } from "@kitshn/local";
 import type { ServerReport } from "./sites.ts";
 import type { DoorPlan } from "./port.ts";
+import {
+  KITSHN_PROTOCOL,
+  type ProtocolMatch,
+  ROLLOUT_FIX,
+  legacyProtocol,
+  matchProtocol,
+} from "@kitshn/local/protocol";
 /** A joined machine (K-602). Its resource card has the same id and the kind `machine`. */
 export interface Machine {
   readonly id: string;
@@ -67,6 +74,8 @@ export const allowedFor = (machine: Machine, repo: string): Array<string> =>
 /** K-605: what a daemon reports about itself. */
 export interface MachineStatus {
   readonly version: string;
+  /** K-724: the KITSHN_PROTOCOL of the daemon; a daemon before K-724 names none (`daemonProtocol`). */
+  readonly protocol?: string;
   readonly os: string;
   readonly arch: string;
   readonly hostname: string;
@@ -105,6 +114,40 @@ export interface MachineStatus {
   /** K-704: the items that the last register or upsert of a provider dropped (`path: reason`); signed only. */
   readonly providerProblems?: ReadonlyArray<ProviderRefusal>;
 }
+
+/**
+ * K-724: the protocol of a daemon. A kitshn 2 daemon before K-724 names none and reads as 2.0.0; its capabilities
+ * (such as "protocol-2") still gate the features that it lacks.
+ */
+export const daemonProtocol = (status: Pick<MachineStatus, "protocol">) =>
+  status.protocol ?? legacyProtocol(2);
+
+/**
+ * K-724: the protocol that a daemon names in its challenge answer or status. Absent: a daemon before K-724, 2.0.0.
+ * Another type than a string is no version, so it refuses.
+ */
+export const namedProtocol = (value: unknown): string =>
+  value === undefined
+    ? legacyProtocol(2)
+    : typeof value === "string"
+      ? value.slice(0, 40)
+      : String(JSON.stringify(value)).slice(0, 40);
+
+/** K-724: how kitshn treats the daemon of a machine that speaks `version`. */
+export const daemonProtocolMatch = (version: string, machineName: string): ProtocolMatch =>
+  matchProtocol(
+    { name: "kitshn", version: KITSHN_PROTOCOL, update: ROLLOUT_FIX },
+    { name: `the daemon of ${machineName}`, version, update: ROLLOUT_FIX },
+  );
+
+/**
+ * K-724: the jobs that a daemon of another protocol major still gets. "update" is the way out, so the rollout reaches
+ * it; "restart" and "diagnostics" help a person find why it did not update.
+ */
+export const PROTOCOL_CARE_JOBS: ReadonlySet<Command["kind"]> = new Set(["update", "restart", "diagnostics"]);
+
+/** K-724: the messages that kitshn reads from a daemon of another protocol major: enough to update it. */
+export const PROTOCOL_CARE_MESSAGES: ReadonlySet<string> = new Set(["status", "sample", "jobResult"]);
 
 /** K-605, K-606: the latest resource sample. The Durable Object keeps it in memory only. */
 export interface Sample {
@@ -282,7 +325,12 @@ export interface AskResult {
 
 export type DaemonMessage =
   /** K-1704: the signature of `connectText` with the key that the challenge names. */
-  | { readonly type: "answer"; readonly signature: string }
+  | {
+      readonly type: "answer";
+      readonly signature: string;
+      /** K-724: the KITSHN_PROTOCOL of the daemon, so kitshn decides before it sends anything. */
+      readonly protocol?: string;
+    }
   /** K-1705: a new public half, with the signature of `rotateText` by the old private half. */
   | { readonly type: "rotate"; readonly publicKey: string; readonly signature: string }
   | { readonly type: "status"; readonly status: MachineStatus }
@@ -361,7 +409,12 @@ export type ServerToDaemon =
    */
   | { readonly type: "challenge"; readonly challenge: string; readonly fingerprint: string | null }
   /** K-1704: the answer passed; from now on kitshn reads the messages of this connection. */
-  | { readonly type: "accepted"; readonly fingerprint: string }
+  | {
+      readonly type: "accepted";
+      readonly fingerprint: string;
+      /** K-724: the KITSHN_PROTOCOL of kitshn; a Worker before K-724 names none, which reads as 2.0.0. */
+      readonly protocol: string;
+    }
   /** K-1705: "Rotate key" in the machine panel. */
   | { readonly type: "rotateKey" }
   /** K-631: "Check now" in the Machines view; the daemon checks at once and sends `health`. */

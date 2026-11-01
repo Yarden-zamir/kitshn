@@ -159,6 +159,8 @@ jobs:
           cp kitshn-edge.tar.gz packages/kitshn/dist/kitshn.mjs packages/kitshn/dist/kitshn.tgz "$out"/
           cp packages/local/dist/local.tgz "$out/kitshn-local.tgz"
           cp packages/contract/dist/contract.tgz "$out/kitshn-contract-tests.tgz"
+          # K-636: kitshn rollout <version> runs the bootstrap of that release.
+          cp packages/edge/public/install "$out/kitshn-install.sh"
           # Each daemon is a Bun binary with its runtime inside (85 to 105 MB); gzip takes it to about a third.
           for daemon in kitshn-linux-arm64 kitshn-linux-x64 kitshn-darwin-arm64 kitshn-darwin-x64 kitshn-windows-x64.exe; do
             gzip -9 -n -c "packages/daemon/dist/$daemon" > "$out/$daemon.gz"

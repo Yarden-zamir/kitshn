@@ -89,7 +89,7 @@ kitshn doors uninstall                  as root: remove it and its firewall tabl
 kitshn exec uninstall --user <u>        as root: remove that rule; exec as <u> then needs its provider's bridge`,
   skill: `kitshn skill install [--repo]           the skill for coding agents, global or in this repo (K-618)
 kitshn skill check                      exit 1 when a copy of the skill is from another release`,
-  version: `kitshn version [--json]                 the version; --json: {"product":"kitshn","generation":2,"version"}`,
+  version: `kitshn version [--json]                 the version; --json: {"product":"kitshn","generation":2,"version","protocol"}`,
 } as const;
 
 export type MachineCommand = keyof typeof MACHINE_HELP;

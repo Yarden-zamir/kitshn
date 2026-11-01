@@ -63,6 +63,7 @@ export const machineView = (online: boolean, key: MachineKey | null): MachineVie
     servers: [],
     queued: 0,
     update: null,
+    protocolRefusal: null,
   };
 };
 export const KEY: MachineKey = { kind: "public", publicKey: "demo", fingerprint: "SHA256:demo", since: NOW };
