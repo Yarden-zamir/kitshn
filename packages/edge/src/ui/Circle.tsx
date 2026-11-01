@@ -30,6 +30,7 @@ import {
   machineMember,
   memberFrom,
   memberKind,
+  tokenOpensNothing,
 } from "./members.ts";
 import { callApi } from "./store.ts";
 import { Switch, useDialogEscape } from "./controls.tsx";
@@ -765,13 +766,7 @@ export function CircleEditor(props: {
                         <summary data-tip={`Add a phone, desktop app or script to ${actor.name} (K-1601).`}>
                           Add device
                         </summary>
-                        {[...state.circles.values()]
-                          .filter((each) =>
-                            each.members.some(
-                              (other) => other._tag === "actor" && other.actorId === actor.id,
-                            ),
-                          )
-                          .every((each) => each.needsPasskey) ? (
+                        {tokenOpensNothing(state, actor.id) ? (
                           <p class="warning">
                             Every circle of {actor.name} needs a passkey, so a new token of it opens nothing
                             (K-1778). Put {actor.name} in a circle without a passkey first.

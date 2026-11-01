@@ -120,6 +120,12 @@ export const machineMember = (circle: Circle, machineId: string) =>
 export const actorMember = (circle: Circle, actorId: string) =>
   circle.members.some((member) => member._tag === "actor" && member.actorId === actorId);
 
+/** K-1778: every circle of the actor needs a passkey, so a new token of it opens nothing. An actor in no circle is not. */
+export const tokenOpensNothing = (state: Pick<State, "circles">, actorId: string) => {
+  const circles = [...state.circles.values()].filter((circle) => actorMember(circle, actorId));
+  return circles.length > 0 && circles.every((circle) => circle.needsPasskey);
+};
+
 /** K-1778: the edits that delete an actor: its chip in every circle goes first, so no circle names it after. */
 export const deleteActorEdits = (state: State, actorId: string): Array<Edit> => [
   ...[...state.circles.values()]

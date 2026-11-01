@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { actorIdOf } from "../core/model.ts";
-import { memberFrom } from "./members.ts";
+import { type Circle, actorIdOf } from "../core/model.ts";
+import { memberFrom, tokenOpensNothing } from "./members.ts";
 
 const NO_ONE = { actors: new Map(), machines: new Map() };
 const rule = (text: string, kind: Parameters<typeof memberFrom>[0] = "auto") => {
@@ -43,5 +43,32 @@ describe("the Add member input", () => {
 
   it("adds everyone without text", () => {
     expect(rule("", "everyone")).toEqual({ _tag: "everyone" });
+  });
+});
+
+describe("the Add device warning", () => {
+  const circle = (id: string, needsPasskey: boolean, actorIds: ReadonlyArray<string>): Circle => ({
+    id,
+    name: id,
+    color: "#000000",
+    level: "view",
+    members: actorIds.map((actorId) => ({ _tag: "actor", actorId })),
+    match: "any",
+    needsPasskey,
+    endsAt: null,
+    x: 0,
+    y: 0,
+    r: 1,
+  });
+  const circles = (...list: ReadonlyArray<Circle>) => ({
+    circles: new Map(list.map((each) => [each.id, each])),
+  });
+
+  it("warns only when the actor is in a circle and every circle of it needs a passkey (K-1778)", () => {
+    expect(tokenOpensNothing(circles(circle("owner", true, ["a"])), "a")).toBe(true);
+    expect(tokenOpensNothing(circles(circle("owner", true, ["a"]), circle("home", false, ["a"])), "a")).toBe(
+      false,
+    );
+    expect(tokenOpensNothing(circles(circle("owner", true, ["b"])), "a")).toBe(false);
   });
 });
