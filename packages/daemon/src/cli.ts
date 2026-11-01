@@ -6,6 +6,7 @@ import {
   AGENT_COMMANDS,
   AGENT_HELP,
   type AgentState,
+  type ForwardWait,
   type StateRight,
   forwardWaiting,
   isAgentCommand,
@@ -231,15 +232,19 @@ const waitOf = (answer: Answer) =>
     ? forwardWaiting(answer.status, Buffer.from(answer.body, "base64").toString("utf8"))
     : null;
 
+/** K-1714: the waiting answer that `--json` prints as one line on stdout, before the result line. */
+export const waitingJson = (wait: ForwardWait) => JSON.stringify({ outcome: "waiting", ...wait });
+
 /**
  * K-1714, K-1776: one forwarded call. While it waits for an approval, it prints the waiting line and keeps the
  * connection for the answer of the proposal; after "approved" it sends the same call once more, from the same
- * thread, because the approval runs only that call. "denied" or "expired" fail with one line.
+ * thread, because the approval runs only that call. "denied" or "expired" fail with one line. `say` also gets the
+ * wait, so `--json` can print it as data.
  */
 export async function forwardAndWait(
   ask: LocalAsk,
   request: Extract<IdRequest, { type: "forward" }>,
-  say: (line: string) => void,
+  say: (line: string, wait: ForwardWait) => void,
   now: () => number,
 ): Promise<ForwardAnswer> {
   const forward = (answer: Answer): ForwardAnswer =>
@@ -251,7 +256,7 @@ export async function forwardAndWait(
     (answer) => waitOf(answer) !== null,
     (answer) => {
       const wait = waitOf(answer);
-      if (wait) say(waitingLine(wait, now(), true));
+      if (wait) say(waitingLine(wait, now(), true), wait);
     },
   );
   if (first.type !== "ask-result") return forward(first);

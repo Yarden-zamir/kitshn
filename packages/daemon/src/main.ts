@@ -198,6 +198,7 @@ import {
   rightLines,
   serverTable,
   unexposeRefusal,
+  waitingJson,
 } from "./cli.ts";
 import { CliError } from "kitshn/cli-error";
 import { isOpCommand, runOpCommand } from "kitshn/ops";
@@ -573,7 +574,15 @@ function daemonTransport(): AgentTransport {
         ...(body === undefined ? {} : { body }),
         ...attestFromEnv(),
       };
-      const answer = await forwardAndWait(ask, request, (line) => console.error(line), Date.now);
+      const answer = await forwardAndWait(
+        ask,
+        request,
+        (line, wait) => {
+          console.error(line);
+          if (args.includes("--json")) process.stdout.write(`${waitingJson(wait)}\n`);
+        },
+        Date.now,
+      );
       return new Response(Buffer.from(answer.body, "base64"), {
         status: answer.status,
         headers: answer.contentType ? { "content-type": answer.contentType } : {},
