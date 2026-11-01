@@ -10,9 +10,12 @@ import type { Snapshot } from "./protocol.ts";
  * - `own`: a card that the caller added or published.
  * - `machine`: a machine where the caller may run a shell (K-718).
  * - `rule`: the edits pass `agentRefusal` (K-715, K-718).
+ * - `job`: a job that the caller queued, or a job on a machine card that the caller controls.
+ * - `ports`: the body fields `machine` and `relay` name cards that the caller controls (K-2007).
  * - `never`: nothing passes, so every agent call asks the Owner.
+ * A scope that kitshn cannot check, such as a target that does not exist, does not pass.
  */
-export type Scope = "any" | "card" | "own" | "machine" | "rule" | "never";
+export type Scope = "any" | "card" | "own" | "machine" | "rule" | "job" | "ports" | "never";
 
 /** K-1777: only a person can do it, because only a person has the proof. The reason shows in review and in help. */
 export interface PersonGate {
@@ -80,8 +83,8 @@ const NOTIFICATIONS = "a person's own Inbox: mute, snooze and dismiss change no 
 const PUSH = "a push key belongs to one browser (K-1901)";
 
 /**
- * K-1777: the operations. Each owner route of `kitshn.ts` has a row (`test/parity.test.ts`), and `gate` is required, so
- * an owner action without an agent path does not compile or does not pass the tests.
+ * K-1777: the operations. Each owner route of `kitshn.ts` has a row (`src/core/operations.test.ts`), and `gate` is
+ * required, so an owner action without an agent path does not compile or does not pass the tests.
  */
 export const OPERATIONS = {
   // Cards and circles. `apply` carries every map edit: places, shares, levels, stacks, circles, members and the pause.
@@ -222,12 +225,13 @@ export const OPERATIONS = {
     title: "cancel a queued job: kitshn job-cancel <job id>",
     method: "POST",
     route: "/api/jobs/:target/cancel",
-    gate: { right: "maintains", scope: "any" },
+    gate: { right: "maintains", scope: "job" },
   },
+  // K-610, K-614: the label "deploy" is the owner's consent to deploys on a machine, so labels always ask the Owner.
   "machine-labels": machineField(
     `set the labels of a machine: --body '{"labels":["gpu"]}' (K-610)`,
     "labels",
-    { right: "maintains", scope: "any" },
+    { right: null, scope: "never" },
   ),
   "machine-order": machineField(`set the place of a machine in lists: --body '{"order":3}'`, "order", {
     right: "maintains",
@@ -390,7 +394,7 @@ export const OPERATIONS = {
     title: "add a port card; the short form is kitshn port add (K-2001)",
     method: "POST",
     route: "/api/ports",
-    gate: { right: "addsApps", scope: "any" },
+    gate: { right: "addsApps", scope: "ports" },
     short: "kitshn port add --machine <machine> --name <name> --port <port/proto>",
   },
   "port-remove": {
@@ -498,7 +502,7 @@ export const OPERATIONS = {
     title: "cancel a waiting device invite: kitshn device-invite-cancel <token id> (K-1601)",
     method: "DELETE",
     route: "/api/devices/invites/:target",
-    gate: { right: null, scope: "any" },
+    gate: { right: "maintains", scope: "any" },
   },
   "device-list": {
     group: "circles",
@@ -626,7 +630,7 @@ export const OPERATIONS = {
     title: "deny an open ask of a circle that you are in (K-1723)",
     method: "POST",
     route: "/api/proposals/:target/deny",
-    gate: { right: null, scope: "any" },
+    gate: { right: "maintains", scope: "any" },
   },
   approve: {
     group: "asks",
@@ -732,6 +736,13 @@ export const OP_IDS = Object.keys(OPERATIONS) as ReadonlyArray<OpId>;
 export const isOpId = (value: unknown): value is OpId =>
   typeof value === "string" && Object.hasOwn(OPERATIONS, value);
 
+/** The rows whose answer holds a secret, so each needs a text of what it gives (K-1777). */
+export type SecretOpId = {
+  [Id in OpId]: (typeof OPERATIONS)[Id] extends { readonly secret: true } ? Id : never;
+}[OpId];
+
+export const isSecretOp = (id: OpId): id is SecretOpId => (OPERATIONS[id] as Operation).secret === true;
+
 /** K-1777: the rights that start "automatic" for a machine in an agent circle: their commands are closed (Y1, Y2). */
 export const AUTOMATIC_BY_DEFAULT: ReadonlySet<MachineRight> = new Set(["maintains", "readsMap"]);
 
@@ -750,7 +761,7 @@ export interface GateInput {
   readonly inAgentCircle: boolean;
   /** The scope of the row holds for this target. */
   readonly scope: boolean;
-  /** An approval of exactly this call is open (K-1714). It waives the right and the scope for this call. */
+  /** An approval of exactly this call is open (K-1714). It waives the scope and the mode, but not "off". */
   readonly approved: boolean;
 }
 
@@ -764,13 +775,14 @@ export function decide(op: Operation, input: GateInput, ownerCircleId: string): 
   if (input.admin) return { outcome: "run" };
   if (input.paused)
     return { outcome: "refuse", reason: "kitshn is paused, so agents wait until Resume (K-1504)." };
-  if (input.approved) return { outcome: "run" };
   const { right, scope } = op.gate;
+  // "off" wins over an approval that the owner gave before they set it (K-1776).
   if (right !== null && input.mode?.mode === "off")
     return {
       outcome: "refuse",
       reason: `The right "${MACHINE_RIGHT_NAMES[right]}" is off for this machine (K-1720). Ask the owner to turn it on.`,
     };
+  if (input.approved) return { outcome: "run" };
   if (!input.scope || scope === "never") return { outcome: "ask", circleId: ownerCircleId };
   if (right === null) return { outcome: "run" };
   if (input.mode?.mode === "automatic") return { outcome: "run" };

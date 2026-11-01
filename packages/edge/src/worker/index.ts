@@ -473,7 +473,7 @@ export default {
       headers.set("x-kitshn-caller", JSON.stringify(caller));
       return env.KITSHN.getByName("kitshn").fetch(new Request(request, { headers }));
     }
-    // K-1777: one path for every caller. The admin application lets in the owner logins and every service token;
+    // K-1777: one path for every caller. The admin application lets in the owner logins and each machine token;
     // the Durable Object gate decides each call. A browser may call only from the map's own page.
     if (url.pathname.startsWith("/op/")) {
       const origin = request.headers.get("origin");

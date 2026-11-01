@@ -56,6 +56,55 @@ export async function setup(
   await evictDurableObject(stub);
 }
 
+/**
+ * Runs `scenario` with a signed daemon socket of vps that is online and sent its status, then closes the socket,
+ * because an open one keeps the Durable Object busy and the next test evicts it.
+ */
+export async function withDaemon<T>(
+  scenario: (
+    instance: unknown,
+    state: DurableObjectState,
+    daemon: (message: object) => Promise<void>,
+  ) => Promise<T>,
+  capabilities: ReadonlyArray<string> = [],
+): Promise<T> {
+  return runInDurableObject(env.KITSHN.getByName("kitshn"), async (instance, state) => {
+    const kitshn = instance as unknown as {
+      setPresence(machineId: string, online: boolean): void;
+      webSocketMessage(socket: WebSocket, message: string): Promise<void>;
+    };
+    const pair = new WebSocketPair();
+    state.acceptWebSocket(pair[1], ["vps", "machines"]);
+    pair[0].accept();
+    pair[1].serializeAttachment({
+      kind: "machine",
+      machineId: "vps",
+      since: Date.now(),
+      challenge: "",
+      check: "signed",
+      answered: true,
+      rotateBy: null,
+      status: null,
+      sample: null,
+    });
+    kitshn.setPresence("vps", true);
+    const daemon = (message: object) => kitshn.webSocketMessage(pair[1], JSON.stringify(message));
+    const status = {
+      version: "bbbbbbbbbbbb",
+      os: "Linux 6",
+      arch: "x64",
+      hostname: "vps",
+      tunnel: "running",
+    };
+    await daemon({ type: "status", status: { ...status, capabilities } });
+    try {
+      return await scenario(instance, state, daemon);
+    } finally {
+      pair[1].close(1000, "test over");
+    }
+  });
+}
+
 /** One call as the daemon forwards it: the machine token, and the machine key's signature (K-1714). */
 export async function forwarded(
   key: MachinePrivateKey,

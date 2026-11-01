@@ -112,6 +112,10 @@ describe("operations (K-1777)", () => {
       circleId: "c",
     });
     expect(decide(shell, { ...base, mode: { mode: "off" }, scope: true }, OWNER).outcome).toBe("refuse");
+    // An approval from before the owner set the right "off" no longer runs.
+    expect(
+      decide(shell, { ...base, mode: { mode: "off" }, scope: false, approved: true }, OWNER).outcome,
+    ).toBe("refuse");
     expect(decide(shell, { ...base, mode: null, scope: false, approved: true }, OWNER)).toEqual({
       outcome: "run",
     });
@@ -132,6 +136,22 @@ describe("operations (K-1777)", () => {
       outcome: "ask",
       circleId: OWNER,
     });
+    // K-610, K-614: the label "deploy" is the owner's consent, so no right lets an agent set labels.
+    expect(
+      decide(
+        OPERATIONS["machine-labels"],
+        { ...base, inAgentCircle: true, mode: { mode: "automatic" } },
+        OWNER,
+      ),
+    ).toEqual({ outcome: "ask", circleId: OWNER });
+  });
+
+  it("gives a right to each row that runs for any target, so the owner can turn it off", () => {
+    const open = rows.filter(
+      ([, op]) =>
+        !isPersonGate(op.gate) && op.shortOnly !== true && op.gate.scope === "any" && op.gate.right === null,
+    );
+    expect(open.map(([id]) => id)).toEqual([]);
   });
 
   it("keeps the fixed command of a row, so a caller cannot turn one operation into another", () => {
@@ -177,12 +197,21 @@ describe("operations (K-1777)", () => {
       kitshn.indexOf("};", kitshn.indexOf("const API_MESSAGES")),
     );
     expect(start).toBeGreaterThan(0);
+    // The handlers that `ownerRoute` gives a whole path to read the rest of it, so a new route there needs a row too.
+    const handlers = ["inviteRequest", "notificationRequest", "pushRequest", "ownerSite"].map((name) => {
+      const at = kitshn.indexOf(`private async ${name}(`);
+      expect(at, name).toBeGreaterThan(0);
+      return kitshn.slice(at, kitshn.indexOf("\n  }\n", at));
+    });
     const missing: Array<string> = [];
     for (const { value, line } of [
       ...literals(kitshn.slice(start, end), "/api/"),
       ...literals(messages, "/api/"),
+      ...handlers.flatMap((text) => literals(text, "/api/")),
     ]) {
       if (Object.hasOwn(READS, value)) continue;
+      // A person row covers its whole path: the Inbox and the push key of one browser.
+      if (rows.some(([, op]) => isPersonGate(op.gate) && value.startsWith(op.route))) continue;
       const suffixes = [...args(line, "endsWith"), ...args(line, "includes")];
       const methods = line
         .split('request.method === "')

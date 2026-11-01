@@ -116,7 +116,7 @@ export const MACHINE_RIGHTS = [
   "getsPasses",
   "addsPages",
   "restores",
-  /** K-1777: restart, update, diagnostics, tunnel restart, labels, order, automatic update, cancel, rotate key. */
+  /** K-1777: machine care, such as restart, update, order and automatic update; `OPERATIONS` lists each row. */
   "maintains",
   /** K-1777: the full map read of `kitshn state`, through AGENT_READ. */
   "readsMap",

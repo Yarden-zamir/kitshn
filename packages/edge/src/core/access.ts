@@ -8,16 +8,15 @@ import {
   activeShares,
 } from "./model.ts";
 
-/** An Access rule, in the shape of the Cloudflare API. */
-/** K-1777: the policy that lets every service token reach the gate of `/op`. */
+/** K-1777: the policy that lets the service token of each machine reach the gate of `/op`. */
 export const OP_TOKENS_POLICY = "policy:op:tokens";
 
+/** An Access rule, in the shape of the Cloudflare API. */
 export type Rule =
   | { readonly email: { readonly email: string } }
   | { readonly email_domain: { readonly domain: string } }
   | { readonly ip: { readonly ip: string } }
   | { readonly service_token: { readonly token_id: string } }
-  | { readonly any_valid_service_token: Record<string, never> }
   | { readonly everyone: Record<string, never> };
 
 export interface PolicyBody {
@@ -299,14 +298,16 @@ export function desiredAccess(
         policyKeys.push(key);
       }
     }
-    // K-1777: `/op` sits below the admin address, and every service token reaches its Worker gate; a machine
+    // K-1777: `/op` sits below the admin address, and the token of each machine reaches its Worker gate; a machine
     // still proves its key there (K-1714). During a pause only people pass, as for the Owner devices above.
-    // Limit: only while a machine is joined, because only the owner and machines call `/op` until actors land.
+    // Limit: only machine tokens, because only the owner and machines call `/op` until actors land.
     if (resource.id === ADMIN_RESOURCE_ID && !state.paused && state.machines.size > 0) {
       policies.set(OP_TOKENS_POLICY, {
-        name: `${ACCESS_NAME_PREFIX}operation tokens`,
+        name: `${ACCESS_NAME_PREFIX}operation machines`,
         decision: "non_identity",
-        include: [{ any_valid_service_token: {} }],
+        include: [...state.machines.values()].map((machine) => ({
+          service_token: { token_id: machine.serviceTokenId },
+        })),
         require: [],
         exclude: [],
       });

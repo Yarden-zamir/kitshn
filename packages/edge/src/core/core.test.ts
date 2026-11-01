@@ -512,7 +512,7 @@ describe("Access compile (K-401 to K-403)", () => {
       desiredAccess(state, 0, [], old).apps.get("app:riffle:old-riffle.example.com")?.policyKeys,
     ).toEqual(["policy:owner:people"]);
     expect(access.apps.get("app:riffle:riffle.example.com")).not.toHaveProperty("custom_pages");
-    // K-1777: with a machine joined, every service token reaches the gate of `/op`, except during a pause.
+    // K-1777: with a machine joined, the token of each machine reaches the gate of `/op`, except during a pause.
     const joined: State = {
       ...state,
       machines: new Map([
@@ -525,6 +525,9 @@ describe("Access compile (K-401 to K-403)", () => {
     expect(desiredAccess(joined, 0).apps.get("app:kitshn-admin:kit.example.com")?.policyKeys).toEqual([
       OP_TOKENS_POLICY,
       "policy:owner:people",
+    ]);
+    expect(desiredAccess(joined, 0).policies.get(OP_TOKENS_POLICY)?.include).toEqual([
+      { service_token: { token_id: "t" } },
     ]);
     expect(
       desiredAccess({ ...joined, paused: "lockdown" }, 0).apps.get("app:kitshn-admin:kit.example.com")
