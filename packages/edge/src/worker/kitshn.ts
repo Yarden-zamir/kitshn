@@ -618,11 +618,10 @@ const decodeExecRun = Schema.decodeUnknownSync(ExecRunSchema);
 const LINK_BROADCAST_MS = 10_000;
 /** K-1610: the forwarded calls of one machine that kitshn records in a minute; the rest are counted and dropped. */
 const LINK_CALLS_PER_MINUTE = 120;
-/**
- * K-1610: the newest 2,000 link events stay, trimmed by id right after an insert, so a trim reads only the rows that
- * it deletes, not the whole table (K-1302).
- */
-const TRIM_LINK_EVENTS = "DELETE FROM link_events WHERE id <= last_insert_rowid() - 2000";
+/** K-1610: the link events that stay; each insert trims by id, so a trim reads only the rows it deletes (K-1302). */
+const LINK_EVENTS_KEPT = 2000;
+/** K-1302: the newest events of each table that a snapshot shows, kept in memory. */
+const RECENT_EVENTS = 50;
 
 /** K-722: one run that kitshn relays; a row of `exec_runs`, so an evicted Durable Object finds it again. */
 type ExecRow = {
@@ -13626,31 +13625,47 @@ export class Kitshn extends DurableObject<Env> {
     labels: Readonly<Record<string, string>>,
     outcome: AskOutcome,
   ) {
-    this.sql(
-      `INSERT INTO ask_events (at, machine_id, action, target, reason, labels, outcome, detail, verified)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    const recent = this.recentAskRows;
+    const values = {
       at,
-      machine.id,
+      machine_id: machine.id,
       action,
       target,
       reason,
-      JSON.stringify(labels),
-      outcome.outcome,
-      outcome.outcome === "refused"
-        ? outcome.reason
-        : outcome.outcome === "waiting"
-          ? outcome.proposalId
-          : "",
-      JSON.stringify(this.verifiedKeys(machine.id, labels)),
+      labels: JSON.stringify(labels),
+      outcome: outcome.outcome,
+      detail:
+        outcome.outcome === "refused"
+          ? outcome.reason
+          : outcome.outcome === "waiting"
+            ? outcome.proposalId
+            : "",
+      verified: JSON.stringify(this.verifiedKeys(machine.id, labels)),
+    };
+    // No RETURNING: the row is in `values`, and a refused ask reads only what this write reads (K-1715).
+    this.sql(
+      `INSERT INTO ask_events (at, machine_id, action, target, reason, labels, outcome, detail, verified)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      values.at,
+      values.machine_id,
+      values.action,
+      values.target,
+      values.reason,
+      values.labels,
+      values.outcome,
+      values.detail,
+      values.verified,
     );
-    // K-1717: at most 5,000 events, trimmed on insert by id, so a burst of asks cannot grow the table within a day.
     const [last] = this.sql<{ id: number }>("SELECT last_insert_rowid() AS id");
-    if (!last) return;
+    if (!last) throw new Error("The ask event insert has no row id.");
+    const event: AskEventRow = { id: last.id, ...values };
     // K-1756: the label index of this event, for the search of History.
     for (const [key, value] of Object.entries(labels))
-      this.sql("INSERT INTO ask_labels (event_id, key, value) VALUES (?, ?, ?)", last.id, key, value);
-    this.sql("DELETE FROM ask_events WHERE id <= ?", last.id - ASK_EVENT_COUNT);
-    this.sql("DELETE FROM ask_labels WHERE event_id <= ?", last.id - ASK_EVENT_COUNT);
+      this.sql("INSERT INTO ask_labels (event_id, key, value) VALUES (?, ?, ?)", event.id, key, value);
+    // K-1717: at most 5,000 events, trimmed on insert by id, so a burst of asks cannot grow the table within a day.
+    this.sql("DELETE FROM ask_events WHERE id <= ?", event.id - ASK_EVENT_COUNT);
+    this.sql("DELETE FROM ask_labels WHERE event_id <= ?", event.id - ASK_EVENT_COUNT);
+    this.recentAskRows = recent && [event, ...recent].slice(0, RECENT_EVENTS);
   }
 
   /**
@@ -13934,7 +13949,7 @@ export class Kitshn extends DurableObject<Env> {
       return;
     }
     counted.count += 1;
-    this.sql(
+    this.addLinkEvent(
       `INSERT INTO link_events (at, source, target, kind, thread, name, cwd, outcome, exit_code)
        VALUES (?, ?, ?, 'tool', NULL, ?, NULL, ?, NULL)`,
       now,
@@ -13943,7 +13958,6 @@ export class Kitshn extends DurableObject<Env> {
       name,
       status >= 200 && status < 400 ? "succeeded" : status === 401 || status === 403 ? "refused" : "failed",
     );
-    this.sql(TRIM_LINK_EVENTS);
     if (now - this.linkBroadcastAt >= LINK_BROADCAST_MS) {
       this.linkBroadcastAt = now;
       this.broadcast();
@@ -13958,7 +13972,7 @@ export class Kitshn extends DurableObject<Env> {
     row: ExecRow,
     exit: { readonly exitCode: number | null; readonly reason: string | null },
   ) {
-    this.sql(
+    this.addLinkEvent(
       `INSERT INTO link_events (at, source, target, kind, thread, name, cwd, outcome, exit_code)
        VALUES (?, ?, ?, 'exec', ?, ?, ?, ?, ?)`,
       Date.now(),
@@ -13970,12 +13984,20 @@ export class Kitshn extends DurableObject<Env> {
       execOutcome(exit),
       exit.exitCode,
     );
-    this.sql(TRIM_LINK_EVENTS);
     // Known limit: the last events of a burst show with the next change of the map; revisit if History must be live.
     if (Date.now() - this.linkBroadcastAt >= LINK_BROADCAST_MS) {
       this.linkBroadcastAt = Date.now();
       this.broadcast();
     }
+  }
+
+  /** K-1610: one link event, and the trim; the newest events in memory take it too (K-1302). */
+  private addLinkEvent(insert: string, ...bindings: Array<SqlStorageValue>) {
+    const recent = this.recentLinkRows;
+    const [event] = this.sql<LinkEventRow>(`${insert} RETURNING *`, ...bindings);
+    if (!event) throw new Error("The link event insert returned no row.");
+    this.sql("DELETE FROM link_events WHERE id <= ?", event.id - LINK_EVENTS_KEPT);
+    this.recentLinkRows = recent && [event, ...recent].slice(0, RECENT_EVENTS);
   }
 
   /** K-1610: the newest 50 link events, of one machine or of all, with machine names. */
@@ -13984,7 +14006,8 @@ export class Kitshn extends DurableObject<Env> {
     const rows =
       machineId === null
         ? (this.recentLinkRows ??= this.sql<LinkEventRow>(
-            "SELECT * FROM link_events ORDER BY id DESC LIMIT 50",
+            "SELECT * FROM link_events ORDER BY id DESC LIMIT ?",
+            RECENT_EVENTS,
           ))
         : this.sql<LinkEventRow>(
             "SELECT * FROM link_events WHERE source = ? OR target = ? ORDER BY id DESC LIMIT 50",
@@ -14001,7 +14024,10 @@ export class Kitshn extends DurableObject<Env> {
 
   /** K-1717: the newest 50 ask events, for History; a snapshot reads at most 50 rows for them. */
   private recentAskEvents(): Array<AskEventView> {
-    this.recentAskRows ??= this.sql<AskEventRow>("SELECT * FROM ask_events ORDER BY id DESC LIMIT 50");
+    this.recentAskRows ??= this.sql<AskEventRow>(
+      "SELECT * FROM ask_events ORDER BY id DESC LIMIT ?",
+      RECENT_EVENTS,
+    );
     return this.recentAskRows.map((row) => this.askEventView(row));
   }
 

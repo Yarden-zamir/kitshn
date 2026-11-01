@@ -36,7 +36,13 @@ const dropLaterMigrations = (sql: SqlStorage) => {
   sql.exec("DROP TABLE deploy_instances");
   sql.exec("ALTER TABLE deploys DROP COLUMN compose");
   sql.exec("ALTER TABLE backups DROP COLUMN repository");
-  for (const index of ["notifications_state", "library_previous", "library_added", "repos_first_seen"])
+  for (const index of [
+    "forward_nonces_at",
+    "notifications_state",
+    "library_previous",
+    "library_added",
+    "repos_first_seen",
+  ])
     sql.exec(`DROP INDEX ${index}`);
 };
 

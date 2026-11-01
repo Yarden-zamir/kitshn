@@ -73,8 +73,8 @@ it("reads few rows on a wake and on each snapshot", async () => {
 
 /**
  * K-1302: the hot paths with grown tables, as on 2026-11-01, when the free plan ran out. A load (each change) keeps the
- * History it holds, a snapshot (each map update and `kitshn ops state`) reads no whole notifications or library table,
- * and a link event trims by id.
+ * History it holds, a snapshot (each map update and `kitshn ops state`) reads no whole notifications or library table
+ * and keeps the newest events in memory, and a link event trims by id.
  */
 it("reads few rows per change, snapshot and link event once the tables grow", async () => {
   stubAccessCerts();
@@ -164,8 +164,8 @@ it("reads few rows per change, snapshot and link event once the tables grow", as
   rowsRead = 0;
   await runInDurableObject(stub, recordExec);
   const linkEvent = rowsRead;
-  // Without the indexes, the History refresh and the trim by id: 188, 505 and 2,007 rows.
-  expect(snapshot).toBeLessThan(100);
+  // On main before this fix: 188, 505 and 2,007 rows. A link event that empties the events in memory: 68 for a snapshot.
+  expect(snapshot).toBeLessThan(40);
   expect(changeAndSnapshot).toBeLessThan(300);
   expect(linkEvent).toBeLessThan(10);
 });
