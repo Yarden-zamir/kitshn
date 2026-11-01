@@ -147,6 +147,16 @@ const Ask = Schema.Struct({
 });
 export type Ask = typeof Ask.Type;
 
+/** K-709: the fields of `desired-set` and `desired-init`. */
+const DesiredChange = {
+  provider: ProviderName,
+  kind: Schema.String.check(Schema.isMaxLength(64)),
+  part: Schema.Literals(["shared", "machine"]),
+  value: Schema.Unknown,
+  /** K-709: the provider's mark of this set; the next `desired` event of the kind carries the last stored one. */
+  rev: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(64))),
+};
+
 export const Request = Schema.Union([
   /** The machine id, the key fingerprint, the connection to kitshn and the tunnel service (K-605). */
   Schema.Struct({ id: Id, type: Schema.Literal("status") }),
@@ -242,15 +252,16 @@ export const Request = Schema.Union([
    * it to every machine of the provider. `desired-init` writes only an absent part, including when another provider
    * or the owner writes between registration and this request. Only the registered connection sends either.
    */
+  // One member per type, so `Extract<Request, { type: "desired-set" }>` finds it.
   Schema.Struct({
     id: Id,
-    type: Schema.Literals(["desired-set", "desired-init"]),
-    provider: ProviderName,
-    kind: Schema.String.check(Schema.isMaxLength(64)),
-    part: Schema.Literals(["shared", "machine"]),
-    value: Schema.Unknown,
-    /** K-709: the provider's mark of this set; the next `desired` event of the kind carries the last stored one. */
-    rev: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(64))),
+    type: Schema.Literal("desired-set"),
+    ...DesiredChange,
+  }),
+  Schema.Struct({
+    id: Id,
+    type: Schema.Literal("desired-init"),
+    ...DesiredChange,
   }),
   /** K-1612: cancels a job of this machine while it waits in the queue: one that runs here, or one that it queued. */
   Schema.Struct({ id: Id, type: Schema.Literal("job-cancel"), jobId: Schema.Int }),
