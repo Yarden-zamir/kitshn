@@ -115,6 +115,7 @@ function context(version = "0123456789ab"): ActionContext {
     servers: [],
     queued: 0,
     update: null,
+    protocolRefusal: null,
   };
   return {
     state,

@@ -18,11 +18,12 @@ Each edge release `edge-<sha12>` of Yarden-zamir/kitshn carries `kitshn-local.tg
 
 ## Register
 
-Send `register` on each new connection, with `protocol: 2`, your provider name, a stable `instance`, your kinds, commands and all your resources.
+Send `register` on each new connection, with `protocol: 2` and `protocolVersion` (the `KITSHN_PROTOCOL` of your `@kitshn/local`), your provider name, a stable `instance`, your kinds, commands and all your resources.
 
 - A bad item does not refuse the register. The answer names it in `problems`. Fix what it names.
 - A resource with `site: { port }` becomes a live site of the machine. The daemon names its address.
 - Skip an event type that you do not know, and ignore unknown fields.
+- Compare `protocolVersion` of the answer with `matchProtocol`. Another minor: log the warning, and use only what the older minor has. A refused `register` names both versions; show it, and do not retry in a loop.
 
 ## Decide access
 

@@ -30,8 +30,12 @@ import {
   HEALTH_INTERVAL_MS,
   type HealthReport,
   type IdRequest,
+  KITSHN_PROTOCOL,
   MAX_FORWARD_BYTES,
   PROVIDER_PROTOCOL,
+  ROLLOUT_FIX,
+  legacyProtocol,
+  matchProtocol,
   type Request,
   WINDOW_ACTIONS,
 } from "@kitshn/local";
@@ -210,6 +214,7 @@ import {
 } from "./cli.ts";
 import { CliError } from "kitshn/cli-error";
 import { isOpCommand, runOpCommand } from "kitshn/ops";
+import { deployWorker } from "./rollout.ts";
 import { checkSkill, installGlobalSkill, installRepoSkill, refreshGlobalSkill } from "./skill.ts";
 import { forwardDesired, providerReports } from "./desired.ts";
 import { appSocketFolder, removeOldSockets, socketPathProblem, upOnSocket } from "./sockets.ts";
@@ -2093,6 +2098,8 @@ function report() {
             ],
       ...(keptBytes === undefined ? {} : { keptBytes }),
       version: VERSION,
+      // K-724: kitshn reads a status without it as 2.0.0.
+      protocol: KITSHN_PROTOCOL,
       os: `${osPlatform()} ${release()}`,
       arch: arch(),
       hostname: hostname(),
@@ -2696,6 +2703,18 @@ function connect(config: JoinSecrets) {
           });
       } else if (message.type === "accepted") {
         accepted(`with the key ${message.fingerprint}`);
+        // K-724: kitshn refuses or tolerates this daemon by the same rule; the daemon only names it in its log.
+        const kitshn = matchProtocol(
+          { name: "this daemon", version: KITSHN_PROTOCOL, update: ROLLOUT_FIX },
+          {
+            name: "kitshn",
+            version: message.protocol ?? legacyProtocol(PROVIDER_PROTOCOL),
+            update: ROLLOUT_FIX,
+          },
+        );
+        if (kitshn.outcome === "refuse")
+          log(`kitshn protocol: ${kitshn.reason} kitshn sends this daemon only its update.`);
+        if (kitshn.outcome === "tolerate") log(`kitshn protocol: ${kitshn.warning}`);
       } else if (message.type === "rotateKey") {
         void rotateKey(ws);
       } else if (message.type === "checkHealth") {
@@ -3639,6 +3658,7 @@ async function answerLocal(
         ? registry().register(request, providerCaller)
         : registry().change(request, providerCaller);
     if (!outcome.ok) throw new Error(outcome.error);
+    if (outcome.warning !== null) log(`kitshn protocol: ${outcome.warning}`);
     if (outcome.changed) {
       sendProviders();
       void checkSites().catch((error: unknown) => log(`site check failed: ${String(error)}`));
@@ -3659,6 +3679,7 @@ async function answerLocal(
       id,
       type: "register",
       protocol: PROVIDER_PROTOCOL,
+      protocolVersion: KITSHN_PROTOCOL,
       machine: {
         id: joined.machineId,
         name: registry().pushedValue(MACHINE_NAME_KEY) as string | null,
@@ -3717,6 +3738,10 @@ if (command === "--version" || command === "-v") {
 // K-1777: an operation id is never a machine or agent command (`ops.test.ts`).
 if (isOpCommand(command)) {
   try {
+    // K-636: with a version, the Worker of that release goes first; the operation then updates the daemons.
+    const [target] = args;
+    if (command === "rollout" && target !== undefined && !target.startsWith("--"))
+      await deployWorker(target, await daemonTransport().server(), process.env);
     await runOpCommand(command, args, daemonTransport);
   } catch (error) {
     if (!(error instanceof CliError)) throw error;
@@ -3786,7 +3811,7 @@ switch (command) {
     await localUsersCommand(args);
     break;
   case "version":
-    console.log(args.includes("--json") ? versionJson(VERSION) : VERSION);
+    console.log(args.includes("--json") ? versionJson(VERSION, KITSHN_PROTOCOL) : VERSION);
     break;
   case "doors":
     doorsCommand(args[0], flag("--user"), flag("--public-address"));

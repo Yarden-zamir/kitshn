@@ -10,6 +10,7 @@ import {
   nextAutoUpdate,
   BUSY_CAP_MS,
   releaseBusyStep,
+  rolloutView,
   startStep,
   stepSent,
   withBusyWaits,
@@ -19,11 +20,18 @@ import {
 const NEW = "aaaaaaaaaaaa";
 const NEWER = "cccccccccccc";
 const OLD = "bbbbbbbbbbbb";
-const online = (version: string, connectedAt = 0): LiveStatus => ({
+const PROTOCOL = "2.1.0";
+const online = (
+  version: string,
+  connectedAt = 0,
+  more: Partial<NonNullable<LiveStatus>> = {},
+): LiveStatus => ({
   version,
+  protocol: PROTOCOL,
   capabilities: ["update"],
   os: "linux 6.8.0",
   connectedAt,
+  ...more,
 });
 const behind = (id: string, order: number, more: Partial<AutoUpdateMachine> = {}): AutoUpdateMachine => ({
   id,
@@ -34,8 +42,8 @@ const behind = (id: string, order: number, more: Partial<AutoUpdateMachine> = {}
   busy: false,
   ...more,
 });
-/** A rollout of NEW whose step on "a" went out at time 10. */
-const sent: Rollout = stepSent(startStep(NO_ROLLOUT, NEW, "a", 1), NEW, 10);
+/** A rollout of NEW whose step on "a" went out at time 10, while the provider t3 was online there. */
+const sent: Rollout = stepSent(startStep(NO_ROLLOUT, NEW, "a", 1), NEW, 10, ["t3"]);
 
 describe("next automatic update (K-627)", () => {
   it("picks the first BEHIND machine in the owner's order, and only one", () => {
@@ -135,19 +143,19 @@ describe("a step of the rollout (K-627)", () => {
   type State = "queued" | "sent" | "done" | "failed" | "closed" | "gone";
   const job = (state: State, output = "") => ({ state, output });
   it("holds the rest while the machine stays offline, also after a done job", () => {
-    expect(advanceRollout(sent, job("done"), () => null)).toEqual(sent);
-    expect(advanceRollout(sent, job("closed"), () => null)).toEqual(sent);
+    expect(advanceRollout(sent, job("done"), () => null, PROTOCOL)).toEqual(sent);
+    expect(advanceRollout(sent, job("closed"), () => null, PROTOCOL)).toEqual(sent);
   });
   it("ends when the machine is online on the release, and the card says updated", () => {
-    const next = advanceRollout(sent, job("done"), () => online(NEW, 20));
+    const next = advanceRollout(sent, job("done"), () => online(NEW, 20), PROTOCOL);
     expect(next).toEqual({ ...sent, step: null, updated: ["a"] });
     expect(daemonUpdate(next, "a", NEW)).toEqual({ state: "updated" });
   });
   it("waits while the connection that ran the job still reports the old release", () => {
-    expect(advanceRollout(sent, job("done"), () => online(OLD, 5))).toEqual(sent);
+    expect(advanceRollout(sent, job("done"), () => online(OLD, 5), PROTOCOL)).toEqual(sent);
   });
   it("fails when a later connection comes back on another release, or with the last line of a failed job", () => {
-    expect(advanceRollout(sent, job("done"), () => online(OLD, 20)).failed).toEqual({
+    expect(advanceRollout(sent, job("done"), () => online(OLD, 20), PROTOCOL).failed).toEqual({
       machineId: "a",
       reason: `The daemon came back on edge-${OLD}.`,
     });
@@ -155,27 +163,68 @@ describe("a step of the rollout (K-627)", () => {
       sent,
       job("failed", "download\nThe new daemon failed its start check.\n"),
       () => null,
+      PROTOCOL,
     );
     expect(daemonUpdate(failed, "a", NEW)).toEqual({
       state: "failed",
       reason: "The new daemon failed its start check.",
     });
   });
+  it("fails a daemon on the release that speaks another protocol, or lost a provider that was online (K-636)", () => {
+    const after = (more: Partial<NonNullable<LiveStatus>>) =>
+      advanceRollout(sent, job("done"), () => online(NEW, 20, more), PROTOCOL).failed?.reason;
+    expect(after({ protocol: "2.2.0" })).toBe("The daemon came back with kitshn protocol 2.2.0, not 2.1.0.");
+    expect(
+      after({ refusedProviders: [{ provider: "t3", reason: "the major versions differ", at: 1 }] }),
+    ).toBe("After the update the daemon refused the provider t3: the major versions differ");
+    expect(after({ offlineProviders: [{ provider: "t3", reason: "never connected", at: 1 }] })).toBe(
+      "The provider t3 did not register again after the update: never connected.",
+    );
+    // A provider that was not online when the job went out holds nothing.
+    expect(
+      after({ offlineProviders: [{ provider: "other", reason: "never connected", at: 1 }] }),
+    ).toBeUndefined();
+  });
+  it("tells kitshn rollout where each machine stands, and stops on a failure (K-636)", () => {
+    const machines = [
+      { ...behind("c", 3), name: "C" },
+      { ...behind("a", 1, { status: online(NEW, 20) }), name: "A" },
+      { ...behind("b", 2), name: "B" },
+      { ...behind("d", 4, { status: null }), name: "D" },
+      { ...behind("e", 5, { autoUpdate: false }), name: "E" },
+    ];
+    const done = advanceRollout(sent, job("done"), () => online(NEW, 20), PROTOCOL);
+    const view = rolloutView(NEW, PROTOCOL, done, machines);
+    expect(view.state).toBe("running");
+    expect(view.machines.map((machine) => `${machine.id} ${machine.state}`)).toEqual([
+      "a updated",
+      "b behind",
+      "c behind",
+      "d offline",
+      "e skipped",
+    ]);
+    const stopped = { ...done, failed: { machineId: "b", reason: "start check" } };
+    expect(rolloutView(NEW, PROTOCOL, stopped, machines)).toMatchObject({
+      state: "stopped",
+      machines: [{ id: "a" }, { id: "b", state: "failed", reason: "start check" }, {}, {}, {}],
+    });
+    expect(rolloutView(NEW, PROTOCOL, done, machines.slice(1, 2)).state).toBe("done");
+  });
   it("holds while a daemon on the release has not confirmed it, so a crash just after acceptance never counts", () => {
-    expect(advanceRollout(sent, job("closed"), () => online(NEW, 20))).toEqual(sent);
+    expect(advanceRollout(sent, job("closed"), () => online(NEW, 20), PROTOCOL)).toEqual(sent);
   });
   it("drops an expired step without a failure", () => {
-    expect(advanceRollout(sent, job("gone"), () => null)).toEqual({ ...sent, step: null });
+    expect(advanceRollout(sent, job("gone"), () => null, PROTOCOL)).toEqual({ ...sent, step: null });
   });
   it("lets the owner end a hold or a failure: setting off, or Update daemon that succeeds (K-626)", () => {
-    const held = advanceRollout(sent, job("done"), () => null);
+    const held = advanceRollout(sent, job("done"), () => null, PROTOCOL);
     expect(withoutMachine(held, "a")).toEqual({ ...held, step: null });
     const failed: Rollout = { ...NO_ROLLOUT, version: NEW, failed: { machineId: "a", reason: "x" } };
     expect(withoutMachine(failed, "a").failed).toBeNull();
     for (const before of [held, failed]) {
       const retry = manualStep(before, "a", 9);
       expect(retry).toMatchObject({ failed: null, step: { machineId: "a", jobId: 9 } });
-      expect(advanceRollout(retry, job("done"), () => online(NEW, 20))).toMatchObject({
+      expect(advanceRollout(retry, job("done"), () => online(NEW, 20), PROTOCOL)).toMatchObject({
         step: null,
         failed: null,
         updated: ["a"],
@@ -186,7 +235,7 @@ describe("a step of the rollout (K-627)", () => {
   });
   it("follows the release that delivery names after a deploy", () => {
     const queued = startStep(NO_ROLLOUT, NEW, "a", 1);
-    expect(stepSent(queued, NEWER, 10)).toMatchObject({
+    expect(stepSent(queued, NEWER, 10, [])).toMatchObject({
       version: NEWER,
       step: { machineId: "a", sentAt: 10 },
     });

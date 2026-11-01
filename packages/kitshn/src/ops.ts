@@ -12,7 +12,8 @@ export const isOpCommand = (value: string): value is OpCommand =>
 export const OPS_HELP = `kitshn ops [--json]                     every operation that an owner can do, with its gate (K-1777)
 kitshn state [field...] [--json]        the map as the owner sees it, without the hidden fields (K-1777)
 kitshn <operation> [target] [--body json] [--reason text]
-                                        do one operation as this actor: it runs, waits for a person, or says why not`;
+                                        do one operation as this actor: it runs, waits for a person, or says why not
+kitshn rollout [version] [--json]       update every online daemon to the release of kitshn and follow it (K-636)`;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -70,6 +71,87 @@ export function stateFields(
   return Object.fromEntries(fields.map((field) => [field, snapshot[field]]));
 }
 
+/** K-636: one machine in the answer of `rollout` and `rollout-state`. */
+interface RolloutMachine {
+  readonly id: string;
+  readonly name: string;
+  readonly state: string;
+  readonly version: string | null;
+  readonly reason: string | null;
+}
+
+interface RolloutView {
+  readonly version: string;
+  readonly protocol: string;
+  readonly state: "running" | "done" | "stopped";
+  readonly machines: ReadonlyArray<RolloutMachine>;
+}
+
+function rolloutView(value: unknown): RolloutView {
+  if (!isRecord(value) || !Array.isArray(value["machines"]) || typeof value["state"] !== "string")
+    throw new CliError(
+      `kitshn answered the rollout with an unknown shape: ${JSON.stringify(value).slice(0, 200)}`,
+    );
+  return value as unknown as RolloutView;
+}
+
+/** K-636: a line for each machine whose state changed since `before`. */
+function rolloutChanges(before: RolloutView | null, after: RolloutView): Array<string> {
+  return after.machines.flatMap((machine) => {
+    const old = before?.machines.find((item) => item.id === machine.id);
+    if (old?.state === machine.state && old.reason === machine.reason) return [];
+    const version = machine.version === null ? "" : ` (edge-${machine.version})`;
+    return [
+      `  ${machine.name}: ${machine.state}${version}${machine.reason === null ? "" : ` - ${machine.reason}`}`,
+    ];
+  });
+}
+
+/** K-636: no daemon updates now or waits for its turn; busy, offline and skipped machines update later or by hand. */
+const settled = (view: RolloutView) =>
+  view.state !== "running" ||
+  !view.machines.some((machine) => machine.state === "updating" || machine.state === "behind");
+
+/** K-636: `kitshn rollout`: starts the rollout, then prints each change until it ends or stops. */
+async function followRollout(args: ReadonlyArray<string>, transport: () => AgentTransport, json: boolean) {
+  const [version] = words(args, ["--server", "--reason"]);
+  let view = rolloutView(
+    await opResult(
+      await transport().call("/op/rollout", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ target: "", body: version === undefined ? {} : { version } }),
+      }),
+    ),
+  );
+  if (!json) console.log(`kitshn edge-${view.version}, protocol ${view.protocol}`);
+  let before: RolloutView | null = null;
+  for (;;) {
+    if (!json) for (const line of rolloutChanges(before, view)) console.log(line);
+    if (settled(view)) break;
+    before = view;
+    await new Promise((resolve) => setTimeout(resolve, ROLLOUT_POLL_MS));
+    view = rolloutView(
+      await opResult(
+        await transport().call("/op/rollout-state", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        }),
+      ),
+    );
+  }
+  if (json) console.log(JSON.stringify(view));
+  const failed = view.machines.find((machine) => machine.state === "failed");
+  if (view.state === "stopped")
+    throw new CliError(
+      `the rollout stopped at ${failed?.name ?? "a machine"}: ${failed?.reason ?? "see kitshn rollout-state"}`,
+    );
+}
+
+/** K-636: how often `kitshn rollout` reads the rollout; one step takes minutes (K-629). */
+const ROLLOUT_POLL_MS = 5_000;
+
 export async function runOpCommand(
   command: OpCommand,
   args: ReadonlyArray<string>,
@@ -99,6 +181,7 @@ export async function runOpCommand(
     console.log(JSON.stringify(stateFields({ snapshot, hidden: result["hidden"] }, fields), null, 2));
     return;
   }
+  if (command === "rollout") return await followRollout(args, transport, json);
   const result = await opResult(
     await transport().call(`/op/${command}`, {
       method: "POST",

@@ -354,6 +354,22 @@ export const OPERATIONS = {
     effect: "destroys",
     gate: { scope: "machine" },
   },
+  rollout: {
+    group: "machines",
+    title: `update every online daemon to the release of kitshn, one at a time, and follow it: --body '{"version":"<12 hex>"}' checks the release first. kitshn rollout <version> on a machine with CLOUDFLARE_API_TOKEN deploys the Worker first (K-636)`,
+    method: "POST",
+    route: "/api/rollout",
+    effect: "maintains",
+    gate: { scope: "any" },
+  },
+  "rollout-state": {
+    group: "machines",
+    title: "where each daemon stands in the rollout of the release of kitshn (K-636)",
+    method: "GET",
+    route: "/api/rollout",
+    effect: "reads",
+    gate: { scope: "any" },
+  },
   "health-check": {
     group: "machines",
     title: "check the providers and links of every machine now (K-630)",

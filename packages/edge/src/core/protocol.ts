@@ -256,6 +256,8 @@ export interface MachineView {
   readonly queued: number | null;
   /** K-628: the update of its daemon to the release of the Worker; null when no update job of that release exists. */
   readonly update: DaemonUpdate | null;
+  /** K-724: why kitshn reads only what an update needs from this daemon: another protocol major. Null while offline. */
+  readonly protocolRefusal: string | null;
 }
 
 export interface JobView {

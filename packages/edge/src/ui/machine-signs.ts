@@ -46,6 +46,8 @@ export function machineProblems(
     long: `Since ${whenText(entry.at)}: ${refusalText(providerLabel(entry.provider), name, entry.reason)}`,
   });
   return [
+    // K-724: kitshn sends this daemon only its update, so its cards and links do not update until the rollout.
+    ...(view.protocolRefusal ? [{ short: "protocol refused", long: view.protocolRefusal }] : []),
     ...(view.status?.refusedProviders ?? []).map(refused),
     ...(view.status?.offlineProviders ?? []).map(offline),
     ...(view.status?.tunnel === "stopped"

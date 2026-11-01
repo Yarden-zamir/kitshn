@@ -1,5 +1,5 @@
 import type { ProviderRequest } from "@kitshn/local";
-import { pushKey } from "@kitshn/local";
+import { KITSHN_PROTOCOL, pushKey } from "@kitshn/local";
 import { describe, expect, it } from "vitest";
 import { NEVER_CONNECTED, type ProviderCaller, Providers, type SavedFile, parseSaved } from "./providers.ts";
 
@@ -64,11 +64,17 @@ describe("the providers of a machine (K-704, K-705)", () => {
     expect(restarted.states()).toMatchObject([{ online: false, since: null }]);
   });
 
-  it("refuses another protocol with a reason that names both, and a register without an instance (C-2)", () => {
+  it("refuses another protocol major with a reason that names both, tolerates a minor, and needs an instance (C-2, K-724)", () => {
     const { registry } = providers();
     expect(registry.register(register([], { protocol: 3 }), caller(1))).toMatchObject({
       ok: false,
-      error: /protocol 2; this register says 3/,
+      error: new RegExp(
+        `this daemon speaks kitshn protocol ${KITSHN_PROTOCOL} and the provider t3 speaks 3.0.0`,
+      ),
+    });
+    expect(registry.register(register([], { protocolVersion: "2.0.9" }), caller(1))).toMatchObject({
+      ok: true,
+      warning: /the provider t3 speaks 2.0.9: this daemon uses only what 2.0.9 has/,
     });
     const { instance: _instance, ...noInstance } = register([]);
     expect(registry.register(noInstance, caller(1))).toMatchObject({

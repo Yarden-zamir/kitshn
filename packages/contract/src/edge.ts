@@ -2,6 +2,7 @@
 // `accepted`, the pushes, jobs and asks that a scenario sends, and the exec relay, which it loops back to the same
 // daemon, so one machine is A and B of a run. It also serves the Access signing keys for `check`.
 import type { DaemonMessage, ServerToDaemon } from "@kitshn/edge/machine";
+import { KITSHN_PROTOCOL } from "@kitshn/local/protocol";
 import { type JWK, SignJWT, exportJWK, generateKeyPair } from "jose";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -118,7 +119,7 @@ export async function fakeEdge(fingerprint: string): Promise<FakeEdge> {
       received.push(message);
       if (message.type === "answer") {
         isSigned = true;
-        reply({ type: "accepted", fingerprint });
+        reply({ type: "accepted", fingerprint, protocol: KITSHN_PROTOCOL });
         signed?.();
       } else if (message.type === "ask") {
         reply({

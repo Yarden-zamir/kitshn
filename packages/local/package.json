@@ -6,7 +6,8 @@
   "description": "The messages of the kitshn daemon's local socket (K-702).",
   "license": "MIT",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./protocol": "./src/protocol.ts"
   },
   "publishConfig": {
     "exports": {
@@ -23,7 +24,8 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "build": "rm -rf dist && bun build src/index.ts --target=node --outdir dist --external effect && tsc -p tsconfig.build.json && node scripts/declarations.ts"
+    "build": "rm -rf dist && bun build src/index.ts --target=node --outdir dist --external effect && tsc -p tsconfig.build.json && node scripts/declarations.ts",
+    "protocol-lock": "node scripts/protocol-lock.ts"
   },
   "peerDependencies": {
     "effect": "^4.0.5"

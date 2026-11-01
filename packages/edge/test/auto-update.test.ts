@@ -1,6 +1,6 @@
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import type { ProviderReport } from "@kitshn/local";
+import { KITSHN_PROTOCOL, type ProviderReport } from "@kitshn/local";
 import { afterEach, expect, it, vi } from "vitest";
 import type { Machine } from "../src/core/machine.ts";
 import { type Circle, OWNER_CIRCLE_ID, type Resource } from "../src/core/model.ts";
@@ -91,6 +91,8 @@ async function withDaemon(
     readonly kitshn: { commit(actor: object, changes: Array<object>, undo: null): number | null };
     /** K-627: the stored rollout. */
     readonly rollout: () => unknown;
+    /** What kitshn sent the daemon. */
+    readonly received: Array<{ readonly type: string } & Record<string, unknown>>;
   }) => Promise<void>,
 ) {
   const stub = await setup();
@@ -105,6 +107,8 @@ async function withDaemon(
     const pair = new WebSocketPair();
     state.acceptWebSocket(pair[1], [machine.id, "machines"]);
     pair[0].accept();
+    const received: Array<{ readonly type: string } & Record<string, unknown>> = [];
+    pair[0].addEventListener("message", (event) => received.push(JSON.parse(String(event.data))));
     pair[1].serializeAttachment({
       kind: "machine",
       machineId: machine.id,
@@ -120,6 +124,7 @@ async function withDaemon(
     kitshn.setPresence(machine.id, true);
     try {
       await scenario({
+        received,
         daemon: (message) => instance.webSocketMessage(pair[1], JSON.stringify(message)),
         jobs: () =>
           state.storage.sql
@@ -345,4 +350,76 @@ it("turns Update daemon automatically off in one revision that History can undo 
   expect(off.revision.summary).toContain("Turned off Update daemon automatically for auto");
   expect((await post("/api/undo", { revision: off.revision.id })).status).toBe(200);
   expect((await stored()).autoUpdate).toBeUndefined();
+});
+
+it("refuses a daemon of another protocol major, and still sends it its update (K-724)", async () => {
+  await withDaemon(async ({ daemon, jobs, received }) => {
+    // An earlier test can leave the card of t3 busy.
+    await daemon({ type: "providers", providers: [busyReport(false)] });
+    await daemon({ ...behindStatus, status: { ...behindStatus.status, protocol: "3.0.0" } });
+    expect(jobs().map((job) => [job.state, job.command])).toEqual([
+      ["sent", JSON.stringify({ kind: "update", version: NEW })],
+    ]);
+    await daemon({ type: "ask", requestId: "r1", ask: { action: "state", target: "" } });
+    await vi.waitFor(() =>
+      expect(received).toContainEqual(
+        expect.objectContaining({
+          type: "askAnswer",
+          requestId: "r1",
+          outcome: "refused",
+          reason: expect.stringContaining("the daemon of auto speaks 3.0.0: the major versions differ"),
+        }),
+      ),
+    );
+  });
+});
+
+it("stops the rollout when a provider that was online does not register again after the update (K-636)", async () => {
+  await withDaemon(async ({ daemon, jobs, rollout }) => {
+    await daemon({ type: "providers", providers: [busyReport(false)] });
+    await daemon(behindStatus);
+    expect(rollout()).toMatchObject({ step: { machineId: machine.id, providers: ["t3"] } });
+    const offline = [{ provider: "t3", reason: "never connected since the daemon started", at: 1 }];
+    await daemon({
+      type: "status",
+      status: { ...behindStatus.status, version: NEW, protocol: KITSHN_PROTOCOL, offlineProviders: offline },
+    });
+    const [job] = jobs();
+    expect(job?.state).toBe("sent");
+    const id = await runInDurableObject(
+      env.KITSHN.getByName("kitshn"),
+      (_, state) =>
+        state.storage.sql.exec<{ id: number }>("SELECT id FROM jobs WHERE machine_id = ?", machine.id).one()
+          .id,
+    );
+    await daemon({ type: "jobResult", id, result: { ok: true, exitCode: 0, output: "updated" } });
+    expect(rollout()).toMatchObject({
+      step: null,
+      failed: {
+        machineId: machine.id,
+        reason:
+          "The provider t3 did not register again after the update: never connected since the daemon started.",
+      },
+    });
+  });
+});
+
+it("answers where the rollout stands, and refuses a version that the Worker does not run (K-636)", async () => {
+  stubAccessCerts();
+  await setup();
+  const owner = await accessToken("admin-aud", { email: "owner@example.com" });
+  const headers = { "cf-access-jwt-assertion": owner, "content-type": "application/json" };
+  const wrong = await send("/api/rollout", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ version: OLD }),
+  });
+  expect(wrong.status).toBe(409);
+  expect(((await wrong.json()) as { error: string }).error).toContain(`kitshn rollout ${OLD}`);
+  const view = (await (await send("/api/rollout", { method: "GET", headers })).json()) as {
+    protocol: string;
+    machines: Array<{ id: string; state: string }>;
+  };
+  expect(view.protocol).toBe(KITSHN_PROTOCOL);
+  expect(view.machines).toContainEqual(expect.objectContaining({ id: machine.id, state: "offline" }));
 });

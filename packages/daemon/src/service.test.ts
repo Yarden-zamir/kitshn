@@ -225,11 +225,12 @@ describe("daemon service (K-601)", () => {
     });
   });
 
-  it("names itself kitshn 2 in one stable JSON line, so tools can tell it from KitSHn 1 (K-1714)", () => {
-    expect(JSON.parse(versionJson("edge-abc"))).toEqual({
+  it("names itself kitshn 2 and its protocol in one stable JSON line, so tools can tell it from KitSHn 1 (K-1714, K-724)", () => {
+    expect(JSON.parse(versionJson("edge-abc", "2.1.0"))).toEqual({
       product: "kitshn",
       generation: 2,
       version: "edge-abc",
+      protocol: "2.1.0",
     });
   });
 });

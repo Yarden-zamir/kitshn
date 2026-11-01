@@ -17,7 +17,10 @@ import {
   decodeResources,
   isProviderName,
   PROVIDER_LIMITS,
-  PROVIDER_PROTOCOL,
+  KITSHN_PROTOCOL,
+  ROLLOUT_FIX,
+  legacyProtocol,
+  matchProtocol,
   pushKey,
   screenResources,
   shapeProblem,
@@ -119,6 +122,8 @@ export type ProviderOutcome =
       readonly problems: ReadonlyArray<ProviderProblem>;
       /** K-704: the connection that the same instance held before this register, which the caller closes. */
       readonly replaced: number | null;
+      /** K-724: the provider speaks another minor of the protocol; the daemon logs this line. */
+      readonly warning: string | null;
     };
 
 /** What a `register` or `upsert` needs from the daemon besides the request. */
@@ -212,16 +217,25 @@ export class Providers {
 
   /**
    * K-704: one `register` of protocol 2. One bad item never refuses it: each bad resource, row, fact, sticker or
-   * client goes, named in `problems`. Only a broken shape, another protocol, another user or another live instance
-   * refuses the whole register.
+   * client goes, named in `problems`. Only a broken shape, another protocol major (K-724), another user or another
+   * live instance refuses the whole register.
    */
   register(request: Extract<ProviderRequest, { type: "register" }>, caller: ProviderCaller): ProviderOutcome {
     const now = caller.now ?? Date.now();
     const name = request.provider;
-    if (request.protocol !== PROVIDER_PROTOCOL) {
-      const error = `kitshn speaks provider protocol ${PROVIDER_PROTOCOL}; this register says ${request.protocol ?? "none"}. Update the provider (K-704).`;
-      this.refuse(name, error, now);
-      return { ok: false, error };
+    const protocol = matchProtocol(
+      { name: "this daemon", version: KITSHN_PROTOCOL, update: ROLLOUT_FIX },
+      {
+        name: `the provider ${name}`,
+        version:
+          request.protocolVersion ??
+          (request.protocol === undefined ? "none" : legacyProtocol(request.protocol)),
+        update: `install a release of ${name} that speaks kitshn protocol ${KITSHN_PROTOCOL}`,
+      },
+    );
+    if (protocol.outcome === "refuse") {
+      this.refuse(name, protocol.reason, now);
+      return { ok: false, error: protocol.reason };
     }
     if (request.instance === undefined) {
       const error = "a register of protocol 2 names its instance (K-704).";
@@ -309,7 +323,13 @@ export class Providers {
     if (bound) this.owners.set(name, caller.uid);
     const changed = JSON.stringify(old?.report) !== JSON.stringify(screened.report);
     if (changed || bound) this.persist();
-    return { ok: true, changed, problems, replaced };
+    return {
+      ok: true,
+      changed,
+      problems,
+      replaced,
+      warning: protocol.outcome === "tolerate" ? protocol.warning : null,
+    };
   }
 
   /** K-705: one `upsert` or `remove` of the connection that registered the provider; item by item, as `register`. */
@@ -345,7 +365,7 @@ export class Providers {
     this.entries.set(name, { ...old, report: screened.report, problems });
     const changed = JSON.stringify(old.report) !== JSON.stringify(screened.report);
     if (changed) this.persist();
-    return { ok: true, changed, problems, replaced: null };
+    return { ok: true, changed, problems, replaced: null, warning: null };
   }
 
   private othersThan(name: string): Array<ProviderReport> {
