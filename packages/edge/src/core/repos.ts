@@ -90,20 +90,21 @@ export const keyRemoved = (gate: RepoGate, hasAgentCircle: (clientId: string) =>
   gate.state === "allowed" && gate.allowedBy !== null && !hasAgentCircle(gate.allowedBy.clientId);
 
 /**
- * K-819: why an agent key may not allow this repo, with the HTTP status, or null. It needs the right "adds
- * apps" (K-718) and allows only a waiting repo: it never unblocks a blocked repo or takes over an allowed one.
+ * K-819: why an agent key may not allow this repo, with the HTTP status, or null. It needs the effect "runs",
+ * because an allowed repo deploys its code (K-1730), and allows only a waiting repo: it never unblocks a blocked repo
+ * or takes over an allowed one.
  */
 export function agentAllowRefusal(
   gate: RepoGate | undefined,
   state: unknown,
-  creates: boolean,
+  runs: boolean,
   goneOnGitHub: boolean,
 ): { readonly status: 400 | 403 | 404 | 409; readonly error: string } | null {
   if (state !== "allowed") return { status: 400, error: 'Send {"state": "allowed"}.' };
-  if (!creates)
+  if (!runs)
     return {
       status: 403,
-      error: 'The effect "creates" is not automatic for this agent. The owner sets it (K-718).',
+      error: 'The effect "runs" is not automatic for this agent. The owner sets it (K-718).',
     };
   if (!gate)
     return { status: 404, error: "kitshn knows no such repo. Its first deploy step records it (K-819)." };

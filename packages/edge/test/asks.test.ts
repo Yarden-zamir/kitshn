@@ -661,8 +661,12 @@ it("runs an approved Owner ask of an unset right, and refuses it once the owner 
   const approve = (stub: DurableObjectStub, id: string) =>
     runInDurableObject(stub, (instance) => (instance as unknown as Instance).decide(id, "approved", owner));
   const waitingId = (outcome: AskOutcome) => (outcome.outcome === "waiting" ? outcome.proposalId : "");
-  // "runs" asks the Owner: the approval allows the waiting repo.
-  const stub = await setup({ changes: { mode: "automatic" }, runs: { mode: "ask", circleId: "owner" } });
+  // "runs" asks the Owner: the approval allows the waiting repo. "creates" is no longer the effect of an allow.
+  const stub = await setup({
+    changes: { mode: "automatic" },
+    creates: { mode: "off" },
+    runs: { mode: "ask", circleId: "owner" },
+  });
   await runInDurableObject(stub, (_, state) =>
     state.storage.sql.exec(
       "INSERT OR REPLACE INTO repos (repo_id, name, state, first_seen) VALUES ('123', 'Yarden-zamir/x', 'waiting', 0)",

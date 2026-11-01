@@ -65,7 +65,7 @@ export function ActorRights(props: {
               name={name}
               checked={mode === null}
               label="default"
-              tip={`Default: ${EFFECT_DEFAULTS[right]} in an agent circle; outside one, automatic asks the Owner (K-1730).`}
+              tip={`Default: ${EFFECT_DEFAULTS[right]}. A default of automatic counts while the caller is in any agent circle, not only this one; else it asks the Owner (K-1730).`}
               onSelect={() => props.onChange(right, null)}
             />
             <Radio

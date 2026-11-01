@@ -11489,7 +11489,7 @@ export class Kitshn extends DurableObject<Env> {
       const refusal = agentAllowRefusal(
         row ? repoGateOf(row) : undefined,
         isRecord(body) ? body["state"] : null,
-        agentHas(this.state, caller.visitor, "creates", Date.now(), caller.attested ?? null, approved),
+        agentHas(this.state, caller.visitor, "runs", Date.now(), caller.attested ?? null, approved),
         row?.gone_at !== null && row?.gone_at !== undefined,
       );
       if (refusal) return Response.json({ error: refusal.error }, { status: refusal.status });
@@ -17627,17 +17627,18 @@ async function readStart(stream: ReadableStream<Uint8Array>, limit: number): Pro
 export function forwardRight(path: string, method: string): Effect | undefined {
   const card = path.startsWith("/agent/cards/") ? path.slice("/agent/cards/".length) : null;
   if (path === "/agent/library" && method === "POST") return "creates";
-  if (path.startsWith("/agent/library/") && path.endsWith("/previous") && method === "POST") return "creates";
+  // K-1777: one effect per operation, the same as the rows library-previous and card-address.
+  if (path.startsWith("/agent/library/") && path.endsWith("/previous") && method === "POST") return "changes";
   if (path.startsWith("/agent/library/") && path.endsWith("/content") && method === "GET") return "reads";
   if (path.startsWith("/agent/sites/") && method === "POST") return "creates";
-  if (card !== null && card.endsWith("/address") && method === "POST") return "creates";
+  if (card !== null && card.endsWith("/address") && method === "POST") return "changes";
   if (card !== null && card.endsWith("/time") && method === "POST") return "changes";
   if (card !== null && card.includes("/redirects") && method === "POST") return "creates";
   if (card !== null && card.includes("/redirects") && method === "DELETE") return "changes";
   if (card !== null && card.endsWith("/handover") && method === "POST") return "creates";
   if (path === "/agent/ports" && method === "POST") return "creates";
   if (card !== null && !card.includes("/") && method === "DELETE") return "destroys";
-  if (card !== null && card.endsWith("/previous") && method === "POST") return "creates";
+  if (card !== null && card.endsWith("/previous") && method === "POST") return "changes";
   if (card !== null && card.includes("/doors") && method === "GET") return "reads";
   if (card !== null && card.includes("/doors") && method === "DELETE") return "maintains";
   if (path === "/agent/logs" && method === "POST") return "reads";
