@@ -54,7 +54,7 @@ export const ASK_RIGHT: Record<AskAction, Effect | "none" | "member" | "apply"> 
   apply: "apply",
   organize: "apply",
   publish: "apply",
-  allow: "creates",
+  allow: "runs",
   deploy: "changes",
   job: "runs",
   "job-read": "none",

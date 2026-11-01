@@ -162,7 +162,9 @@ export function migrateRights(
               : OWNER_ASK;
         const set = counted.some((right) => old[right] !== undefined);
         if (set || !sameMode(narrowest, newDefault)) rights[effect] = narrowest;
-        if (modes.some(([, mode]) => !sameMode(mode, narrowest)))
+        // "raises access" automatic makes "shares" automatic below, so a merge note of "shares" would be wrong.
+        const owner = effect === "shares" && old.raisesAccess?.mode === "automatic";
+        if (!owner && modes.some(([, mode]) => !sameMode(mode, narrowest)))
           notes.push(
             `${name} in ${circle.name}: "${effect}" is ${modeText(narrowest)}, the narrowest of ${modes
               .map(

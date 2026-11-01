@@ -333,8 +333,13 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
     "UPDATE proposals SET right_name = 'raisesAccess' WHERE right_name = 'owner'",
   ],
   // 46: effects (K-1730). Its code step (`migrateRights`) moves the rights of each chip, the proposals and the approvals
-  // of deploys and handovers to effects, once, in the transaction of the migration.
-  ["UPDATE github_tokens SET right_name = CASE right_name WHEN 'writesCode' THEN 'changes' ELSE 'reads' END"],
+  // of deploys and handovers to effects, once, in the transaction of the migration. A queued job keeps the approval of
+  // its call with the right names of before, so it fails, and the caller sends it again.
+  [
+    "UPDATE github_tokens SET right_name = CASE right_name WHEN 'writesCode' THEN 'changes' ELSE 'reads' END",
+    `UPDATE jobs SET state = 'failed', output = 'kitshn moved to effects; send the job again (K-1730)'
+      WHERE state = 'queued' AND json_extract(visitor, '$.ownerApproved') IS NOT NULL`,
+  ],
 ];
 
 /** K-819: the migration after which the Durable Object derives the repo ids of older deploy rows. */

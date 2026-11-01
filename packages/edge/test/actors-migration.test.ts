@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { LegacyCircle } from "../src/core/actors.ts";
 import { ruleViolation } from "../src/core/changes.ts";
 import { type State, actorIdOf } from "../src/core/model.ts";
-import { ACTORS_MIGRATION, MIGRATIONS } from "../src/worker/migrations.ts";
+import { ACTORS_MIGRATION, EFFECTS_MIGRATION, MIGRATIONS } from "../src/worker/migrations.ts";
 
 /** K-1778, H1: migration 44 on a stored database of migration 43. */
 
@@ -122,5 +122,61 @@ describe("migration 44 on a database of migration 43 (K-1778)", () => {
     expect(after.version).toBe(String(ACTORS_MIGRATION - 1));
     expect(after.before).toBeNull();
     expect(after.owner).toBe(after.body);
+  });
+});
+
+/** K-1730: puts the install `name` back at migration 45 with three jobs, then runs the start migrations. */
+const migrateFrom45 = (name: string, broken: boolean) =>
+  runInDurableObject(env.KITSHN.getByName(name), (object, durable) => {
+    const sql = durable.storage.sql;
+    const visitor = { email: null, clientId: "vps.access", ip: null };
+    const approval = { machineId: "vps", key: "f 0", right: "runsCommands", person: true };
+    const job = (id: number, state: string, stored: object) =>
+      sql.exec(
+        `INSERT OR REPLACE INTO jobs (id, machine_id, labels, command, state, created_at, expires_at, actor, visitor, exit_code, output, when_idle)
+         VALUES (?, 'vps', '[]', '{"kind":"restart"}', ?, 0, ?, '{"_tag":"machine","machineId":"vps","name":"vps"}', ?, NULL, '', 0)`,
+        id,
+        state,
+        Date.now() + 60_000,
+        JSON.stringify(stored),
+      );
+    job(1, "queued", { ...visitor, ownerApproved: approval });
+    job(2, "queued", visitor);
+    job(3, "sent", { ...visitor, ownerApproved: approval });
+    // A circle body that does not parse makes the code step throw.
+    if (broken) sql.exec("INSERT OR REPLACE INTO circles (id, body) VALUES ('broken', 'not json')");
+    sql.exec("UPDATE meta SET value = ? WHERE key = 'schema_version'", String(EFFECTS_MIGRATION - 1));
+    let error: unknown = null;
+    try {
+      (object as unknown as Instance).migrateSchema();
+    } catch (thrown) {
+      error = thrown;
+    }
+    return {
+      error: error === null ? null : String(error),
+      version: sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'schema_version'").one().value,
+      jobs: sql
+        .exec<{ id: number; state: string; output: string }>("SELECT id, state, output FROM jobs ORDER BY id")
+        .toArray(),
+    };
+  });
+
+describe("migration 46 on a database of migration 45 (K-1730)", () => {
+  it("fails each queued job that carries a stored approval, because its right names are of before", async () => {
+    const after = await migrateFrom45("m46-jobs", false);
+    expect(after.error).toBeNull();
+    expect(after.version).toBe(String(MIGRATIONS.length));
+    expect(after.jobs).toEqual([
+      { id: 1, state: "failed", output: "kitshn moved to effects; send the job again (K-1730)" },
+      { id: 2, state: "queued", output: "" },
+      { id: 3, state: "sent", output: "" },
+    ]);
+  });
+
+  it("rolls back when its code step throws, so the database stays at migration 45", async () => {
+    const after = await migrateFrom45("m46-broken", true);
+    expect(after.error).not.toBeNull();
+    expect(after.version).toBe(String(EFFECTS_MIGRATION - 1));
+    expect(after.jobs.map((row) => row.state)).toEqual(["queued", "queued", "sent"]);
   });
 });

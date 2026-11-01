@@ -127,9 +127,10 @@ describe("the move of rights to effects (K-1730, migration 46)", () => {
       actorId: phone.id,
       rights: { creates: owner, shares: automatic, secrets: automatic },
     });
-    expect(notes).toContain(
+    // The unset rights of "shares" asked the Owner, but the chip acted as the owner, so no merge note names them.
+    expect(notes).toEqual([
       'Phone in phone-devices acted as the owner, so "shares" and "secrets" are automatic.',
-    );
+    ]);
   });
 
   it("keeps only off for a machine in a circle with a person, where its rights did not count before", () => {

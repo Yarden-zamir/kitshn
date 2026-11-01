@@ -171,6 +171,18 @@ describe("operations (K-1777)", () => {
       decide(shell, { ...base, mode: { mode: "off" }, scope: false, approved: true }, OWNER).outcome,
     ).toBe("refuse");
     expect(decide(shell, { ...base, scope: false, approved: true }, OWNER)).toEqual({ outcome: "run" });
+    // A target out of scope with "shares" off refuses, also with an approval of this call.
+    expect(
+      decide(shell, { ...base, shares: { mode: "off" }, scope: false, approved: true }, OWNER).outcome,
+    ).toBe("refuse");
+    // The default "off" of "secrets" holds out of scope too: "shares" alone never hands out a secret.
+    const shares = { mode: "automatic" } as const;
+    expect(decide(OPERATIONS["machine-add"], { ...base, shares, scope: false }, OWNER).outcome).toBe(
+      "refuse",
+    );
+    expect(
+      decide(OPERATIONS["machine-add"], { ...base, shares, mode: shares, scope: false }, OWNER).outcome,
+    ).toBe("run");
     expect(decide(shell, { ...base, scope: true, paused: true, approved: true }, OWNER).outcome).toBe(
       "refuse",
     );

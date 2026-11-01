@@ -48,9 +48,11 @@ export const EFFECT_DEFAULTS: Record<Effect, "automatic" | "ask the Owner" | "of
  * - `job`: a job that the caller queued, or a job on a machine card that the caller controls.
  * - `ports`: the body fields `machine` and `relay` name cards that the caller controls (K-2007).
  * - `self`: the machine of the caller.
+ * - `owner`: never holds, so "shares" decides every call: settings of the whole kitshn and actions with no target that
+ *   a caller controls.
  * A target that does not exist refuses. An edit that does not resolve does not pass the rule.
  */
-export type Scope = "any" | "card" | "own" | "machine" | "rule" | "job" | "ports" | "self";
+export type Scope = "any" | "card" | "own" | "machine" | "rule" | "job" | "ports" | "self" | "owner";
 
 /** K-1777: only a person can do it, because only a person has the proof. The reason shows in review and in help. */
 export interface PersonGate {
@@ -142,7 +144,7 @@ export const OPERATIONS = {
     method: "POST",
     route: "/api/organize",
     effect: "changes",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
   },
   undo: {
     group: "safety",
@@ -151,7 +153,7 @@ export const OPERATIONS = {
     route: "/api/undo",
     pick: ["revision", "source"],
     effect: "shares",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
   },
   "undo-item": {
     group: "safety",
@@ -160,7 +162,7 @@ export const OPERATIONS = {
     route: "/api/undo-item",
     pick: ["item"],
     effect: "shares",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
   },
   "card-setting": {
     group: "cards",
@@ -184,7 +186,7 @@ export const OPERATIONS = {
     title: "give a card a new address name; the short form is kitshn address (K-1120)",
     method: "POST",
     route: "/api/cards/:target/address",
-    effect: "creates",
+    effect: "changes",
     gate: { scope: "own" },
     short: "kitshn address <card> <name>",
   },
@@ -282,7 +284,7 @@ export const OPERATIONS = {
     `set the labels of a machine: --body '{"labels":["gpu"]}' (K-610)`,
     "labels",
     "shares",
-    "any",
+    "owner",
   ),
   "machine-order": machineField(
     `set the place of a machine in lists: --body '{"order":3}'`,
@@ -296,12 +298,12 @@ export const OPERATIONS = {
     "maintains",
     "any",
   ),
-  // K-818: a risky Compose setting runs a container with host access, as a shell does.
+  // K-818: a risky Compose setting runs a container with host access, as a shell does. It stays with the Owner.
   "machine-compose-allow": machineField(
     `allow risky Compose settings on a machine: --body '{"allow":[...]}' (K-818)`,
     "allow",
     "runs",
-    "machine",
+    "owner",
   ),
   // A rotation ends the approved jobs of the machine (K-1776), so another machine's key asks the Owner.
   "machine-rotate-key": {
@@ -318,7 +320,7 @@ export const OPERATIONS = {
     method: "POST",
     route: "/api/machines/:target/reset-key",
     effect: "secrets",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
     secret: true,
   },
   "machine-add": {
@@ -327,7 +329,7 @@ export const OPERATIONS = {
     method: "POST",
     route: "/api/machines",
     effect: "secrets",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
     secret: true,
   },
   "machine-remove": {
@@ -336,7 +338,7 @@ export const OPERATIONS = {
     method: "DELETE",
     route: "/api/machines/:target",
     effect: "destroys",
-    gate: { scope: "any" },
+    gate: { scope: "machine" },
   },
   "provider-forget": {
     group: "machines",
@@ -345,7 +347,7 @@ export const OPERATIONS = {
     route: "/api/machines/:target/providers/:provider/forget",
     pick: ["card"],
     effect: "destroys",
-    gate: { scope: "any" },
+    gate: { scope: "machine" },
   },
   "health-check": {
     group: "machines",
@@ -361,7 +363,7 @@ export const OPERATIONS = {
     method: "POST",
     route: "/api/sites/live",
     effect: "shares",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
     short: "kitshn expose <port|socket> --name <name>",
   },
 
@@ -446,16 +448,16 @@ export const OPERATIONS = {
     method: "DELETE",
     route: "/api/worker-storage/:target",
     effect: "destroys",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
   },
   "bot-run-deploy": {
     group: "apps",
     title: `deploy a waiting bot pull request: --body '{"repoId":...,"pr":...,"sha":"..."}' (K-1767)`,
     method: "POST",
     route: "/api/bot-runs/deploy",
-    // K-1767: a pull request of the kitshn App bot never deploys by itself; a Deploy of an actor with "changes" does.
+    // K-1767: a pull request of the kitshn App bot never deploys by itself; a person or a caller with "shares" does.
     effect: "changes",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
   },
   "port-list": {
     group: "apps",
@@ -553,7 +555,7 @@ export const OPERATIONS = {
     title: "go back to the previous version of a page, file or folder site (K-1117)",
     method: "POST",
     route: "/api/library/:target/previous",
-    effect: "creates",
+    effect: "changes",
     gate: { scope: "own" },
     short: "kitshn publish --previous <card>",
   },
@@ -574,7 +576,7 @@ export const OPERATIONS = {
     method: "POST",
     route: "/api/devices",
     effect: "secrets",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
     secret: true,
   },
   "device-invite": {
@@ -583,7 +585,7 @@ export const OPERATIONS = {
     method: "POST",
     route: "/api/devices/invites",
     effect: "secrets",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
     secret: true,
   },
   "device-invite-cancel": {
@@ -611,7 +613,7 @@ export const OPERATIONS = {
     route: "/api/repos/:target",
     pick: [],
     fixed: { state: "allowed" },
-    effect: "creates",
+    effect: "runs",
     gate: { scope: "any" },
   },
   "repo-block": {
@@ -622,7 +624,7 @@ export const OPERATIONS = {
     pick: [],
     fixed: { state: "blocked" },
     effect: "changes",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
   },
   "repo-forget": {
     group: "repos",
@@ -632,7 +634,7 @@ export const OPERATIONS = {
     pick: [],
     fixed: { state: "forget" },
     effect: "destroys",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
   },
   "repos-check": {
     group: "repos",
@@ -648,7 +650,7 @@ export const OPERATIONS = {
     method: "POST",
     route: "/api/repo-groups",
     effect: "shares",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
   },
   "repo-group-edit": {
     group: "repos",
@@ -656,7 +658,7 @@ export const OPERATIONS = {
     method: "POST",
     route: "/api/repo-groups/:target",
     effect: "shares",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
   },
   "repo-group-remove": {
     group: "repos",
@@ -664,7 +666,7 @@ export const OPERATIONS = {
     method: "DELETE",
     route: "/api/repo-groups/:target",
     effect: "changes",
-    gate: { scope: "any" },
+    gate: { scope: "card" },
   },
   "github-way": {
     group: "repos",
@@ -672,7 +674,7 @@ export const OPERATIONS = {
     method: "POST",
     route: "/api/settings/github-way",
     effect: "shares",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
   },
 
   // Passes.
@@ -690,7 +692,7 @@ export const OPERATIONS = {
     method: "POST",
     route: "/api/passes",
     effect: "shares",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
   },
   "passes-rotate": {
     group: "passes",
@@ -698,7 +700,7 @@ export const OPERATIONS = {
     method: "POST",
     route: "/api/passes/rotate",
     effect: "changes",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
   },
   "audience-add": {
     group: "passes",
@@ -717,7 +719,7 @@ export const OPERATIONS = {
     route: "/api/passes/audiences",
     pick: ["address", "labels"],
     effect: "shares",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
   },
   "audience-remove": {
     group: "passes",
@@ -725,7 +727,7 @@ export const OPERATIONS = {
     method: "DELETE",
     route: "/api/passes/audiences/:target",
     effect: "changes",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
     short: "kitshn agent audience-remove --audience <address>, for an audience that you added",
   },
 
@@ -773,8 +775,8 @@ export const OPERATIONS = {
     title: "download the state export (K-1830)",
     method: "GET",
     route: "/api/state/export",
-    effect: "reads",
-    gate: { scope: "any" },
+    effect: "secrets",
+    gate: { scope: "owner" },
     gives: "the whole state, with History text, which can quote what a person typed",
   },
   jobs: {
@@ -782,8 +784,8 @@ export const OPERATIONS = {
     title: "the last 100 jobs with their output",
     method: "GET",
     route: "/api/jobs",
-    effect: "reads",
-    gate: { scope: "any" },
+    effect: "secrets",
+    gate: { scope: "owner" },
     gives: "the commands and output of the last 100 jobs, which can quote what a person typed",
   },
   usage: {
@@ -800,15 +802,28 @@ export const OPERATIONS = {
     method: "GET",
     route: "/api/desired/:target",
     effect: "reads",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
   },
-  "desired-set": {
+  // K-709: the part of one machine and the shared part are two rows, so the scope checks the machine that the call writes.
+  "desired-set-machine": {
     group: "safety",
-    title: "replace the desired state of one resource kind",
+    title: `replace the desired state of one machine: kitshn desired-set-machine <machine> --body '{"kind":"<kind>","value":{...}}'`,
+    method: "PUT",
+    route: "/api/desired/:kind",
+    targetField: "machineId",
+    pick: ["value"],
+    effect: "changes",
+    gate: { scope: "machine" },
+  },
+  "desired-set-shared": {
+    group: "safety",
+    title: `replace the shared desired state of one resource kind: --body '{"value":{...}}'`,
     method: "PUT",
     route: "/api/desired/:target",
+    pick: ["value"],
+    fixed: { machineId: null },
     effect: "changes",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
   },
   "sign-out": {
     group: "account",
@@ -816,7 +831,7 @@ export const OPERATIONS = {
     method: "POST",
     route: "/api/sign-out",
     effect: "changes",
-    gate: { scope: "any" },
+    gate: { scope: "owner" },
   },
   "sign-out-retry": {
     group: "account",

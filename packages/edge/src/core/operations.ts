@@ -57,8 +57,13 @@ export function decide(op: Operation, input: GateInput, ownerCircleId: string): 
   if (input.admin) return { outcome: "run" };
   if (input.paused)
     return { outcome: "refuse", reason: "kitshn is paused, so agents wait until Resume (K-1504)." };
-  // "off" wins over an approval that the owner gave before they set it (K-1776).
+  // "off" wins over an approval that the owner gave before they set it (K-1776). A default "off" counts too, so a
+  // target out of scope never gets a secret by "shares" alone.
   if (input.mode?.mode === "off") return offDecision(op.effect);
+  if (input.mode === null && EFFECT_DEFAULTS[op.effect] === "off")
+    return byMode(op.effect, null, false, ownerCircleId);
+  // A target out of scope needs "shares"; "off" there refuses also an approval of this call.
+  if (!input.scope && input.shares?.mode === "off") return offDecision("shares");
   if (input.approved) return { outcome: "run" };
   if (!input.scope) return byMode("shares", input.shares, input.inAgentCircle, ownerCircleId);
   return byMode(op.effect, input.mode, input.inAgentCircle, ownerCircleId);

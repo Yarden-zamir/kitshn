@@ -166,6 +166,18 @@ it("runs an owner call at once, and refuses a service token that is no machine (
   });
 });
 
+it("refuses a machine token on an owner route, also when the machine holds the admin (K-1714, M3)", async () => {
+  stubAccessCerts();
+  // The circle holds the admin card of the seed at (0, 40), and "shares" and "secrets" are automatic (K-1778).
+  const automatic = { mode: "automatic" } as const;
+  await setup({ shares: automatic, secrets: automatic }, null, { x: 0, y: 40 });
+  const answer = await send("/api/state", {
+    headers: { "cf-access-jwt-assertion": await accessToken(ADMIN, { common_name: "vps.access" }) },
+  });
+  expect(answer.status).toBe(403);
+  expect(await answer.json()).toMatchObject({ error: expect.stringContaining("/op") });
+});
+
 it("refuses an unsigned call of a machine token on /op (K-1714)", async () => {
   stubAccessCerts();
   await setup({});
@@ -219,7 +231,7 @@ const TARGETS: Partial<Record<OpId, string>> = {
   "device-invite-cancel": "token-x",
   "proposal-deny": "proposal-x",
   desired: "t3.settings",
-  "desired-set": "t3.settings",
+  "desired-set-shared": "t3.settings",
 };
 const BODIES: Partial<Record<OpId, unknown>> = {
   "card-time": { endsAt: null },
@@ -236,7 +248,8 @@ const BODIES: Partial<Record<OpId, unknown>> = {
   "app-restore": { run: "run-1" },
   "port-add": { machine: "vps", name: "p1", ports: ["25565/tcp"] },
   "port-door-close": { address: "p1.example.com" },
-  "desired-set": { machineId: "vps", value: {} },
+  "desired-set-machine": { kind: "t3.settings", value: {} },
+  "desired-set-shared": { value: {} },
   "repo-group-add": { match: "acme" },
   "github-way": { githubWay: "not-kitshn" },
   "passes-set": { on: false },
@@ -286,7 +299,8 @@ const BOTH_FAIL: Partial<Record<OpId, string>> = {
   "proposal-deny": "needs an open proposal",
   usage: "calls the Cloudflare API",
   desired: "needs a provider that registered the state",
-  "desired-set": "needs a provider that registered the state",
+  "desired-set-machine": "needs a provider that registered the state",
+  "desired-set-shared": "needs a provider that registered the state",
   "sign-out": "calls the Cloudflare API",
   "sign-out-retry": "needs a sign-out with sessions left",
 };
@@ -416,6 +430,116 @@ it("runs each gated row through the owner code: it fails only where the owner fa
   expect(problems).toEqual([]);
 });
 
+/**
+ * The rows of scope "never" before effects (K-1730): each asked the Owner always. `desired-set` is now two rows. Each
+ * has a real scope or the scope "owner", so a target out of scope still waits while "shares" asks.
+ */
+const FORMER_NEVER: ReadonlyArray<OpId> = [
+  "organize",
+  "undo",
+  "undo-item",
+  "card-take-address",
+  "card-give-address-back",
+  "machine-volume-remove",
+  "machine-labels",
+  "machine-compose-allow",
+  "machine-reset-key",
+  "machine-add",
+  "machine-remove",
+  "provider-forget",
+  "site-live-add",
+  "worker-storage-remove",
+  "bot-run-deploy",
+  "device-token-add",
+  "device-invite",
+  "repo-block",
+  "repo-forget",
+  "repo-group-add",
+  "repo-group-edit",
+  "repo-group-remove",
+  "github-way",
+  "passes-set",
+  "passes-rotate",
+  "audience-labels",
+  "audience-remove",
+  "state-export",
+  "jobs",
+  "desired",
+  "desired-set-machine",
+  "desired-set-shared",
+  "sign-out",
+];
+
+it("still asks the Owner for each former never row out of scope, with every effect automatic but shares (K-1730)", async () => {
+  stubAccessCerts();
+  const key = await newMachineKey();
+  const automatic = { mode: "automatic" } as const;
+  await setup(
+    {
+      reads: automatic,
+      maintains: automatic,
+      creates: automatic,
+      changes: automatic,
+      runs: automatic,
+      destroys: automatic,
+      secrets: automatic,
+      shares: { mode: "ask", circleId: OWNER_CIRCLE_ID },
+    },
+    key,
+  );
+  const stub = env.KITSHN.getByName("kitshn");
+  // The machine card of vps sits in the Owner circle only, so a card or machine target is out of scope.
+  await runInDurableObject(stub, (_, state) => {
+    const owner = JSON.parse(
+      state.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = ?", OWNER_CIRCLE_ID).one()
+        .body,
+    ) as Circle;
+    const card: Resource = {
+      id: "vps",
+      kind: "machine",
+      name: "vps",
+      addresses: [],
+      status: "running",
+      group: null,
+      machine: "vps",
+    };
+    state.storage.sql.exec(
+      "INSERT OR REPLACE INTO resources (id, body) VALUES ('vps', ?)",
+      JSON.stringify(card),
+    );
+    state.storage.sql.exec("INSERT OR REPLACE INTO places (id, x, y) VALUES ('vps', ?, ?)", owner.x, owner.y);
+  });
+  await evictDurableObject(stub);
+  const bodies: Partial<Record<OpId, unknown>> = {
+    ...BODIES,
+    "machine-volume-remove": { command: { volume: "old" } },
+    "desired-set-machine": { kind: "t3.settings", value: {} },
+  };
+  const outcomes: Array<string> = [];
+  for (const id of FORMER_NEVER) {
+    const answer = await forwarded(
+      key,
+      "POST",
+      `/op/${id}`,
+      `never-${id}-0123456789abcdef`,
+      call(TARGETS[id] ?? "vps", bodies[id] ?? {}),
+      {},
+      ADMIN,
+    );
+    const result = (await answer.json()) as { outcome: string; reason?: string };
+    const [proposal] = await runInDurableObject(stub, (_, state) => {
+      const rows = state.storage.sql
+        .exec<{ right_name: string }>("SELECT right_name FROM proposals")
+        .toArray();
+      // At most 20 open asks per credential (K-1722): each row starts with none.
+      state.storage.sql.exec("DELETE FROM proposals");
+      return rows;
+    });
+    outcomes.push(`${id}: ${result.outcome} ${proposal?.right_name ?? result.reason ?? ""}`);
+  }
+  expect(outcomes).toEqual(FORMER_NEVER.map((id) => `${id}: waiting shares`));
+});
+
 it("sends the job of a gated call once its machine is online, and the right off or the pause ends it (K-1777)", async () => {
   stubAccessCerts();
   const key = await newMachineKey();
@@ -445,6 +569,14 @@ it("sends the job of a gated call once its machine is online, and the right off 
   const off = await restart("off");
   await setup({ changes: { mode: "automatic" }, maintains: { mode: "off" } }, key);
   expect(await deliver(off)).toMatchObject({ state: "failed", output: expect.stringContaining("off") });
+  // No person approved it, so "ask" ends it too: only an automatic effect let it in (M5).
+  await setup({ changes: { mode: "automatic" } }, key);
+  const asks = await restart("asks");
+  await setup({ changes: { mode: "automatic" }, maintains: { mode: "ask", circleId: OWNER_CIRCLE_ID } }, key);
+  expect(await deliver(asks)).toMatchObject({
+    state: "failed",
+    output: expect.stringContaining('"maintains" of the caller is no longer automatic'),
+  });
 
   await setup({ changes: { mode: "automatic" } }, key);
   const paused = await restart("paused");
@@ -682,8 +814,9 @@ it("asks the Owner when the scope fails or a secret goes out, and the Owner's ap
     );
   const reset = await waits(await op("machine-reset-key", "reset", call("vps")));
   expect(await shown(reset)).toContain("gives: a key code that can act as the machine vps");
-  // K-1730: the job output is a read, so "reads" runs it at once in an agent circle.
-  expect((await op("jobs", "jobs", call(""))).status).toBe(200);
+  // K-1730: job output can quote a secret that a person typed, so it waits for the Owner.
+  const jobs = await waits(await op("jobs", "jobs", call("")));
+  expect(await shown(jobs)).toContain("gives: the commands and output of the last 100 jobs");
 
   // A target that does not exist refuses, because no approval could run the call.
   for (const [id, target, kind] of [

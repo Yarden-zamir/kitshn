@@ -4640,6 +4640,14 @@ export class Kitshn extends DurableObject<Env> {
     if (path === "/device/machines" && request.method === "GET")
       return Response.json(this.deviceMachines(caller.visitor));
     if (path.startsWith("/connect/deploys/")) return this.deploySource(path, caller);
+    // K-1714: a machine acts only through /op or /connect, signed, so its token alone never reaches an owner route.
+    if (machineOf(this.state, caller.visitor))
+      return Response.json(
+        {
+          error: "A machine acts only through its daemon: kitshn <operation> signs the call on /op (K-1714).",
+        },
+        { status: 403 },
+      );
     return this.ownerRoute(path, request, caller);
   }
 
@@ -6034,11 +6042,14 @@ export class Kitshn extends DurableObject<Env> {
     }
     if (approval.right !== null && rightOff(this.state, visitor, approval.right, now, attested))
       return `${NO_LONGER_ALLOWED} the owner set the effect "${approval.right}" to off.`;
-    // K-1778: "shares" let it past the scope, so the effect must still be automatic.
-    if (approval.raises === true)
-      return effectiveMode(this.state, visitor, "shares", now, attested).mode === "automatic"
-        ? null
-        : `${NO_LONGER_ALLOWED} the effect "shares" of the caller is no longer automatic.`;
+    // K-1777: only the gate let it in, so the effect that let it in must still be automatic, not only "not off".
+    if (
+      approval.automatic !== undefined &&
+      effectiveMode(this.state, visitor, approval.automatic, now, attested).mode !== "automatic"
+    )
+      return `${NO_LONGER_ALLOWED} the effect "${approval.automatic}" of the caller is no longer automatic.`;
+    // K-1778: "shares" let it past the scope, so K-718 does not count.
+    if (approval.raises === true) return null;
     // K-718: only the gate let this job in, so a command that gives a shell needs the whole machine again now.
     if (
       !approval.person &&
@@ -10744,6 +10755,7 @@ export class Kitshn extends DurableObject<Env> {
         right,
         labels,
         person: used?.person === true,
+        ...(used === null ? { automatic: gate.scope ? right : ("shares" as const) } : {}),
         ...(!gate.scope && used === null ? { raises: true as const } : {}),
       };
       gated = {
@@ -10852,6 +10864,7 @@ export class Kitshn extends DurableObject<Env> {
       }
       case "any":
       case "rule":
+      case "owner":
         return null;
     }
   }
@@ -10869,6 +10882,9 @@ export class Kitshn extends DurableObject<Env> {
     switch (op.gate.scope) {
       case "any":
         return true;
+      // K-1777: settings of the whole kitshn and actions with no target that a caller controls; "shares" decides.
+      case "owner":
+        return false;
       case "card":
         return cardsControlledBy(this.state, visitor, now, attested).has(target);
       case "machine":
@@ -11407,18 +11423,19 @@ export class Kitshn extends DurableObject<Env> {
     if (path.startsWith("/agent/library/") && path.endsWith("/previous") && request.method === "POST")
       return this.restorePrevious(agent, path.slice("/agent/library/".length, -"/previous".length), "agent");
     if (path === "/agent/jobs" && request.method === "POST") {
-      if (!machineMay("runs"))
-        return Response.json(
-          { error: 'The effect "runs" is not automatic for this machine (K-1720).' },
-          { status: 403 },
-        );
       const body: unknown = await request.json().catch(() => null);
       const machineId =
         typeof body === "object" && body !== null && "machineId" in body ? body.machineId : undefined;
-      // K-718, K-909: an agent key removes nothing, also no orphaned volume.
       const command = isRecord(body) && isRecord(body["command"]) ? body["command"] : null;
-      if (command?.["kind"] === "compose-volume-remove")
-        return Response.json({ error: NO_VOLUME_JOBS }, { status: 403 });
+      const volume = command?.["kind"] === "compose-volume-remove";
+      // K-718, K-909: an agent key removes nothing, also no orphaned volume. A machine removes one by "destroys".
+      if (volume && !machine) return Response.json({ error: NO_VOLUME_JOBS }, { status: 403 });
+      const effect = volume ? "destroys" : "runs";
+      if (!machineMay(effect))
+        return Response.json(
+          { error: `The effect "${effect}" is not automatic for this machine (K-1720).` },
+          { status: 403 },
+        );
       const noUpdate =
         command?.["kind"] === "update" && typeof machineId === "string"
           ? this.agentUpdateRefusal(machineId)
@@ -11702,15 +11719,16 @@ export class Kitshn extends DurableObject<Env> {
         reason: `This machine does not manage the card ${target} (K-718).`,
       });
     // K-718, K-909: a job that no approval can run refuses at once, so the Owner gets no ask that cannot run.
+    let volume = false;
     if (action === "job") {
       const command = parseCommand(isRecord(raw["body"]) ? raw["body"]["command"] : null);
       if (typeof command === "string") return event({ outcome: "refused", reason: command });
-      if (command.kind === "compose-volume-remove")
-        return event({ outcome: "refused", reason: NO_VOLUME_JOBS });
+      volume = command.kind === "compose-volume-remove";
       const noUpdate = command.kind === "update" ? this.agentUpdateRefusal(target) : null;
       if (noUpdate !== null) return event({ outcome: "refused", reason: noUpdate });
     }
-    const needs = ASK_RIGHT[action];
+    // K-909: a volume removal has no Undo, so it follows "destroys", as the row machine-volume-remove does (K-1777).
+    const needs = volume ? "destroys" : ASK_RIGHT[action];
     if (needs === "member")
       throw new Error(`The action ${action} needs membership, and only approve and deny do.`);
     if (needs !== "none" && needs !== "apply") {
@@ -11745,9 +11763,19 @@ export class Kitshn extends DurableObject<Env> {
         );
       }
     }
+    // K-1777: apply and organize are the rows of effect "changes" on /op, so the mode of "changes" decides them here
+    // too. Publish only moves a card into or out of Everyone, so "shares" alone decides it.
+    const changes =
+      action === "apply" || action === "organize"
+        ? machineEffectiveMode(this.state, machine.id, "changes", now, attested)
+        : null;
+    if (changes?.mode === "off") return event(offRight("changes"));
     // K-532: Organize keeps every share, so it never moves a card into Everyone and needs no "shares".
+    let raises = false;
     if (needs === "apply" && action !== "organize") {
       const edits = this.askEdits(machine, action, target, raw["body"], now, attested, []);
+      // "shares" automatic took an edit beyond the rule, so "shares" decided it and "changes" does not ask.
+      raises = typeof edits !== "string" && this.askRuleRefusal(machine, edits, now, attested, []) !== null;
       if (typeof edits === "string") {
         // K-1778: an edit beyond the rule of K-718 raises access, so "shares" decides it. At "automatic" askEdits
         // already took it; a rule that binds the owner too (K-105) refuses also with "shares".
@@ -11770,6 +11798,20 @@ export class Kitshn extends DurableObject<Env> {
         );
       }
     }
+    if (changes?.mode === "ask" && !raises)
+      return event(
+        await this.propose(
+          machineAsker(machine),
+          action,
+          target,
+          raw["body"],
+          reason,
+          labels,
+          "changes",
+          changes.circleId,
+          now,
+        ),
+      );
     return event(await this.runAsk(machine, action, target, raw["body"], [], labels, attested));
   }
 
@@ -11813,24 +11855,37 @@ export class Kitshn extends DurableObject<Env> {
       }
     }
     try {
-      const changes = resolveEdits(this.state, edits);
       // K-1778: "shares" automatic, or an approval of it, lets an edit raise access; the rules of K-105 still hold.
-      if (agentHas(this.state, visitor, "shares", now, attested, approved)) return edits;
-      const refusal = agentRefusal(
-        this.state,
-        applyChanges(this.state, changes),
-        visitor,
-        changes,
-        now,
-        this.agentAdded(machine.clientId),
-        attested,
-        approved,
-      );
-      return refusal ?? edits;
+      if (agentHas(this.state, visitor, "shares", now, attested, approved)) {
+        resolveEdits(this.state, edits);
+        return edits;
+      }
+      return this.askRuleRefusal(machine, edits, now, attested, approved) ?? edits;
     } catch (error) {
       if (error instanceof RuleError) return error.message;
       throw error;
     }
+  }
+
+  /** K-718: why these edits of a machine break the rule before "shares" counts, or null. Throws RuleError (K-105). */
+  private askRuleRefusal(
+    machine: Machine,
+    edits: ReadonlyArray<Edit>,
+    now: number,
+    attested: Attested | null,
+    approved: ReadonlyArray<Effect>,
+  ): string | null {
+    const changes = resolveEdits(this.state, edits);
+    return agentRefusal(
+      this.state,
+      applyChanges(this.state, changes),
+      { email: null, clientId: machine.clientId, ip: null },
+      changes,
+      now,
+      this.agentAdded(machine.clientId),
+      attested,
+      approved,
+    );
   }
 
   /** K-718: the cards of repos that this agent allowed (K-819), and the pages and files that it published. */

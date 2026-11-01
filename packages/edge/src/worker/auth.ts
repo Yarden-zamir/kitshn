@@ -24,9 +24,11 @@ export type JobApproval = (
    */
   readonly person: boolean;
   /**
-   * K-1778: "shares" automatic let the call run past its scope. Its delivery checks that the effect stays automatic,
-   * and not K-718.
+   * K-1777: no approval ran the call; the gate ran it because this effect of the caller was automatic. Its delivery
+   * checks that the effect stays automatic.
    */
+  readonly automatic?: Effect;
+  /** K-1778: "shares" automatic let the call run past its scope, so its delivery does not check K-718 again. */
   readonly raises?: true;
 };
 
