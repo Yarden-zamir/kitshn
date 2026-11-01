@@ -74,19 +74,21 @@ it("binds an approval of a forwarded call to the thread that asked (K-1714)", as
   const found = await runInDurableObject(env.KITSHN.getByName("kitshn"), (instance, state) => {
     state.storage.sql.exec(
       `INSERT INTO proposals (id, machine_id, action, target, body, reason, labels, right_name, circle_id, shown, shown_hash,
-       state, created_at, expires_at, verified, decided_at) VALUES ('p-thread', 'vps', 'forward', 'POST /agent/library', 'null',
-       NULL, '{"t3.thread.id":"a"}', 'addsPages', 'owner', 's', 'h-thread', 'approved', ?, ?, '[]', ?)`,
+       state, created_at, expires_at, verified, decided_at, decided_by) VALUES ('p-thread', 'vps', 'forward', 'POST /agent/library', 'null',
+       NULL, '{"t3.thread.id":"a"}', 'addsPages', 'owner', 's', 'h-thread', 'approved', ?, ?, '[]', ?, ?)`,
       now,
       now + 60_000,
       now,
+      JSON.stringify({ actor: { _tag: "person", email: "owner@example.com" }, reason: null }),
     );
     const approval = (thread: string | null) =>
       (
         instance as unknown as {
-          forwardApproval(m: string, h: string, c: string, t: string | null, n: number): string | null;
+          forwardApproval(m: string, h: string, c: string, t: string | null, n: number): object | null;
         }
       ).forwardApproval("vps", "h-thread", "owner", thread, now);
     return { same: approval("a"), other: approval("b"), none: approval(null) };
   });
-  expect(found).toEqual({ same: "p-thread", other: null, none: null });
+  // K-1777: the approval says that a person gave it, so its job keeps the 1-hour expiry of K-613.
+  expect(found).toEqual({ same: { id: "p-thread", person: true }, other: null, none: null });
 });

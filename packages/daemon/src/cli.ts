@@ -11,6 +11,7 @@ import {
   isAgentCommand,
   waitingLine,
 } from "kitshn/agent";
+import { OPS_HELP } from "./ops.ts";
 import type { SiteEntry } from "./sites.ts";
 
 /**
@@ -117,6 +118,7 @@ export function helpText(command: string | null, version: string): string {
     `kitshn ${version}`,
     "",
     ...order.map((name) => MACHINE_HELP[name]),
+    OPS_HELP,
     ...AGENT_COMMANDS.map((name) => AGENT_HELP[name]),
     ...rest.map((name) => MACHINE_HELP[name]),
     "",

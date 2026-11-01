@@ -541,7 +541,9 @@ export const forwardText = (
  * below `/agent/` and hold no encoded slash, backslash, dot or percent, so no later decoding can climb out of it.
  */
 export function forwardPathProblem(pathname: string): string | null {
-  if (!pathname.startsWith("/agent/")) return `${pathname} is not below /agent/`;
+  // K-1777: `/op/` carries the operations; `/agent/` keeps the short forms until it goes.
+  if (!pathname.startsWith("/agent/") && !pathname.startsWith("/op/"))
+    return `${pathname} is not below /agent/ or /op/`;
   const lower = pathname.toLowerCase();
   for (const bad of ["%2f", "%5c", "%2e", "%25", "\\", "/./", "/../"])
     if (lower.includes(bad)) return `${pathname} holds ${bad}`;

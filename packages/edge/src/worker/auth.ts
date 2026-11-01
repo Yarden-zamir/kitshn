@@ -1,12 +1,33 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { Actor } from "../core/changes.ts";
 import type { ContentVisitor } from "../core/library.ts";
+import type { MachineRight } from "../core/model.ts";
+import type { OpId } from "../core/operations.ts";
 import type { Visitor } from "../core/visitor.ts";
 import type { Env } from "./env.ts";
+
+/** K-1776, K-1777: what lets the job of a machine go out without the agent checks of its delivery. */
+export interface JobApproval {
+  readonly machineId: string;
+  /** The key of the machine that asked, at the approval, so a reset or a rotation ends the approval. */
+  readonly key: string | null;
+  /** The right that the approval or the gate used; null when no right lets an agent run the call (K-1777). */
+  readonly right: MachineRight | null;
+  /**
+   * A person approved this call. Without one, only the gate let it run, so its delivery checks K-718 again for a command
+   * that is not closed, and its job keeps the normal expiry (K-613).
+   */
+  readonly person: boolean;
+}
 
 export interface Caller {
   readonly visitor: Visitor;
   readonly actor: Actor;
+  /**
+   * K-1777: the operation whose gate let this machine call run, and the approval that its jobs carry. Only the Durable
+   * Object sets it, never a header. An owner call through `/op` has none, so it runs as from the map.
+   */
+  readonly gated?: { readonly op: OpId; readonly approval: JobApproval };
 }
 
 let jwks: { readonly team: string; readonly set: ReturnType<typeof createRemoteJWKSet> } | null = null;

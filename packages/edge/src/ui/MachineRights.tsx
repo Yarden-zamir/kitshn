@@ -26,6 +26,10 @@ const RIGHT_HELP: Record<MachineRight, string> = {
     "Adds pages: the machine publishes pages, files and folder sites into its agent circles, and sets their addresses and redirects.",
   restores:
     "Restores: the machine writes a backup run of a Compose card back, after a backup of the current data (K-1820).",
+  maintains:
+    "Maintains: machine care (restart, update, diagnostics, order, its own key), and closing device invites and asks (K-1777). Default: automatic.",
+  readsMap:
+    "Reads the map: kitshn state shows the whole map, without job output and History text (K-1777). Default: automatic.",
 };
 
 /**

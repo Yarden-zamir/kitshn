@@ -37,6 +37,8 @@ const MachineRights = Schema.Struct({
   getsPasses: Schema.optionalKey(RightMode),
   addsPages: Schema.optionalKey(RightMode),
   restores: Schema.optionalKey(RightMode),
+  maintains: Schema.optionalKey(RightMode),
+  readsMap: Schema.optionalKey(RightMode),
 });
 // A new right of MACHINE_RIGHTS fails here until the schema decodes it.
 const _everyRight: Record<Model.MachineRight, unknown> = MachineRights.fields;

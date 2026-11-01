@@ -222,6 +222,8 @@ import {
   agentHas,
   agentHomeCircle,
   agentMayCommand,
+  agentMayRunOn,
+  CLOSED_COMMANDS,
   agentRefusal,
   cardsControlledBy,
   circlesOf,
@@ -282,7 +284,21 @@ import {
   shownHash,
   WINDOW_ACTIONS,
   answerRefusal,
+  type ProposalRight,
+  proposalRightName,
 } from "../core/asks.ts";
+import {
+  type Decision,
+  type Operation,
+  OPERATIONS,
+  type SecretOpId,
+  agentRead,
+  decide,
+  isOpId,
+  isPersonGate,
+  isSecretOp,
+  opRequest,
+} from "../core/operations.ts";
 import { type MachineOs, machineOs } from "../core/icons.ts";
 import {
   contentSecurityPolicy,
@@ -404,7 +420,7 @@ import {
 } from "./access-sync.ts";
 import { approverOf } from "./auth.ts";
 import { MAX_KEYS, type PassKey, RETIRED_MS, discovery, jwks, newPassKey, signPass } from "./passes.ts";
-import type { Caller, Deployer } from "./auth.ts";
+import type { Caller, Deployer, JobApproval } from "./auth.ts";
 import { CloudflareError, cloudflare } from "./cloudflare.ts";
 import {
   NotInstalled,
@@ -2008,8 +2024,9 @@ export class Kitshn extends DurableObject<Env> {
         this.setMeta("paused_at", String(Date.now()));
         // K-1504: jobs that devices and agent keys queued do not run after Resume.
         this.sql(
-          `UPDATE jobs SET state = 'failed', output = 'The emergency pause ended this job.'
+          `UPDATE jobs SET state = 'failed', output = ?
            WHERE state = 'queued' AND json_extract(visitor, '$.email') IS NULL AND json_extract(visitor, '$.clientId') IS NOT NULL`,
+          PAUSE_ENDED_JOB,
         );
         // K-1716: the pause denies every open ask.
         this.denyOpenProposals(null, "the emergency pause");
@@ -3777,7 +3794,16 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   private authorized(caller: Caller) {
-    return this.hasAdmin(caller.visitor);
+    return caller.gated !== undefined || this.hasAdmin(caller.visitor);
+  }
+
+  /** K-1777: a gated caller passed the gate of its operation, so the owner checks of the handler hold. */
+  private callerControls(caller: Caller, id: string): boolean {
+    return caller.gated !== undefined || this.canControl(caller.visitor, id);
+  }
+
+  private callerIsOwner(caller: Caller): boolean {
+    return caller.gated !== undefined || this.isOwner(caller.visitor);
   }
 
   private hasAdmin(visitor: Visitor) {
@@ -3842,7 +3868,7 @@ export class Kitshn extends DurableObject<Env> {
       progress: Object.fromEntries(
         [...this.progressRows()].flatMap(([id, row]) =>
           this.state.resources.has(id) && progressShown(row.progress, Date.now())
-            ? [[id, { ...row.progress, canDismiss: this.canControl(caller.visitor, id) }]]
+            ? [[id, { ...row.progress, canDismiss: this.callerControls(caller, id) }]]
             : [],
         ),
       ),
@@ -4106,7 +4132,7 @@ export class Kitshn extends DurableObject<Env> {
     const machineId = typeof body["machineId"] === "string" ? body["machineId"] : null;
     if (machineId !== null && !this.state.machines.has(machineId))
       return Response.json({ error: `No machine "${machineId}" exists.` }, { status: 404 });
-    if (machineId !== null && !this.canControl(caller.visitor, machineId))
+    if (machineId !== null && !this.callerControls(caller, machineId))
       return Response.json({ error: "A part of a machine needs control on that machine." }, { status: 403 });
     const refusal = this.writeDesired(kind, machineId ?? "", body["value"], caller.actor);
     return refusal ? Response.json({ error: refusal }, { status: 413 }) : Response.json({ ok: true });
@@ -4128,9 +4154,7 @@ export class Kitshn extends DurableObject<Env> {
         { error: `${setting.title} is one of ${setting.values.join(", ")}.` },
         { status: 400 },
       );
-    const state =
-      this.state.paused && this.hasAdmin(caller.visitor) ? { ...this.state, paused: null } : this.state;
-    if (visitorLevel(state, card, caller.visitor, Date.now()) !== "control")
+    if (!this.callerControls(caller, card.id))
       return Response.json(
         { error: `${setting.title} needs control on ${card.name} (K-717).` },
         { status: 403 },
@@ -4525,10 +4549,28 @@ export class Kitshn extends DurableObject<Env> {
     }
     const header = request.headers.get("x-kitshn-caller");
     if (!header) return new Response("The Worker sent no caller.", { status: 500 });
-    const caller = JSON.parse(header) as Caller;
+    // K-1777: only the operation path gates a caller; a header never carries a gate.
+    const { gated: _gated, ...caller } = JSON.parse(header) as Caller;
     if (path === "/connect") return this.connectMachine(request, caller);
+    if (path.startsWith("/op/")) return this.opRequest(path.slice("/op/".length), request, caller);
     // Only the Worker's fresh passkey route sends this path (K-1504).
     if (path === "/fresh/resume" && request.method === "POST") return this.resume(caller);
+    if (path === "/fresh/restore-time" && request.method === "POST")
+      return await this.restoreTime(caller, await request.json().catch(() => null));
+    if (path === "/fresh/restored" && request.method === "POST")
+      return await this.restored(caller, await request.json().catch(() => null));
+    if (path.startsWith("/agent/")) return this.agentRequest(path, request, caller);
+    if (path === "/device/machines" && request.method === "GET")
+      return Response.json(this.deviceMachines(caller.visitor));
+    if (path.startsWith("/connect/deploys/")) return this.deploySource(path, caller);
+    return this.ownerRoute(path, request, caller);
+  }
+
+  /**
+   * K-1777: the owner routes. The map calls them with a login, and an operation calls them with a gated caller after
+   * `decide` let the call run. The rules that also bind the owner (K-105, K-1504) stay in the handlers.
+   */
+  private async ownerRoute(path: string, request: Request, caller: Caller): Promise<Response> {
     // K-1723: the owner denies an ask from the map.
     if (path.startsWith("/api/proposals/") && path.endsWith("/deny") && request.method === "POST")
       return this.answerProposal(
@@ -4538,14 +4580,6 @@ export class Kitshn extends DurableObject<Env> {
         null,
         await request.json().catch(() => null),
       );
-    if (path === "/fresh/restore-time" && request.method === "POST")
-      return await this.restoreTime(caller, await request.json().catch(() => null));
-    if (path === "/fresh/restored" && request.method === "POST")
-      return await this.restored(caller, await request.json().catch(() => null));
-    if (path.startsWith("/agent/")) return this.agentRequest(path, request, caller);
-    if (path === "/device/machines" && request.method === "GET")
-      return Response.json(this.deviceMachines(caller.visitor));
-    if (path.startsWith("/connect/deploys/")) return this.deploySource(path, caller);
     if (!this.authorized(caller)) {
       return Response.json(
         { error: "You have no control level on the kitshn admin (K-104)." },
@@ -5867,14 +5901,27 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /** K-1776: why an approved job may no longer go out, because the machine that asked lost its access; or null. */
-  private approvalGone(approval: OwnerApproval, now: number) {
+  private approvalGone(
+    approval: JobApproval,
+    visitor: Visitor,
+    machineId: string | null,
+    kind: Command["kind"],
+    now: number,
+  ) {
     const asker = this.state.machines.get(approval.machineId);
     if (!asker) return `${NO_LONGER_ALLOWED} the machine that asked is gone.`;
     if (keyMark(asker) !== approval.key)
       return `${NO_LONGER_ALLOWED} the key of the machine that asked changed.`;
-    return machineRightOff(this.state, asker.id, approval.right, now)
-      ? `${NO_LONGER_ALLOWED} the owner set the right "${MACHINE_RIGHT_NAMES[approval.right]}" to off.`
-      : null;
+    if (approval.right !== null && machineRightOff(this.state, asker.id, approval.right, now))
+      return `${NO_LONGER_ALLOWED} the owner set the right "${MACHINE_RIGHT_NAMES[approval.right]}" to off.`;
+    // K-718: only the gate let this job in, so a command that gives a shell needs the whole machine again now.
+    if (
+      !approval.person &&
+      !CLOSED_COMMANDS.has(kind) &&
+      (machineId === null || !agentMayRunOn(this.state, visitor, machineId, now))
+    )
+      return `${NO_LONGER_ALLOWED} the machine that asked no longer manages every card of the target machine (K-718).`;
+    return null;
   }
 
   /** K-622: why an agent may not update this daemon now, or null. The status is unknown while it is offline. */
@@ -5937,7 +5984,7 @@ export class Kitshn extends DurableObject<Env> {
    * portal keep their own paths (`tunnelConfig`).
    */
   private async takeAddress(caller: Caller, id: string, api: Api) {
-    if (!this.isOwner(caller.visitor))
+    if (!this.callerIsOwner(caller))
       return Response.json({ error: "Only the owner takes an address over." }, { status: 403 });
     const refused = () => {
       const card = this.state.resources.get(id);
@@ -6027,7 +6074,7 @@ export class Kitshn extends DurableObject<Env> {
    * while the portal still holds the exact host, so the host never stays without an application.
    */
   private async giveAddressBack(caller: Caller, id: string, api: Api) {
-    if (!this.isOwner(caller.visitor))
+    if (!this.callerIsOwner(caller))
       return Response.json({ error: "Only the owner gives an address back." }, { status: 403 });
     const card = this.state.resources.get(id);
     const site = this.liveSites.get(id);
@@ -6104,7 +6151,7 @@ export class Kitshn extends DurableObject<Env> {
 
   /** K-538: a failed action stays on its card until someone with control dismisses it. */
   private dismissProgress(caller: Caller, id: string) {
-    if (!this.canControl(caller.visitor, id))
+    if (!this.callerControls(caller, id))
       return Response.json({ error: "Dismiss needs control on the card." }, { status: 403 });
     if (this.progressRows().get(id)?.progress.outcome.state !== "failed")
       return Response.json({ error: "This card has no failed action." }, { status: 409 });
@@ -6147,7 +6194,7 @@ export class Kitshn extends DurableObject<Env> {
   private forgetProvider(caller: Caller, machineId: string, name: string, card: string | null) {
     const machine = this.state.machines.get(machineId);
     if (!machine) return Response.json({ error: `No machine "${machineId}" exists.` }, { status: 404 });
-    if (!this.canControl(caller.visitor, machineId))
+    if (!this.callerControls(caller, machineId))
       return Response.json({ error: "Forgetting a provider needs control on its machine." }, { status: 403 });
     // The status that the daemon last reported: an offline machine whose daemon still has the provider brings it back.
     const running = [...this.state.resources.values()].some(
@@ -6254,7 +6301,7 @@ export class Kitshn extends DurableObject<Env> {
       const queuedBy = JSON.parse(job.actor) as Actor;
       if (queuedBy._tag !== "machine" || queuedBy.machineId !== who.machine.id)
         return `Job ${id} was not queued by ${who.machine.name}; cancel it on the map, with control on its machine (K-1612).`;
-    } else if (job.machine_id !== null && !this.canControl(who.caller.visitor, job.machine_id))
+    } else if (job.machine_id !== null && !this.callerControls(who.caller, job.machine_id))
       return "Cancelling a job needs control on its machine.";
     if (job.state !== "queued") return `Job ${id} is ${job.state}, so it cannot be cancelled.`;
     const name = actorName(actor);
@@ -6282,7 +6329,7 @@ export class Kitshn extends DurableObject<Env> {
     const checking: Array<string> = [];
     const skipped: Array<{ readonly machine: string; readonly reason: string }> = [];
     for (const machine of this.state.machines.values()) {
-      if (!this.canControl(caller.visitor, machine.id)) continue;
+      if (!this.callerControls(caller, machine.id)) continue;
       const socket = this.openSocket(machine.id);
       const attachment = socket ? attachmentOf(socket) : null;
       if (!socket || attachment?.kind !== "machine" || attachment.check !== "signed") {
@@ -6364,7 +6411,9 @@ export class Kitshn extends DurableObject<Env> {
     return queued;
   }
 
-  private addJob(caller: Caller, body: unknown, ownerApproved: OwnerApproval | null = null) {
+  private addJob(caller: Caller, body: unknown, approvedBy: JobApproval | null = null) {
+    // K-1777: a job of a gated call carries the gate's approval; its delivery checks K-718 again only without a person.
+    const ownerApproved = approvedBy ?? caller.gated?.approval ?? null;
     const input = (typeof body === "object" && body !== null ? body : {}) as Record<string, unknown>;
     const parsed = parseCommand(input["command"]);
     if (typeof parsed === "string") return Response.json({ error: parsed }, { status: 400 });
@@ -6405,7 +6454,7 @@ export class Kitshn extends DurableObject<Env> {
         : parsed.kind === "compose-volume-remove" && orphan
           ? { ...parsed, project: orphan.project }
           : (providerCommand ?? parsed);
-    if (machineId !== null && !ownerApproved && !this.canControl(caller.visitor, machineId)) {
+    if (machineId !== null && !ownerApproved && !this.callerControls(caller, machineId)) {
       return Response.json(
         {
           error:
@@ -6428,7 +6477,8 @@ export class Kitshn extends DurableObject<Env> {
         now,
         // K-613: an approval covers what its person saw, for a short time. Limit: a private card that lands within this
         // hour is still in reach of the job. Revisit if owners need longer, then fail the job when the cards changed.
-        now + (ownerApproved ? DEPLOY_MS : JOB_EXPIRY_MS),
+        // K-1777: a gated job that no person approved has its checks again at delivery, so it keeps the normal expiry.
+        now + (ownerApproved?.person === true ? DEPLOY_MS : JOB_EXPIRY_MS),
         JSON.stringify(caller.actor),
         JSON.stringify(ownerApproved ? { ...caller.visitor, ownerApproved } : caller.visitor),
         // K-613: "when online and idle" waits until no provider of the machine reports busy (K-1608).
@@ -6485,11 +6535,16 @@ export class Kitshn extends DurableObject<Env> {
     for (const job of queued) {
       const visitor = JSON.parse(job.visitor) as Visitor & {
         readonly kitshn?: true;
-        readonly ownerApproved?: OwnerApproval | null;
+        readonly ownerApproved?: JobApproval | null;
       };
       const queuedCommand = JSON.parse(job.command) as Command;
       // K-1776: an approval holds only while the machine that asked keeps its access.
-      const gone = visitor.ownerApproved ? this.approvalGone(visitor.ownerApproved, Date.now()) : null;
+      // K-1504: the pause ends the queued jobs of agents, also an approved job that a race queued after the pause.
+      const gone = !visitor.ownerApproved
+        ? null
+        : this.state.paused
+          ? PAUSE_ENDED_JOB
+          : this.approvalGone(visitor.ownerApproved, visitor, job.machine_id, queuedCommand.kind, Date.now());
       if (gone !== null) {
         this.sql("UPDATE jobs SET state = 'failed', output = ? WHERE id = ?", gone, job.id);
         this.endStep(job.id);
@@ -8117,7 +8172,7 @@ export class Kitshn extends DurableObject<Env> {
    * a new device token drops its secret, and the exchange rotates it. A cancel never touches a token.
    */
   private async inviteRequest(path: string, request: Request, caller: Caller): Promise<Response> {
-    if (!this.isOwner(caller.visitor))
+    if (!this.callerIsOwner(caller))
       return Response.json(
         { error: "Only the owner makes or cancels a device invite (K-1601)." },
         { status: 403 },
@@ -10040,31 +10095,33 @@ export class Kitshn extends DurableObject<Env> {
    * and signs it with the machine key. kitshn checks the signature, the right of the path with its mode and
    * conditions, the pause, and writes one ask event.
    */
-  private async forwardedRequest(path: string, request: Request, caller: Caller, machine: Machine) {
-    const now = Date.now();
+  /**
+   * K-1714: the attested labels of a call that the daemon of this machine forwarded and signed, or why kitshn refuses
+   * it. Each nonce counts once, also after a restart.
+   */
+  private async verifiedForward(
+    request: Request,
+    machine: Machine,
+    now: number,
+  ): Promise<Readonly<Record<string, string>> | string> {
     const url = new URL(request.url);
     const call = { method: request.method, path: `${url.pathname}${url.search}` };
     const header = (name: string) => request.headers.get(name) ?? "";
     const at = Number(header(FORWARD_HEADERS.at));
     const nonce = header(FORWARD_HEADERS.nonce);
     const labelsText = header(FORWARD_HEADERS.labels) || "{}";
-    // A refusal drops the body that it does not read, so the connection does not wait on it.
-    const refuse = async (status: number, error: string, need?: MachineRight) => {
-      if (!request.bodyUsed) await request.body?.cancel().catch(() => undefined);
-      return Response.json({ error, ...(need ? { need } : {}) }, { status });
-    };
     const pathProblem = forwardPathProblem(url.pathname);
-    if (pathProblem !== null || forwardRight(url.pathname, request.method) === undefined)
-      return refuse(403, `A machine forwards no call to ${request.method} ${url.pathname} (K-1714).`);
+    if (pathProblem !== null)
+      return `A machine forwards no call to ${request.method} ${url.pathname} (K-1714).`;
     if (machine.key?.kind !== "public")
-      return refuse(403, "This machine has no key, so it cannot forward a call (K-1714).");
+      return "This machine has no key, so it cannot forward a call (K-1714).";
     if (
       !Number.isFinite(at) ||
       Math.abs(now - at) > FORWARD_WINDOW_MS ||
       nonce.length < 16 ||
       nonce.length > 64
     )
-      return refuse(403, "The forwarded call is too old, or its nonce is not one (K-1714).");
+      return "The forwarded call is too old, or its nonce is not one (K-1714).";
     const labelsHash = await sha256Hex(labelsText);
     const valid = await verifyForHosts(
       machine.key.publicKey,
@@ -10072,8 +10129,7 @@ export class Kitshn extends DurableObject<Env> {
       (host) => forwardText(host, machine.id, { ...call, at, nonce, labelsHash }),
       header(FORWARD_HEADERS.signature),
     );
-    if (!valid)
-      return refuse(403, "The signature of the forwarded call does not fit the machine key (K-1714).");
+    if (!valid) return "The signature of the forwarded call does not fit the machine key (K-1714).";
     // K-1714: one use per nonce, also after a restart; a nonce older than the window fails the time check above.
     this.sql("DELETE FROM forward_nonces WHERE at < ?", now - FORWARD_WINDOW_MS);
     const [fresh] = this.sql<{ nonce: string }>(
@@ -10081,7 +10137,7 @@ export class Kitshn extends DurableObject<Env> {
       nonce,
       at,
     );
-    if (!fresh) return refuse(403, "The nonce of this forwarded call was used (K-1714).");
+    if (!fresh) return "The nonce of this forwarded call was used (K-1714).";
     const prefixes = this.labelPrefixesOf(machine.id);
     let parsed: unknown = null;
     try {
@@ -10089,12 +10145,29 @@ export class Kitshn extends DurableObject<Env> {
     } catch {
       parsed = null;
     }
-    const labels = Object.fromEntries(
+    return Object.fromEntries(
       Object.entries(isRecord(parsed) ? parsed : {}).filter(
         (entry): entry is [string, string] =>
           typeof entry[1] === "string" && prefixes.some((prefix) => entry[0].startsWith(prefix)),
       ),
     );
+  }
+
+  private async forwardedRequest(path: string, request: Request, caller: Caller, machine: Machine) {
+    const now = Date.now();
+    const url = new URL(request.url);
+    const call = { method: request.method, path: `${url.pathname}${url.search}` };
+    // A refusal drops the body that it does not read, so the connection does not wait on it.
+    const refuse = async (status: number, error: string, need?: MachineRight) => {
+      if (!request.bodyUsed) await request.body?.cancel().catch(() => undefined);
+      return Response.json({ error, ...(need ? { need } : {}) }, { status });
+    };
+    if (forwardRight(url.pathname, request.method) === undefined)
+      return refuse(403, `A machine forwards no call to ${request.method} ${url.pathname} (K-1714).`);
+    const verified = await this.verifiedForward(request, machine, now);
+    if (typeof verified === "string") return refuse(403, verified);
+    const labels = verified;
+    const prefixes = this.labelPrefixesOf(machine.id);
     const target = `${call.method} ${call.path}`.slice(0, 512);
     let waiting: string | null = null;
     const answer = await (async (): Promise<Response> => {
@@ -10186,7 +10259,7 @@ export class Kitshn extends DurableObject<Env> {
         if (approval === null) wait ??= { right: need, circleId };
         else {
           approved.push(need);
-          used.add(approval);
+          used.add(approval.id);
         }
       }
       // An approval of a call that cannot run would only cost the approver a click.
@@ -10249,6 +10322,323 @@ export class Kitshn extends DurableObject<Env> {
     return answer;
   }
 
+  /**
+   * K-1777: one operation: `POST /op/<id>` with `{ target, body, reason }`, or the read `GET /op/state`. The owner runs
+   * it at once. A machine sends it through its daemon (K-1714), and `decide` runs it, asks a circle, or refuses. An
+   * approval runs nothing: the same call again within 1 hour runs, so no proposal holds a secret (K-1723).
+   */
+  private async opRequest(id: string, request: Request, caller: Caller): Promise<Response> {
+    const now = Date.now();
+    const answer = (status: number, body: Record<string, unknown>) => Response.json(body, { status });
+    const refused = (status: number, reason: string) =>
+      answer(status, { outcome: "refused", reason, error: reason });
+    const machine = machineOf(this.state, caller.visitor);
+    let labels: Readonly<Record<string, string>> = {};
+    if (machine) {
+      const verified = await this.verifiedForward(request, machine, now);
+      if (typeof verified === "string") return refused(403, verified);
+      labels = verified;
+    }
+    const admin = this.hasAdmin(caller.visitor);
+    if (!admin && !machine)
+      return refused(
+        403,
+        "Only the owner, or an agent through the daemon of a joined machine, calls an operation (K-1732, K-1777).",
+      );
+    const asker: Caller = machine
+      ? { visitor: caller.visitor, actor: { _tag: "machine", machineId: machine.id, name: machine.name } }
+      : caller;
+    if (id === "state" && request.method === "GET") return this.opState(asker, machine ?? null, now);
+    if (!isOpId(id)) return refused(404, `kitshn has no operation "${id}"; kitshn ops lists them.`);
+    if (request.method !== "POST") return refused(405, "Send an operation with POST.");
+    const op: Operation = OPERATIONS[id];
+    if (op.shortOnly === true)
+      return refused(400, `This operation has its own path: use ${op.short ?? "the map"}.`);
+    const input: unknown = await request.json().catch(() => null);
+    if (!isRecord(input))
+      return refused(400, 'Send {"target": "...", "body": {...}, "reason": "..."} as JSON.');
+    const target = typeof input["target"] === "string" ? input["target"] : "";
+    const body = input["body"] ?? {};
+    const reason = typeof input["reason"] === "string" ? input["reason"].slice(0, 500) : null;
+    const built = opRequest(op, target, body);
+    if (typeof built === "string") return refused(400, built);
+    let decision: Decision;
+    let used: { readonly id: string; readonly person: boolean } | null = null;
+    let gated: Caller["gated"] = undefined;
+    if (machine && !admin) {
+      const right = isPersonGate(op.gate) ? null : op.gate.right;
+      const open = right === null ? null : machineRightMode(this.state, machine.id, right, now);
+      const off = right !== null && open === null && machineRightOff(this.state, machine.id, right, now);
+      const failed = conditionProblem(open?.conditions, labels, this.labelPrefixesOf(machine.id));
+      if (failed) return refused(403, failed);
+      const missing = this.opMissing(op, target, built.body);
+      if (missing !== null) return refused(404, missing);
+      const gate = {
+        admin: false,
+        paused: this.state.paused !== null,
+        mode: off ? ({ mode: "off" } as const) : open,
+        inAgentCircle: circlesOf(this.state, caller.visitor, now).size > 0,
+        scope: this.opScope(op, target, built.body, caller.visitor, now),
+      };
+      decision = decide(op, { ...gate, approved: false }, OWNER_CIRCLE_ID);
+      if (decision.outcome === "ask") {
+        const opTarget = `op ${id} ${target}`.slice(0, 512);
+        // K-1777: the approver reads what the answer gives, not only the fields of the call.
+        const effect = isSecretOp(id) ? this.secretEffect(id, target, built.body) : (op.gives ?? null);
+        const shownBody = {
+          headers: effect === null ? {} : { gives: effect },
+          body: JSON.stringify({ target, body, reason }),
+        };
+        const hash = await shownHash(shownAsk("forward", opTarget, shownBody));
+        const thread = labels["t3.thread.id"] ?? null;
+        used = this.forwardApproval(machine.id, hash, decision.circleId, thread, now);
+        if (used !== null) decision = decide(op, { ...gate, approved: true }, OWNER_CIRCLE_ID);
+        else {
+          const proposal = await this.forwardProposal(
+            machine,
+            opTarget,
+            shownBody,
+            labels,
+            // K-1777: a failed scope asks the Owner whatever the mode, so no mode of the right decides the approval.
+            { right: gate.scope ? (right ?? "owner") : "owner", circleId: decision.circleId },
+            hash,
+            thread,
+            now,
+          );
+          this.askEvent(
+            now,
+            machine,
+            "forward",
+            opTarget,
+            reason,
+            labels,
+            proposal.outcome === "waiting"
+              ? { outcome: "waiting", proposalId: proposal.proposalId }
+              : { outcome: "refused", reason: proposal.reason },
+          );
+          if (proposal.outcome === "refused") return refused(409, proposal.reason);
+          return answer(409, {
+            outcome: "waiting",
+            error: proposal.line,
+            proposalId: proposal.proposalId,
+            circle: proposal.circle,
+            expiresAt: proposal.expiresAt,
+            ask: { id: proposal.proposalId, circle: proposal.circle, expiresAt: proposal.expiresAt },
+          });
+        }
+      }
+      if (decision.outcome === "refuse") {
+        this.askEvent(now, machine, "forward", `op ${id} ${target}`.slice(0, 512), reason, labels, {
+          outcome: "refused",
+          reason: decision.reason,
+        });
+        return refused(403, decision.reason);
+      }
+      gated = {
+        op: id,
+        approval: { machineId: machine.id, key: keyMark(machine), right, person: used?.person === true },
+      };
+    } else {
+      // K-1777: the admin runs as from the map; `decide` refuses only a person gate, whose path is not `/op`.
+      decision = decide(
+        op,
+        {
+          admin: true,
+          paused: this.state.paused !== null,
+          mode: null,
+          inAgentCircle: false,
+          scope: true,
+          approved: false,
+        },
+        OWNER_CIRCLE_ID,
+      );
+      if (decision.outcome === "refuse") return refused(403, decision.reason);
+    }
+    if (decision.outcome !== "run") return refused(403, "kitshn decided nothing for this call (K-006).");
+    if (used !== null)
+      this.sql("UPDATE proposals SET used_at = ? WHERE id = ? AND used_at IS NULL", now, used.id);
+    const owner = new Request(new URL(built.path, request.url), {
+      method: built.method,
+      headers: { "content-type": "application/json" },
+      ...(built.body === null ? {} : { body: JSON.stringify(built.body) }),
+    });
+    const ran = await this.ownerRoute(built.path, owner, gated === undefined ? asker : { ...asker, gated });
+    if (machine)
+      this.askEvent(
+        now,
+        machine,
+        "forward",
+        `op ${id} ${target}`.slice(0, 512),
+        reason,
+        labels,
+        ran.ok ? { outcome: "done", result: null } : { outcome: "refused", reason: `answered ${ran.status}` },
+      );
+    const result: unknown = await ran.json().catch(() => null);
+    if (!ran.ok) {
+      const error =
+        isRecord(result) && typeof result["error"] === "string" ? result["error"] : `answered ${ran.status}`;
+      return refused(ran.status, error);
+    }
+    return answer(200, { outcome: "done", result });
+  }
+
+  /**
+   * K-1777: why the target that the scope checks does not exist, or null. A missing target refuses, because an approval
+   * could not run the call either; only a target out of scope asks the Owner.
+   */
+  private opMissing(op: Operation, target: string, body: unknown): string | null {
+    if (isPersonGate(op.gate)) return null;
+    const card = (id: string) =>
+      this.state.resources.has(id) || this.sql("SELECT 1 FROM library WHERE id = ?", id).length > 0;
+    switch (op.gate.scope) {
+      case "card":
+      case "own":
+        return card(target) ? null : `There is no such card: "${target}".`;
+      case "machine":
+      case "self":
+        return this.state.machines.has(target) ? null : `There is no such machine: "${target}".`;
+      case "job": {
+        const jobId = Number(target);
+        const found =
+          target !== "" &&
+          Number.isSafeInteger(jobId) &&
+          this.sql("SELECT 1 FROM jobs WHERE id = ?", jobId).length > 0;
+        return found ? null : `There is no such job: "${target}".`;
+      }
+      case "ports": {
+        const missing = ["machine", "relay"]
+          .map((name) => (isRecord(body) && typeof body[name] === "string" ? (body[name] as string) : ""))
+          .filter((id) => id !== "" && !card(id));
+        return missing.length === 0 ? null : `There is no such card: "${missing.join('", "')}".`;
+      }
+      case "any":
+      case "rule":
+      case "never":
+        return null;
+    }
+  }
+
+  /** K-1777: whether the target of a call fits the scope of its operation for this machine. */
+  private opScope(op: Operation, target: string, body: unknown, visitor: Visitor, now: number): boolean {
+    if (isPersonGate(op.gate)) return false;
+    switch (op.gate.scope) {
+      case "any":
+        return true;
+      case "never":
+        return false;
+      case "card":
+        return cardsControlledBy(this.state, visitor, now).has(target);
+      case "machine":
+        return agentMayRunOn(this.state, visitor, target, now);
+      case "self":
+        return machineOf(this.state, visitor)?.id === target;
+      case "own":
+        return this.addedBy(visitor.clientId).has(target);
+      case "job": {
+        const jobId = Number(target);
+        const [job] =
+          target !== "" && Number.isSafeInteger(jobId)
+            ? this.sql<{ machine_id: string | null; actor: string }>(
+                "SELECT machine_id, actor FROM jobs WHERE id = ?",
+                jobId,
+              )
+            : [];
+        if (!job) return false;
+        const queuedBy = JSON.parse(job.actor) as Actor;
+        const own = queuedBy._tag === "machine" && queuedBy.machineId === machineOf(this.state, visitor)?.id;
+        return (
+          own || (job.machine_id !== null && cardsControlledBy(this.state, visitor, now).has(job.machine_id))
+        );
+      }
+      case "ports": {
+        // K-2007: the port machine and its relay are cards that the caller controls.
+        const field = (name: string) =>
+          isRecord(body) && typeof body[name] === "string" ? (body[name] as string) : "";
+        const managed = cardsControlledBy(this.state, visitor, now);
+        return managed.has(field("machine")) && (field("relay") === "" || managed.has(field("relay")));
+      }
+      case "rule": {
+        const edits =
+          isRecord(body) && Array.isArray(body["edits"]) ? (body["edits"] as ReadonlyArray<Edit>) : [];
+        try {
+          const changes = resolveEdits(this.state, edits);
+          return (
+            agentRefusal(
+              this.state,
+              applyChanges(this.state, changes),
+              visitor,
+              changes,
+              now,
+              this.addedBy(visitor.clientId),
+              [],
+            ) === null
+          );
+        } catch {
+          // An edit that does not resolve cannot pass the rule, so the Owner decides.
+          return false;
+        }
+      }
+    }
+  }
+
+  /** K-1777: what the answer of a secret row gives, for the approver to read. */
+  private secretEffect(id: SecretOpId, target: string, body: unknown): string {
+    const field = (name: string) =>
+      isRecord(body) && typeof body[name] === "string" ? (body[name] as string) : "";
+    switch (id) {
+      case "machine-reset-key":
+        return `a key code that can act as the machine ${this.state.machines.get(target)?.name ?? target}`;
+      case "machine-add":
+        return `the join code of a new machine ${field("name")}`;
+      case "device-token-add":
+        return `the secret of a new device token ${field("name")}, in no circle yet`;
+      case "device-invite": {
+        const tokenId = field("tokenId");
+        if (tokenId === "")
+          return `a code for the secret of a new device token ${field("name")}, in no circle yet`;
+        const circles = [...this.state.circles.values()]
+          .filter((circle) =>
+            circle.members.some((member) => member._tag === "device" && member.tokenId === tokenId),
+          )
+          .map((circle) => circle.name);
+        return `a code for the secret of the token ${tokenId} (circles: ${circles.join(", ") || "none"})`;
+      }
+    }
+  }
+
+  /** K-718: the cards of repos that this caller allowed (K-819), and the pages and files that it published. */
+  private addedBy(clientId: string | null) {
+    return new Set(
+      this.sql<{ resource_id: string }>(
+        `SELECT DISTINCT deploys.resource_id FROM deploys JOIN repos ON repos.repo_id = deploys.repo_id AND deploys.kind = 'deploy'
+         WHERE repos.allowed_by_client = ?
+         UNION SELECT id FROM library WHERE added_by = ?`,
+        clientId,
+        clientId,
+      ).map((row) => row.resource_id),
+    );
+  }
+
+  /**
+   * K-1777, K-208: `kitshn state`: the owner snapshot through AGENT_READ. A machine reads it while "reads the map" is
+   * not off and it is in an agent circle; else it asks the Owner through `kitshn agent state`.
+   */
+  private opState(caller: Caller, machine: Machine | null, now: number) {
+    if (machine) {
+      const open = machineRightMode(this.state, machine.id, "readsMap", now);
+      const allowed =
+        open?.mode === "automatic" ||
+        (open === null &&
+          !machineRightOff(this.state, machine.id, "readsMap", now) &&
+          circlesOf(this.state, caller.visitor, now).size > 0);
+      if (!allowed) {
+        const reason = `This machine has no "reads the map" now: it is off, asks a circle, or the machine is in no agent circle. kitshn agent state shows its own cards (K-1777).`;
+        return Response.json({ outcome: "refused", reason, error: reason }, { status: 403 });
+      }
+    }
+    return Response.json({ outcome: "done", result: agentRead(this.snapshot(caller)) });
+  }
+
   /** K-1123: true when this agent has a live folder site of this folder, so a plan updates it. */
   private folderSiteKnown(clientId: string, folder: string, now: number) {
     const [stored] = this.sql<AgentSiteRow>(
@@ -10261,7 +10651,7 @@ export class Kitshn extends DurableObject<Env> {
 
   /**
    * K-1714, K-1776: the unused approval of exactly this forwarded call (its shown hash) of this machine and thread, from
-   * this circle, within the hour; null when there is none.
+   * this circle, within the hour, and whether a person gave it; null when there is none.
    */
   private forwardApproval(
     machineId: string,
@@ -10269,9 +10659,10 @@ export class Kitshn extends DurableObject<Env> {
     circleId: string,
     thread: string | null,
     now: number,
-  ): string | null {
-    const [row] = this.sql<{ id: string }>(
-      `SELECT id FROM proposals WHERE machine_id = ? AND action = 'forward' AND shown_hash = ? AND circle_id = ?
+  ): { readonly id: string; readonly person: boolean } | null {
+    const [row] = this.sql<{ id: string; person: number }>(
+      `SELECT id, json_extract(decided_by, '$.actor._tag') = 'person' AS person FROM proposals
+       WHERE machine_id = ? AND action = 'forward' AND shown_hash = ? AND circle_id = ?
        AND state = 'approved' AND used_at IS NULL AND decided_at > ? AND json_extract(labels, '$."t3.thread.id"') IS ?
        LIMIT 1`,
       machineId,
@@ -10280,7 +10671,7 @@ export class Kitshn extends DurableObject<Env> {
       now - APPROVED_WINDOW_MS,
       thread,
     );
-    return row?.id ?? null;
+    return row ? { id: row.id, person: row.person === 1 } : null;
   }
 
   /**
@@ -10292,7 +10683,7 @@ export class Kitshn extends DurableObject<Env> {
     target: string,
     body: unknown,
     labels: Readonly<Record<string, string>>,
-    wait: { readonly right: MachineRight; readonly circleId: string },
+    wait: { readonly right: ProposalRight; readonly circleId: string },
     hash: string,
     thread: string | null,
     now: number,
@@ -10331,7 +10722,7 @@ export class Kitshn extends DurableObject<Env> {
       proposalId: made.proposalId,
       circle,
       expiresAt,
-      line: `waiting: ${circle} must approve this call (right "${MACHINE_RIGHT_NAMES[wait.right]}", proposal ${made.proposalId}, expires in ${hours} h). After the approval, run the same command once more within 1 hour, from the same thread; a changed call asks again (K-1776).`,
+      line: `waiting: ${circle} must approve this call (right "${proposalRightName(wait.right)}", proposal ${made.proposalId}, expires in ${hours} h). After the approval, run the same command once more within 1 hour, from the same thread; a changed call asks again (K-1776).`,
     };
   }
 
@@ -10341,7 +10732,7 @@ export class Kitshn extends DurableObject<Env> {
     caller: Caller,
     approved: ReadonlyArray<MachineRight> = [],
     /** K-1776: a person of the Owner circle approved this one job or deploy, so K-718 does not refuse it. */
-    ownerApproved: OwnerApproval | null = null,
+    ownerApproved: JobApproval | null = null,
   ) {
     const now = Date.now();
     // K-1714: a machine's token over HTTP is a call that its daemon forwarded and signed; asks use the connection.
@@ -11138,7 +11529,7 @@ export class Kitshn extends DurableObject<Env> {
     body: unknown,
     approved: ReadonlyArray<MachineRight>,
     labels: Readonly<Record<string, string>> = {},
-    ownerApproved: OwnerApproval | null = null,
+    ownerApproved: JobApproval | null = null,
   ): Promise<AskOutcome> {
     if (action === "pass") return this.issuePass(machine, target, labels);
     if (action === "exec") return this.startExecRun(machine, target, body);
@@ -11618,7 +12009,7 @@ export class Kitshn extends DurableObject<Env> {
     body: unknown,
     reason: string | null,
     labels: Readonly<Record<string, string>>,
-    right: MachineRight,
+    right: ProposalRight,
     circleId: string,
     now: number,
   ): Promise<AskOutcome> {
@@ -11778,12 +12169,13 @@ export class Kitshn extends DurableObject<Env> {
           proposal.action,
           proposal.target,
           proposal.body,
-          [proposal.right],
+          proposal.right === "owner" ? [] : [proposal.right],
           proposal.labels,
           proposal.circleId === OWNER_CIRCLE_ID &&
             by.machineId === null &&
-            (proposal.action === "job" || proposal.action === "deploy")
-            ? { machineId: machine.id, key: keyMark(machine), right: proposal.right }
+            (proposal.action === "job" || proposal.action === "deploy") &&
+            proposal.right !== "owner"
+            ? { machineId: machine.id, key: keyMark(machine), right: proposal.right, person: true }
             : null,
         )
       : ({ outcome: "refused", reason: "The machine that asked is gone." } as const);
@@ -11831,6 +12223,9 @@ export class Kitshn extends DurableObject<Env> {
         .length === 0
     )
       return "the caller of this run is gone.";
+    // K-1777: no right lets an agent run the call, so only the Owner circle answers it, and no mode can change.
+    if (proposal.right === "owner")
+      return proposal.circleId === OWNER_CIRCLE_ID ? null : "only the Owner answers this ask.";
     const mode =
       proposal.right === "readsCode" || proposal.right === "writesCode"
         ? codeRightMode(this.state, proposal.machineId, proposal.right, proposal.target, now)
@@ -12403,7 +12798,7 @@ export class Kitshn extends DurableObject<Env> {
     caller: Caller,
     machineId: string,
     command: Extract<Command, { kind: "compose-redeploy" }>,
-    ownerApproved: OwnerApproval | null,
+    ownerApproved: JobApproval | null,
   ) {
     const now = Date.now();
     const id = this.ctx.storage.transactionSync(() => {
@@ -15565,7 +15960,7 @@ export class Kitshn extends DurableObject<Env> {
         recipients: { _tag: "approvers", circle: proposal.circleId },
         level: "warn",
         priority: "high",
-        title: clip(`${proposal.machineName} asks: ${MACHINE_RIGHT_NAMES[proposal.right]}`, TITLE_MAX),
+        title: clip(`${proposal.machineName} asks: ${proposalRightName(proposal.right)}`, TITLE_MAX),
         text: clip(`${proposal.shown}${proposal.reason ? ` · ${proposal.reason}` : ""}`, TEXT_MAX),
         actions: [
           {
@@ -15608,7 +16003,7 @@ export class Kitshn extends DurableObject<Env> {
   /** K-1905: the Notifications view and its ways out, for the owner only in this version (K-1902). */
   private async notificationRequest(path: string, request: Request, caller: Caller): Promise<Response> {
     const now = Date.now();
-    if (!this.isOwner(caller.visitor))
+    if (!this.callerIsOwner(caller))
       return Response.json(
         { error: "Notifications are for the Owner circle in this version (K-1902)." },
         { status: 403 },
@@ -15808,7 +16203,7 @@ export class Kitshn extends DurableObject<Env> {
 
   /** K-1907: the devices of push, for the Owner circle only in this version (K-1902). */
   private async pushRequest(path: string, request: Request, caller: Caller): Promise<Response> {
-    if (!this.isOwner(caller.visitor))
+    if (!this.callerIsOwner(caller))
       return Response.json(
         { error: "Push is for the Owner circle in this version (K-1902)." },
         { status: 403 },
@@ -16529,15 +16924,9 @@ function parsePausedBy(
 
 const NO_VOLUME_JOBS = "An agent does not delete volumes (K-718, K-909).";
 
-/** K-1776: the approval of a person in the Owner circle for one job or deploy, stored on the job. */
-interface OwnerApproval {
-  readonly machineId: string;
-  /** The key of the machine that asked at the approval, so a reset or a rotation ends the approval. */
-  readonly key: string | null;
-  readonly right: MachineRight;
-}
-
 const NO_LONGER_ALLOWED = "no longer allowed:";
+
+const PAUSE_ENDED_JOB = "The emergency pause ended this job.";
 
 const keyMark = (machine: Machine) =>
   machine.key?.kind === "public" ? `${machine.key.fingerprint} ${machine.key.since}` : null;
