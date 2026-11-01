@@ -1311,3 +1311,63 @@ it("opens a notification for a provider offline 5 minutes, keeps it beside refus
   await status([]);
   expect((await notifications()).map((row) => row.state)).toEqual(["closed"]);
 });
+
+it("initializes only absent desired parts and preserves owner-set empty or disabled state (K-709)", async () => {
+  const { stub, sql } = await setup();
+  const sent: Array<unknown> = [];
+  const kind = "t3.init";
+  const raw = (message: object) =>
+    runInDurableObject(stub, (instance) =>
+      instance.webSocketMessage(daemonSocket("signed", sent), JSON.stringify(message)),
+    );
+  await sql("DELETE FROM desired_state WHERE kind = ?", kind);
+  await raw({
+    type: "providers",
+    providers: [
+      {
+        ...report([]),
+        kinds: [...report([]).kinds, { id: kind, name: "Initialization", levels: {}, state: {} }],
+      },
+    ],
+  });
+  stubAccessCerts();
+  const token = await accessToken("admin-aud", { email: "owner@example.com" });
+  let sequence = 0;
+  const init = async (part: "shared" | "machine") => {
+    const requestId = `init-${sequence++}`;
+    await raw({ type: "desiredInit", requestId, provider: "t3", kind, part, value: { enabled: true } });
+    return sent.find((item) => (item as { requestId?: string }).requestId === requestId);
+  };
+  for (const part of ["shared", "machine"] as const) {
+    const machineId = part === "shared" ? "" : "vps";
+    expect(await init(part)).toMatchObject({ type: "requestAnswer", error: null, initialized: true });
+    for (const value of [{}, { enabled: false }]) {
+      const response = await send(`/api/desired/${kind}`, {
+        method: "PUT",
+        headers: { "cf-access-jwt-assertion": token, "content-type": "application/json" },
+        body: JSON.stringify({ machineId: machineId || null, value }),
+      });
+      expect(response.status).toBe(200);
+      const revisions = () =>
+        runInDurableObject(
+          stub,
+          (_, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM revisions").one().n,
+        );
+      const before = await revisions();
+      expect(await init(part)).toMatchObject({ type: "requestAnswer", error: null, initialized: false });
+      expect(await revisions()).toBe(before);
+      const saved = await runInDurableObject(
+        stub,
+        (_, state) =>
+          state.storage.sql
+            .exec<{ body: string }>(
+              "SELECT body FROM desired_state WHERE kind = ? AND machine_id = ?",
+              kind,
+              machineId,
+            )
+            .one().body,
+      );
+      expect(JSON.parse(saved)).toEqual(value);
+    }
+  }
+});

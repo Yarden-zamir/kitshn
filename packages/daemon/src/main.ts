@@ -202,6 +202,7 @@ import {
 import { CliError } from "kitshn/cli-error";
 import { isOpCommand, runOpCommand } from "./ops.ts";
 import { checkSkill, installGlobalSkill, installRepoSkill, refreshGlobalSkill } from "./skill.ts";
+import { forwardDesired } from "./desired.ts";
 import { appSocketFolder, removeOldSockets, socketPathProblem, upOnSocket } from "./sockets.ts";
 
 declare const KITSHN_VERSION: string;
@@ -2698,7 +2699,7 @@ function connect(config: JoinSecrets) {
         )
           sendProviders();
       } else if (message.type === "requestAnswer") {
-        answerWaiters.get(message.requestId)?.(message.error);
+        answerWaiters.get(message.requestId)?.(message.error, message.initialized);
         answerWaiters.delete(message.requestId);
       } else if (message.type === "dropTokens") {
         keptTokens.drop(message.repo);
@@ -3177,7 +3178,7 @@ function readMachineFile(): unknown {
 }
 
 /** The requests to kitshn that wait for its `answer`, by request id: null, or why kitshn refused. */
-const answerWaiters = new Map<string, (error: string | null) => void>();
+const answerWaiters = new Map<string, (error: string | null, initialized?: boolean) => void>();
 /** K-704: where the daemon keeps the machine's name among its saved pushes. */
 const MACHINE_NAME_KEY = "machine:name";
 
@@ -3551,7 +3552,7 @@ async function answerLocal(
     if (error !== null) throw new Error(error);
     return { id, type: "job-cancel" };
   }
-  if (request.type === "desired-set") {
+  if (request.type === "desired-set" || request.type === "desired-init") {
     // K-709: only the connection that registered the provider, and only over a signed connection to kitshn.
     if (registry().connectionOf(request.provider) !== caller.connection)
       throw new Error(`register ${request.provider} on this connection first (K-704).`);
@@ -3565,22 +3566,21 @@ async function answerLocal(
     const problem = desiredProblem(kinds, request.kind, request.value);
     if (problem) throw new Error(problem);
     // kitshn checks again when it writes; the provider gets that answer, not only the daemon's.
-    const { id: _id, type: _type, ...change } = request;
-    const requestId = crypto.randomUUID();
-    const error = await new Promise<string | null>((resolve) => {
-      // Like an ask, a request waits at most 60 seconds for kitshn.
-      const timer = setTimeout(() => {
-        answerWaiters.delete(requestId);
-        resolve("kitshn did not answer within 60 seconds; the state may or may not be stored.");
-      }, 60_000);
-      answerWaiters.set(requestId, (answer) => {
-        clearTimeout(timer);
-        resolve(answer);
+    return forwardDesired(request, (change) => {
+      const requestId = crypto.randomUUID();
+      return new Promise((resolve) => {
+        // Like an ask, a request waits at most 60 seconds for kitshn.
+        const timer = setTimeout(() => {
+          answerWaiters.delete(requestId);
+          resolve({ error: "kitshn did not answer within 60 seconds; the state may or may not be stored." });
+        }, 60_000);
+        answerWaiters.set(requestId, (error, initialized) => {
+          clearTimeout(timer);
+          resolve({ error, ...(initialized === undefined ? {} : { initialized }) });
+        });
+        sendOn(ws, { requestId, ...change });
       });
-      sendOn(ws, { type: "desiredSet", requestId, ...change });
     });
-    if (error !== null) throw new Error(error);
-    return { id, type: "desired-set" };
   }
   if (request.type === "provider-rebind") return rebindProvider(request);
   if (request.type === "local-users") return editLocalUsers(request);

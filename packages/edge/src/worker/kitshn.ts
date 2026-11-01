@@ -4216,7 +4216,7 @@ export class Kitshn extends DurableObject<Env> {
    */
   private setDesiredFromMachine(
     machine: Machine,
-    message: Extract<DaemonMessage, { type: "desiredSet" }>,
+    message: Extract<DaemonMessage, { type: "desiredSet" | "desiredInit" }>,
   ): string | null {
     const kinds =
       this.providerRegs.get(machine.id)?.find((item) => item.name === message.provider)?.kinds ?? [];
@@ -5398,12 +5398,36 @@ export class Kitshn extends DurableObject<Env> {
       this.recordLinkCall(machine, message);
     } else if (message.type === "execFrame" && attachment.check === "signed") {
       this.execRelay(socket, machine, message);
-    } else if (message.type === "desiredSet" && typeof message.kind === "string") {
+    } else if (
+      (message.type === "desiredSet" || message.type === "desiredInit") &&
+      typeof message.kind === "string"
+    ) {
       // K-709: the provider gets kitshn's own answer, also a refusal.
       // A failed write is an answer too, so the provider never waits for one that does not come.
       let error: string | null;
+      let initialized: boolean | undefined;
       try {
-        error = this.setDesiredFromMachine(machine, message);
+        if (message.type === "desiredInit") {
+          // K-709: a single storage step arbitrates with owner edits. Empty
+          // objects and disabled values are present too; never replace them.
+          const result = this.ctx.storage.transactionSync(() => {
+            const kinds =
+              this.providerRegs.get(machine.id)?.find((item) => item.name === message.provider)?.kinds ?? [];
+            const problem = desiredProblem(kinds, message.kind, message.value);
+            if (problem) return { error: problem, initialized: false };
+            const exists =
+              this.sql(
+                "SELECT 1 FROM desired_state WHERE kind = ? AND machine_id = ?",
+                message.kind,
+                message.part === "shared" ? "" : machine.id,
+              ).length > 0;
+            if (exists) return { error: null, initialized: false };
+            const error = this.setDesiredFromMachine(machine, message);
+            return { error, initialized: error === null };
+          });
+          error = result.error;
+          initialized = result.initialized;
+        } else error = this.setDesiredFromMachine(machine, message);
       } catch (thrown) {
         console.error(`kitshn could not store the desired state of ${machine.name}: ${String(thrown)}`);
         error = `kitshn could not store the state: ${thrown instanceof Error ? thrown.message : String(thrown)}`;
@@ -5413,6 +5437,7 @@ export class Kitshn extends DurableObject<Env> {
           type: "requestAnswer",
           requestId: message.requestId.slice(0, 64),
           error,
+          ...(initialized === undefined ? {} : { initialized }),
         } satisfies ServerToDaemon);
     } else if (
       message.type === "applied" &&

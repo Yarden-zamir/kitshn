@@ -307,7 +307,7 @@ export type DaemonMessage =
   | { readonly type: "providers"; readonly providers: ReadonlyArray<ProviderReport> }
   /** K-709: a provider set a part of a desired state; kitshn stores it and pushes it to every machine. */
   | {
-      readonly type: "desiredSet";
+      readonly type: "desiredSet" | "desiredInit";
       /** kitshn answers with `requestAnswer` and this id. */
       readonly requestId: string;
       readonly provider: string;
@@ -372,7 +372,13 @@ export type ServerToDaemon =
       readonly hash: string;
     }
   /** The answer to a request of the daemon that names a `requestId`: null, or why kitshn refused. */
-  | { readonly type: "requestAnswer"; readonly requestId: string; readonly error: string | null }
+  | {
+      readonly type: "requestAnswer";
+      readonly requestId: string;
+      readonly error: string | null;
+      /** K-709: only a desiredInit answer; false means the existing part won. */
+      readonly initialized?: boolean;
+    }
   /** K-709: the shared part and this machine's part of one desired state, with the `rev` of its last set. */
   | {
       readonly type: "desired";
