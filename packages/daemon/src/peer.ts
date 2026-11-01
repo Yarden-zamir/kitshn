@@ -70,6 +70,7 @@ const REQUEST_SENDERS: Record<Request["type"], "local-users" | "providers" | "da
   remove: "providers",
   "command-result": "providers",
   "desired-set": "providers",
+  "desired-init": "providers",
   // K-721, K-1752: only the connection that registered a provider checks sessions and attests its threads.
   check: "providers",
   "attest-result": "providers",

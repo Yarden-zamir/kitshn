@@ -239,11 +239,12 @@ export const Request = Schema.Union([
   }),
   /**
    * K-709: a provider sets the part of a desired state of this machine, or the shared part. kitshn stores it and pushes
-   * it to every machine of the provider. Only the connection that registered the provider sends it.
+   * it to every machine of the provider. `desired-init` writes only an absent part, including when another provider
+   * or the owner writes between registration and this request. Only the registered connection sends either.
    */
   Schema.Struct({
     id: Id,
-    type: Schema.Literal("desired-set"),
+    type: Schema.Literals(["desired-set", "desired-init"]),
     provider: ProviderName,
     kind: Schema.String.check(Schema.isMaxLength(64)),
     part: Schema.Literals(["shared", "machine"]),
@@ -476,6 +477,7 @@ export const Answer = Schema.Union([
     graceMs: Schema.Number,
   }),
   Schema.Struct({ id: Id, type: Schema.Literal("desired-set") }),
+  Schema.Struct({ id: Id, type: Schema.Literal("desired-init"), initialized: Schema.Boolean }),
   Schema.Struct({
     id: Id,
     type: Schema.Literal("check"),

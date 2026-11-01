@@ -58,6 +58,7 @@ describe("local users in machine.json (K-701)", () => {
       "command-result",
       "provider-forget",
       "desired-set",
+      "desired-init",
     ] as const) {
       expect(requestAllowed(type, 1001, own, [])).toBe(false);
       expect(requestAllowed(type, own, own, [])).toBe(true);
@@ -74,6 +75,7 @@ describe("local users in machine.json (K-701)", () => {
       "remove",
       "command-result",
       "desired-set",
+      "desired-init",
       "check",
       "attest-result",
       "exec-frame",
