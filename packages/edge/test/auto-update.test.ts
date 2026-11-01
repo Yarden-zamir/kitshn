@@ -374,36 +374,6 @@ it("refuses a daemon of another protocol major, and still sends it its update (K
   });
 });
 
-it("stops the rollout when a provider that was online does not register again after the update (K-636)", async () => {
-  await withDaemon(async ({ daemon, jobs, rollout }) => {
-    await daemon({ type: "providers", providers: [busyReport(false)] });
-    await daemon(behindStatus);
-    expect(rollout()).toMatchObject({ step: { machineId: machine.id, providers: ["t3"] } });
-    const offline = [{ provider: "t3", reason: "never connected since the daemon started", at: 1 }];
-    await daemon({
-      type: "status",
-      status: { ...behindStatus.status, version: NEW, protocol: KITSHN_PROTOCOL, offlineProviders: offline },
-    });
-    const [job] = jobs();
-    expect(job?.state).toBe("sent");
-    const id = await runInDurableObject(
-      env.KITSHN.getByName("kitshn"),
-      (_, state) =>
-        state.storage.sql.exec<{ id: number }>("SELECT id FROM jobs WHERE machine_id = ?", machine.id).one()
-          .id,
-    );
-    await daemon({ type: "jobResult", id, result: { ok: true, exitCode: 0, output: "updated" } });
-    expect(rollout()).toMatchObject({
-      step: null,
-      failed: {
-        machineId: machine.id,
-        reason:
-          "The provider t3 did not register again after the update: never connected since the daemon started.",
-      },
-    });
-  });
-});
-
 it("answers where the rollout stands, and refuses a version that the Worker does not run (K-636)", async () => {
   stubAccessCerts();
   await setup();

@@ -17,8 +17,6 @@ export interface Rollout {
     readonly sentAt: number | null;
     /** The job waits while the machine is busy (K-1608); false after `BUSY_CAP_MS`. Absent in older rollouts: true. */
     readonly whenIdle?: boolean;
-    /** K-636: the providers that were online when the job went out; each must be online again after the update. */
-    readonly providers?: ReadonlyArray<string>;
   } | null;
   readonly failed: { readonly machineId: string; readonly reason: string } | null;
   readonly updated: ReadonlyArray<string>;
@@ -42,10 +40,7 @@ export interface StepJob {
 
 /** The daemon as kitshn sees it now: its status and the start of its connection while online, else null. */
 export type LiveStatus =
-  | (Pick<
-      MachineStatus,
-      "version" | "capabilities" | "os" | "protocol" | "refusedProviders" | "offlineProviders"
-    > & { readonly connectedAt: number })
+  | (Pick<MachineStatus, "version" | "capabilities" | "os" | "protocol"> & { readonly connectedAt: number })
   | null;
 
 /** K-628: what the card shows about the update of its daemon. */
@@ -70,37 +65,15 @@ const withUpdated = (rollout: Rollout, machineId: string): Rollout => ({
 });
 
 /**
- * K-636: why a daemon that runs the release is not healthy: another protocol than kitshn, or a provider that was online
- * before the update and is refused or offline now. Null when it is healthy.
- */
-export function unhealthyReason(
-  status: NonNullable<LiveStatus>,
-  protocol: string,
-  providers: ReadonlyArray<string>,
-): string | null {
-  const running = daemonProtocol(status);
-  if (running !== protocol) return `The daemon came back with kitshn protocol ${running}, not ${protocol}.`;
-  for (const provider of providers) {
-    const refused = status.refusedProviders?.find((entry) => entry.provider === provider);
-    if (refused) return `After the update the daemon refused the provider ${provider}: ${refused.reason}`;
-    const offline = status.offlineProviders?.find((entry) => entry.provider === provider);
-    if (offline)
-      return `The provider ${provider} did not register again after the update: ${offline.reason}.`;
-  }
-  return null;
-}
-
-/**
  * K-627: moves the rollout on from what kitshn sees now. A step ends well only when its job is done and its machine is
  * online on the release: a K-629 daemon sends `done` only after its connection stayed up, so a release that crashes
- * just after kitshn accepts it never counts. A machine that stays offline holds the rest. K-636: the daemon must also
- * speak `protocol`, the one of kitshn, and be healthy (`unhealthyReason`).
+ * just after kitshn accepts it never counts. A machine that stays offline holds the rest. K-636: a daemon checks its
+ * providers before it sends `done` (K-629), so a release that loses one rolls back there.
  */
 export function advanceRollout(
   rollout: Rollout,
   job: StepJob | null,
   statusOf: (machineId: string) => LiveStatus,
-  protocol: string,
 ): Rollout {
   const step = rollout.step;
   if (!step) return rollout;
@@ -110,12 +83,8 @@ export function advanceRollout(
   if (job === null || job.state === "gone") return { ...rollout, step: null };
   if (job.state === "failed")
     return { ...rollout, step: null, failed: { machineId: step.machineId, reason: lastLine(job.output) } };
-  if (status !== null && status.version === rollout.version && job.state === "done") {
-    const reason = unhealthyReason(status, protocol, step.providers ?? []);
-    return reason === null
-      ? withUpdated({ ...rollout, step: null }, step.machineId)
-      : { ...rollout, step: null, failed: { machineId: step.machineId, reason } };
-  }
+  if (status !== null && status.version === rollout.version && job.state === "done")
+    return withUpdated({ ...rollout, step: null }, step.machineId);
   if (
     status !== null &&
     status.version !== rollout.version &&
@@ -258,16 +227,11 @@ export const startStep = (
  * K-627: the step went out. Delivery names the release of the Worker at that time (K-617), so a step queued before a
  * deploy moves to the new release.
  */
-export function stepSent(
-  rollout: Rollout,
-  version: string,
-  now: number,
-  providers: ReadonlyArray<string>,
-): Rollout {
+export function stepSent(rollout: Rollout, version: string, now: number): Rollout {
   if (rollout.step === null) return rollout;
   return {
     ...startStep(rollout, version, rollout.step.machineId, rollout.step.jobId, rollout.step.whenIdle ?? true),
-    step: { ...rollout.step, sentAt: now, providers },
+    step: { ...rollout.step, sentAt: now },
   };
 }
 
@@ -305,8 +269,13 @@ export interface RolloutMachine {
 export interface RolloutView {
   readonly version: string;
   readonly protocol: string;
-  /** `stopped`: a step failed; `running`: a daemon waits for its update; `done`: none does. */
-  readonly state: "running" | "done" | "stopped";
+  /**
+   * `stopped`: a step failed. `held`: daemons wait, but kitshn is paused. `running`: a daemon waits for its update.
+   * `done`: none does.
+   */
+  readonly state: "running" | "held" | "done" | "stopped";
+  /** Why the rollout stopped or is held; null otherwise. */
+  readonly reason: string | null;
   readonly machines: ReadonlyArray<RolloutMachine>;
 }
 
@@ -316,6 +285,7 @@ export function rolloutView(
   protocol: string,
   rollout: Rollout,
   machines: ReadonlyArray<AutoUpdateMachine & { readonly name: string }>,
+  paused: boolean,
 ): RolloutView {
   const current = rollout.version === version;
   const behind = new Set(behindMachines(version, machines).map((machine) => machine.id));
@@ -346,11 +316,21 @@ export function rolloutView(
     return is("skipped", "It cannot update by itself; Update daemon in its panel installs it (K-622).");
   };
   const states = machines.toSorted((a, b) => a.order - b.order || a.id.localeCompare(b.id)).map(machineState);
-  const state =
-    current && rollout.failed !== null
-      ? "stopped"
-      : states.some((machine) => ["updating", "waiting", "behind"].includes(machine.state))
-        ? "running"
-        : "done";
-  return { version, protocol, state, machines: states };
+  const failed = current ? rollout.failed : null;
+  if (failed !== null) {
+    const name = machines.find((machine) => machine.id === failed.machineId)?.name ?? failed.machineId;
+    return { version, protocol, state: "stopped", reason: `${name}: ${failed.reason}`, machines: states };
+  }
+  if (!states.some((machine) => ["updating", "waiting", "behind"].includes(machine.state)))
+    return { version, protocol, state: "done", reason: null, machines: states };
+  // K-627: no automatic update goes while kitshn is paused, so the waiting daemons hold until Resume.
+  return paused
+    ? {
+        version,
+        protocol,
+        state: "held",
+        reason: "kitshn is paused, so no daemon updates until Resume (K-1504).",
+        machines: states,
+      }
+    : { version, protocol, state: "running", reason: null, machines: states };
 }

@@ -122,14 +122,22 @@ export interface MachineStatus {
 export const daemonProtocol = (status: Pick<MachineStatus, "protocol">) =>
   status.protocol ?? legacyProtocol(2);
 
-/** K-724: how kitshn treats the daemon of a machine. */
-export const daemonProtocolMatch = (
-  status: Pick<MachineStatus, "protocol">,
-  machineName: string,
-): ProtocolMatch =>
+/**
+ * K-724: the protocol that a daemon names in its challenge answer or status. Absent: a daemon before K-724, 2.0.0.
+ * Another type than a string is no version, so it refuses.
+ */
+export const namedProtocol = (value: unknown): string =>
+  value === undefined
+    ? legacyProtocol(2)
+    : typeof value === "string"
+      ? value.slice(0, 40)
+      : String(JSON.stringify(value)).slice(0, 40);
+
+/** K-724: how kitshn treats the daemon of a machine that speaks `version`. */
+export const daemonProtocolMatch = (version: string, machineName: string): ProtocolMatch =>
   matchProtocol(
     { name: "kitshn", version: KITSHN_PROTOCOL, update: ROLLOUT_FIX },
-    { name: `the daemon of ${machineName}`, version: daemonProtocol(status), update: ROLLOUT_FIX },
+    { name: `the daemon of ${machineName}`, version, update: ROLLOUT_FIX },
   );
 
 /**
@@ -317,7 +325,12 @@ export interface AskResult {
 
 export type DaemonMessage =
   /** K-1704: the signature of `connectText` with the key that the challenge names. */
-  | { readonly type: "answer"; readonly signature: string }
+  | {
+      readonly type: "answer";
+      readonly signature: string;
+      /** K-724: the KITSHN_PROTOCOL of the daemon, so kitshn decides before it sends anything. */
+      readonly protocol?: string;
+    }
   /** K-1705: a new public half, with the signature of `rotateText` by the old private half. */
   | { readonly type: "rotate"; readonly publicKey: string; readonly signature: string }
   | { readonly type: "status"; readonly status: MachineStatus }

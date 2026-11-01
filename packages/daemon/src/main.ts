@@ -118,6 +118,7 @@ import {
   restorePrevious,
   runStep,
   writeMarker,
+  providersBack,
 } from "./update.ts";
 import {
   MEASURE_EVERY_MS,
@@ -1118,6 +1119,10 @@ async function installRelease(
         from: VERSION,
         to: version,
         now: Date.now(),
+        providers: registry()
+          .states()
+          .filter((state) => state.online)
+          .map((state) => state.name),
       },
     );
     if (refused !== null) return failed(refused);
@@ -1170,10 +1175,18 @@ function updateDropped() {
   watch.timer = deadlineTimer(step.marker);
 }
 
-/** K-629: the connection stayed up, so the update holds: the marker goes, and kitshn gets the result. */
+/**
+ * K-629: the connection stayed up, so the update holds: the marker goes, and kitshn gets the result. K-636: each
+ * provider that was online before the swap must be back first, else the previous daemon comes back.
+ */
 function confirmUpdate() {
   const watch = updateWatch;
   if (!watch) return;
+  const lost = providersBack(watch.marker.providers ?? [], registry().states());
+  if (lost !== null) {
+    void rollBackUpdate(watch.marker, lost);
+    return;
+  }
   updateWatch = null;
   rmSync(markerPath(paths.data), { force: true });
   log(
@@ -2312,7 +2325,8 @@ async function answerChallenge(
   }
   const signing = await fingerprintOf(key.x);
   const signature = await signText(key, connectText(config.server, config.machineId, message.challenge));
-  ws.send(JSON.stringify({ type: "answer", signature } satisfies DaemonMessage));
+  // K-724: the protocol goes with the answer, so kitshn decides before it sends this daemon anything.
+  ws.send(JSON.stringify({ type: "answer", signature, protocol: KITSHN_PROTOCOL } satisfies DaemonMessage));
   challenge = message.challenge;
   if (message.fingerprint === signing) return "answered";
   log(

@@ -22,7 +22,7 @@ describe("kitshn protocol (K-724)", () => {
     const minor = matchProtocol(side("the daemon", "2.3.0"), side("t3", "2.1.0"));
     expect(minor).toMatchObject({ outcome: "tolerate" });
     expect(minor.outcome === "tolerate" && minor.warning).toContain(
-      "the daemon speaks kitshn protocol 2.3.0 and t3 speaks 2.1.0: the daemon uses only what 2.1.0 has. Update t3: update t3",
+      "the daemon speaks kitshn protocol 2.3.0 and t3 speaks 2.1.0: t3 ignores what it does not know. Update t3: update t3",
     );
     const major = matchProtocol(side("kitshn", "3.0.0"), side("the daemon", "2.4.1"));
     expect(major.outcome === "refuse" && major.reason).toContain(
@@ -70,6 +70,11 @@ describe("kitshn protocol (K-724)", () => {
     expect(change(widened).minor).toHaveLength(4);
     expect(change(Schema.Struct({ type: Schema.Literal("ping") })).major).toEqual(["wire: status removed"]);
     expect(change(member({ at: Schema.Number })).major).toEqual(["wire status.at: new required field"]);
+    // Only `required` changes here, also inside a union member.
+    expect(change(member({ note: Schema.String })).major).toEqual(["wire status.note now required"]);
+    expect(
+      change(member({ name: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(10))) })).major,
+    ).toEqual(["wire status.name now optional"]);
     const narrowed = Schema.Union([
       Schema.Struct({
         type: Schema.Literal("status"),

@@ -74,7 +74,13 @@ describe("the providers of a machine (K-704, K-705)", () => {
     });
     expect(registry.register(register([], { protocolVersion: "2.0.9" }), caller(1))).toMatchObject({
       ok: true,
-      warning: /the provider t3 speaks 2.0.9: this daemon uses only what 2.0.9 has/,
+      warning: /the provider t3 speaks 2.0.9: the provider t3 ignores what it does not know/,
+    });
+    expect(
+      registry.register(register([], { protocol: 3, protocolVersion: "2.1.0" }), caller(1)),
+    ).toMatchObject({
+      ok: false,
+      error: /protocol 3 and protocolVersion 2.1.0, whose majors differ/,
     });
     const { instance: _instance, ...noInstance } = register([]);
     expect(registry.register(noInstance, caller(1))).toMatchObject({

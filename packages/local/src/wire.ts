@@ -73,13 +73,17 @@ function compare(beforeSchema: unknown, afterSchema: unknown, path: string, chan
     compareUnion(before, after, path, change);
     return;
   }
+  let fieldsCompared = false;
   for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
     const old = before[key];
     const now = after[key];
     if (same(old, now)) continue;
-    if (key === "properties") compareFields(before, after, path, change);
-    else if (key === "required") continue;
-    else if (key === "enum" && Array.isArray(old) && Array.isArray(now))
+    // An optional field that turns required changes only `required`, so either key compares the fields, once.
+    if (key === "properties" || key === "required") {
+      if (fieldsCompared) continue;
+      fieldsCompared = true;
+      compareFields(before, after, path, change);
+    } else if (key === "enum" && Array.isArray(old) && Array.isArray(now))
       if (old.every((value) => now.some((item) => same(item, value))))
         change.minor.push(
           `${path}: new values ${JSON.stringify(now.filter((item) => !old.some((value) => same(value, item))))}`,

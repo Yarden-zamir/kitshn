@@ -1197,3 +1197,36 @@ it("lets an agent key with shares automatic move its own card into another circl
   const share = await apply([{ _tag: "place", id: "key-card", after: { x: owner.x, y: owner.y } }]);
   expect([rename.status, share.status]).toEqual([403, 200]);
 });
+
+it("asks the Owner to end a stopped rollout when a machine calls it, and the approved call ends it (K-636)", async () => {
+  stubAccessCerts();
+  const key = await newMachineKey();
+  await setup({ changes: { mode: "automatic" } }, key);
+  const stub = env.KITSHN.getByName("kitshn");
+  const rollout = (failed: object | null) =>
+    runInDurableObject(stub, (instance, state) => {
+      const version = (instance as unknown as { env: { KITSHN_VERSION: string } }).env.KITSHN_VERSION;
+      state.storage.sql.exec(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('daemon_rollout', ?)",
+        JSON.stringify({ version, step: null, failed, updated: [] }),
+      );
+    }).then(() => evictDurableObject(stub));
+  const op = (nonce: string) =>
+    forwarded(key, "POST", "/op/rollout", `${nonce}-0123456789abcdef`, call(""), {}, ADMIN);
+
+  // A rollout that runs or ended: "maintains" lets the machine go on with it.
+  await rollout(null);
+  expect((await op("runs")).status).toBe(200);
+  // A stopped rollout updates the failed machine again, so the Owner decides; an approval of a person ends it.
+  await rollout({ machineId: "vps", reason: "start check" });
+  const first = await op("stop-1");
+  expect(first.status).toBe(409);
+  const { proposalId } = (await first.json()) as { proposalId: string };
+  expect(await approveAsOwner(proposalId)).toMatchObject({ ok: true });
+  const second = await op("stop-2");
+  expect(second.status, await second.clone().text()).toBe(200);
+  const stored = await runInDurableObject(stub, (_, state) =>
+    state.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'daemon_rollout'").one(),
+  );
+  expect(JSON.parse(stored.value)).toMatchObject({ failed: null });
+});

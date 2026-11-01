@@ -21,6 +21,7 @@ import {
   ROLLOUT_FIX,
   legacyProtocol,
   matchProtocol,
+  parseProtocol,
   pushKey,
   screenResources,
   shapeProblem,
@@ -236,6 +237,16 @@ export class Providers {
     if (protocol.outcome === "refuse") {
       this.refuse(name, protocol.reason, now);
       return { ok: false, error: protocol.reason };
+    }
+    // K-724: the two fields of one register name one major, or the daemon cannot tell which one the provider speaks.
+    if (
+      request.protocolVersion !== undefined &&
+      request.protocol !== undefined &&
+      parseProtocol(request.protocolVersion)?.major !== request.protocol
+    ) {
+      const error = `the register names protocol ${request.protocol} and protocolVersion ${request.protocolVersion}, whose majors differ (K-724).`;
+      this.refuse(name, error, now);
+      return { ok: false, error };
     }
     if (request.instance === undefined) {
       const error = "a register of protocol 2 names its instance (K-704).";

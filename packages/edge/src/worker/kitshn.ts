@@ -116,7 +116,9 @@ import {
   PROTOCOL_CARE_MESSAGES,
   allowedFor,
   connectText,
+  daemonProtocol,
   daemonProtocolMatch,
+  namedProtocol,
   FORWARD_HEADERS,
   FORWARD_WINDOW_MS,
   forwardPathProblem,
@@ -589,6 +591,8 @@ type Attachment =
       readonly servers?: ReadonlyArray<ServerReport>;
       /** K-630: the last health check of this connection; an older daemon sends none. */
       readonly health?: HealthReport;
+      /** K-724: the protocol that the daemon named in its answer; a socket of a Worker before K-724 has none. */
+      readonly protocol?: string;
     };
 
 /** K-1805: a Compose tail runs on the daemon; K-1807: a Worker tail is a Cloudflare tail of the script. */
@@ -4209,7 +4213,7 @@ export class Kitshn extends DurableObject<Env> {
       queued: this.queuedFor(machine, live?.status ?? null),
       // K-628: kept between the events that change it (K-627), so a view reads no job rows.
       update: daemonUpdate(this.rollout(), machine.id, this.env.KITSHN_VERSION),
-      protocolRefusal: live?.status ? this.protocolRefusal(machine.id) : null,
+      protocolRefusal: this.protocolRefusal(machine.id),
     };
   }
 
@@ -4218,8 +4222,9 @@ export class Kitshn extends DurableObject<Env> {
     const machine = this.state.machines.get(machineId);
     const socket = this.openSocket(machineId);
     const attachment = socket ? attachmentOf(socket) : null;
-    if (!machine || attachment?.kind !== "machine" || !attachment.status) return null;
-    const match = daemonProtocolMatch(attachment.status, machine.name);
+    if (!machine || attachment?.kind !== "machine") return null;
+    const version = attachment.protocol ?? daemonProtocol(attachment.status ?? {});
+    const match = daemonProtocolMatch(version, machine.name);
     return match.outcome === "refuse" ? match.reason : null;
   }
 
@@ -5737,7 +5742,13 @@ export class Kitshn extends DurableObject<Env> {
         machine,
         `The answer does not carry a signature of ${plan.fingerprint}.`,
       );
-    this.acceptMachine(socket, { ...attachment, answered: true, check: "signed" });
+    // K-724: the protocol is known before `accepted`, so the first pushes and jobs already follow it.
+    this.acceptMachine(socket, {
+      ...attachment,
+      answered: true,
+      check: "signed",
+      protocol: namedProtocol(message["protocol"]),
+    });
   }
 
   /**
@@ -5836,9 +5847,9 @@ export class Kitshn extends DurableObject<Env> {
     if (message.type === "status" && isRecord(message.status)) {
       const status: MachineStatus = {
         version: String(message.status.version).slice(0, 40),
-        ...(typeof message.status.protocol === "string"
-          ? { protocol: message.status.protocol.slice(0, 40) }
-          : {}),
+        ...(message.status.protocol === undefined
+          ? {}
+          : { protocol: namedProtocol(message.status.protocol) }),
         os: String(message.status.os).slice(0, 80),
         arch: String(message.status.arch).slice(0, 20),
         hostname: String(message.status.hostname).slice(0, 80),
@@ -5875,7 +5886,7 @@ export class Kitshn extends DurableObject<Env> {
       };
       saveMachine(socket, { ...attachment, status });
       // K-724: one log line when a daemon connects or changes its protocol; the machine card shows a refusal.
-      const protocol = daemonProtocolMatch(status, machine.name);
+      const protocol = daemonProtocolMatch(daemonProtocol(status), machine.name);
       if (protocol.outcome !== "same" && attachment.status?.protocol !== status.protocol)
         console.warn(protocol.outcome === "refuse" ? protocol.reason : protocol.warning);
       if (status.refusedProviders) this.notifyRefusals(machine, status.refusedProviders);
@@ -7321,9 +7332,7 @@ export class Kitshn extends DurableObject<Env> {
       this.sql("UPDATE jobs SET state = 'sent', machine_id = ? WHERE id = ?", machine.id, job.id);
       // K-627: the rollout step follows the release that went out, and only later connections show its outcome.
       if (queuedCommand.kind === "update" && this.rollout().step?.jobId === job.id)
-        this.saveRollout(
-          stepSent(this.rollout(), this.env.KITSHN_VERSION, Date.now(), this.onlineProviders(machine.id)),
-        );
+        this.saveRollout(stepSent(this.rollout(), this.env.KITSHN_VERSION, Date.now()));
       sent++;
     }
     return sent;
@@ -7364,14 +7373,6 @@ export class Kitshn extends DurableObject<Env> {
       : null;
   }
 
-  /** K-636: the providers of a machine that are online now: registered, and not offline in its status. */
-  private onlineProviders(machineId: string): ReadonlyArray<string> {
-    const offline = this.liveStatus(machineId)?.offlineProviders ?? [];
-    return (this.providerRegs.get(machineId) ?? [])
-      .map((registration) => registration.name)
-      .filter((name) => !offline.some((entry) => entry.provider === name));
-  }
-
   /** K-636: the rollout of the Worker's release, for the rollout operation. */
   private currentRollout() {
     return rolloutView(
@@ -7387,6 +7388,7 @@ export class Kitshn extends DurableObject<Env> {
         status: this.liveStatus(machine.id),
         busy: this.busy(machine.id),
       })),
+      this.state.paused !== null,
     );
   }
 
@@ -7403,16 +7405,18 @@ export class Kitshn extends DurableObject<Env> {
         },
         { status: 409 },
       );
-    const rollout = this.rollout();
-    if (
-      !this.isAgentSender(caller.visitor) &&
-      rollout.version === this.env.KITSHN_VERSION &&
-      rollout.step === null
-    )
-      this.saveRollout({ ...rollout, failed: null });
+    // K-636: a person, or a call that a person approved, ends a stopped rollout; the gate asks the Owner for it.
+    const person = !this.isAgentSender(caller.visitor) || caller.gated?.approval.person === true;
+    if (person && this.rolloutStopped()) this.saveRollout({ ...this.rollout(), failed: null });
     this.autoUpdate();
     this.broadcast();
     return Response.json(this.currentRollout());
+  }
+
+  /** K-627: a step of the Worker's release failed, so no daemon updates until a person ends it. */
+  private rolloutStopped() {
+    const rollout = this.rollout();
+    return rollout.version === this.env.KITSHN_VERSION && rollout.failed !== null && rollout.step === null;
   }
 
   /** K-627: the rollout step is over without a failure: its job was cancelled or dropped. */
@@ -7436,11 +7440,8 @@ export class Kitshn extends DurableObject<Env> {
       step: stored.step && this.state.machines.has(stored.step.machineId) ? stored.step : null,
       failed: stored.failed && this.state.machines.has(stored.failed.machineId) ? stored.failed : null,
     };
-    let rollout = advanceRollout(
-      before,
-      before.step ? this.stepJob(before.step.jobId) : null,
-      (id) => this.liveStatus(id),
-      KITSHN_PROTOCOL,
+    let rollout = advanceRollout(before, before.step ? this.stepJob(before.step.jobId) : null, (id) =>
+      this.liveStatus(id),
     );
     // K-627: a step whose job still waits for a busy machine holds no other machine; its job goes, without a failure.
     const held = rollout.step;
@@ -11656,6 +11657,7 @@ export class Kitshn extends DurableObject<Env> {
       }
       case "any":
       case "rule":
+      case "rollout":
       case "owner":
         return null;
     }
@@ -11714,6 +11716,9 @@ export class Kitshn extends DurableObject<Env> {
       // K-1777: settings of the whole kitshn and actions with no target that a caller controls; "shares" decides.
       case "owner":
         return false;
+      // K-636: ending a stopped rollout updates the machine that failed again, so the Owner decides it.
+      case "rollout":
+        return !this.rolloutStopped();
       case "card":
         return cardsControlledBy(this.state, visitor, now, attested).has(target);
       case "machine":

@@ -40,7 +40,7 @@ export interface ProtocolSide {
 export type ProtocolMatch =
   /** The same major and minor: no message. */
   | { readonly outcome: "same" }
-  /** The same major, another minor: the newer side uses only what the older minor has, and logs `warning`. */
+  /** The same major, another minor: both sides go on and log `warning`; the older side ignores what it does not know. */
   | { readonly outcome: "tolerate"; readonly warning: string }
   /** Another major, or no version: the side that checks refuses the other with `reason`. */
   | { readonly outcome: "refuse"; readonly reason: string };
@@ -67,10 +67,9 @@ export function matchProtocol(ours: ProtocolSide, theirs: ProtocolSide): Protoco
       outcome: "refuse",
       reason: `${pair}: the major versions differ, so ${ours.name} refuses ${theirs.name}. Update ${older.name}: ${older.update} (K-724).`,
     };
-  const newer = oursOlder ? theirs : ours;
   return {
     outcome: "tolerate",
-    warning: `${pair}: ${newer.name} uses only what ${older.version} has. Update ${older.name}: ${older.update} (K-724).`,
+    warning: `${pair}: ${older.name} ignores what it does not know. Update ${older.name}: ${older.update} (K-724).`,
   };
 }
 

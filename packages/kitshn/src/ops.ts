@@ -83,7 +83,8 @@ interface RolloutMachine {
 interface RolloutView {
   readonly version: string;
   readonly protocol: string;
-  readonly state: "running" | "done" | "stopped";
+  readonly state: "running" | "held" | "done" | "stopped";
+  readonly reason: string | null;
   readonly machines: ReadonlyArray<RolloutMachine>;
 }
 
@@ -112,45 +113,50 @@ const settled = (view: RolloutView) =>
   view.state !== "running" ||
   !view.machines.some((machine) => machine.state === "updating" || machine.state === "behind");
 
-/** K-636: `kitshn rollout`: starts the rollout, then prints each change until it ends or stops. */
+/** K-636: `kitshn rollout`: starts the rollout, then prints each change until it ends, stops or stalls. */
 async function followRollout(args: ReadonlyArray<string>, transport: () => AgentTransport, json: boolean) {
   const [version] = words(args, ["--server", "--reason"]);
-  let view = rolloutView(
-    await opResult(
-      await transport().call("/op/rollout", {
+  const reason = flag(args, "--reason");
+  const call = (path: string, body: object) =>
+    transport()
+      .call(path, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ target: "", body: version === undefined ? {} : { version } }),
-      }),
-    ),
-  );
+        body: JSON.stringify(body),
+      })
+      .then(opResult)
+      .then(rolloutView);
+  let view = await call("/op/rollout", {
+    target: "",
+    body: version === undefined ? {} : { version },
+    ...(reason === undefined ? {} : { reason }),
+  });
   if (!json) console.log(`kitshn edge-${view.version}, protocol ${view.protocol}`);
   let before: RolloutView | null = null;
+  let changedAt = Date.now();
   for (;;) {
-    if (!json) for (const line of rolloutChanges(before, view)) console.log(line);
+    const lines = rolloutChanges(before, view);
+    if (lines.length > 0) changedAt = Date.now();
+    if (!json) for (const line of lines) console.log(line);
     if (settled(view)) break;
+    if (Date.now() - changedAt > ROLLOUT_STALL_MS)
+      throw new CliError(
+        `no daemon changed for ${ROLLOUT_STALL_MS / 60_000} minutes, so kitshn rollout stops following; kitshn rollout-state reads where it stands.`,
+      );
     before = view;
     await new Promise((resolve) => setTimeout(resolve, ROLLOUT_POLL_MS));
-    view = rolloutView(
-      await opResult(
-        await transport().call("/op/rollout-state", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: "{}",
-        }),
-      ),
-    );
+    view = await call("/op/rollout-state", {});
   }
   if (json) console.log(JSON.stringify(view));
-  const failed = view.machines.find((machine) => machine.state === "failed");
-  if (view.state === "stopped")
-    throw new CliError(
-      `the rollout stopped at ${failed?.name ?? "a machine"}: ${failed?.reason ?? "see kitshn rollout-state"}`,
-    );
+  if (view.state === "stopped" || view.state === "held")
+    throw new CliError(`the rollout is ${view.state}: ${view.reason ?? "see kitshn rollout-state"}`);
 }
 
 /** K-636: how often `kitshn rollout` reads the rollout; one step takes minutes (K-629). */
 const ROLLOUT_POLL_MS = 5_000;
+
+/** K-636: longer than one step (download, restart and 3 minutes up), so a stall is not a slow machine. */
+const ROLLOUT_STALL_MS = 10 * 60_000;
 
 export async function runOpCommand(
   command: OpCommand,
