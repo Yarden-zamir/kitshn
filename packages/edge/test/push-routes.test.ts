@@ -164,12 +164,18 @@ it("sends the push of an ask at once, not with the next alarm, and still at most
       queuePush(notification: Notification): void;
       pushNow: Promise<void> | null;
     };
+    // An older push waits already; the new ask still takes the slots first.
+    kitshn.pushQueue = [{ notification: failed, device: null, tries: 0 }];
     kitshn.queuePush({ ...failed, source: "kitshn.ask", key: "p1", priority: "high" });
     await kitshn.pushNow;
-    return kitshn.pushQueue.length;
+    const waiting = kitshn.pushQueue.map((each) => each.notification.source);
+    // The answer of an ask waits for the alarm: the request that answered may have spent its calls on the ask.
+    kitshn.queuePush({ ...failed, source: "kitshn.ask", key: "p1", priority: "high", state: "approved" });
+    return { waiting, now: kitshn.pushNow };
   });
   expect(pushesIn(sent)).toHaveLength(5);
-  expect(left).toBe(1);
+  expect(left.waiting).toEqual(["kitshn.ask", ...Array<string>(6).fill("deploy")]);
+  expect(left.now).toBeNull();
 });
 
 it("sends at most 5 pushes in one alarm run, also when its reconcile opens another notification (K-1907, K-406)", async () => {

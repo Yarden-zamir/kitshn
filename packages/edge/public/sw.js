@@ -1,10 +1,10 @@
 // K-1606, K-1907: the service worker of the kitshn map. It shows Web Push notifications, runs their buttons and
 // opens the map on a click. It caches nothing: the map sits behind Access, and a cache could show a stale map.
 //
-// K-1722: a push carries ids only. For an ask, this worker reads the full text over the browser's own Access login
-// and shows it with Approve and Deny. Approve sends the hash of the text that the notification showed. When the
-// browser has no approve login of the right kind (a passkey check older than 10 minutes, for example), Access answers
-// with a redirect, and Approve opens the passkey or login check in a window instead.
+// K-1722: a push carries ids only. For an ask, this worker reads its text over the browser's own Access login and
+// shows it with Deny, and with Approve only when the body shows the whole text that the hash covers. When the browser
+// has no approve login of the right kind (a passkey check older than 10 minutes, for example), Access answers with a
+// redirect, and Approve opens the passkey or login check in a window instead.
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 
@@ -58,11 +58,16 @@ const settle = (notification, body, path) =>
     body,
     tag: notification.tag,
     silent: true,
-    data: { path },
+    data: { path, shownAt: Date.now() },
   });
 
 async function showPush(message) {
-  const base = { ...ICON, tag: message.tag, data: { path: message.path, id: message.id } };
+  // `shownAt` lets the map tell a push from before its list read from a newer one (K-1905).
+  const base = {
+    ...ICON,
+    tag: message.tag,
+    data: { path: message.path, id: message.id, shownAt: Date.now() },
+  };
   // K-1722: a high priority notification also tells its answer, so every device shows how the ask ended.
   if (message.state && message.state !== "open")
     return self.registration.showNotification(message.title, {
@@ -79,23 +84,36 @@ async function showPush(message) {
         body: read.ok ? OUTCOME.closed : "Open kitshn to read and answer this ask.",
       });
     const expires = new Date(ask.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    // K-1722: Approve only when the body shows the whole text that its hash covers; else a tap opens the ask.
+    const whole = ask.approveOnPush === true;
     return self.registration.showNotification(message.title, {
       ...base,
-      body: [ask.shown, ask.reason ? `Why: ${ask.reason}` : null, `Expires at ${expires}.`]
+      body: [
+        ask.text,
+        ask.reason ? `Why: ${ask.reason}` : null,
+        whole ? `Expires at ${expires}.` : "Open the ask to read all of it and approve.",
+      ]
         .filter(Boolean)
         .join("\n"),
       requireInteraction: true,
       actions: [
-        { action: "approve", title: ask.via === "passkey" ? "Approve (passkey)" : "Approve" },
+        ...(whole
+          ? [{ action: "approve", title: ask.via === "passkey" ? "Approve (passkey)" : "Approve" }]
+          : []),
         { action: "deny", title: "Deny" },
       ],
       data: { ...base.data, ask: { id: ask.id, hash: ask.shownHash, via: ask.via } },
     });
   }
+  // K-1905: Dismiss closes it for everyone, where the run actions leave room (Android shows 2 buttons).
+  const actions = [
+    ...(message.actions || []).map((each) => ({ action: each.id, title: each.label })),
+    { action: "dismiss", title: "Dismiss" },
+  ];
   return self.registration.showNotification(message.title, {
     ...base,
     body: message.body,
-    actions: (message.actions || []).slice(0, 2).map((each) => ({ action: each.id, title: each.label })),
+    actions: actions.slice(0, 2),
   });
 }
 
@@ -138,10 +156,16 @@ async function approve(notification, ask) {
     );
 }
 
-/** K-1903: a run action of the notification, such as Deny of an ask or Allow of a repo. */
+/** K-1903, K-1905: a run action of the notification, such as Deny of an ask or Allow of a repo, or Dismiss. */
 async function run(notification, action) {
   const id = notification.data && notification.data.id;
-  const answer = await post(`/api/notifications/${id}/actions/${encodeURIComponent(action)}`, {});
+  const answer = await post(
+    action === "dismiss"
+      ? `/api/notifications/${id}/dismiss`
+      : `/api/notifications/${id}/actions/${encodeURIComponent(action)}`,
+    {},
+  );
+  if (answer.ok && action === "dismiss") return;
   const label = action.charAt(0).toUpperCase() + action.slice(1);
   if (answer.ok) return settle(notification, `${label}: done.`, "/#notifications");
   if (answer.login) return openPath("/#notifications");

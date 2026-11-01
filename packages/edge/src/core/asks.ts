@@ -183,6 +183,16 @@ export function shownAsk(action: ProposalAction, target: string, body: unknown):
   }
 }
 
+/**
+ * K-1722: the text of an ask in a notification and a push: the shown text without the request headers of a forwarded
+ * call, because a header can hold a token. The Inbox shows the whole shown text.
+ */
+export function askNotificationText(action: ProposalAction, target: string, body: unknown): string {
+  if (action !== "forward") return shownAsk(action, target, body);
+  const object = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+  return [target, String(object["body"] ?? "")].join("\n");
+}
+
 /** K-1722: the SHA-256 of the shown text, hex. */
 export async function shownHash(shown: string): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(shown)));
@@ -277,6 +287,24 @@ const isAgentMember = (member: Circle["members"][number], directory: Directory) 
   return actor !== undefined && !isPerson(actor);
 };
 
+/** K-1730: what each effect lets an actor do, in the words of the map. */
+export const EFFECT_HELP: Record<Effect, string> = {
+  reads: "Reads: the map, logs, History, job output and repo read tokens.",
+  maintains:
+    "Maintains: closed machine care (restart, update, tunnel restart, diagnostics, order, automatic update), and closing invites and asks.",
+  creates:
+    "Creates: new cards (apps, pages, sites, ports, repos). They land only in the actor's own circles, so creating never shares.",
+  changes:
+    "Changes: existing cards in scope: deploys, settings, desired state, repo push tokens and backups.",
+  runs: "Runs: shell and exec on machines in scope.",
+  destroys:
+    "Destroys: anything without Undo: remove an app, restore over data, delete volumes, forget a card.",
+  shares:
+    "Shares: shares what this actor manages: its cards into a circle or Everyone, audiences and passes. Circles, members, levels, effects and targets out of scope ask the Owner. With Secrets automatic too, it acts as the owner. A person approves an ask of it with a passkey.",
+  secrets:
+    "Secrets: hands out a secret: invite codes, key reset codes and tokens. A person approves an ask of it with a passkey.",
+};
+
 /** K-1725: the effects that the map warns about at "automatic", with what they do with no person. */
 const AUTOMATIC_WARNING: Readonly<Partial<Record<Effect, string>>> = {
   shares: `"shares" runs at once: the actor shares what this actor manages, such as its cards into any circle or Everyone, audiences and passes, with no person. Circles, members, levels and effects still ask the Owner.`,
@@ -284,6 +312,9 @@ const AUTOMATIC_WARNING: Readonly<Partial<Record<Effect, string>>> = {
   runs: `"runs" runs at once: the actor runs shell commands on its machines with no person.`,
   destroys: `"destroys" runs at once: the actor removes data that has no Undo with no person.`,
 };
+
+/** K-1725: the effects that run a shell, destroy data, raise access or hand out a secret, so their sticker warns. */
+export const WARNED_EFFECTS: ReadonlySet<Effect> = new Set(Object.keys(AUTOMATIC_WARNING) as Array<Effect>);
 
 /** K-1778: "shares" and "secrets" automatic together make an actor with control of the admin card the owner (K-104). */
 const OWNER_WARNING = `"shares" and "secrets" run at once: where the actor has control of the admin card, it acts as you, the owner, with no person.`;

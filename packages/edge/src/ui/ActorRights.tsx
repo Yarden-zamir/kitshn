@@ -1,4 +1,4 @@
-import { automaticWarning, formatConditions, rightWarnings } from "../core/asks.ts";
+import { EFFECT_HELP, automaticWarning, formatConditions, rightWarnings } from "../core/asks.ts";
 import {
   type Actor,
   EFFECTS,
@@ -12,23 +12,6 @@ import { EFFECT_DEFAULTS } from "../core/operations.ts";
 import { Radio } from "./controls.tsx";
 
 type ActorMember = Extract<Member, { _tag: "actor" }>;
-
-const EFFECT_HELP: Record<Effect, string> = {
-  reads: "Reads: the map, logs, History, job output and repo read tokens.",
-  maintains:
-    "Maintains: closed machine care (restart, update, tunnel restart, diagnostics, order, automatic update), and closing invites and asks.",
-  creates:
-    "Creates: new cards (apps, pages, sites, ports, repos). They land only in the actor's own circles, so creating never shares.",
-  changes:
-    "Changes: existing cards in scope: deploys, settings, desired state, repo push tokens and backups.",
-  runs: "Runs: shell and exec on machines in scope.",
-  destroys:
-    "Destroys: anything without Undo: remove an app, restore over data, delete volumes, forget a card.",
-  shares:
-    "Shares: shares what this actor manages: its cards into a circle or Everyone, audiences and passes. Circles, members, levels, effects and targets out of scope ask the Owner. With Secrets automatic too, it acts as the owner. A person approves an ask of it with a passkey.",
-  secrets:
-    "Secrets: hands out a secret: invite codes, key reset codes and tokens. A person approves an ask of it with a passkey.",
-};
 
 /**
  * K-1720, K-1730: the mode of each effect of an actor chip: default, off, automatic, or ask one circle. K-1725: the

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
-import type { Effect } from "../core/model.ts";
+import { EFFECT_HELP, WARNED_EFFECTS } from "../core/asks.ts";
 import type { AskEventView, LinkEventView, ProposalView } from "../core/protocol.ts";
 import { callApi } from "./store.ts";
 import { whenText } from "./time.ts";
@@ -242,20 +242,6 @@ export function BotRuns(props: {
   );
 }
 
-/** K-1725: what an approval of each effect lets the agent do, in one line for the approver. */
-const EFFECT_TEXT: Record<Effect, string> = {
-  reads: "reads the map, logs or code",
-  maintains: "looks after a machine",
-  creates: "adds a new card",
-  changes: "changes an existing card, such as a deploy",
-  runs: "runs a shell command on a machine",
-  destroys: "removes data that has no Undo",
-  shares: "shares access with more people",
-  secrets: "gets a secret, such as a key or a token",
-};
-/** K-1725: the effects that run a shell, destroy data or raise access; their sticker warns. */
-const RISKY: ReadonlySet<Effect> = new Set(["runs", "destroys", "shares", "secrets"]);
-
 /**
  * K-1722: one ask in the Inbox, in the order an approver decides: who asks for what, the exact text that runs, why,
  * then Approve and Deny.
@@ -271,20 +257,18 @@ export function AskRow(props: {
   readonly onDeny: () => void;
 }) {
   const { proposal } = props;
-  const risky = RISKY.has(proposal.right);
+  const risky = WARNED_EFFECTS.has(proposal.right);
   return (
     <li class="ask">
       <div class="ask-head">
         <span
           class={risky ? "sticker right warn" : "sticker wait"}
-          data-tip={`${proposal.right}: the agent ${EFFECT_TEXT[proposal.right]}.${risky ? " High risk: read the command." : ""}`}
+          data-tip={`${EFFECT_HELP[proposal.right]}${risky ? " High risk: read the text before you approve." : ""}`}
         >
           {proposal.right}
         </span>
         <strong>{proposal.machineName}</strong>
-        <span class="muted">
-          {EFFECT_TEXT[proposal.right]} · for {props.circleName(proposal.circleId)}
-        </span>
+        <span class="muted">asks {props.circleName(proposal.circleId)}</span>
       </div>
       <div>
         <code class="shown">{proposal.shown}</code>

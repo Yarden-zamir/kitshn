@@ -26,6 +26,27 @@ export const DEFAULT_LEVELS: ReadonlyArray<NotificationLevel> = ["warn", "error"
  * plan allows 50 subrequests, so 5 keep 5 spare; the rest wait for the next alarm.
  */
 export const PUSH_SENDS_PER_RUN = 5;
+/**
+ * K-1722: the longest shown text that a push offers Approve for. A phone shows the body of an expanded notification in
+ * full at this length, also with the reason and the expiry below it. A longer text gets Deny only.
+ */
+export const PUSH_APPROVE_MAX = 100;
+
+/**
+ * K-1722: whether the push shows the whole text that Approve hashes, so the approver sees all that runs: one line of
+ * at most PUSH_APPROVE_MAX printable ASCII characters, with no run of spaces. Any other character, such as a tab, a
+ * control or a bidi character, could hide a part, so it gets Deny only and a tap opens the ask.
+ */
+export function approvesOnPush(shown: string): boolean {
+  if (shown.length === 0 || shown.length > PUSH_APPROVE_MAX) return false;
+  if (shown.includes("  ") || shown.startsWith(" ") || shown.endsWith(" ")) return false;
+  for (let index = 0; index < shown.length; index++) {
+    const code = shown.charCodeAt(index);
+    if (code < 0x20 || code > 0x7e) return false;
+  }
+  return true;
+}
+
 /** K-1907: "Send a test" runs at most once in this time. */
 export const PUSH_TEST_MS = 60_000;
 

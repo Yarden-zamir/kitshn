@@ -1433,5 +1433,32 @@ describe("the approve applications (K-1723)", () => {
     expect(joined.apps.get("app:approve:passkey")).toMatchObject({
       policyKeys: ["policy:approve-passkey:owner"],
     });
+    // An ask of "secrets" needs a passkey also in a circle without one, so its people reach the passkey path too.
+    const helpers: Circle = {
+      ...state.circles.get("owner")!,
+      id: "helpers",
+      name: "Helpers",
+      needsPasskey: false,
+      members: [chip(login("g@x.com"))],
+    };
+    const asking = {
+      ...agents,
+      members: [
+        chip(machineKey("vps"), {
+          changes: { mode: "ask", circleId: "helpers" },
+          secrets: { mode: "ask", circleId: "helpers" },
+        }),
+      ],
+    };
+    const both = desiredAccess(
+      { ...state, circles: new Map(state.circles).set("agents", asking).set("helpers", helpers) },
+      0,
+    );
+    expect(both.apps.get("app:approve:login")?.policyKeys).toEqual(["policy:approve-login:helpers"]);
+    expect(both.apps.get("app:approve:passkey")?.policyKeys).toContain("policy:approve-passkey:helpers");
+    expect(both.policies.get("policy:approve-passkey:helpers")).toMatchObject({
+      include: [{ email: { email: "g@x.com" } }],
+      mfa_config: { session_duration: "10m" },
+    });
   });
 });

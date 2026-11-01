@@ -46,13 +46,14 @@ export function NotificationsView(props: {
   );
 
   useEffect(() => {
+    const readAt = Date.now();
     void callApi<{ notifications: Array<Notification>; mutes: Array<Mute> }>(
       "GET",
       "/api/notifications",
     ).then((result) => {
       if ("error" in result) return props.onToast(result.error, true);
       setList(result);
-      void closeStalePushes(result.notifications);
+      void closeStalePushes(result.notifications, readAt);
     });
   }, [props.bell, version]);
 
@@ -160,16 +161,25 @@ export function NotificationsView(props: {
 }
 
 /**
- * K-1905, K-1907: a closed notification sends no push, except an ask, so this browser can still show one that closed
- * elsewhere. The open list is the truth: each push of this browser that names no open notification closes.
+ * K-1905: most closes send no push, so this browser can still show a push of a notification that closed. A push closes
+ * here only when the list has its notification closed, with no open one of the same source and key, and the push
+ * showed before the list was read. So a notification that opened after the read keeps its push.
  */
-async function closeStalePushes(notifications: ReadonlyArray<Notification>) {
+async function closeStalePushes(notifications: ReadonlyArray<Notification>, readAt: number) {
   const registration = await navigator.serviceWorker?.getRegistration().catch(() => undefined);
   if (!registration) return;
-  const open = new Set(
-    notifications.flatMap((each) => (each.state === "open" ? [`${each.source}:${each.key}`] : [])),
-  );
-  for (const shown of await registration.getNotifications()) if (!open.has(shown.tag)) shown.close();
+  const tag = (each: Notification) => `${each.source}:${each.key}`;
+  const open = new Set(notifications.filter((each) => each.state === "open").map(tag));
+  const closed = new Set(notifications.filter((each) => each.state !== "open").map(tag));
+  for (const shown of await registration.getNotifications()) {
+    const data: unknown = shown.data;
+    // The service worker stamps `shownAt`; a push without it is from an older worker, so from before this read.
+    const at =
+      typeof data === "object" && data !== null && "shownAt" in data && typeof data.shownAt === "number"
+        ? data.shownAt
+        : 0;
+    if (closed.has(shown.tag) && !open.has(shown.tag) && at < readAt) shown.close();
+  }
 }
 
 /** K-1905: one notification with its state, its source and card, and its actions. */

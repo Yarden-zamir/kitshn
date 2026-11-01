@@ -101,14 +101,32 @@ type Instance = {
   expireProposals(now: number): void;
 };
 
-async function ask(stub: DurableObjectStub, action: string, target = "", extra: object = {}) {
+/** One ask of vps. `vouched` are labels that a T3 provider of the machine vouched for (K-1752). */
+async function ask(
+  stub: DurableObjectStub,
+  action: string,
+  target = "",
+  extra: object = {},
+  vouched: Readonly<Record<string, string>> | null = null,
+) {
   const sent: Array<ServerToDaemon> = [];
-  await runInDurableObject(stub, (instance) =>
-    (instance as unknown as Instance).webSocketMessage(
-      daemonSocket(sent),
-      JSON.stringify({ type: "ask", requestId: "r1", ask: { action, target, ...extra } }),
-    ),
-  );
+  await runInDurableObject(stub, async (instance) => {
+    const kitshn = instance as unknown as Instance & { labelPrefixesOf(id: string): Array<string> };
+    const reported = kitshn.labelPrefixesOf.bind(kitshn);
+    if (vouched) kitshn.labelPrefixesOf = () => ["t3."];
+    try {
+      await kitshn.webSocketMessage(
+        daemonSocket(sent),
+        JSON.stringify({
+          type: "ask",
+          requestId: "r1",
+          ask: { action, target, ...extra, ...(vouched ? { attested: vouched } : {}) },
+        }),
+      );
+    } finally {
+      kitshn.labelPrefixesOf = reported;
+    }
+  });
   const answer = sent.find((message) => message.type === "askAnswer");
   if (!answer) throw new Error("kitshn sent no askAnswer.");
   const {
@@ -650,7 +668,8 @@ it("issues a pass only while passes are on and for a listed audience, and serves
 
 it("opens a high-priority notification for each ask and closes it when the ask is answered (K-1722)", async () => {
   const stub = await setup({ changes: { mode: "ask", circleId: "owner" } });
-  const waiting = await ask(stub, "deploy", "card");
+  const thread = { "t3.thread.id": "t1" };
+  const waiting = await ask(stub, "deploy", "card", {}, thread);
   const id = waiting.outcome === "waiting" ? waiting.proposalId : "";
   const state = () =>
     runInDurableObject(stub, (_, durable) =>
@@ -661,8 +680,41 @@ it("opens a high-priority notification for each ask and closes it when the ask i
         )
         .toArray(),
     );
-  // The same ask again, as after the CLI stopped waiting, waits on the same proposal, so nobody answers it twice.
-  expect(await ask(stub, "deploy", "card")).toEqual({ outcome: "waiting", proposalId: id });
+  // The same call again from the same thread, as after the CLI stopped waiting, waits on the same proposal.
+  expect(await ask(stub, "deploy", "card", {}, thread)).toEqual({ outcome: "waiting", proposalId: id });
+  // Another call asks again: another thread of the machine (another agent), no thread, or another body.
+  for (const [extra, vouched] of [
+    [{}, { "t3.thread.id": "t2" }],
+    [{}, null],
+    [{ body: { mode: "build" } }, thread],
+  ] as const) {
+    const other = await ask(stub, "deploy", "card", extra, vouched);
+    expect(other).toMatchObject({ outcome: "waiting", proposalId: expect.not.stringMatching(id) });
+  }
+  // With no thread, two equal asks never join, because two agents of one machine key could send them.
+  const bare = await Promise.all([ask(stub, "deploy", "card"), ask(stub, "deploy", "card")]);
+  expect(new Set(bare.map((each) => (each.outcome === "waiting" ? each.proposalId : ""))).size).toBe(2);
+  // An exec carries its own execId in the stored body, so a second run of the same command never joins the first.
+  const execs = await runInDurableObject(stub, async (instance) => {
+    const kitshn = instance as unknown as {
+      propose(...args: ReadonlyArray<unknown>): Promise<AskOutcome>;
+    };
+    const asker = { credential: "machine/vps", machineId: "vps", name: "vps" };
+    const run = (execId: string) =>
+      kitshn.propose(
+        asker,
+        "exec",
+        "mac",
+        { command: "ls", execId },
+        null,
+        thread,
+        "runs",
+        "owner",
+        Date.now(),
+      );
+    return [await run("e1"), await run("e2")];
+  });
+  expect(execs[0]).not.toEqual(execs[1]);
   const [open] = await state();
   expect(open).toMatchObject({ state: "open", priority: "high" });
   // Only the approver circle gets it; an owner outside that circle reads asks in History.
@@ -740,13 +792,18 @@ it("answers an ask from its push: the text by the admin login, Approve only by t
     const response = await call(`/api/notifications/${id}`, await as("admin-aud"));
     return {
       status: response.status,
-      ask: ((await response.json()) as { ask?: { shownHash: string; via: string; shown: string } }).ask,
+      ask: (
+        (await response.json()) as {
+          ask?: { shownHash: string; via: string; text: string; approveOnPush: boolean };
+        }
+      ).ask,
     };
   };
   const allow = await ask(stub, "allow", "123");
   const allowId = allow.outcome === "waiting" ? allow.proposalId : "";
   const read = await details(allowId);
-  expect(read.ask).toMatchObject({ via: "login", shown: expect.stringContaining("123") });
+  // "allow the repo 123" fits a phone in full, so the push offers Approve; the text has no request headers.
+  expect(read.ask).toMatchObject({ via: "login", text: "allow the repo 123", approveOnPush: true });
   const hash = read.ask?.shownHash ?? "";
   const approve = async (via: string, token: string, seen = hash, id = allowId) =>
     call(`/api/approve/${via}/${encodeURIComponent(id)}`, token, { hash: seen });

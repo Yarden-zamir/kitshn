@@ -2,6 +2,7 @@ import {
   ADMIN_RESOURCE_ID,
   type Circle,
   type Directory,
+  type Effect,
   type Member,
   OWNER_CIRCLE_ID,
   type State,
@@ -9,6 +10,7 @@ import {
   isPerson,
   memberActor,
 } from "./model.ts";
+import { approveVia } from "./asks.ts";
 
 /** K-1777: the policy that lets the service token of each machine reach the gate of `/op`. */
 export const OP_TOKENS_POLICY = "policy:op:tokens";
@@ -444,36 +446,43 @@ export function desiredAccess(
   // no other policy, so its token proves a fresh passkey; a circle without it goes on `/api/approve/login`, where the
   // Durable Object refuses a passkey circle. "All must match" is left out, as for K-113. During a pause no ask runs.
   // K-1776: an unset right asks the Owner, so the Owner is an approver while any machine is joined, also one in the tray.
+  // An ask of "shares" or "secrets" needs a passkey proof in any circle (K-1723), so a circle that some chip asks for
+  // one of them also gets a passkey policy on `/api/approve/passkey`, next to its login policy.
   const host = state.resources.get(ADMIN_RESOURCE_ID)?.addresses[0];
-  const asked = new Set([
-    ...(state.machines.size > 0 ? [OWNER_CIRCLE_ID] : []),
-    ...[...state.circles.values()].flatMap((circle) =>
-      circle.members.flatMap((member) =>
-        member._tag === "actor"
-          ? Object.values(member.rights ?? {}).flatMap((mode) =>
-              mode?.mode === "ask" ? [mode.circleId] : [],
-            )
-          : [],
-      ),
-    ),
-  ]);
+  const asked = new Map<string, Set<"passkey" | "login">>();
+  const ask = (circleId: string, kind: "passkey" | "login") =>
+    asked.set(circleId, (asked.get(circleId) ?? new Set()).add(kind));
+  // K-1776: an unset effect asks the Owner, also "shares", so the Owner gets both kinds while any machine is joined.
+  if (state.machines.size > 0) {
+    ask(OWNER_CIRCLE_ID, approveVia(state.circles.get(OWNER_CIRCLE_ID), "changes"));
+    ask(OWNER_CIRCLE_ID, "passkey");
+  }
+  for (const circle of state.circles.values())
+    for (const member of circle.members)
+      if (member._tag === "actor")
+        for (const [effect, mode] of Object.entries(member.rights ?? {}))
+          if (mode?.mode === "ask") {
+            const target = state.circles.get(mode.circleId);
+            ask(mode.circleId, approveVia(target, effect as Effect));
+          }
   const approvers = { passkey: [] as Array<string>, login: [] as Array<string> };
-  for (const id of state.paused || !host ? [] : asked) {
+  for (const [id, kinds] of state.paused || !host ? [] : asked) {
     const circle = state.circles.get(id);
     if (!circle || circle.match === "all" || (circle.endsAt !== null && circle.endsAt <= now)) continue;
     const include = circle.members.flatMap((member) => personRules(member, state));
     if (include.length === 0) continue;
-    const kind = circle.needsPasskey ? "passkey" : "login";
-    const key = `policy:approve-${kind}:${circle.id}`;
-    policies.set(key, {
-      name: `${ACCESS_NAME_PREFIX}approvers ${circle.name}${circle.needsPasskey ? " (passkey)" : ""}`,
-      decision: "allow",
-      include,
-      require: [],
-      exclude: [],
-      ...(circle.needsPasskey ? { mfa_config: { ...PASSKEY_MFA, session_duration: "10m" } } : {}),
-    });
-    approvers[kind].push(key);
+    for (const kind of kinds) {
+      const key = `policy:approve-${kind}:${circle.id}`;
+      policies.set(key, {
+        name: `${ACCESS_NAME_PREFIX}approvers ${circle.name}${kind === "passkey" ? " (passkey)" : ""}`,
+        decision: "allow",
+        include,
+        require: [],
+        exclude: [],
+        ...(kind === "passkey" ? { mfa_config: { ...PASSKEY_MFA, session_duration: "10m" } } : {}),
+      });
+      approvers[kind].push(key);
+    }
   }
   for (const kind of ["passkey", "login"] as const) {
     if (!host || approvers[kind].length === 0) continue;

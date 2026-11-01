@@ -13,7 +13,7 @@ it("takes a call that the daemon forwarded and signed, with the right of its pat
   // K-1777: an address change has the effect "changes", as the row card-address.
   await setup({ creates: { mode: "automatic" }, changes: { mode: "ask", circleId: "owner" } }, key);
   const address = "/agent/cards/no-such-card/address";
-  // K-1776: an effect that asks the Owner waits, and the same call again gets the same proposal, not a second one.
+  // K-1776: an effect that asks the Owner waits.
   const unset = await forwarded(key, "POST", address, "nonce-off-0123456789");
   expect(unset.status).toBe(409);
   const waiting = (await unset.json()) as {
@@ -27,8 +27,10 @@ it("takes a call that the daemon forwarded and signed, with the right of its pat
     circle: "Owner",
     error: expect.stringMatching(/^waiting: /),
   });
+  // K-1722: a call with no vouched thread never joins an open proposal, because two agents of one machine key could
+  // send it. The approval of either one still runs the call once (K-1714).
   const again = await forwarded(key, "POST", address, "nonce-off-1123456789");
-  expect(((await again.json()) as { proposalId: string }).proposalId).toBe(waiting.proposalId);
+  expect(((await again.json()) as { proposalId: string }).proposalId).not.toBe(waiting.proposalId);
   // A changed call is another call, so the approval of the first does not run it.
   const other = await forwarded(
     key,
