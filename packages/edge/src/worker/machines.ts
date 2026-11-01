@@ -1,5 +1,6 @@
 import type { Command, Machine, MachineKey, MachineStatus } from "../core/machine.ts";
 import type { JobView } from "../core/protocol.ts";
+import { FACT_LABELS, type MachineFact, hasLabels, isReservedLabel } from "../core/facts.ts";
 import { type ProviderRefusal, PROVIDER_LIMITS, isProviderName } from "@kitshn/local";
 
 /** K-613: a job waits at most this long for its machine by default. */
@@ -20,25 +21,38 @@ export const OUTPUT_LIMIT = 64 * 1024;
 
 export type Job = JobView;
 
-/** K-610: the first online machine in the owner's order that has every label, or null. */
+/** K-610: the first online machine in the owner's order that has every label, or null. Fact labels count (K-635). */
 export function pickMachine(
   machines: Iterable<Machine>,
   online: ReadonlySet<string>,
   labels: ReadonlyArray<string>,
+  factsOf: (machine: Machine) => ReadonlyArray<MachineFact>,
 ): Machine | null {
   const fitting = [...machines]
-    .filter((machine) => online.has(machine.id) && labels.every((label) => machine.labels.includes(label)))
+    .filter((machine) => online.has(machine.id) && hasLabels(machine.labels, factsOf(machine), labels))
     .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
   return fitting[0] ?? null;
 }
 
 const LABEL = /^[a-z0-9][a-z0-9-]{0,30}$/;
+const isFactLabel = (label: string): boolean => (FACT_LABELS as ReadonlyArray<string>).includes(label);
 
+/** K-610: the labels that a job needs, which can name a fact label (K-635). */
 export function parseLabels(value: unknown): Array<string> | string {
   if (!Array.isArray(value)) return "Labels must be a list.";
   const labels = value.map((label) => String(label).trim().toLowerCase()).filter(Boolean);
-  const bad = labels.find((label) => !LABEL.test(label));
+  const bad = labels.find((label) => !LABEL.test(label) && !isFactLabel(label));
   return bad ? `The label "${bad}" may use only a to z, 0 to 9 and dashes.` : [...new Set(labels)];
+}
+
+/** K-609, K-635: the labels that the owner sets. Only kitshn gives the names of fact labels. */
+export function parseOwnerLabels(value: unknown): Array<string> | string {
+  const labels = parseLabels(value);
+  if (typeof labels === "string") return labels;
+  const reserved = labels.find(isReservedLabel);
+  return reserved === undefined
+    ? labels
+    : `The label "${reserved}" comes from the daemon: kitshn sets os:, arch: and unix labels by itself (K-635).`;
 }
 
 export function parseCommand(value: unknown): Command | string {

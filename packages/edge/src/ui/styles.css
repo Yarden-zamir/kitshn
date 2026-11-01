@@ -532,10 +532,20 @@ input[type="search"]::-webkit-search-cancel-button {
    The bars change with each sample, once a minute, with no transition. */
 .card .live {
   display: grid;
-  /* Two sticker lines hold the widest set: "2 needs you", "12 queued" and BEHIND. */
-  grid-template-rows: 1lh 14px 54px;
+  /* Two label lines hold the owner labels and the facts (K-635). Two sticker lines hold the widest set: "2 needs you",
+     "12 queued" and BEHIND. */
+  grid-template-rows: 1lh 34px 14px 54px;
   row-gap: 4px;
   overflow: hidden;
+}
+.card .live .machine-labels {
+  align-content: flex-start;
+  gap: 2px;
+  overflow: hidden;
+}
+.card .live .machine-label {
+  padding: 0 2px;
+  font-size: 0.62rem;
 }
 .card .live .meters {
   display: flex;
@@ -2818,4 +2828,27 @@ details.raw[open] > summary::before {
 /* U16: a folded toolbar gives the title's room to its buttons; the browser tab names the page. */
 .bar.folded h1 {
   display: none;
+}
+/* K-609, K-635: an owner label has a solid border; a fact label from the daemon has a dashed one. */
+.machine-labels {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.machine-label {
+  padding: 0 4px;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+.machine-label.fact {
+  color: var(--muted);
+  border-style: dashed;
+}
+.card.sel .machine-label.fact {
+  color: inherit;
 }

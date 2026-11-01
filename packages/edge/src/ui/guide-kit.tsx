@@ -53,6 +53,7 @@ export const machineView = (online: boolean, key: MachineKey | null): MachineVie
     online,
     lastSeen: online ? NOW : NOW - 3_600_000,
     status: null,
+    facts: [],
     sample: null,
     os: first.os,
     keyFailure: null,

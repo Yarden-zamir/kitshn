@@ -104,6 +104,7 @@ function context(version = "0123456789ab"): ActionContext {
     online: true,
     lastSeen: null,
     status: null,
+    facts: [],
     sample: null,
     os: null,
     keyFailure: null,

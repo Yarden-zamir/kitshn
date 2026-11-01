@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { circlePolicies } from "../core/access.ts";
+import { machineFacts } from "../core/facts.ts";
 import { type Machine, newJoinCode, openJoin, sealJoin } from "../core/machine.ts";
 import type { Circle } from "../core/model.ts";
 import { circleMatches } from "../core/visitor.ts";
@@ -9,6 +10,7 @@ import {
   machineIdFor,
   parseCommand,
   parseLabels,
+  parseOwnerLabels,
   pickMachine,
   rekeyDecision,
   socketStart,
@@ -48,9 +50,13 @@ describe("jobs (K-610)", () => {
       machine("c", 0, ["docker"]),
     ];
     const online = new Set(["a", "b"]);
-    expect(pickMachine(machines, online, ["docker"])?.id).toBe("a");
-    expect(pickMachine(machines, online, ["docker", "arm"])?.id).toBe("b");
-    expect(pickMachine(machines, online, ["gpu"])).toBeNull();
+    // K-635: only b reports Linux.
+    const factsOf = (each: Machine) =>
+      machineFacts(each.id === "b" ? { os: "linux 6.8.0", arch: "arm64" } : null);
+    expect(pickMachine(machines, online, ["docker"], factsOf)?.id).toBe("a");
+    expect(pickMachine(machines, online, ["docker", "arm"], factsOf)?.id).toBe("b");
+    expect(pickMachine(machines, online, ["docker", "unix"], factsOf)?.id).toBe("b");
+    expect(pickMachine(machines, online, ["gpu"], factsOf)).toBeNull();
   });
 
   it("checks commands and labels", () => {
@@ -64,6 +70,11 @@ describe("jobs (K-610)", () => {
     });
     expect(parseLabels(["Docker", "docker", "arm"])).toEqual(["docker", "arm"]);
     expect(parseLabels(["no spaces"])).toMatch(/label/);
+    // K-635: a job can need a fact label, but the owner cannot set one.
+    expect(parseLabels(["os:linux", "unix"])).toEqual(["os:linux", "unix"]);
+    expect(parseOwnerLabels(["deploy", "Unix"])).toMatch(/comes from the daemon/);
+    expect(parseOwnerLabels(["arch:x64"])).toMatch(/comes from the daemon/);
+    expect(parseOwnerLabels(["deploy", "docker"])).toEqual(["deploy", "docker"]);
     expect(machineIdFor("Oracle VPS!")).toMatch(/^oracle-vps-[0-9a-f]{6}$/);
   });
 });
