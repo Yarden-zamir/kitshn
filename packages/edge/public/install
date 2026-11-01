@@ -23,7 +23,8 @@ SCRIPT=kitshn
 BUNDLE=${KITSHN_BUNDLE:-https://github.com/Yarden-zamir/kitshn/releases/download/edge/kitshn-edge.tar.gz}
 COMPATIBILITY_DATE=2026-10-20
 MFA='{"allowed_authenticators":["biometrics","security_key"],"session_duration":"24h"}'
-TOKEN_LINK='https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_routes%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_r2%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22access%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22access_acct%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22dns%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22account_analytics%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_observability%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22access_custom_page%22%2C%22type%22%3A%22edit%22%7D%5D&accountId=%2A&zoneId=all&name=kitshn'
+# K-1202: an account API token with every permission. TOKEN_LINK in src/core/token.ts is the source; a test compares.
+TOKEN_LINK='https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=%5B%7B%22key%22%3A%22e086da7e2179491d91ee5f35b3ca210a%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22f7f0eda5697f475c90846e879bab8666%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22bf7481a1826f439697cb59a20b22293e%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%2282c075da3f4647a2a03becd0fe240f8a%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%221e13c5124ca64b72b1969a67e8829049%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22bfe0d8686a584fa680f4c53b5eb0de6d%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22a1c0fec57cf94af79479a6d827fa518c%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%224e5fd8ac327b4a358e48c66fcbeb856d%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22b05b28e839c54467a7d6cba5d3abb5a3%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22c07321b023e944ff818fec44d8203567%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22b89a480218d04ceb98b4fe57ca29dc1f%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22c8fed203ed3043cba015a93ad1616f1f%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%224755a26eedb94da69e1066d98aa820be%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%2228f4b596e7d643029c524985477ae49a%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%2206f0526e6e464647bd61b63c54935235%22%2C%22type%22%3A%22edit%22%7D%5D&name=kitshn'
 
 say() { printf '%s\n' "$*"; }
 changed() { printf '  changed: %s\n' "$*"; }
@@ -36,7 +37,7 @@ die() {
 for tool in curl jq tar base64; do
   command -v "$tool" >/dev/null 2>&1 || die "this script needs $tool. Install it and run the script again."
 done
-[ -n "${CLOUDFLARE_API_TOKEN:-}" ] || die "set CLOUDFLARE_API_TOKEN. Make a token with this link: $TOKEN_LINK"
+[ -n "${CLOUDFLARE_API_TOKEN:-}" ] || die "set CLOUDFLARE_API_TOKEN. Make a token with this link, and give its Zone permissions all zones of the account: $TOKEN_LINK"
 [ -n "${KITSHN_HOST:-}" ] || die "set KITSHN_HOST to the admin address, for example kit.example.com."
 [ -n "${KITSHN_OWNER_EMAILS:-}" ] || die "set KITSHN_OWNER_EMAILS to your email (a comma-separated list for more)."
 [ -z "${KITSHN_IMPORT:-}" ] || [ -r "$KITSHN_IMPORT" ] || die "KITSHN_IMPORT names no readable file: $KITSHN_IMPORT"
@@ -76,7 +77,7 @@ api() {
     errors=$(jq -r '[.errors[]? | "\(.code): \(.message)" + ([.error_chain[]?.message] | if length > 0 then " (" + join("; ") + ")" else "" end)] | join("; ")' "$WORK/out" 2>/dev/null || head -c 300 "$WORK/out")
     hint=""
     # Only a 401 or a 403 says that the token lacks a permission.
-    case "$http_status" in 401 | 403) if [ -n "$NEED" ]; then hint=" The token needs \"$NEED\". Make a new token with this link: $TOKEN_LINK"; fi ;; esac
+    case "$http_status" in 401 | 403) if [ -n "$NEED" ]; then hint=" The token needs $NEED. Edit the token at ${TOKEN_PAGE:-the Cloudflare dashboard}, or make a new token with this link: $TOKEN_LINK"; fi ;; esac
     die "$method $path failed ($http_status): $errors.$hint"
   fi
   jq -c '.result' "$WORK/out"
@@ -90,10 +91,20 @@ try() {
 say "kitshn bootstrap for $KITSHN_HOST"
 
 say "1. API token and account"
-NEED="any valid API token"
-verify=$(api GET /user/tokens/verify)
-[ "$(printf '%s' "$verify" | jq -r .status)" = active ] || die "the API token is not active."
-NEED="Account Settings: Read, or any account permission"
+NEED="a valid API token"
+# K-1202: the token link makes an account token, which verifies only below its account; /user/tokens/verify answers
+# it with error 1000. A user token, as older installs have, verifies at /user/tokens/verify.
+TOKEN_PAGE=""
+if try GET /user/tokens/verify; then
+  TOKEN_KIND=user
+  TOKEN_STATUS=$(jq -r .result.status "$WORK/out")
+  TOKEN_PAGE=https://dash.cloudflare.com/profile/api-tokens
+elif jq -e 'any(.errors[]?; .code == 1000)' "$WORK/out" >/dev/null 2>&1; then
+  TOKEN_KIND=account
+else
+  die "the check of the API token failed: $(jq -r '[.errors[]? | "\(.code): \(.message)"] | join("; ")' "$WORK/out" 2>/dev/null || head -c 300 "$WORK/out")"
+fi
+NEED="any account permission"
 if [ -n "${KITSHN_ACCOUNT_ID:-}" ]; then
   ACCOUNT=$KITSHN_ACCOUNT_ID
 else
@@ -102,13 +113,20 @@ else
     die "the token sees $(printf '%s' "$accounts" | jq length) accounts. Set KITSHN_ACCOUNT_ID to one of: $(printf '%s' "$accounts" | jq -r 'map("\(.id) (\(.name))") | join(", ")')"
   ACCOUNT=$(printf '%s' "$accounts" | jq -r '.[0].id')
 fi
-NEED="Zone: Read"
+if [ "$TOKEN_KIND" = account ]; then
+  NEED="a valid API token"
+  verify=$(api GET "/accounts/$ACCOUNT/tokens/verify")
+  TOKEN_STATUS=$(printf '%s' "$verify" | jq -r .status)
+  TOKEN_PAGE="https://dash.cloudflare.com/$ACCOUNT/api-tokens"
+fi
+[ "$TOKEN_STATUS" = active ] || die "the API token is $TOKEN_STATUS, not active."
+NEED='"Zone > Zone > Read"'
 zones=$(api GET "/zones?account.id=$ACCOUNT&per_page=50")
 ZONE=$(printf '%s' "$zones" | jq -r --arg host "$KITSHN_HOST" \
   '[.[] | . as $z | select($z.name == $host or ($host | endswith("." + $z.name)))] | sort_by(.name | length) | last | .id // empty')
 [ -n "$ZONE" ] || die "no zone of this account contains $KITSHN_HOST. Add the domain to Cloudflare first (K-1111)."
 ZONE_NAME=$(printf '%s' "$zones" | jq -r --arg id "$ZONE" '.[] | select(.id == $id) | .name')
-kept "account $ACCOUNT, zone $ZONE_NAME"
+kept "account $ACCOUNT, zone $ZONE_NAME, $TOKEN_KIND token"
 # K-1806: Worker log search is optional, so a token without it gets a warning, not a stop.
 now=$(($(date +%s) * 1000))
 status=$(curl -sS -o "$WORK/out" -w '%{http_code}' -X POST "$API/accounts/$ACCOUNT/workers/observability/telemetry/query" \
@@ -117,15 +135,14 @@ status=$(curl -sS -o "$WORK/out" -w '%{http_code}' -X POST "$API/accounts/$ACCOU
 case "$status" in
 200) kept "Worker log search (K-1806)" ;;
 403)
-  say "  warning: the token has no \"Workers Observability: Edit\", so search in Worker logs is off (K-1806)."
-  say "           Live in Worker logs still works. To add it, edit the token at https://dash.cloudflare.com/profile/api-tokens:"
-  say "           add \"Account\", \"Workers Observability\", \"Edit\", then Update token."
+  say "  warning: the token has no \"Account > Workers Observability > Edit\", so search in Worker logs is off (K-1806)."
+  say "           Live in Worker logs still works. To add it, edit the token at $TOKEN_PAGE, then Update token."
   ;;
 *) say "  warning: the check of Worker log search failed ($status): $(jq -r '[.errors[]?.message] | join("; ")' "$WORK/out" 2>/dev/null || head -c 200 "$WORK/out")" ;;
 esac
 
 say "2. Zero Trust organization (K-1207)"
-NEED="Access: Organizations, Identity Providers, and Groups: Edit"
+NEED='"Account > Access: Organizations, Identity Providers, and Groups > Edit"'
 if ! try GET "/accounts/$ACCOUNT/access/organizations"; then
   die "this account has no Zero Trust organization yet. Open https://one.dash.cloudflare.com/$ACCOUNT once, pick a team name and the Free plan, then run this script again."
 fi
@@ -174,7 +191,7 @@ else
 fi
 
 say "5. Access applications (K-104, K-1204)"
-NEED="Access: Apps and Policies: Edit"
+NEED='"Account > Access: Apps and Policies > Edit"'
 APPS=$(api GET "/accounts/$ACCOUNT/access/apps?per_page=1000")
 POLICIES=$(api GET "/accounts/$ACCOUNT/access/policies?per_page=1000")
 # policy NAME JSON: prints the id of the reusable policy NAME, and creates it when it is missing.
@@ -237,7 +254,7 @@ public_policy=$(policy "kitshn public paths" '{"name":"kitshn public paths","dec
 machines_policy=$(policy "kitshn machines" '{"name":"kitshn machines","decision":"non_identity","include":[{"any_valid_service_token":{}}],"require":[],"exclude":[]}')
 # K-1130: the kitshn Access login pages, so no kitshn application shows the bare Cloudflare login: "chef" for a card that
 # only the Owner circle opens, "closed" for a card in no circle, and "login" for every other one. Optional: without
-# "Access: Custom Pages Edit", or on a plan that refuses login pages, the applications keep the Cloudflare login.
+# "Account > Access: Custom Pages > Edit", or on a plan that refuses login pages, the applications keep the Cloudflare login.
 # A login page must show the Cloudflare sign-in box and allows no script, so "closed" keeps it under a note.
 login_page_html() {
   cat <<'HTML'
@@ -309,9 +326,8 @@ HTML
 }
 LOGIN_PAGES=""
 if ! try GET "/accounts/$ACCOUNT/access/custom_pages"; then
-  say "  warning: the token has no \"Access: Custom Pages Edit\", so kitshn applications show the Cloudflare login (K-1130)."
-  say "           To add it, edit the token at https://dash.cloudflare.com/profile/api-tokens:"
-  say "           add \"Account\", \"Access: Custom Pages\", \"Edit\", then Update token."
+  say "  warning: the token has no \"Account > Access: Custom Pages > Edit\", so kitshn applications show the Cloudflare login"
+  say "           (K-1130). To add it, edit the token at $TOKEN_PAGE, then Update token."
 else
   cp "$WORK/out" "$WORK/pages.json"
   ids="{}"
@@ -417,7 +433,7 @@ FILES_LOGIN_AUD=$(app "files.$ZONE_NAME/login" "kitshn files login" 720h "$machi
 FILES_PASSKEY_AUD=$(app "files.$ZONE_NAME/login/passkey" "kitshn files login (passkey)" 24h "")
 
 say "6. R2 bucket"
-NEED="Workers R2 Storage: Edit"
+NEED='"Account > Workers R2 Storage > Edit"'
 R2=""
 if try GET "/accounts/$ACCOUNT/r2/buckets"; then
   if jq -e '.result.buckets // [] | any(.name == "kitshn")' "$WORK/out" >/dev/null; then
@@ -459,7 +475,7 @@ fi
 [ -z "${KITSHN_IMPORT:-}" ] || [ -n "$R2" ] || die "KITSHN_IMPORT needs R2, which is off on this account (K-1833)."
 
 say "7. Worker (K-1203)"
-NEED="Workers Scripts: Edit"
+NEED='"Account > Workers Scripts > Edit"'
 case "$BUNDLE" in
 http*) curl -fsSL "$BUNDLE" -o "$WORK/bundle.tar.gz" || die "cannot download the kitshn bundle from $BUNDLE." ;;
 *) cp "$BUNDLE" "$WORK/bundle.tar.gz" ;;
@@ -517,7 +533,7 @@ if [ -n "${KITSHN_ZONES:-}" ]; then
     [ "$name" = "$ZONE_NAME" ] && continue
     id=$(printf '%s' "$zones" | jq -r --arg n "$name" '.[] | select(.name == $n) | .id // empty')
     [ -n "$id" ] || die "the token sees no zone $name in this account (K-1111)."
-    NEED="DNS: Edit on $name"
+    NEED="\"Zone > DNS > Edit\" on $name"
     api GET "/zones/$id/dns_records?per_page=1" >/dev/null
     ZONES_JSON=$(printf '%s' "$ZONES_JSON" | jq -c --arg n "$name" --arg id "$id" '. + {($n): $id}')
   done
@@ -628,7 +644,7 @@ api POST "/accounts/$ACCOUNT/workers/scripts/$SCRIPT/subdomain" '{"enabled":fals
 kept "workers.dev address off"
 
 say "8. Addresses (K-1208, K-1003, K-1102)"
-NEED="Workers Routes: Edit and DNS: Edit"
+NEED='"Zone > Workers Routes > Edit" and "Zone > DNS > Edit"'
 for host in "$KITSHN_HOST" "pages.$ZONE_NAME" "files.$ZONE_NAME"; do
   domains=$(api GET "/accounts/$ACCOUNT/workers/domains?hostname=$host")
   domain=$(printf '%s' "$domains" | jq -r --arg h "$host" 'map(select(.hostname == $h)) | .[0].service // empty')
@@ -654,7 +670,7 @@ for zone_id in $zone_ids; do
   401 | 403)
     say "  warning: the token has no \"Zone > Config Rules > Edit\" on zone $zone_id, so private cards keep the"
     say "           Browser Integrity Check, which refuses many scripts and machines (K-412). To add it, edit the token at"
-    say "           https://dash.cloudflare.com/profile/api-tokens: add \"Zone\", \"Config Rules\", \"Edit\", then Update token."
+    say "           $TOKEN_PAGE, then Update token."
     ;;
   *) say "  warning: the check of the Configuration Rules of zone $zone_id failed ($status): $(jq -r '[.errors[]?.message] | join("; ")' "$WORK/out" 2>/dev/null || head -c 200 "$WORK/out")" ;;
   esac

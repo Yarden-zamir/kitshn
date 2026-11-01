@@ -29,7 +29,7 @@ export type LogAnswer =
       readonly cut: boolean;
     }
   | { readonly state: "error"; readonly error: string }
-  /** K-1806: the token has no "Workers Observability: Edit". */
+  /** K-1806: the token has no "Account > Workers Observability > Edit". */
   | { readonly state: "needs-permission" };
 
 /** K-1808: one deploy of a card in "Deploy runs", with the lines of its output that match. */

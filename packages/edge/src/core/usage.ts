@@ -1,3 +1,5 @@
+import { TOKEN_PERMISSIONS } from "./token.ts";
+
 /** K-1303: the free plan limits of the account that the Usage view measures, and how to read the raw numbers. */
 
 /** Daily limits reset at 00:00 UTC, monthly ones on the first of the month; "now" is a count or a size now. */
@@ -47,13 +49,13 @@ const DNS_DOCS = "https://developers.cloudflare.com/dns/faq/";
 
 /** K-1305: the permission that each part of the view needs on the API token. */
 export const PERMISSION = {
-  analytics: "Account Analytics: Read",
-  seats: "Access: Audit Logs Read",
-  applications: "Access: Apps and Policies Read",
-  serviceTokens: "Access: Service Tokens Read",
-  scripts: "Workers Scripts Read",
-  dns: "DNS Read",
-  zone: "Zone Read",
+  analytics: TOKEN_PERMISSIONS.accountAnalytics.label,
+  seats: TOKEN_PERMISSIONS.accessAuditLogs.label,
+  applications: TOKEN_PERMISSIONS.accessApps.label,
+  serviceTokens: TOKEN_PERMISSIONS.accessServiceTokens.label,
+  scripts: TOKEN_PERMISSIONS.workersScripts.label,
+  dns: TOKEN_PERMISSIONS.dns.label,
+  zone: TOKEN_PERMISSIONS.zone.label,
 } as const;
 
 type Sum<T extends string> = { readonly sum: Readonly<Record<T, number>> };
