@@ -4,6 +4,7 @@ import { ruleViolation } from "./changes.ts";
 import type { Machine } from "./machine.ts";
 import {
   ADMIN_RESOURCE_ID,
+  OWNER_CIRCLE_ID,
   type Circle,
   type Resource,
   type ShareSetting,
@@ -12,6 +13,8 @@ import {
   machineActorId,
   shareKey,
 } from "./model.ts";
+import { agentMayCommand, cardsControlledBy, circlesOf, rightMode } from "./agent.ts";
+import { OPERATIONS, decide } from "./operations.ts";
 import { grantsOf } from "./providers.ts";
 import { keyRights, login, machineKey, token } from "./testkit.ts";
 import { type Visitor, visitorLevel } from "./visitor.ts";
@@ -315,6 +318,7 @@ describe("the migration of members into actors (K-1778, migration 44)", () => {
           readsCode: ask,
           restores: { mode: "off" },
           maintains: ask,
+          readsMap: { mode: "automatic" },
         },
       },
       {
@@ -330,12 +334,58 @@ describe("the migration of members into actors (K-1778, migration 44)", () => {
     expect(actors.filter((actor) => actor.id === machineActorId("vps")).map((actor) => actor.name)).toEqual([
       "VPS",
     ]);
+    const ranAtOnce = { maintains: { mode: "automatic" }, readsMap: { mode: "automatic" } };
     expect(byId(circles, "machines").members).toEqual([
-      { _tag: "actor", actorId: machineActorId("vps") },
-      { _tag: "actor", actorId: machineActorId("mac") },
+      { _tag: "actor", actorId: machineActorId("vps"), rights: ranAtOnce },
+      { _tag: "actor", actorId: machineActorId("mac"), rights: ranAtOnce },
     ]);
     expect(byId(circles, "agents").approvesWithoutPasskey).toBe(true);
     expect("machinesMayApprove" in byId(circles, "agents")).toBe(false);
+  });
+
+  it("keeps a circle of machines with no rights an agent circle, with the same control and machine care (K-1777)", () => {
+    const win = machineOf("win", "windows 2");
+    const all = new Map(machines).set("win", win);
+    const winCard: Resource = { ...card("win", "machine"), machine: "win" };
+    // Before migration 44, a circle of machines only was an agent circle of each machine, with no right set.
+    const migration = migrateMembers(
+      [
+        circle("owner", 0, [{ _tag: "email", email: "yarden@example.com" }], { needsPasskey: true }),
+        circle("machines", 3000, [
+          { _tag: "machine", machineId: "win" },
+          { _tag: "device", tokenId: "s-mac", clientId: "mac.access", name: "kitshn machine mac" },
+        ]),
+      ],
+      all,
+      { x: 0, y: 0 },
+      new Map(),
+    );
+    const state: State = {
+      ...stateOf(migration),
+      machines: all,
+      resources: new Map([admin, winCard].map((each) => [each.id, each])),
+      places: new Map([
+        [admin.id, { x: 0, y: 0 }],
+        [winCard.id, { x: 3000, y: 0 }],
+      ]),
+      shareSettings: new Map(),
+    };
+    const macVisitor: Visitor = { email: null, clientId: "mac.access", ip: null };
+    expect([...circlesOf(state, macVisitor, 0)]).toEqual(["machines"]);
+    expect([...circlesOf(state, { email: null, clientId: "win.access", ip: null }, 0)]).toEqual(["machines"]);
+    expect([...cardsControlledBy(state, macVisitor, 0)]).toEqual([winCard.id]);
+    expect(agentMayCommand(state, macVisitor, "win", "restart", 0)).toBe(true);
+    const restart = OPERATIONS["machine-restart"];
+    const mode = rightMode(state, macVisitor, "maintains", 0, null);
+    expect(mode).toEqual({ mode: "automatic" });
+    expect(
+      decide(
+        restart,
+        { admin: false, paused: false, mode, inAgentCircle: true, scope: true, approved: false },
+        OWNER_CIRCLE_ID,
+      ),
+    ).toEqual({ outcome: "run" });
+    expect(migration.notes.join(" ")).toContain("machines stays an agent circle");
   });
 
   it("grants an all-must-match circle of a person with a token by the login alone (M2)", () => {

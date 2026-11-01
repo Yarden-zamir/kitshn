@@ -81,6 +81,8 @@ const KEY_RIGHTS = ["addsApps", "publishes"] as const;
  * - A token in a circle that needs a passkey gets nothing there (the passkey line), and it stays its own actor. Its
  *   actor goes into a new circle "<actor>'s devices" without a passkey, with the place, the level and the share
  *   settings of that circle. The token keeps its cards; no login gets them without a passkey.
+ * - A circle of devices and machines only was an agent circle. Now a circle needs a right set on a chip for that, so
+ *   each machine chip there gets the rights that ran at once before, "maintains" and "reads the map", as automatic.
  * - A token or a machine that held the admin through a circle keeps it, with "raises access" automatic on its chip, so it
  *   still acts as the owner. Without the admin, a devices circle gets no share of it.
  */
@@ -122,6 +124,17 @@ export function migrateMembers(
     holdsAdmin(circle as LegacyCircle) &&
     (shareSettings.get(shareKey(ADMIN_RESOURCE_ID, circle.id))?.level ?? circle.level) === "control";
   const ACTS_AS_OWNER: Partial<Record<Right, RightMode>> = { raisesAccess: { mode: "automatic" } };
+  // K-1777: the rights whose default ran at once for a machine in an agent circle. A set mode stays as it is.
+  const RAN_AT_ONCE: Partial<Record<Right, RightMode>> = {
+    maintains: { mode: "automatic" },
+    readsMap: { mode: "automatic" },
+  };
+  const keptAgentCircles = new Set<string>();
+  const machineDefaults = (circle: LegacyCircle): Partial<Record<Right, RightMode>> => {
+    if (circle.needsPasskey || !isAgentCircle(circle)) return {};
+    keptAgentCircles.add(circle.name);
+    return RAN_AT_ONCE;
+  };
   const actsAsOwner = (actorId: string, circleName: string) =>
     notes.push(
       `${actors.get(actorId)?.name ?? actorId} held the kitshn admin, so it has "raises access" automatic in ${circleName} and acts as the owner, as before. Set the right to default, and its access changes wait for a person.`,
@@ -238,7 +251,7 @@ export function migrateMembers(
           const tokenMachine = machineOfToken.get(member.clientId);
           if (tokenMachine !== undefined && !circle.needsPasskey) {
             const id = machineActor(tokenMachine);
-            chip(id, givesAdmin(circle) ? ACTS_AS_OWNER : {});
+            chip(id, { ...machineDefaults(circle), ...(givesAdmin(circle) ? ACTS_AS_OWNER : {}) });
             if (givesAdmin(circle)) actsAsOwner(id, circle.name);
             break;
           }
@@ -288,6 +301,8 @@ export function migrateMembers(
             byAgent.set(id, { ...byAgent.get(id), [right]: plain });
             own[right] = { mode: "ask", circleId: OWNER_CIRCLE_ID };
           }
+          for (const [right, mode] of Object.entries(machineDefaults(circle)) as Array<[Right, RightMode]>)
+            own[right] ??= mode;
           if (givesAdmin(circle)) {
             Object.assign(own, ACTS_AS_OWNER);
             actsAsOwner(machineActor(member.machineId), circle.name);
@@ -307,6 +322,10 @@ export function migrateMembers(
     return { ...rest, members, ...(machinesMayApprove === true ? { approvesWithoutPasskey: true } : {}) };
   });
 
+  for (const name of keptAgentCircles)
+    notes.push(
+      `${name} stays an agent circle: its machines have "maintains" and "reads the map" set to automatic, as they ran before.`,
+    );
   const ids = new Set(circles.map((circle) => circle.id));
   const names = new Set(circles.map((circle) => circle.name));
   const unique = (base: string, taken: Set<string>, max: number) => {
