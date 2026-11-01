@@ -10,9 +10,10 @@ const helper = join(mkdtempSync(join(tmpdir(), "kitshn-exec-")), "exec");
 writeFileSync(helper, EXEC_HELPER, { mode: 0o755 });
 
 /** Runs the helper as sudo would, with `home` as HOME; resolves with its output and exit code. */
-function run(folder: string, command: string, home: string, onStart?: (pid: number) => void) {
+function run(folder: string, command: string, home: string, onStart?: (pid: number) => void, input?: string) {
   return new Promise<{ output: string; code: number | null }>((resolve) => {
     const child = spawn(helper, [folder, command], { env: { HOME: home, PATH: process.env["PATH"] } });
+    if (input !== undefined) child.stdin.end(input);
     let output = "";
     child.stdout.on("data", (chunk: Buffer) => {
       output += String(chunk);
@@ -40,6 +41,11 @@ describe("the exec helper of the sudo rule (K-722)", () => {
     const home = mkdtempSync(join(tmpdir(), "kitshn-home-"));
     const { output } = await run("/", 'printf %s "$PATH"', home);
     expect(output.split(":")[0]).toBe(`${home}/.local/bin`);
+  });
+
+  it("gives the command the stdin of the run", async () => {
+    const { output, code } = await run("/", "wc -c", tmpdir(), undefined, "probe-data\n");
+    expect({ output: output.trim(), code }).toEqual({ output: "11", code: 0 });
   });
 
   it("ends a process that the command left in the background when the command exits", async () => {
