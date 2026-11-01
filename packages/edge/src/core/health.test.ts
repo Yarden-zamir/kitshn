@@ -1,6 +1,14 @@
 import type { HealthReport } from "@kitshn/local";
 import { describe, expect, it } from "vitest";
-import { HEALTH_STALE_MS, type HealthMachine, healthCell, healthNotices, healthProblems } from "./health.ts";
+import {
+  HEALTH_STALE_MS,
+  type HealthMachine,
+  TUNNEL_RESTART_GAP_MS,
+  healthCell,
+  healthNotices,
+  healthProblems,
+  tunnelRestarts,
+} from "./health.ts";
 
 const report = (at: number, links: HealthReport["links"], providers: HealthReport["providers"] = []) => ({
   at,
@@ -61,10 +69,52 @@ describe("the health grid (K-631)", () => {
       a,
       report(10, [link("b", 1), link("b", 2), link("c", 3)], providers),
       others,
+      () => null,
     );
     expect(notices.map(({ key, episode }) => ({ key, episode }))).toEqual([
       { key: "a:link:t3:b", episode: "50" },
     ]);
-    expect(healthNotices(a, report(10, [link("b", 0)]), others)).toEqual([]);
+    expect(healthNotices(a, report(10, [link("b", 0)]), others, () => null)).toEqual([]);
+    // K-634: the notification says that kitshn restarted the tunnel in this episode, and not for an older restart.
+    const restarted = healthNotices(a, report(10, [link("b", 2)]), others, () =>
+      Date.UTC(2026, 10, 1, 7, 20),
+    );
+    expect(restarted[0]?.text).toContain("kitshn restarted the tunnel of B at 07:20 UTC.");
+    expect(healthNotices(a, report(10, [link("b", 2)]), others, () => 49)[0]?.text).not.toContain(
+      "restarted",
+    );
+  });
+});
+
+describe("the tunnel restart after links with no answer (K-634)", () => {
+  const now = 100 * 60_000;
+  const silent = (machineId: string, failures: number, since = now - 20 * 60_000) => ({
+    ...link(machineId, failures),
+    status: null,
+    since,
+  });
+  const restarts = (
+    links: HealthReport["links"],
+    {
+      restartable = () => true,
+      last = null,
+    }: { restartable?: (machineId: string) => boolean; last?: number | null } = {},
+  ) => tunnelRestarts("a", report(now, links), restartable, () => last, now);
+
+  it("restarts the tunnel of a machine that gave no answer to another machine 2 times in a row", () => {
+    expect(restarts([silent("b", 2), { ...silent("b", 3), provider: "other" }])).toEqual(["b"]);
+    expect(restarts([silent("b", 1)])).toEqual([]);
+    // An answer, even a 530, came through the tunnel, so the tunnel is no suspect.
+    expect(restarts([link("b", 5)])).toEqual([]);
+    expect(restarts([silent("a", 2)])).toEqual([]);
+  });
+
+  it("restarts only an online machine whose daemon can, at most once in 30 minutes and once per streak", () => {
+    expect(restarts([silent("b", 2)], { restartable: (id) => id !== "b" })).toEqual([]);
+    const longStreak = now - 40 * 60_000;
+    expect(restarts([silent("b", 2)], { last: now - TUNNEL_RESTART_GAP_MS + 1 })).toEqual([]);
+    expect(restarts([silent("b", 2, longStreak)], { last: longStreak - 1 })).toEqual(["b"]);
+    // The restart came during this streak and did not help, so the streak gets no second one.
+    expect(restarts([silent("b", 2, longStreak)], { last: now - TUNNEL_RESTART_GAP_MS })).toEqual([]);
   });
 });

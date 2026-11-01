@@ -198,7 +198,12 @@ export function agentMayRunOn(state: State, visitor: Visitor, machineId: string,
 }
 
 /** K-718: these commands of a machine give no shell: the Worker names the release of `update`, the rest take no input. */
-const CLOSED_COMMANDS: ReadonlySet<Command["kind"]> = new Set(["restart", "update", "diagnostics"]);
+const CLOSED_COMMANDS: ReadonlySet<Command["kind"]> = new Set([
+  "restart",
+  "tunnel-restart",
+  "update",
+  "diagnostics",
+]);
 
 /**
  * K-718: whether this sender may run this command on a machine without a person. For a closed command, an agent on a

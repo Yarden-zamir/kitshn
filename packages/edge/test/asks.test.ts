@@ -789,7 +789,7 @@ async function machineWithCards(stub: DurableObjectStub, inCircle: ReadonlyArray
   const sent: Array<ServerToDaemon> = [];
   const socket = daemonSocket(sent, {
     os: "linux-x64",
-    capabilities: ["compose-redeploy", "compose-guard"],
+    capabilities: ["compose-redeploy", "compose-guard", "tunnel-restart"],
   });
   await runInDurableObject(stub, (instance) => {
     (instance as unknown as { openSocket(id: string): WebSocket }).openSocket = () => socket;
@@ -851,10 +851,9 @@ it("runs a closed command with only the machine card, and asks the Owner without
   const stub = await setup({ runsCommands: { mode: "automatic" } });
   const { jobs } = await machineWithCards(stub, ["vps"]);
   expect(await ask(stub, "job", "vps", restart)).toMatchObject({ outcome: "done" });
-  expect(await ask(stub, "job", "vps", { body: { command: { kind: "diagnostics" } } })).toMatchObject({
-    outcome: "done",
-  });
-  expect(jobs()).toEqual(["restart", "diagnostics"]);
+  for (const kind of ["diagnostics", "tunnel-restart"])
+    expect(await ask(stub, "job", "vps", { body: { command: { kind } } })).toMatchObject({ outcome: "done" });
+  expect(jobs()).toEqual(["restart", "diagnostics", "tunnel-restart"]);
   const outside = await setup({ runsCommands: { mode: "automatic" } });
   const other = await machineWithCards(outside, []);
   const id = proposalOf(await ask(outside, "job", "vps", restart));

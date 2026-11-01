@@ -5,8 +5,10 @@ import {
   expectedHash,
   localSocket,
   otherUsersSockets,
+  type Platform,
   pathsFor,
   releaseAsset,
+  restartTunnel,
   serviceCommands,
   serviceFile,
   windowsElevated,
@@ -107,6 +109,35 @@ describe("daemon service (K-601)", () => {
     expect(task).toContain("tunnel --metrics 127.0.0.1:49152 run");
     expect(task).toContain("--token-file &quot;C:\\k\\tunnel-token&quot;");
     expect(tunnelCommands("win32", "C:\\t.xml", -1).start[0]?.argv).toContain("\\kitshn\\tunnel");
+  });
+
+  it("restarts the tunnel service on each platform, and fails with the steps that failed (K-634)", () => {
+    const ran = (platform: Platform, failing: string | null = null) => {
+      const argvs: Array<string> = [];
+      const outcome = restartTunnel(tunnelCommands(platform, "/t/tunnel", 501).restart, (argv) => {
+        argvs.push(argv.join(" "));
+        return argv[1] !== failing;
+      });
+      return { argvs, outcome };
+    };
+    expect(ran("darwin").argvs).toEqual([
+      "launchctl bootout gui/501 /t/tunnel",
+      "launchctl bootstrap gui/501 /t/tunnel",
+    ]);
+    expect(ran("linux").argvs).toContain("systemctl --user restart kitshn-tunnel.service");
+    expect(ran("win32").argvs).toEqual([
+      "schtasks /End /TN \\kitshn\\tunnel",
+      expect.stringContaining("kitshn-cloudflared.exe"),
+      "schtasks /Create /TN \\kitshn\\tunnel /XML /t/tunnel /F",
+      "schtasks /Run /TN \\kitshn\\tunnel",
+    ]);
+    expect(ran("linux").outcome).toEqual({ ok: true, exitCode: 0, output: "the tunnel restarted" });
+    // `bootout` of an agent that is not loaded fails, and means "already so".
+    expect(ran("darwin", "bootout").outcome.ok).toBe(true);
+    expect(ran("darwin", "bootstrap").outcome).toMatchObject({
+      ok: false,
+      output: expect.stringContaining("bootstrap"),
+    });
   });
 
   it("reads the tunnel state from its service manager (K-605)", () => {

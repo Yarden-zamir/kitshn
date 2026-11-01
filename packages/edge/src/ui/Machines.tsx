@@ -711,6 +711,13 @@ export function MachinePanel(props: {
         <button class="btn" data-tip={MACHINE_TIPS.restart} onClick={() => void run({ kind: "restart" })}>
           Restart daemon
         </button>
+        <button
+          class="btn"
+          data-tip={MACHINE_TIPS.tunnelRestart}
+          onClick={() => void run({ kind: "tunnel-restart" })}
+        >
+          Restart tunnel
+        </button>
         {/* A local build names no release, so there is nothing to update to (K-617). */}
         {isRelease(props.version) ? (
           <button

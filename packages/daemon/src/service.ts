@@ -436,6 +436,18 @@ export function tunnelCommands(
   } satisfies Record<string, ReadonlyArray<Step> | ReadonlyArray<string>>;
 }
 
+/**
+ * K-634: the job "tunnel-restart" runs the restart steps of the tunnel service as its file stands, and fails with the
+ * steps that failed. A step that may fail means "already so", so it never fails the job.
+ */
+export function restartTunnel(steps: ReadonlyArray<Step>, runStep: (argv: ReadonlyArray<string>) => boolean) {
+  const failed: Array<string> = [];
+  for (const step of steps) if (!runStep(step.argv) && !step.mayFail) failed.push(step.argv.join(" "));
+  return failed.length === 0
+    ? { ok: true, exitCode: 0, output: "the tunnel restarted" }
+    : { ok: false, exitCode: 1, output: `the tunnel restart failed: ${failed.join("; ")}` };
+}
+
 /** K-605: the tunnel state for the status report, from the output of the state command. */
 export function tunnelStateOf(platform: Platform, output: string): "starting" | "running" | "stopped" {
   if (platform === "darwin") return output.includes("state = running") ? "running" : "stopped";
