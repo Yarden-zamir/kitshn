@@ -232,7 +232,9 @@ it("applies and undoes right after a wake, before History is read", async () => 
     body: JSON.stringify({ edits: [{ _tag: "circle", id: "stale", after: { ...circle, id: "stale" } }] }),
   });
   expect(reapplied.status).toBe(200);
-  const later = (await (await send("/api/state", { headers })).json()) as { revisions: ReadonlyArray<RevisionView> };
+  const later = (await (await send("/api/state", { headers })).json()) as {
+    revisions: ReadonlyArray<RevisionView>;
+  };
   expect(later.revisions.map((item) => item.id)).toContain(written);
 });
 
