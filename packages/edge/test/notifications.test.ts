@@ -172,6 +172,7 @@ it("runs the later alarm steps when one throws, skips it with backoff, and tells
     kitshn["syncRoutes"] = step("syncRoutes", 0);
     kitshn["syncRedirects"] = step("syncRedirects", 0);
     kitshn["syncLauncher"] = step("syncLauncher", 0);
+    kitshn["syncBic"] = step("syncBic", 0);
     let accessBudget = 0;
     kitshn["syncAccessLocked"] = async (_api: unknown, budget: number) => {
       ran.push("syncAccessLocked");
@@ -197,17 +198,24 @@ it("runs the later alarm steps when one throws, skips it with backoff, and tells
     const ended = await run(t0 + 17 * 60_000);
     return { failed, skipped, again, works, rows, ended, endedRows: read() };
   });
-  const later = ["syncRoutes", "syncRedirects", "syncLauncher", "syncAccessLocked", "syncLauncher"];
+  const later = [
+    "syncRoutes",
+    "syncRedirects",
+    "syncLauncher",
+    "syncAccessLocked",
+    "syncLauncher",
+    "syncBic",
+  ];
   const before = ["fillAudiences", "refreshForeignPaths", "syncTunnels", "checkSites", "syncDns"];
   expect(result.failed.ran).toEqual([...before, "syncPortDns", ...later]);
-  // The failed step counts its whole budget of 4, so Access keeps 40 - 4 - 16 - 3.
-  expect(result.failed.accessBudget).toBe(17);
+  // The failed step counts its whole budget of 4, so Access keeps 40 - 4 - 16 - 3 - 4 (K-412).
+  expect(result.failed.accessBudget).toBe(13);
   expect(result.failed.rows).toEqual([{ key: "port card DNS", state: "open" }]);
   // The next second sends the push of the new notification (K-1907).
   expect(result.failed.alarm).toBe(t0 + 1_000);
   // Until its retry time the step is skipped, spends nothing, and its waiting records wake no alarm.
   expect(result.skipped.ran).toEqual([...before, ...later]);
-  expect(result.skipped.accessBudget).toBe(21);
+  expect(result.skipped.accessBudget).toBe(17);
   expect(result.skipped.alarm).toBe(t0 + 5 * 60_000);
   // The second failure waits twice as long.
   expect(result.again.ran).toContain("syncPortDns");

@@ -642,6 +642,23 @@ for host in "$KITSHN_HOST" "pages.$ZONE_NAME" "files.$ZONE_NAME"; do
     changed "$host now serves the Worker"
   fi
 done
+# K-412: the Worker keeps one Configuration Rule per zone that turns Browser Integrity Check off on private cards, so
+# scripts and machines reach them. The rule needs "Zone > Config Rules > Edit"; without it, the map shows a notification.
+zone_ids=$ZONE
+if [ -n "$ZONES_JSON" ]; then zone_ids="$zone_ids $(printf '%s' "$ZONES_JSON" | jq -r '.[]')"; fi
+for zone_id in $zone_ids; do
+  status=$(curl -sS -o "$WORK/out" -w '%{http_code}' "$API/zones/$zone_id/rulesets/phases/http_config_settings/entrypoint" \
+    -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" 2>&1) || status="no answer"
+  case "$status" in
+  200 | 404) kept "Configuration Rules of zone $zone_id (K-412)" ;;
+  401 | 403)
+    say "  warning: the token has no \"Zone > Config Rules > Edit\" on zone $zone_id, so private cards keep the"
+    say "           Browser Integrity Check, which refuses many scripts and machines (K-412). To add it, edit the token at"
+    say "           https://dash.cloudflare.com/profile/api-tokens: add \"Zone\", \"Config Rules\", \"Edit\", then Update token."
+    ;;
+  *) say "  warning: the check of the Configuration Rules of zone $zone_id failed ($status): $(jq -r '[.errors[]?.message] | join("; ")' "$WORK/out" 2>/dev/null || head -c 200 "$WORK/out")" ;;
+  esac
+done
 
 if [ -n "${IMPORT_AT:-}" ]; then
   say "9. Import (K-1833)"
