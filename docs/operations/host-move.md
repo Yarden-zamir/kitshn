@@ -17,7 +17,7 @@ Passkeys survive the move, because they belong to the Access team domain (K-113)
 3. Worker: add the custom domain `kitshn.<zone>`.
 4. Daemons: on each joined machine, change the server address in `machine.json` and restart the daemon. Check that each card shows a signed connection.
 5. GitHub App: change the homepage, callback and webhook addresses.
-6. Text and config in this repo: `.github/workflows/kitshn2-deploy.yml` (its default `server`, which app repos call with `@main`), `packages/edge/public/install`, `site/apps.js`, `site/index.html`, `site/install/index.html`, `packages/kitshn/skill/SKILL.md`, `AGENTS.md`, `docs/`, and every `kit.<zone>` in `SPEC.md`.
+6. Text and config in this repo: `.github/workflows/kitshn2-deploy.yml` (its default `server`, which app repos call with `@main`), `packages/edge/public/install`, `site/apps.js`, `site/index.html`, `site/install/index.html`, `packages/kitshn/skill/SKILL.md`, `AGENTS.md`, and every `kit.<zone>` in `docs/`.
 7. Change every link and badge that names the old host, in each of these places:
    - every app repo (`kitshn.config.ts` comments, `kitshn.md`, README badges and links, workflow files);
    - kitshn.com (`site/`) and the kitshn skill (`packages/kitshn/skill/SKILL.md`);

@@ -1,5 +1,5 @@
 #!/bin/sh
-# kitshn bootstrap (SPEC K-1201 to K-1207). It sets up kitshn on a Cloudflare account, and a second
+# kitshn bootstrap (K-1201 to K-1207). It sets up kitshn on a Cloudflare account, and a second
 # run changes only what is not right yet (K-1205). It uses only sh, curl, jq and tar (K-1203).
 #
 #   curl -fsSL https://kit.yarden-zamir.com/install | \

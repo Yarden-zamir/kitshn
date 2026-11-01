@@ -35,19 +35,19 @@ import { CircleView, StackCard, TrayCard } from "./Map.tsx";
 import { PanicOpener, PausedBanner } from "./Pause.tsx";
 
 /**
- * The concepts page at `kit.<zone>/concepts` (K-531): what each idea of kitshn is, in the words of SPEC.md, with a
+ * The concepts page at `kit.<zone>/concepts` (K-531): what each idea of kitshn is, in the words of the internal docs, with a
  * small example drawn by the real components and fixtures, and how the ideas connect. Owner only, as the map.
  */
 
-const SPEC = "https://github.com/Yarden-zamir/kitshn/blob/main/SPEC.md";
+const DOCS = "https://github.com/Yarden-zamir/kitshn/blob/main/docs/internals";
 
-/** One concept: its words, how it relates to the others, an example, its K numbers and its spec section. */
+/** One concept: its words, how it relates to the others, an example, its K numbers and its docs section. */
 function Concept(props: {
   name: string;
   words: ComponentChildren;
   relates: ComponentChildren;
   ks: ReadonlyArray<string>;
-  section: readonly [label: string, anchor: string];
+  section: readonly [label: string, path: string];
   children: ComponentChildren;
 }) {
   return (
@@ -64,12 +64,12 @@ function Concept(props: {
           ))}
           <a
             class="btn"
-            href={`${SPEC}#${props.section[1]}`}
+            href={`${DOCS}/${props.section[1]}`}
             target="_blank"
             rel="noreferrer"
-            data-tip={`Open the section "${props.section[0]}" of SPEC.md on GitHub.`}
+            data-tip={`Open the section "${props.section[0]}" of the docs on GitHub.`}
           >
-            SPEC: {props.section[0]} ↗
+            Docs: {props.section[0]} ↗
           </a>
         </div>
       </header>
@@ -304,7 +304,7 @@ function Things(props: { base: State }) {
         }
         relates="A card is shared with every circle it sits in. Deploys, uploads and providers make cards; a new card waits in the tray. Each environment of an app is its own card."
         ks={["K-301", "K-303", "K-304", "K-524"]}
-        section={["3. Resources", "3-resources"]}
+        section={["Resources", "circles-and-resources.md#resources"]}
       >
         <MiniMap width={700} height={300} center={at(0, 75)}>
           {kinds.flatMap(([id, point]) => {
@@ -322,7 +322,7 @@ function Things(props: { base: State }) {
         words="A circle is a named group of who: people (emails), email domains, devices, networks (IP ranges), machines, and the flag “needs passkey”. A circle has a default level."
         relates="Members go in circles; cards inside a circle are its shares. Circles overlap freely. “Any” lets in a visitor who matches one member; “all must match” needs every member."
         ks={["K-201", "K-202", "K-203", "K-211"]}
-        section={["2. Circles and shares", "2-circles-and-shares"]}
+        section={["Circles and shares", "circles-and-resources.md#circles-and-shares"]}
       >
         <MiniMap width={480} height={480} center={at(0, 0)}>
           {ring(shareState, team)}
@@ -334,7 +334,7 @@ function Things(props: { base: State }) {
         words="A share is a card inside a circle. It gives the members of the circle the circle's default level on that resource, or the level of an override. A level is what a share allows; each kind names its own ordered levels, for example view, use, control."
         relates="A visitor in several matching circles gets the highest level. A level that a kind does not have steps down to its highest lower one. A card in no circle is private. A share can end at a date."
         ks={["K-204", "K-205", "K-206", "K-207", "K-208", "K-209"]}
-        section={["2. Circles and shares", "2-circles-and-shares"]}
+        section={["Circles and shares", "circles-and-resources.md#circles-and-shares"]}
       >
         <MiniMap width={480} height={480} center={at(0, 0)}>
           {ring(shareState, team)}
@@ -351,7 +351,7 @@ function Things(props: { base: State }) {
         words="Who a circle holds: people (emails), email domains, networks (IP ranges), devices (an Access service token each), machines, and “everyone”, which means anyone who can reach the address, with no login."
         relates="A machine is a member too, so a share can give one machine access to another resource. An agent on a machine acts as its machine; an agent key is a device member that the owner makes as an exception."
         ks={["K-106", "K-107", "K-202", "K-718", "K-1731", "K-1732"]}
-        section={["1. Identity and login", "1-identity-and-login"]}
+        section={["Identity and login", "access.md#identity-and-login"]}
       >
         <MiniMap width={1060} height={430} center={at(-40, -10)}>
           {ring(memberState, people)}
@@ -363,7 +363,7 @@ function Things(props: { base: State }) {
         words="Two circles exist from the start. The Owner circle holds the person who installed kitshn and the admin card, with “needs passkey” on. The Everyone circle holds “everyone”: its cards are public."
         relates="The admin card always keeps a share to a circle with a person and “needs passkey”; kitshn refuses any change that breaks that. The first time that a card enters any circle with “everyone”, kitshn asks first: “This makes <name> public.”"
         ks={["K-104", "K-105", "K-210", "K-211"]}
-        section={["1. Identity and login", "1-identity-and-login"]}
+        section={["Identity and login", "access.md#identity-and-login"]}
       >
         <MiniMap width={860} height={400} center={at(0, 10)}>
           {builtIn.map((each) => ring(builtInState, each))}
@@ -390,7 +390,7 @@ function Arrangement(props: { base: State }) {
         words="Cards that sit on one point, so they move as one and get the same circles. The owner stacks cards; the environments of one app, the pages of one thread and the files of one upload stack by themselves."
         relates="A stack keeps its cards' shares together; pulling a card out lands it next to the stack in the same circles, so no share changes."
         ks={["K-508", "K-521", "K-522"]}
-        section={["5. Map UX", "5-map-ux"]}
+        section={["Map", "map.md#rules"]}
       >
         <MiniMap width={560} height={420} center={at(0, 160)}>
           <StackCard
@@ -420,7 +420,7 @@ function Arrangement(props: { base: State }) {
         words="New cards arrive in a tray at the edge of the map, outside every circle, so they start private."
         relates="A drag from the tray places a card in exactly the circles at the drop point, so it gets those shares. Cards that a recipe places skip the tray."
         ks={["K-509", "K-208"]}
-        section={["5. Map UX", "5-map-ux"]}
+        section={["Map", "map.md#rules"]}
       >
         <div class="tray guide-tray">
           <div class="tray-list">
@@ -465,7 +465,7 @@ function Delivery(props: { base: State }) {
         words="A recipe is kitshn.config.ts in an app repo. An environment is one deployed copy of an app, for example prod or pr-12. A push to the repo deploys; kitshn reads the recipe and never runs repo code."
         relates="Each environment is its own card. The recipe names the circle that a new environment starts in; after that, the map decides. The first deploy of a new repo waits for one click."
         ks={["K-801", "K-803", "K-807", "K-819"]}
-        section={["8. Recipes and deploys", "8-recipes-and-deploys"]}
+        section={["Recipes", "deploys.md#recipes"]}
       >
         <pre>
           {`export default defineApp({
@@ -487,7 +487,7 @@ function Delivery(props: { base: State }) {
         words="Two things share the name. A pull request preview is an environment pr-<n> with its own address, which goes when the pull request closes. A live preview is a small frame of a site, a page or a file (of a type that a browser shows) on its card."
         relates="A pull request preview is a card like any other, with a “PR #n” sticker. A live preview shows only what the browser may open: a frame cannot log in, so a site behind Access shows only when the browser already has its Access session."
         ks={["K-901", "K-904", "K-303", "K-520"]}
-        section={["9. Previews", "9-previews"]}
+        section={["Previews", "deploys.md#previews"]}
       >
         <MiniMap width={480} height={330} center={at(0, 110)}>
           {preview ? fixtureCard(base, preview, at(-115, 0), { pullRequest: 41 }) : null}
@@ -499,7 +499,7 @@ function Delivery(props: { base: State }) {
         words="kitshn compiles shares into Cloudflare Access wherever Access can check them. The map shows a change at once; each card shows “applying” until Cloudflare has it, and “failed” with the reason if Cloudflare refuses it."
         relates="Each circle becomes Access policies, and each card with an address an Access application. A lower level takes effect at once. A daily compare repairs what drifted."
         ks={["K-401", "K-402", "K-407", "K-408", "K-409"]}
-        section={["4. Enforcement", "4-enforcement"]}
+        section={["Enforcement", "access.md#enforcement"]}
       >
         <div class="guide-rows">
           <AccessRow access={{ state: "applied" }} />
@@ -553,7 +553,7 @@ function Safety(props: { base: State }) {
         words="Every change makes one revision with the time, the actor and a summary. Undo makes a new revision that reverses a revision, and its toast offers Undo again."
         relates="History is the audit trail of shares, circles, stacks and apps. Undo runs the same rules as an edit, also the admin guard and the pause."
         ks={["K-1501", "K-1502", "K-1505", "K-1507", "K-1508"]}
-        section={["15. History and safety", "15-history-and-safety"]}
+        section={["History and Undo", "history-and-pause.md#history-and-undo"]}
       >
         <Stage height={440}>
           <OverlayPanel heading="History" large={false} onResize={noop} onClose={noop}>
@@ -577,7 +577,7 @@ function Safety(props: { base: State }) {
         words="The big red button: one press closes every share except the owner's admin, and stops agent keys and new deploys. Public sites stay up, unless the pause is a lockdown. Resume needs a passkey."
         relates="During the pause kitshn refuses every change that raises access; lowering access still works. Undo and agents follow the same rule."
         ks={["K-1504"]}
-        section={["15. History and safety", "15-history-and-safety"]}
+        section={["History and Undo", "history-and-pause.md#history-and-undo"]}
       >
         <div class="row">
           <PanicOpener pause={null} open={false} onOpen={noop} />
@@ -621,7 +621,7 @@ function Agents(props: { base: State }) {
       words="An agent on a joined machine acts as its machine. Each agent right of a machine (adds apps, publishes, deploys, runs commands and more) has a mode: default, off, automatic, or ask a circle. An ask waits for one member of that circle to approve or deny it."
       relates="Rights belong to machines in agent circles, which are circles of devices and machines. The machine proves itself with its own key pair. Asks wait in the Inbox; History records each one."
       ks={["K-1701", "K-1720", "K-1721", "K-1722", "K-1730", "K-1732"]}
-      section={["17. Machine identity and agent rights", "17-machine-identity-and-agent-rights"]}
+      section={["Machine identity and agent rights", "agent-rights.md"]}
     >
       <div class="row">
         <span class="muted">VPS in an agent circle:</span>
@@ -645,7 +645,7 @@ export function Concepts() {
   return (
     <main class="guide">
       <GuideHead page="concepts">
-        The ideas of kitshn in the words of SPEC.md, each with a small example drawn by the map's own
+        The ideas of kitshn in the words of the docs, each with a small example drawn by the map's own
         components and fixtures. Nothing here reads or changes the live state.
       </GuideHead>
       <Overview base={base} />

@@ -1,5 +1,5 @@
 #!/bin/sh
-# kitshn join (SPEC K-602): installs the kitshn daemon for this user, joins the machine with a one-time
+# kitshn join (K-602): installs the kitshn daemon for this user, joins the machine with a one-time
 # code, and starts the daemon as a user service (K-601). "Add machine" on the map prints the command:
 #
 #   curl -fsSL https://kit.example.com/join | sh -s -- <code> https://kit.example.com

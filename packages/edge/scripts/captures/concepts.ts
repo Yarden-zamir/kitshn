@@ -1,5 +1,5 @@
 // The concepts page at /concepts: one shot per section and per entry, in both schemes. Reports page errors, the
-// links to the spec and the style guide, and the tokens that the scheme switch sets.
+// links to the docs and the style guide, and the tokens that the scheme switch sets.
 import { DESKTOP, type Scenario } from "../capture-views.ts";
 
 export default {
@@ -10,7 +10,7 @@ export default {
     await page.goto(new URL("/concepts", page.url()).toString());
     await page.locator(".concept").first().waitFor();
     console.log(
-      `concepts: ${await page.locator(".concept").count()}, spec links: ${await page.locator('.concept a[href*="SPEC.md#"]').count()}, guide link: ${await page.locator('a[href="/neo-brutalism"]').count()}`,
+      `concepts: ${await page.locator(".concept").count()}, docs links: ${await page.locator('.concept a[href*="docs/internals/"]').count()}, guide link: ${await page.locator('a[href="/neo-brutalism"]').count()}`,
     );
     const canvas = () =>
       page.evaluate<string>(`getComputedStyle(document.documentElement).getPropertyValue("--canvas").trim()`);

@@ -1,4 +1,4 @@
-// The kitshn daemon (SPEC section 6). One program: `kitshn join`, `kitshn run`, `kitshn service`.
+// The kitshn daemon (K-6xx, docs/internals/machines.md). One program: `kitshn join`, `kitshn run`, `kitshn service`.
 import {
   connectText,
   fingerprintOf,
