@@ -32,7 +32,12 @@ export default {
         );
         data.snapshot?.actors?.push(builder);
         const person = data.snapshot?.actors?.find((actor) => actor.id === her);
-        person?.credentials.push({ _tag: "token", tokenId: "t-her", clientId: "her.access", name: "Her phone" });
+        person?.credentials.push({
+          _tag: "token",
+          tokenId: "t-her",
+          clientId: "her.access",
+          name: "Her phone",
+        });
         socket.send(JSON.stringify(data));
       });
     });
