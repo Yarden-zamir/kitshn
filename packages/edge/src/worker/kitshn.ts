@@ -12065,6 +12065,8 @@ export class Kitshn extends DurableObject<Env> {
           // A machine card has no status of its own; its connection is the live one.
           const known = kind === "machine" ? this.state.machines.get(id) : undefined;
           const status = known ? (this.openSocket(known.id) ? "online" : "offline") : resource.status;
+          // K-724: the daemon release and protocol of an online machine, as the owner map shows them; null offline.
+          const live = known ? this.machineStatus(known.id) : null;
           const backup = this.latestBackups().get(id);
           const uptime = checked.has(id) ? (this.uptime.get(id) ?? UP) : null;
           return [
@@ -12074,6 +12076,9 @@ export class Kitshn extends DurableObject<Env> {
               name,
               addresses,
               status,
+              ...(known
+                ? { daemon: live ? { version: live.version, protocol: daemonProtocol(live) } : null }
+                : {}),
               place: this.state.places.get(id) ?? null,
               // K-212: when the card leaves every circle for the tray, or null.
               endsAt: this.state.ends.get(id) ?? null,
