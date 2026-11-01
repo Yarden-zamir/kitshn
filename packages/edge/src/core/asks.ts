@@ -184,13 +184,31 @@ export function shownAsk(action: ProposalAction, target: string, body: unknown):
 }
 
 /**
- * K-1722: the text of an ask in a notification and a push: the shown text without the request headers of a forwarded
- * call, because a header can hold a token. The Inbox shows the whole shown text.
+ * K-1722: the request headers of a forwarded call that a notification and a push show, because they decide what the
+ * call does: its name, address, circle, publish, deploy, and on `/op` what the answer gives (K-1777). No other header.
+ */
+export const NOTIFIED_HEADERS: ReadonlySet<string> = new Set([
+  "x-kitshn-name",
+  "x-kitshn-address",
+  "x-kitshn-circle",
+  "x-kitshn-public",
+  "x-kitshn-deploy",
+  "gives",
+]);
+
+/**
+ * K-1722: the text of an ask in a notification and a push: the shown text, where a forwarded call keeps only the
+ * headers of NOTIFIED_HEADERS. The Inbox shows the whole shown text.
  */
 export function askNotificationText(action: ProposalAction, target: string, body: unknown): string {
   if (action !== "forward") return shownAsk(action, target, body);
   const object = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
-  return [target, String(object["body"] ?? "")].join("\n");
+  const headers =
+    typeof object["headers"] === "object" && object["headers"] !== null ? object["headers"] : {};
+  return shownAsk("forward", target, {
+    ...object,
+    headers: Object.fromEntries(Object.entries(headers).filter(([key]) => NOTIFIED_HEADERS.has(key))),
+  });
 }
 
 /** K-1722: the SHA-256 of the shown text, hex. */

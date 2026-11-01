@@ -27,10 +27,10 @@ it("takes a call that the daemon forwarded and signed, with the right of its pat
     circle: "Owner",
     error: expect.stringMatching(/^waiting: /),
   });
-  // K-1722: a call with no vouched thread never joins an open proposal, because two agents of one machine key could
-  // send it. The approval of either one still runs the call once (K-1714).
+  // K-1722: the same call again joins the open proposal on the key of its approval, also with no thread, so a copy
+  // makes no second proposal and no second push.
   const again = await forwarded(key, "POST", address, "nonce-off-1123456789");
-  expect(((await again.json()) as { proposalId: string }).proposalId).not.toBe(waiting.proposalId);
+  expect(((await again.json()) as { proposalId: string }).proposalId).toBe(waiting.proposalId);
   // A changed call is another call, so the approval of the first does not run it.
   const other = await forwarded(
     key,
@@ -59,6 +59,10 @@ it("takes a call that the daemon forwarded and signed, with the right of its pat
   expect((await approved.json()) as { error?: string }).toEqual({
     error: expect.not.stringMatching(/K-1714|K-1776|adds pages|waiting/),
   });
+  // The approval ran the call once: the next copy waits for a new approval.
+  const later = await forwarded(key, "POST", address, "nonce-off-3223456789");
+  expect(later.status).toBe(409);
+  expect(((await later.json()) as { proposalId: string }).proposalId).not.toBe(waiting.proposalId);
   await runInDurableObject(stub, (_, state) => state.storage.sql.exec("DELETE FROM ask_events"));
   // "off" still refuses at once, with the right for the CLI's offer.
   await setup({ creates: { mode: "automatic" }, changes: { mode: "off" } }, key);

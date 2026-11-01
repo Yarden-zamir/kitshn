@@ -38,6 +38,7 @@ async function call(path, init) {
       return {
         ok: false,
         login: false,
+        status: response.status,
         error: (data && data.error) || `kitshn answered ${response.status}.`,
       };
     return { ok: true, data };
@@ -84,12 +85,13 @@ async function showPush(message) {
         body: read.ok ? OUTCOME.closed : "Open kitshn to read and answer this ask.",
       });
     const expires = new Date(ask.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    // K-1722: Approve only when the body shows the whole text that its hash covers; else a tap opens the ask.
+    // K-1722: a heads-up banner shows the title and about one line, so an ask with Approve shows its whole text as the
+    // title. Approve only where the server says that the text fits (`approvesOnPush`); else a tap opens the ask.
     const whole = ask.approveOnPush === true;
-    return self.registration.showNotification(message.title, {
+    return self.registration.showNotification(whole ? ask.text : message.title, {
       ...base,
       body: [
-        ask.text,
+        whole ? message.title : ask.text,
         ask.reason ? `Why: ${ask.reason}` : null,
         whole ? `Expires at ${expires}.` : "Open the ask to read all of it and approve.",
       ]
@@ -165,7 +167,8 @@ async function run(notification, action) {
       : `/api/notifications/${id}/actions/${encodeURIComponent(action)}`,
     {},
   );
-  if (answer.ok && action === "dismiss") return;
+  // A notification that closed already (a stale push, K-1905) answers 404: dismissed is what the person wanted.
+  if (action === "dismiss" && (answer.ok || answer.status === 404)) return;
   const label = action.charAt(0).toUpperCase() + action.slice(1);
   if (answer.ok) return settle(notification, `${label}: done.`, "/#notifications");
   if (answer.login) return openPath("/#notifications");

@@ -11891,7 +11891,16 @@ export class Kitshn extends DurableObject<Env> {
       }
   > {
     // propose finds the same open call too; this read only gives its expiry.
-    const open = this.openTwin(asker.credential, "forward", hash, wait.circleId, body, labels, now);
+    const open = this.openTwin(
+      asker.credential,
+      "forward",
+      hash,
+      wait.circleId,
+      wait.right,
+      body,
+      labels,
+      now,
+    );
     const made = open
       ? { outcome: "waiting" as const, proposalId: open.id }
       : await this.propose(asker, "forward", target, body, null, labels, wait.right, wait.circleId, now);
@@ -13289,7 +13298,7 @@ export class Kitshn extends DurableObject<Env> {
     const hash = await shownHash(shown);
     // K-1722: the same ask again, for example after the CLI stopped waiting, waits on the open proposal, so the
     // approvers get one notification and one answer runs it.
-    const twin = this.openTwin(asker.credential, action, hash, circleId, body, labels, now);
+    const twin = this.openTwin(asker.credential, action, hash, circleId, right, body, labels, now);
     if (twin) return { outcome: "waiting", proposalId: twin.id };
     // K-1722, K-1778: a loop of asks cannot fill the Inbox or each snapshot; the cap holds for each credential.
     const [open] = this.sql<{ count: number }>(
@@ -13332,19 +13341,39 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-1722, K-1714: the open proposal of exactly the same call: the same credential, the same stored body (an exec
-   * carries its own execId, so it never joins) and the same labels, with a vouched thread. A call with no thread never
-   * joins, because two agents of one machine key could send it. Read by the index on the credential.
+   * K-1722, K-1714: the open proposal of the same call, read by the index on the credential.
+   * - A forwarded call runs only when it is sent again, and `forwardApproval` lets one approval run any copy of it.
+   *   So a copy joins on that key: the credential, the hash, the circle, the thread (also none) and, for "shares" and
+   *   "secrets", the effect. One approval then runs the call once.
+   * - Any other approval runs the stored body, so only exactly the same call joins: the same stored body (an exec
+   *   carries its own execId, so it never joins) and the same labels, with a vouched thread. A call with no thread
+   *   never joins, because two agents of one machine key could send it.
    */
   private openTwin(
     credential: string,
     action: ProposalAction,
     hash: string,
     circleId: string,
+    right: Effect,
     body: unknown,
     labels: Readonly<Record<string, string>>,
     now: number,
   ) {
+    if (action === "forward") {
+      const [open] = this.sql<{ id: string; expires_at: number }>(
+        `SELECT id, expires_at FROM proposals WHERE credential = ? AND state = 'pending' AND action = 'forward'
+         AND shown_hash = ? AND circle_id = ? AND (? = 0 OR right_name = ?) AND expires_at > ?
+         AND json_extract(labels, '$."t3.thread.id"') IS ? LIMIT 1`,
+        credential,
+        hash,
+        circleId,
+        PASSKEY_EFFECTS.has(right) ? 1 : 0,
+        right,
+        now,
+        labels["t3.thread.id"] ?? null,
+      );
+      return open;
+    }
     if (!labels["t3.thread.id"]) return undefined;
     const [open] = this.sql<{ id: string; expires_at: number }>(
       `SELECT id, expires_at FROM proposals WHERE credential = ? AND state = 'pending' AND action = ? AND shown_hash = ?
@@ -17535,7 +17564,7 @@ export class Kitshn extends DurableObject<Env> {
           text: askNotificationText(proposal.action, proposal.target, proposal.body),
           shownHash: proposal.shownHash,
           // K-1722: Approve only when the push shows the whole text that its hash covers; else Deny only.
-          approveOnPush: approvesOnPush(proposal.shown),
+          approveOnPush: approvesOnPush(proposal.action, proposal.shown),
           reason: proposal.reason,
           expiresAt: proposal.expiresAt,
           via: approveVia(this.state.circles.get(proposal.circleId), proposal.right),

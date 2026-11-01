@@ -3,6 +3,7 @@ import { ASK_ACTIONS as LOCAL_ACTIONS, WINDOW_ACTIONS as LOCAL_WINDOW } from "..
 import {
   ASK_ACTIONS,
   WINDOW_ACTIONS,
+  askNotificationText,
   askRequest,
   formatConditions,
   labelProblem,
@@ -34,6 +35,22 @@ describe("asks of agents on machines (K-1710, K-1711, K-1750)", () => {
       ["a.b"],
     ])
       expect(labelProblem(bad)).toEqual(expect.any(String));
+  });
+
+  it("shows in a notification only the headers of a forwarded call that decide what it does (K-1722)", () => {
+    const text = askNotificationText("forward", "POST /agent/library", {
+      headers: {
+        "x-kitshn-public": "true",
+        "x-kitshn-circle": "friends",
+        gives: "a key code that can act as a machine",
+        "x-kitshn-title": "My page",
+        authorization: "Bearer secret",
+      },
+      body: "<h1>hi</h1>",
+    });
+    expect(text).toBe(
+      "POST /agent/library\nx-kitshn-public: true\nx-kitshn-circle: friends\ngives: a key code that can act as a machine\n<h1>hi</h1>",
+    );
   });
 
   it("maps each action that kitshn runs through an agent path to that path", () => {

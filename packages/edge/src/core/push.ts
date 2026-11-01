@@ -1,4 +1,5 @@
 /** K-1907: the rules of Web Push for notifications, pure so the UI and the tests share them. */
+import type { ProposalAction } from "./asks.ts";
 import type { Notification, NotificationLevel } from "./notifications.ts";
 
 /** Quiet hours: minutes after midnight in the browser's time zone; `start` after `end` runs over midnight. */
@@ -27,18 +28,30 @@ export const DEFAULT_LEVELS: ReadonlyArray<NotificationLevel> = ["warn", "error"
  */
 export const PUSH_SENDS_PER_RUN = 5;
 /**
- * K-1722: the longest shown text that a push offers Approve for. A phone shows the body of an expanded notification in
- * full at this length, also with the reason and the expiry below it. A longer text gets Deny only.
+ * K-1722: the asks whose shown text is a fixed sentence around one target, such as "deploy riffle (redeploy)", so
+ * the sentence holds their whole meaning. Every other ask is free text, such as a command or the edits of a move.
  */
-export const PUSH_APPROVE_MAX = 100;
+export const PUSH_FIXED_ACTIONS: ReadonlySet<ProposalAction> = new Set([
+  "deploy",
+  "publish",
+  "allow",
+  "backup",
+]);
+/** K-1722: the longest fixed sentence that a push offers Approve for, as its title. */
+export const PUSH_FIXED_MAX = 40;
+/** K-1722: the longest free text that a push offers Approve for, as its title. A heads-up banner shows one line. */
+export const PUSH_FREE_MAX = 32;
 
 /**
- * K-1722: whether the push shows the whole text that Approve hashes, so the approver sees all that runs: one line of
- * at most PUSH_APPROVE_MAX printable ASCII characters, with no run of spaces. Any other character, such as a tab, a
- * control or a bidi character, could hide a part, so it gets Deny only and a tap opens the ask.
+ * K-1722: whether the push shows the whole text that Approve hashes, so the approver sees all that runs. A heads-up
+ * banner shows the title and about one line of the body, so the push shows the text as its title, and offers Approve
+ * only for a fixed sentence of at most PUSH_FIXED_MAX characters or free text of at most PUSH_FREE_MAX. Both are one
+ * line of printable ASCII with no run of spaces. Any other character, such as a tab, a control or a bidi character,
+ * could hide a part. Everything else gets Deny only, and a tap opens the ask.
  */
-export function approvesOnPush(shown: string): boolean {
-  if (shown.length === 0 || shown.length > PUSH_APPROVE_MAX) return false;
+export function approvesOnPush(action: ProposalAction, shown: string): boolean {
+  const max = PUSH_FIXED_ACTIONS.has(action) ? PUSH_FIXED_MAX : PUSH_FREE_MAX;
+  if (shown.length === 0 || shown.length > max) return false;
   if (shown.includes("  ") || shown.startsWith(" ") || shown.endsWith(" ")) return false;
   for (let index = 0; index < shown.length; index++) {
     const code = shown.charCodeAt(index);
