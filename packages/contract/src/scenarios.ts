@@ -413,11 +413,19 @@ export const SCENARIOS: ReadonlyArray<Scenario> = [
       );
       await client.next(is("exec-stdin-credit"));
       ok(await client.request({ type: "exec-close", execId: fed.execId, what: "stdin" }), "exec-close");
-      await client.next(
+      const fedExit = await client.next(
         (event): event is Extract<Answer, { type: "exec-exit" }> =>
           event.type === "exec-exit" && event.execId === fed.execId,
         true,
       );
+      // The bytes of exec-input reach the command: a run that drops stdin still exits 0, with no output.
+      const echoed = client.events
+        .filter((event) => event.type === "exec-output" && event.execId === fed.execId)
+        .map((event) =>
+          Buffer.from((event as Extract<Answer, { type: "exec-output" }>).data, "base64").toString(),
+        )
+        .join("");
+      assert.deepEqual([echoed, fedExit.exitCode], ["piped", 0]);
       const timeout = await exec(client, { command: "sleep 30", timeoutSeconds: 1 });
       assert.deepEqual([timeout.exit.exitCode, timeout.exit.signal], [null, "SIGKILL"]);
       daemon.edge.exec = { mode: "refuse", reason: 'the right "runs commands" is off' };
