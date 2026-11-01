@@ -1,6 +1,6 @@
 // K-1777: every owner action is one operation. The map, the CLI and an agent call the same id, and one gate decides.
-import type { MachineRight, RightMode } from "./model.ts";
-import { MACHINE_RIGHT_NAMES } from "./model.ts";
+import type { Right, RightMode } from "./model.ts";
+import { RIGHT_NAMES } from "./model.ts";
 import type { Snapshot } from "./protocol.ts";
 
 /**
@@ -25,7 +25,7 @@ export interface PersonGate {
 
 export interface RightGate {
   /** The right that lets an agent run it without a person; null when the scope alone decides. */
-  readonly right: MachineRight | null;
+  readonly right: Right | null;
   readonly scope: Scope;
 }
 
@@ -62,7 +62,7 @@ export interface Operation {
   readonly shortOnly?: true;
 }
 
-const job = (title: string, kind: string, right: MachineRight, scope: Scope): Operation => ({
+const job = (title: string, kind: string, right: Right, scope: Scope): Operation => ({
   group: "machines",
   title,
   method: "POST",
@@ -750,7 +750,7 @@ export type SecretOpId = {
 export const isSecretOp = (id: OpId): id is SecretOpId => (OPERATIONS[id] as Operation).secret === true;
 
 /** K-1777: the rights that start "automatic" for a machine in an agent circle: their commands are closed (Y1, Y2). */
-export const AUTOMATIC_BY_DEFAULT: ReadonlySet<MachineRight> = new Set(["maintains", "readsMap"]);
+export const AUTOMATIC_BY_DEFAULT: ReadonlySet<Right> = new Set(["maintains", "readsMap"]);
 
 export type Decision =
   | { readonly outcome: "run" }
@@ -786,7 +786,7 @@ export function decide(op: Operation, input: GateInput, ownerCircleId: string): 
   if (right !== null && input.mode?.mode === "off")
     return {
       outcome: "refuse",
-      reason: `The right "${MACHINE_RIGHT_NAMES[right]}" is off for this machine (K-1720). Ask the owner to turn it on.`,
+      reason: `The right "${RIGHT_NAMES[right]}" is off for this machine (K-1720). Ask the owner to turn it on.`,
     };
   if (input.approved) return { outcome: "run" };
   if (!input.scope || scope === "never") return { outcome: "ask", circleId: ownerCircleId };
@@ -856,6 +856,7 @@ export const shownOp = (id: OpId, target: string, body: unknown) =>
 export const AGENT_READ: Record<keyof Snapshot, "same" | { readonly hidden: string }> = {
   accessApps: "same",
   circles: "same",
+  actors: "same",
   resources: "same",
   places: "same",
   shareSettings: "same",
@@ -926,7 +927,7 @@ export function opsText(): string {
       ? `person only: ${gate.person}`
       : gate.scope === "never"
         ? "asks the Owner"
-        : `${gate.right === null ? "no right" : `right "${MACHINE_RIGHT_NAMES[gate.right]}"`}, scope ${gate.scope}`;
+        : `${gate.right === null ? "no right" : `right "${RIGHT_NAMES[gate.right]}"`}, scope ${gate.scope}`;
   const groups = [...new Set(OP_IDS.map((id) => OPERATIONS[id].group))];
   return groups
     .map((group) =>

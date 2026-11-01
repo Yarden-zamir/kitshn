@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Machine } from "./machine.ts";
 import type { Circle, Resource, State } from "./model.ts";
+import { actorOf, chip, login, machineKey } from "./testkit.ts";
 import { capabilitiesOf, reachOf } from "./reach.ts";
 
 const machine = (id: string): Machine => ({
@@ -37,11 +38,8 @@ const circle = (id: string, x: number, level: Circle["level"], members: Circle["
 
 /** Circle "machines" holds mac and vps with `use`; circle "her" (a person) holds riffle, which runs on vps. */
 function start(): State {
-  const machines = circle("machines", 0, "use", [
-    { _tag: "machine", machineId: "mac" },
-    { _tag: "machine", machineId: "vps" },
-  ]);
-  const her = circle("her", 1000, "control", [{ _tag: "email", email: "her@example.com" }]);
+  const machines = circle("machines", 0, "use", [chip(machineKey("mac")), chip(machineKey("vps"))]);
+  const her = circle("her", 1000, "control", [chip(login("her@example.com"))]);
   return {
     circles: new Map([machines, her].map((c) => [c.id, c])),
     resources: new Map(
@@ -59,6 +57,13 @@ function start(): State {
     ends: new Map(),
     stacks: new Map(),
     paused: null,
+    actors: new Map(
+      [
+        actorOf(machineKey("mac"), "mac"),
+        actorOf(machineKey("vps"), "vps"),
+        actorOf(login("her@example.com")),
+      ].map((actor) => [actor.id, actor]),
+    ),
     machines: new Map([machine("mac"), machine("vps")].map((m) => [m.id, m])),
   };
 }
@@ -93,10 +98,7 @@ describe("reach of the relationship lens (K-537)", () => {
   it("draws no head line for a circle that Access gives no policy, and counts every member of an all-match circle", () => {
     const state = start();
     // The reviewer's case: all must match a machine and a person, which no single visitor does.
-    const strict = circle("strict", 1000, "view", [
-      { _tag: "machine", machineId: "vps" },
-      { _tag: "email", email: "her@example.com" },
-    ]);
+    const strict = circle("strict", 1000, "view", [chip(machineKey("vps")), chip(login("her@example.com"))]);
     const her = { ...state.circles.get("her")!, x: 5000 };
     const mixed = {
       ...state,

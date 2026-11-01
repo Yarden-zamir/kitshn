@@ -45,6 +45,7 @@ describe("repo groups (K-1733, K-1760)", () => {
       stacks: new Map(),
       paused: null,
       machines: new Map(),
+      actors: new Map(s.actors.map((actor) => [actor.id, actor])),
     };
     expect(githubWayOf(state, "yarden-zamir", "not-kitshn")).toBe("app");
     expect(githubWayOf(state, "qlik-trial", "not-kitshn")).toBe("not-kitshn");

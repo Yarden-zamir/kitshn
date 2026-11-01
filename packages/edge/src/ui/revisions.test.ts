@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { Actor } from "../core/changes.ts";
+import type { Author } from "../core/changes.ts";
 import type { RevisionView } from "../core/protocol.ts";
 import { dayOf, filterHistory, groupHistory, rowText, undoableRow, undoneText } from "./revisions.ts";
 
-const me: Actor = { _tag: "person", email: "me@example.com" };
-const bot: Actor = { _tag: "device", clientId: "c1", name: "Bot" };
+const me: Author = { _tag: "person", email: "me@example.com" };
+const bot: Author = { _tag: "device", clientId: "c1", name: "Bot" };
 
 const NOW = new Date(2026, 9, 28, 15, 0).getTime();
 const HOUR = 60 * 60 * 1000;
 
-const revision = (id: number, at: number, actor: Actor, summary = "Moved a card"): RevisionView => ({
+const revision = (id: number, at: number, actor: Author, summary = "Moved a card"): RevisionView => ({
   id,
   at,
   undoSource: null,

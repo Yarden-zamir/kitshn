@@ -10,6 +10,7 @@ import {
 } from "../core/model.ts";
 import type { MachineView } from "../core/protocol.ts";
 import { seed } from "../core/seed.ts";
+import { actorOf, chip, login } from "../core/testkit.ts";
 import {
   CHECKING_TIP,
   type MenuTarget,
@@ -49,7 +50,7 @@ const her: Circle = {
   name: "Her",
   color: "#FF5277",
   level: "use",
-  members: [{ _tag: "email", email: "her@example.com" }],
+  members: [chip(login("her@example.com"))],
   match: "any",
   needsPasskey: false,
   endsAt: null,
@@ -90,6 +91,7 @@ function context(version = "0123456789ab"): ActionContext {
     stacks: new Map([["s1", { id: "s1", name: "Docs", members: ["a", "b"] }]]),
     paused: null,
     machines: new Map(),
+    actors: new Map([...s.actors, actorOf(login("her@example.com"))].map((actor) => [actor.id, actor])),
   };
   const machine: MachineView = {
     machine: {

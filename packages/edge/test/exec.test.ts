@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers";
 import { expect, it } from "vitest";
 import type { Machine, ServerToDaemon } from "../src/core/machine.ts";
 import type { Circle, Resource, RightMode } from "../src/core/model.ts";
+import { insertActors, machine as machineChip } from "./actors.ts";
 
 const machineOf = (id: string): Machine => ({
   id,
@@ -60,7 +61,7 @@ async function setup(runsCommands: RightMode) {
     name: "Agents",
     color: "#ffcc00",
     level: "control",
-    members: [{ _tag: "machine", machineId: "mac", rights: { runsCommands } }],
+    members: [machineChip("mac", { runsCommands })],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -84,6 +85,7 @@ async function setup(runsCommands: RightMode) {
     sql.exec("INSERT OR REPLACE INTO resources (id, body) VALUES ('vps', ?)", JSON.stringify(card));
     sql.exec("INSERT OR REPLACE INTO places (id, x, y) VALUES ('vps', 5000, 5000)");
     sql.exec("INSERT OR REPLACE INTO circles (id, body) VALUES ('agents', ?)", JSON.stringify(agents));
+    insertActors(sql, [...agents.members, machineChip("vps")]);
     for (const table of ["exec_runs", "link_events", "proposals"]) sql.exec(`DELETE FROM ${table}`);
   });
   await evictDurableObject(stub);
@@ -268,7 +270,7 @@ it("runs the t3.agents step of migration 42 once, by its own mark, so a later st
     name: "Machines",
     color: "#ffcc00",
     level: "control",
-    members: [{ _tag: "machine", machineId: "mac", rights }],
+    members: [machineChip("mac", rights)],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -304,6 +306,7 @@ it("runs the t3.agents step of migration 42 once, by its own mark, so a later st
       "INSERT OR REPLACE INTO circles (id, body) VALUES ('machines', ?)",
       JSON.stringify(circle({ readsCode: { mode: "automatic" } })),
     );
+    insertActors(sql, circle({}).members);
     sql.exec("DELETE FROM meta WHERE key = 'agents-migrated'");
   });
   await evictDurableObject(stub);

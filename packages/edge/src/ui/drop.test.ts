@@ -10,6 +10,7 @@ import {
 } from "../core/model.ts";
 import type { Machine } from "../core/machine.ts";
 import { seed } from "../core/seed.ts";
+import { actorOf, chip, login, machineKey, token } from "../core/testkit.ts";
 import { refusal } from "./actions.ts";
 import { dropHover, dropPlan } from "./drop.ts";
 
@@ -40,7 +41,7 @@ const her: Circle = {
   name: "Her",
   color: "#FF5277",
   level: "use",
-  members: [{ _tag: "email", email: "her@example.com" }],
+  members: [chip(login("her@example.com"))],
   match: "any",
   needsPasskey: false,
   endsAt: null,
@@ -67,6 +68,15 @@ function state(): State {
     stacks: new Map(),
     paused: null,
     machines: new Map(),
+    actors: new Map(
+      [
+        ...s.actors,
+        actorOf(login("her@example.com")),
+        actorOf(machineKey("mac"), "mac"),
+        actorOf(machineKey("win"), "win"),
+        actorOf(token("d", "c", "d")),
+      ].map((actor) => [actor.id, actor]),
+    ),
   };
 }
 
@@ -127,7 +137,7 @@ describe("dropPlan", () => {
       ...her,
       id: "machines",
       name: "Machines",
-      members: [{ _tag: "machine", machineId: "mac" }],
+      members: [chip(machineKey("mac"))],
     };
     const start = { x: 2000, y: 2000 };
     const withMachine = (from: typeof start | null): State => {
@@ -154,7 +164,7 @@ describe("dropPlan", () => {
       const base = withMachine(from);
       const plan = dropPlan(base, new Map([["win", point]]), title, "s-new");
       const next = after(base, plan);
-      expect(next.circles.get("machines")?.members).toContainEqual({ _tag: "machine", machineId: "win" });
+      expect(next.circles.get("machines")?.members).toContainEqual(chip(machineKey("win")));
       expect(next.places.get("win")).toEqual(base.places.get("win"));
       expect(plan && "rightsIn" in plan ? plan.rightsIn : null).toBe("machines");
       expect(hoverText(base, "win", title)).toEqual(["+ win joins Machines"]);
@@ -166,7 +176,7 @@ describe("dropPlan", () => {
         ...base,
         circles: new Map([
           ...base.circles,
-          ["machines", { ...machines, members: [{ _tag: "machine" as const, machineId: "win" }] }],
+          ["machines", { ...machines, members: [chip(machineKey("win"))] }],
         ]),
       };
       expect(dropPlan(member, new Map([["win", point]]), title, "s-new")).toBeNull();
@@ -289,11 +299,11 @@ describe("dropPlan", () => {
   });
 
   describe("a change that would admit no one who gets in now (K-539)", () => {
-    const email = { _tag: "email", email: "her@example.com" } as const;
+    const email = chip(login("her@example.com"));
     const network = { _tag: "ip", range: "10.0.0.0/8" } as const;
-    const win = { _tag: "machine", machineId: "win" } as const;
-    const mac = { _tag: "machine", machineId: "mac" } as const;
-    const device = { _tag: "device", tokenId: "d", clientId: "c", name: "d" } as const;
+    const win = chip(machineKey("win"));
+    const mac = chip(machineKey("mac"));
+    const device = chip(token("d", "c", "d"));
     const base = (circle: Circle): State => {
       const s = state();
       return {

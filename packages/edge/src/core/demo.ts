@@ -1,7 +1,7 @@
 import { type Usage, analyticsRows, countRows } from "./usage.ts";
 import type { MachineOs } from "./icons.ts";
 import type { Machine } from "./machine.ts";
-import type { Circle, Point, Resource } from "./model.ts";
+import { type Actor, type Circle, type Credential, type Point, type Resource, actorIdOf } from "./model.ts";
 
 /** K-524: the demo machines, offline, with the system of their last status, so their cards show it. */
 export const DEMO_MACHINES: ReadonlyArray<{ readonly machine: Machine; readonly os: MachineOs }> = [
@@ -83,12 +83,24 @@ export function demo() {
     ["tick3d", { x: 760, y: 40 }],
     ["kitshn-repo", { x: 760, y: 200 }],
   ];
+  const herActor: Actor = {
+    id: actorIdOf({ _tag: "login", email: "her@example.com" }),
+    name: "her@example.com",
+    credentials: [{ _tag: "login", email: "her@example.com" }],
+  };
+  const bot: Credential = {
+    _tag: "token",
+    tokenId: "demo-agent",
+    clientId: "demo-agent.access",
+    name: "Deploy bot",
+  };
+  const botActor: Actor = { id: actorIdOf(bot), name: "Deploy bot", credentials: [bot] };
   const her: Circle = {
     id: "her",
     name: "Her",
     color: "#FF5277",
     level: "use",
-    members: [{ _tag: "email", email: "her@example.com" }],
+    members: [{ _tag: "actor", actorId: herActor.id }],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -118,7 +130,13 @@ export function demo() {
     name: "Agents",
     color: "#14B8A6",
     level: "control",
-    members: [{ _tag: "device", tokenId: "demo-agent", clientId: "demo-agent.access", name: "Deploy bot" }],
+    members: [
+      {
+        _tag: "actor",
+        actorId: botActor.id,
+        rights: { addsApps: { mode: "off" }, publishes: { mode: "off" } },
+      },
+    ],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -126,7 +144,7 @@ export function demo() {
     y: 600,
     r: 200,
   };
-  return { resources, places, circles: [her, qlik, agents] };
+  return { resources, places, circles: [her, qlik, agents], actors: [herActor, botActor] };
 }
 
 /** K-1303: the Usage view of the local demo, so captures show each level without a Cloudflare account. */

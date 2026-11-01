@@ -3,6 +3,7 @@ import { desiredAccess } from "../core/access.ts";
 import { applyChanges, resolveEdits } from "../core/changes.ts";
 import type { Circle, Resource, State } from "../core/model.ts";
 import { seed } from "../core/seed.ts";
+import { actorOf, chip, login, machineKey } from "../core/testkit.ts";
 import { CloudflareError } from "./cloudflare.ts";
 import {
   type AccessRow,
@@ -41,6 +42,12 @@ function start(): State {
     stacks: new Map(),
     paused: null,
     machines: new Map(),
+    actors: new Map(
+      [...s.actors, actorOf(login("g@x.com")), actorOf(machineKey("vps"), "vps")].map((actor) => [
+        actor.id,
+        actor,
+      ]),
+    ),
   };
 }
 
@@ -995,7 +1002,7 @@ describe("passkey enrollment on the App Launcher (K-113)", () => {
       ...owner,
       id: "guests",
       name: "Guests",
-      members: [{ _tag: "email" as const, email: "g@x.com" }],
+      members: [chip(login("g@x.com"))],
     };
     const paused = {
       ...state,
@@ -1397,13 +1404,7 @@ describe("the approve applications (K-1723)", () => {
       ...state.circles.get("owner")!,
       id: "agents",
       name: "Agents",
-      members: [
-        {
-          _tag: "machine" as const,
-          machineId: "vps",
-          rights: { deploys: { mode: "ask" as const, circleId: "owner" } },
-        },
-      ],
+      members: [chip(machineKey("vps"), { deploys: { mode: "ask", circleId: "owner" } })],
     };
     const desired = desiredAccess({ ...state, circles: new Map(state.circles).set("agents", agents) }, 0);
     expect(desired.apps.get("app:approve:passkey")).toMatchObject({

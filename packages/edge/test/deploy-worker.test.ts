@@ -20,6 +20,7 @@ import type { Resource } from "../src/core/model.ts";
 import { type ActionProgress, currentStep } from "../src/core/progress.ts";
 import { environmentNames } from "../src/worker/deploys.ts";
 import worker from "../src/worker/index.ts";
+import { key, withActors } from "./actors.ts";
 
 /** K-806, K-909: Worker deploys, their removal and their storage, through the Worker and its Durable Object. */
 
@@ -1088,7 +1089,7 @@ const agentCircle = (id: string, clientId: string, addsApps: boolean) => ({
   name: id,
   color: "#7c3aed",
   level: "control",
-  members: [{ _tag: "device", tokenId: `t-${id}`, clientId, name: id, ...(addsApps ? { addsApps } : {}) }],
+  members: [key(`t-${id}`, clientId, id, addsApps ? { addsApps } : {})],
   match: "any",
   needsPasskey: false,
   endsAt: null,
@@ -1111,7 +1112,7 @@ describe("folder sites (K-1123)", () => {
       { _tag: "circle", id: "folders", after: agentCircle("folders", "folder-key.access", true) },
       { _tag: "circle", id: "plain", after: agentCircle("plain", "plain-key.access", false) },
     ];
-    expect((await admin("/api/apply", "POST", { edits })).status).toBe(200);
+    expect((await admin("/api/apply", "POST", { edits: withActors(edits) })).status).toBe(200);
     expect((await agentStep("plain-key.access", "/agent/sites/plan", { folder: "demo" })).status).toBe(403);
 
     const plan = await agentStep("folder-key.access", "/agent/sites/plan", {
@@ -1200,12 +1201,12 @@ describe("folder sites (K-1123)", () => {
     const noRight = [
       { _tag: "circle", id: "folders", after: agentCircle("folders", "folder-key.access", false) },
     ];
-    expect((await admin("/api/apply", "POST", { edits: noRight })).status).toBe(200);
+    expect((await admin("/api/apply", "POST", { edits: withActors(noRight) })).status).toBe(200);
     expect((await agentStep("folder-key.access", "/agent/sites/plan", { folder: "demo" })).status).toBe(403);
     const right = [
       { _tag: "circle", id: "folders", after: agentCircle("folders", "folder-key.access", true) },
     ];
-    expect((await admin("/api/apply", "POST", { edits: right })).status).toBe(200);
+    expect((await admin("/api/apply", "POST", { edits: withActors(right) })).status).toBe(200);
     expect(
       (await agentStep("folder-key.access", "/agent/sites/plan", { folder: "demo" })).body,
     ).toMatchObject({
@@ -1243,7 +1244,7 @@ describe("folder sites (K-1123)", () => {
     const cloudflare = fakeCloudflare();
     await noOldAddresses();
     const edits = [{ _tag: "circle", id: "folders", after: agentCircle("folders", "move-key.access", true) }];
-    expect((await admin("/api/apply", "POST", { edits })).status).toBe(200);
+    expect((await admin("/api/apply", "POST", { edits: withActors(edits) })).status).toBe(200);
     const plan = await agentStep("move-key.access", "/agent/sites/plan", {
       folder: "moving",
       address: "first",
@@ -1443,7 +1444,7 @@ describe("owner folder sites (K-1129)", () => {
     const edits = [
       { _tag: "circle", id: "folders", after: agentCircle("folders", "owned-key.access", true) },
     ];
-    expect((await admin("/api/apply", "POST", { edits })).status).toBe(200);
+    expect((await admin("/api/apply", "POST", { edits: withActors(edits) })).status).toBe(200);
     const published = await agentStep("owned-key.access", "/agent/sites/plan", { folder: "keysite" });
     const keyDeploy = published.body["deployId"];
     const manifest = { "/index.html": { hash: "d".repeat(32), size: 4 } };
@@ -1532,7 +1533,7 @@ describe("make it a repo (K-1127)", () => {
       { _tag: "circle", id: "handers", after: agentCircle("handers", "hand-key.access", true) },
       { _tag: "circle", id: "plain", after: agentCircle("plain", "plain-key.access", false) },
     ];
-    expect((await admin("/api/apply", "POST", { edits })).status).toBe(200);
+    expect((await admin("/api/apply", "POST", { edits: withActors(edits) })).status).toBe(200);
     const plan = await agentStep("hand-key.access", "/agent/sites/plan", {
       folder: "hand",
       address: "hand-site",
@@ -1594,7 +1595,7 @@ describe("make it a repo (K-1127)", () => {
   it("turns a page into a repo's site, its old address redirects, and an expired handover does nothing", async () => {
     const cloudflare = fakeCloudflare();
     const edits = [{ _tag: "circle", id: "pagers", after: agentCircle("pagers", "page-key.access", true) }];
-    expect((await admin("/api/apply", "POST", { edits })).status).toBe(200);
+    expect((await admin("/api/apply", "POST", { edits: withActors(edits) })).status).toBe(200);
     const page = await call(
       "/agent/library",
       "POST",
@@ -1701,7 +1702,7 @@ describe("make it a repo (K-1127)", () => {
     const edits = [
       { _tag: "circle", id: "probers", after: agentCircle("probers", "probe-key.access", true) },
     ];
-    expect((await admin("/api/apply", "POST", { edits })).status).toBe(200);
+    expect((await admin("/api/apply", "POST", { edits: withActors(edits) })).status).toBe(200);
     const page = await call(
       "/agent/library",
       "POST",
@@ -1761,7 +1762,7 @@ describe("make it a repo (K-1127)", () => {
     const noRight = [
       { _tag: "circle", id: "probers", after: agentCircle("probers", "probe-key.access", false) },
     ];
-    expect((await admin("/api/apply", "POST", { edits: noRight })).status).toBe(200);
+    expect((await admin("/api/apply", "POST", { edits: withActors(noRight) })).status).toBe(200);
     expect((await staticDeploy(repo("85", "lostright"), "probe.example.com")).status).not.toBe(200);
     expect(await kindOf()).toBe("page");
     expect(await snapshot()).toEqual({ handovers: 0, cards: 0, repos: 0 });
@@ -1809,7 +1810,7 @@ describe("redirect addresses (K-1128)", () => {
     const edits = [
       { _tag: "circle", id: "strangers", after: agentCircle("strangers", "stranger-key.access", true) },
     ];
-    expect((await admin("/api/apply", "POST", { edits })).status).toBe(200);
+    expect((await admin("/api/apply", "POST", { edits: withActors(edits) })).status).toBe(200);
     expect(
       (
         await agentStep("stranger-key.access", `/agent/cards/${app.card}/redirects`, {

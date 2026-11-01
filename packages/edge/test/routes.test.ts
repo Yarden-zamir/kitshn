@@ -5,6 +5,7 @@ import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test"
 import { env } from "cloudflare:workers";
 import worker from "../src/worker/index.ts";
 import { accessToken, send, strangerKeys, stubAccessCerts } from "./access.ts";
+import { key, withActors } from "./actors.ts";
 
 const call = (path: string, token: string | null, body?: object) => {
   const headers = new Headers(token ? { "cf-access-jwt-assertion": token } : {});
@@ -130,7 +131,7 @@ describe("agent route /agent/state (K-718)", () => {
       name: "Agents",
       color: "#7c3aed",
       level: "control",
-      members: [{ _tag: "device", tokenId: "t1", clientId: "agent-1.access", name: "Agent" }],
+      members: [key("t1", "agent-1.access", "Agent")],
       match: "any",
       needsPasskey: false,
       endsAt: null,
@@ -138,7 +139,7 @@ describe("agent route /agent/state (K-718)", () => {
       y: 2000,
       r: 200,
     };
-    const edits: ReadonlyArray<Edit> = [{ _tag: "circle", id: agents.id, after: agents }];
+    const edits = withActors([{ _tag: "circle", id: agents.id, after: agents }]);
     expect((await call("/api/apply", owner, { edits })).status).toBe(200);
     const response = await call(
       "/agent/state",

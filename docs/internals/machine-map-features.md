@@ -4,7 +4,7 @@ kitshn replaces the machine map portal of the T3 Code fork (`apps/machine-map/SP
 
 ## Devices and clients
 
-- **K-1601** Phone and desktop app invites. An invite is a link `https://<KITSHN_HOST>/join/device#code=<code>` with a one-time code of 128 bits that expires after 15 minutes. Like join codes (K-602), it has no attempt limit. Rules:
+- **K-1601** Phone and desktop app invites. An invite is a link `https://<KITSHN_HOST>/join/device#code=<code>` with a one-time code of 128 bits that expires after 15 minutes. Like join codes (K-602), it has no attempt limit. Rules: The token of an invite joins an actor (K-1778): the actor that the invite names, else the person actor of the owner who invites, else a new actor of the token. A token that is a credential already keeps its actor. The answer of `POST /join/device` names it as `actor: { id, name }`.
   - The code stays in the URL fragment, so it never reaches a server log. The page fills the app links in the browser.
   - The app sends `POST /join/device` once. kitshn deletes the invite, rotates the token secret with no grace period, and answers with the service token. kitshn stores the client id, never the secret.
   - A used or unknown code gets 404, also when the first answer got lost, so the app asks for a new invite and never retries. An expired code gets 410. During the pause, the exchange gets 423.

@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AskOutcome, Machine, ServerToDaemon } from "../src/core/machine.ts";
 import type { Circle, Resource, RightMode } from "../src/core/model.ts";
+import { insertActors, machine as machineChip } from "./actors.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -24,7 +25,7 @@ async function setup(rights: Partial<Record<string, RightMode>>) {
     name: "Agents",
     color: "#ffcc00",
     level: "control",
-    members: [{ _tag: "machine", machineId: "vps", rights }],
+    members: [machineChip("vps", rights)],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -47,6 +48,7 @@ async function setup(rights: Partial<Record<string, RightMode>>) {
     const sql = state.storage.sql;
     sql.exec("INSERT OR REPLACE INTO machines (id, body) VALUES (?, ?)", "vps", JSON.stringify(machine));
     sql.exec("INSERT OR REPLACE INTO circles (id, body) VALUES (?, ?)", "agents", JSON.stringify(agents));
+    insertActors(sql, agents.members);
     sql.exec("INSERT OR REPLACE INTO resources (id, body) VALUES (?, ?)", group.id, JSON.stringify(group));
     sql.exec("INSERT OR REPLACE INTO places (id, x, y) VALUES (?, 5000, 5000)", group.id);
     sql.exec("DELETE FROM proposals");
@@ -177,9 +179,7 @@ it("opens the one-hour window on approval with no token; the next ask of the mac
       .exec<{ body: string }>("SELECT body FROM circles WHERE id = 'agents'")
       .toArray();
     const agents = JSON.parse(row?.body ?? "null") as Circle;
-    const members = [
-      { _tag: "machine", machineId: "vps", rights: { writesCode: { mode: "ask", circleId: "agents" } } },
-    ];
+    const members = [machineChip("vps", { writesCode: { mode: "ask", circleId: "agents" } })];
     state.storage.sql.exec(
       "UPDATE circles SET body = ? WHERE id = 'agents'",
       JSON.stringify({ ...agents, members }),

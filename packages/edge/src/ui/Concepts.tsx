@@ -1,14 +1,18 @@
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
-import type { Actor } from "../core/changes.ts";
+import type { Author } from "../core/changes.ts";
 import {
   ADMIN_RESOURCE_ID,
+  type Actor,
   type Circle,
+  type Credential,
   EVERYONE_CIRCLE_ID,
   type Member,
   OWNER_CIRCLE_ID,
   type Point,
   type State,
+  actorIdOf,
+  machineActorId,
   shareKey,
 } from "../core/model.ts";
 import type { ProposalView, RevisionView } from "../core/protocol.ts";
@@ -30,7 +34,7 @@ import {
 } from "./guide-kit.tsx";
 import { HistoryView } from "./History.tsx";
 import { stackOffsets } from "./layout.ts";
-import { MachineRightStickers } from "./MachineRights.tsx";
+import { RightStickers } from "./ActorRights.tsx";
 import { CircleView, StackCard, TrayCard } from "./Map.tsx";
 import { PanicOpener, PausedBanner } from "./Pause.tsx";
 
@@ -102,6 +106,24 @@ const circle = (
 });
 
 /** A state of a few circles and cards at fixed points, so each example shows its own shares. */
+/** K-1778: the actors of the examples: a friend, Yarden with a login and a phone token, a script, and a machine. */
+const FRIEND = { _tag: "login", email: "friend@example.com" } as const;
+const YARDEN = { _tag: "login", email: "yarden@example.com" } as const;
+const PHONE = { _tag: "token", tokenId: "phone", clientId: "phone.access", name: "Yarden's phone" } as const;
+const BACKUP = {
+  _tag: "token",
+  tokenId: "backup",
+  clientId: "backup.access",
+  name: "nightly backup",
+} as const;
+const CONCEPT_ACTORS: ReadonlyArray<Actor> = [
+  { id: actorIdOf(FRIEND), name: "friend@example.com", credentials: [FRIEND] },
+  { id: actorIdOf(YARDEN), name: "Yarden", credentials: [YARDEN, PHONE] },
+  { id: actorIdOf(BACKUP), name: "nightly backup", credentials: [BACKUP] },
+  { id: machineActorId("vps"), name: "VPS", credentials: [{ _tag: "machine", machineId: "vps" }] },
+];
+const chip = (credential: Credential): Member => ({ _tag: "actor", actorId: actorIdOf(credential) });
+
 function scene(
   base: State,
   circles: ReadonlyArray<Circle>,
@@ -110,6 +132,7 @@ function scene(
 ): State {
   return {
     ...base,
+    actors: new Map([...base.actors, ...CONCEPT_ACTORS.map((actor) => [actor.id, actor] as const)]),
     circles: new Map(circles.map((each) => [each.id, each])),
     places: new Map(places),
     shareSettings: new Map(),
@@ -143,19 +166,7 @@ const marker = (n: number, point: Point) => (
 );
 
 function Overview(props: { base: State }) {
-  const friends = circle(
-    "friends",
-    "Friends",
-    "#FF5277",
-    "view",
-    [
-      { _tag: "email", email: "friend@example.com" },
-      { _tag: "device", tokenId: "phone", clientId: "phone.access", name: "Yarden's phone" },
-    ],
-    -150,
-    0,
-    210,
-  );
+  const friends = circle("friends", "Friends", "#FF5277", "view", [chip(FRIEND), chip(YARDEN)], -150, 0, 210);
   const everyone = circle("everyone-o", "Everyone", "#7CFF8A", "view", [{ _tag: "everyone" }], 190, 20, 190);
   const tick3d = resource("tick3d", "site.static", "tick3d", "tick3d.example.com");
   const notes = resource("notes", "page", "notes", null);
@@ -257,12 +268,7 @@ function Things(props: { base: State }) {
     "Members",
     "#6C5CE7",
     "view",
-    [
-      { _tag: "email", email: "friend@example.com" },
-      { _tag: "domain", domain: "qlik.com" },
-      { _tag: "ip", range: "10.0.0.0/8" },
-      { _tag: "device", tokenId: "phone", clientId: "phone.access", name: "Yarden's phone" },
-    ],
+    [chip(FRIEND), { _tag: "domain", domain: "qlik.com" }, { _tag: "ip", range: "10.0.0.0/8" }, chip(BACKUP)],
     -260,
     0,
     170,
@@ -272,7 +278,7 @@ function Things(props: { base: State }) {
     "Machines",
     "#14B8A6",
     "use",
-    [{ _tag: "machine", machineId: "vps" }],
+    [chip({ _tag: "machine", machineId: "vps" })],
     260,
     0,
     170,
@@ -516,8 +522,8 @@ function Delivery(props: { base: State }) {
 }
 
 function Safety(props: { base: State }) {
-  const me: Actor = { _tag: "person", email: "viewer@example.com" };
-  const owner: Actor = { _tag: "person", email: "owner@example.com" };
+  const me: Author = { _tag: "person", email: "viewer@example.com" };
+  const owner: Author = { _tag: "person", email: "owner@example.com" };
   const revisions: ReadonlyArray<RevisionView> = [
     {
       id: 3,
@@ -592,9 +598,9 @@ function Safety(props: { base: State }) {
 }
 
 function Agents(props: { base: State }) {
-  const vps: Extract<Member, { _tag: "machine" }> = {
-    _tag: "machine",
-    machineId: "vps",
+  const vps: Extract<Member, { _tag: "actor" }> = {
+    _tag: "actor",
+    actorId: machineActorId("vps"),
     rights: { deploys: { mode: "automatic" }, publishes: { mode: "ask", circleId: OWNER_CIRCLE_ID } },
   };
   const proposal: ProposalView = {
@@ -618,14 +624,14 @@ function Agents(props: { base: State }) {
   return (
     <Concept
       name="Rights, modes and asks"
-      words="An agent on a joined machine acts as its machine. Each agent right of a machine (adds apps, publishes, deploys, runs commands and more) has a mode: default, off, automatic, or ask a circle. An ask waits for one member of that circle to approve or deny it."
-      relates="Rights belong to machines in agent circles, which are circles of devices and machines. The machine proves itself with its own key pair. Asks wait in the Inbox; History records each one."
-      ks={["K-1701", "K-1720", "K-1721", "K-1722", "K-1730", "K-1732"]}
+      words="An actor is a name that can act: a person, a script, a machine, or an agent on a machine. Each right of an actor in a circle (adds apps, publishes, deploys, runs commands and more) has a mode: default, off, automatic, or ask a circle. An ask waits for one member of that circle to approve or deny it."
+      relates="Rights sit on actor chips in agent circles, which hold actors that are not people. A machine proves itself with its own key pair; an agent actor is the calls of a machine with given attested labels. Asks wait in the Inbox; History records each one."
+      ks={["K-1701", "K-1720", "K-1721", "K-1722", "K-1730", "K-1778"]}
       section={["Machine identity and agent rights", "agent-rights.md"]}
     >
       <div class="row">
         <span class="muted">VPS in an agent circle:</span>
-        <MachineRightStickers member={vps} />
+        <RightStickers member={vps} />
       </div>
       <ul class="repo-list">
         <AskRow

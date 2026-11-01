@@ -1,14 +1,20 @@
 // Section 17: what an ask of an agent on a machine needs, and how kitshn runs it. Pure, for tests.
 import {
+  type Actor,
   type Circle,
+  type Directory,
   HIGH_RISK_RIGHTS,
-  MACHINE_RIGHT_NAMES,
-  type MachineRight,
+  RIGHT_NAMES,
+  type Right,
   type RightCondition,
   type RightMode,
+  type State,
+  isPerson,
+  machineIdOf,
+  memberActor,
 } from "./model.ts";
-import { FORWARD_HEADERS, type Machine } from "./machine.ts";
-import { type Visitor, circleMatches } from "./visitor.ts";
+import { FORWARD_HEADERS } from "./machine.ts";
+import { type Attested, type Visitor, circleMatches } from "./visitor.ts";
 
 /** K-1711: the actions of an ask. The daemon checks the same list (`@kitshn/local`). */
 export const ASK_ACTIONS = [
@@ -38,10 +44,10 @@ export type AskAction = (typeof ASK_ACTIONS)[number];
 export type ProposalAction = AskAction | "forward";
 
 /** K-1777: the right that a proposal asks for; "owner" when no right lets an agent run the call, so the Owner decides. */
-export type ProposalRight = MachineRight | "owner";
+export type ProposalRight = Right | "owner";
 
 export const proposalRightName = (right: ProposalRight) =>
-  right === "owner" ? "none: the Owner decides" : MACHINE_RIGHT_NAMES[right];
+  right === "owner" ? "none: the Owner decides" : RIGHT_NAMES[right];
 
 export const isAskAction = (value: unknown): value is AskAction =>
   typeof value === "string" && (ASK_ACTIONS as ReadonlyArray<string>).includes(value);
@@ -50,7 +56,7 @@ export const isAskAction = (value: unknown): value is AskAction =>
  * K-1711: the right that an action needs. `none` needs no right; `member` needs membership of the approver circle
  * (K-1723); `apply` needs "publishes" only for a move into Everyone, which agentRefusal decides.
  */
-export const ASK_RIGHT: Record<AskAction, MachineRight | "none" | "member" | "apply"> = {
+export const ASK_RIGHT: Record<AskAction, Right | "none" | "member" | "apply"> = {
   state: "none",
   apply: "apply",
   organize: "apply",
@@ -227,25 +233,27 @@ export const APPROVED_WINDOW_MS = 60 * 60_000;
  */
 export const WINDOW_ACTIONS: ReadonlySet<AskAction> = new Set(["github-token", "pass"]);
 
-/** K-1727: a machine of this circle approves asks; in a circle that needs a passkey only with "machines may approve". */
-export const machinesApprove = (circle: Circle) => !circle.needsPasskey || circle.machinesMayApprove === true;
+/** K-1727: a proof without a passkey answers the asks of this circle; in a passkey circle only with the setting on. */
+export const approvesWithoutPasskey = (circle: Circle) =>
+  !circle.needsPasskey || circle.approvesWithoutPasskey === true;
 
 /**
- * K-1723, K-1727, K-1902: why this visitor may not answer the asks of an approver circle, or null when it may. The
- * answer check and the live list of asks use it, so who sees an ask and who answers it never differ. `machine` says
- * that the visitor is a machine, which answers only where machines approve.
+ * K-1723, K-1727, K-1902: why this proof may not answer the asks of an approver circle, or null when it may. The answer
+ * check and the live list of asks use it, so who sees an ask and who answers it never differ. `withoutPasskey` says that
+ * the proof has no passkey (a token or a machine), which answers only where `approvesWithoutPasskey` lets it.
  */
 export function answerRefusal(
   circle: Circle | undefined,
   circleId: string,
   visitor: Visitor,
-  machines: ReadonlyMap<string, Machine>,
-  machine: boolean,
+  directory: Directory,
+  attested: Attested | null,
+  withoutPasskey: boolean,
 ): string | null {
-  if (!circle || !circleMatches(circle, visitor, machines))
+  if (!circle || !circleMatches(circle, visitor, directory, attested))
     return `Only a member of the approver circle ${circle?.name ?? circleId} answers this ask (K-1723).`;
-  if (machine && !machinesApprove(circle))
-    return `${circle.name} needs a passkey, and "machines may approve" is off, so a machine does not answer its asks (K-1727).`;
+  if (withoutPasskey && !approvesWithoutPasskey(circle))
+    return `${circle.name} needs a passkey, and "approves without passkey" is off, so a token or a machine does not answer its asks (K-1727).`;
   return null;
 }
 
@@ -253,96 +261,86 @@ export function answerRefusal(
 export const ASK_EVENT_DAYS = 30;
 export const ASK_EVENT_COUNT = 5000;
 
+/** K-1778: whether a member is a person or names nobody: a person actor or a rule other than a network. */
+const isPersonMember = (member: Circle["members"][number], directory: Directory) => {
+  const actor = memberActor(member, directory);
+  return member._tag === "domain" || (actor !== undefined && isPerson(actor));
+};
+
+/** K-1778: whether a member is an actor that proves calls without a passkey: a machine, an agent or a script. */
+const isAgentMember = (member: Circle["members"][number], directory: Directory) => {
+  const actor = memberActor(member, directory);
+  return actor !== undefined && !isPerson(actor);
+};
+
 /**
- * K-1725: the warnings of the rights of one machine. The map shows them and refuses nothing: all configurations are
- * allowed.
+ * K-1725: the warnings of the rights of one actor in a circle. The map shows them and refuses nothing: all configurations
+ * are allowed.
  */
 export function rightWarnings(
-  circles: ReadonlyMap<string, Circle>,
-  machineId: string,
-  rights: Readonly<Partial<Record<MachineRight, RightMode>>>,
+  state: Pick<State, "circles" | "actors" | "machines">,
+  actor: Actor,
+  rights: Readonly<Partial<Record<Right, RightMode>>>,
 ): Array<string> {
   const warnings: Array<string> = [];
-  for (const [right, mode] of Object.entries(rights) as Array<[MachineRight, RightMode | undefined]>) {
+  for (const [right, mode] of Object.entries(rights) as Array<[Right, RightMode | undefined]>) {
     if (!mode || mode.mode === "off") continue;
-    const name = MACHINE_RIGHT_NAMES[right];
+    const name = RIGHT_NAMES[right];
     if (mode.mode === "automatic") {
-      if (right === "writesCode" && (mode.conditions ?? []).length === 0)
+      if (right === "writesCode" && machineIdOf(actor) !== null && (actor.conditions ?? []).length === 0)
         warnings.push(
-          `"${name}" runs at once with no thread condition, so any process of the machine writes code.`,
+          `"${name}" runs at once for an actor with no thread condition, so any process of the machine writes code.`,
         );
       continue;
     }
-    const circle = circles.get(mode.circleId);
+    const circle = state.circles.get(mode.circleId);
     if (!circle) {
       warnings.push(`"${name}" asks a circle that is gone, so no one can approve it.`);
       continue;
     }
-    const machinesHere =
-      machinesApprove(circle) && circle.members.some((member) => member._tag === "machine");
+    const agentsHere =
+      approvesWithoutPasskey(circle) && circle.members.some((member) => isAgentMember(member, state));
     if (
-      machinesApprove(circle) &&
-      circle.members.some((member) => member._tag === "machine" && member.machineId === machineId)
+      approvesWithoutPasskey(circle) &&
+      circle.members.some((member) => member._tag === "actor" && member.actorId === actor.id)
     )
-      warnings.push(`"${name}" asks ${circle.name}, which holds this machine, so it can approve itself.`);
-    if (
-      HIGH_RISK_RIGHTS.has(right) &&
-      !circle.members.some((member) => member._tag === "email" || member._tag === "domain")
-    )
+      warnings.push(`"${name}" asks ${circle.name}, which holds this actor, so it can approve itself.`);
+    if (HIGH_RISK_RIGHTS.has(right) && !circle.members.some((member) => isPersonMember(member, state)))
       warnings.push(
         `"${name}" asks ${circle.name}, which has no person, so no person sees it before it runs.`,
       );
-    if (machinesHere)
+    if (agentsHere)
       warnings.push(
-        `${circle.name} has machines: their agents read the reason and the labels, which the asking agent writes.`,
+        `${circle.name} has agents: they read the reason and the labels, which the asking agent writes.`,
       );
-    if (machinesHere && circle.needsPasskey)
+    if (agentsHere && circle.needsPasskey)
       warnings.push(
-        `${circle.name} needs a passkey, but "machines may approve" is on, so its machines approve with no passkey.`,
+        `${circle.name} needs a passkey, but "approves without passkey" is on, so its agents approve with no passkey.`,
       );
   }
   return [...new Set(warnings)];
 }
 
 /**
- * K-1725, K-1727: the machines of this circle that it would let approve their own asks, because one of their rights asks
- * this circle. The circle editor warns at once, when the owner adds the machine or sets the rule.
+ * K-1725, K-1727: the actors of this circle that it would let approve their own asks, because one of their rights asks
+ * this circle. The circle editor warns at once, when the owner adds the actor or sets the rule.
  */
 export function selfApprovers(circles: ReadonlyMap<string, Circle>, circle: Circle): Array<string> {
-  if (!machinesApprove(circle)) return [];
+  if (!approvesWithoutPasskey(circle)) return [];
   return circle.members.flatMap((member) => {
-    if (member._tag !== "machine") return [];
+    if (member._tag !== "actor") return [];
     const asks = [...circles.values()].some((other) =>
       (other.id === circle.id ? circle : other).members.some(
         (each) =>
-          each._tag === "machine" &&
-          each.machineId === member.machineId &&
+          each._tag === "actor" &&
+          each.actorId === member.actorId &&
           Object.values(each.rights ?? {}).some(
             (mode) => mode?.mode === "ask" && mode.circleId === circle.id,
           ),
       ),
     );
-    return asks ? [member.machineId] : [];
+    return asks ? [member.actorId] : [];
   });
-}
-
-/**
- * K-1754: why the attested labels of an ask fail the conditions of its right, or null. A condition counts only on the
- * prefix of a provider of the machine, because only then the daemon dropped the caller's own labels of it.
- */
-export function conditionProblem(
-  conditions: ReadonlyArray<RightCondition> | undefined,
-  labels: Readonly<Record<string, string>>,
-  labelPrefixes: ReadonlyArray<string>,
-): string | null {
-  for (const condition of conditions ?? []) {
-    if (!labelPrefixes.some((prefix) => condition.key.startsWith(prefix)))
-      return `The condition on ${condition.key} has no provider on this machine that sets it (K-1754).`;
-    const value = labels[condition.key];
-    if (value === undefined || !condition.values.includes(value))
-      return `The right needs ${condition.key} to be ${condition.values.join(" or ")}, and the ask has ${value === undefined ? "no such verified label" : value} (K-1754).`;
-  }
-  return null;
 }
 
 /** K-1754: conditions as the editor writes them: `key=value,value; key=value`. */

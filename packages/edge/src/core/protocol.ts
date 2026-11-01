@@ -1,4 +1,4 @@
-import type { Actor, Item, RevisionKind } from "./changes.ts";
+import type { Author, Item, RevisionKind } from "./changes.ts";
 import type { DaemonUpdate } from "./autoUpdate.ts";
 import type { Command, Machine, MachineStatus, ProjectVolume, Sample } from "./machine.ts";
 import type { ServerReport } from "./sites.ts";
@@ -7,6 +7,7 @@ import type { MachineOs } from "./icons.ts";
 import type { MachineFact } from "./facts.ts";
 import type { LogLine, TailAnswer } from "./logs.ts";
 import type {
+  Actor,
   Circle,
   GitHubWay,
   PauseMode,
@@ -86,7 +87,7 @@ export interface DeployNote {
 export interface RevisionView {
   readonly id: number;
   readonly at: number;
-  readonly actor: Actor;
+  readonly actor: Author;
   readonly summary: string;
   readonly undoes: number | null;
   /** K-1509: where a whole-revision Undo came from; null for other revisions and older undos. */
@@ -111,6 +112,8 @@ export interface Snapshot {
   /** K-402: the Access applications that kitshn made, against the account's limit of 500. */
   readonly accessApps: number;
   readonly circles: ReadonlyArray<Circle>;
+  /** K-1778: the actors that circles name, with their credentials. A token credential names no secret. */
+  readonly actors: ReadonlyArray<Actor>;
   readonly resources: ReadonlyArray<Resource>;
   readonly places: Readonly<Record<string, Point>>;
   readonly shareSettings: Readonly<Record<string, ShareSetting>>;
@@ -155,7 +158,7 @@ export interface Snapshot {
   /** K-1128: the redirect addresses of each site card, by card id. */
   readonly redirects: Readonly<Record<string, ReadonlyArray<string>>>;
   /** K-1504: who paused and when, while paused. */
-  readonly pausedBy: { readonly actor: Actor; readonly at: number } | null;
+  readonly pausedBy: { readonly actor: Author; readonly at: number } | null;
   readonly machines: ReadonlyArray<MachineView>;
   /** K-717: the stored card setting values, by card id; a missing value is the default of its setting. */
   readonly cardSettings: Readonly<Record<string, Readonly<Record<string, string>>>>;
@@ -200,7 +203,7 @@ export interface Snapshot {
   readonly accessTeam: string;
   /** The zone that sites, pages and files live on (K-1111). */
   readonly zone: string;
-  readonly me: Actor;
+  readonly me: Author;
   /** The newest revision in this snapshot; a map shows a held edit until a snapshot reaches it. */
   readonly revision: number;
 }

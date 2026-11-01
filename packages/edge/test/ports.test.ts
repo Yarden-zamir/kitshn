@@ -5,6 +5,7 @@ import { type DoorPlan, HOUR_MS } from "../src/core/port.ts";
 import type { Machine } from "../src/core/machine.ts";
 import type { Circle, Resource } from "../src/core/model.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
+import { insertActors, person } from "./actors.ts";
 
 /** Section 20: a door opens for a person of the card's circles, and closes when the person leaves the circle. */
 
@@ -13,7 +14,7 @@ const friends: Circle = {
   name: "Friends",
   color: "#22c55e",
   level: "view",
-  members: [{ _tag: "email", email: "friend@example.com" }],
+  members: [person("friend@example.com")],
   match: "any",
   needsPasskey: false,
   endsAt: null,
@@ -46,6 +47,7 @@ async function setup() {
     const sql = state.storage.sql;
     sql.exec("INSERT OR REPLACE INTO machines (id, body) VALUES ('vps', ?)", JSON.stringify(machine));
     sql.exec("INSERT OR REPLACE INTO circles (id, body) VALUES ('friends', ?)", JSON.stringify(friends));
+    insertActors(sql, friends.members);
     sql.exec("INSERT OR REPLACE INTO resources (id, body) VALUES ('card1', ?)", JSON.stringify(card));
     sql.exec("INSERT OR REPLACE INTO places (id, x, y) VALUES ('card1', 9000, 9000)");
     sql.exec(
@@ -155,10 +157,7 @@ it("keeps a door when its circle checks the address, and refuses a second open w
   const office: Circle = {
     ...friends,
     match: "all",
-    members: [
-      { _tag: "email", email: "friend@example.com" },
-      { _tag: "ip", range: "203.0.113.0/24" },
-    ],
+    members: [person("friend@example.com"), { _tag: "ip", range: "203.0.113.0/24" }],
   };
   await runInDurableObject(stub, (_, state) => {
     state.storage.sql.exec("UPDATE circles SET body = ? WHERE id = 'friends'", JSON.stringify(office));

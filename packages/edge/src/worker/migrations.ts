@@ -313,12 +313,24 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
     "ALTER TABLE game_records RENAME TO port_records",
     `UPDATE resources SET body = json_set(body, '$.kind', 'port') WHERE json_extract(body, '$.kind') = 'game'`,
   ],
+  // 44: actors (K-1778). Its code step (`migrateMembers`) turns the email, device and machine members of each circle into
+  // actors and their chips, once, in the transaction of the migration. The circle bodies of before stay in
+  // `circles_before_actors`, so an owner can go back by hand to a kitshn of before it.
+  [
+    "CREATE TABLE circles_before_actors (id TEXT PRIMARY KEY, body TEXT NOT NULL)",
+    "INSERT INTO circles_before_actors (id, body) SELECT id, body FROM circles",
+    "CREATE TABLE actors (id TEXT PRIMARY KEY, body TEXT NOT NULL)",
+    // The actor that a device invite adds its token to; null makes a new actor of the token (K-1601).
+    "ALTER TABLE device_invites ADD COLUMN actor_id TEXT",
+  ],
 ];
 
 /** K-819: the migration after which the Durable Object derives the repo ids of older deploy rows. */
 export const REPO_GATE_MIGRATION = 6;
 /** K-722: the migration after which the `t3.agents` kind is gone; an import from before it runs the code step. */
 export const AGENTS_MIGRATION = 42;
+/** K-1778: the migration of the actors; a database or an import from before it runs `migrateMembers`. */
+export const ACTORS_MIGRATION = 44;
 
 /**
  * Runs the migrations after `from`, up to `to` (K-1833 stops at the schema of an export). Returns the new version.

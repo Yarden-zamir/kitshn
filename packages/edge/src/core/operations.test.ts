@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { describe, expect, it } from "vitest";
-import { MACHINE_RIGHTS } from "./model.ts";
+import { RIGHTS } from "./model.ts";
 import {
   OPERATIONS,
   OP_IDS,
@@ -218,9 +218,9 @@ describe("operations (K-1777)", () => {
     );
   });
 
-  it("names every right of MACHINE_RIGHTS that a row uses", () => {
+  it("names every right of RIGHTS that a row uses", () => {
     for (const [, op] of rows)
-      if (!isPersonGate(op.gate) && op.gate.right !== null) expect(MACHINE_RIGHTS).toContain(op.gate.right);
+      if (!isPersonGate(op.gate) && op.gate.right !== null) expect(RIGHTS).toContain(op.gate.right);
   });
 
   it("has a row for every owner route of the Durable Object", () => {

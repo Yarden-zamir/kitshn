@@ -12,21 +12,29 @@ import {
   cardsControlledBy,
   circlesOf,
   codeRightMode,
-  isAgentKey,
   machineRightMode,
   mayDeployOn,
 } from "./agent.ts";
 import { type Edit, applyChanges, resolveEdits } from "./changes.ts";
 import {
-  type AgentRight,
   type Circle,
   type Point,
   type Resource,
+  type RightCondition,
+  type RightMode,
+  type Right,
   type State,
+  actorIdOf,
   circlesHolding,
 } from "./model.ts";
 import { placeInside } from "./place.ts";
 import { seed } from "./seed.ts";
+import { actorOf, chip, keyRights, login, machineKey, token, withActors } from "./testkit.ts";
+
+type KeyFlags = { readonly addsApps?: true; readonly publishes?: true };
+const KEY = token("t1", "agent-1", "Agent");
+const keyChip = (flags: KeyFlags = {}) => chip(KEY, keyRights(flags));
+const HER = login("her@example.com");
 
 function start(): State {
   const s = seed(["owner@example.com"], "kit.example.com");
@@ -35,7 +43,7 @@ function start(): State {
     id: string,
     x: number,
     level: "view" | "control",
-    members: Circle["members"] = [{ _tag: "device", tokenId: "t1", clientId: "agent-1", name: "Agent" }],
+    members: Circle["members"] = [keyChip()],
   ): Circle => ({
     ...base,
     id,
@@ -63,10 +71,7 @@ function start(): State {
         circle("agents", 0, "control"),
         circle("staging", 600, "control"),
         circle("watch", 1200, "view"),
-        circle("public", 1800, "control", [
-          { _tag: "everyone" },
-          { _tag: "device", tokenId: "t1", clientId: "agent-1", name: "Agent" },
-        ]),
+        circle("public", 1800, "control", [{ _tag: "everyone" }, keyChip()]),
         circle("home", 2400, "control", [{ _tag: "ip", range: "10.0.0.0/24" }]),
       ].map((c) => [c.id, c]),
     ),
@@ -77,12 +82,29 @@ function start(): State {
     stacks: new Map(),
     paused: null,
     machines: new Map(),
+    actors: new Map(
+      [
+        ...s.actors,
+        actorOf(KEY),
+        actorOf(HER),
+        actorOf(machineKey("vps"), "vps"),
+        actorOf(machineKey("m1"), "m1"),
+      ].map((actor) => [actor.id, actor]),
+    ),
   };
 }
 
 const check = (state: State, edits: Array<Edit>) => {
   const changes = resolveEdits(state, edits);
-  return agentRefusal(state, applyChanges(state, changes), as("agent-1"), changes, 0, new Set(["site"]));
+  return agentRefusal(
+    state,
+    applyChanges(state, changes),
+    as("agent-1"),
+    changes,
+    0,
+    new Set(["site"]),
+    null,
+  );
 };
 
 describe("agent keys (K-718)", () => {
@@ -118,22 +140,10 @@ describe("agent keys (K-718)", () => {
     expect(cardsControlledBy(start(), as("stranger"), 0).size).toBe(0);
     expect(check(start(), [{ _tag: "place", id: "nas", after: { x: 0, y: 1000 } }])).toMatch(/no control/);
   });
-  it("does not call the owner's device an agent during a pause", () => {
-    const base = start();
-    const owner = base.circles.get("owner")!;
-    const device = { _tag: "device", tokenId: "t2", clientId: "owner-phone", name: "Phone" } as const;
-    const circles = new Map(base.circles).set("owner", { ...owner, members: [...owner.members, device] });
-    const state = { ...base, circles };
-    expect(isAgentKey({ ...state, paused: "lockdown" as const }, device, 0)).toBe(false);
-    expect(isAgentKey(state, { ...device, clientId: "agent-1" }, 0)).toBe(true);
-  });
-  it("counts only circles of devices that have not ended, and may take a card out of every circle", () => {
+  it("counts only agent circles that have not ended, and may take a card out of every circle", () => {
     const base = start();
     const agents = base.circles.get("agents")!;
-    const mixed = {
-      ...agents,
-      members: [...agents.members, { _tag: "email", email: "her@example.com" } as const],
-    };
+    const mixed = { ...agents, members: [...agents.members, chip(HER)] };
     expect(
       cardsControlledBy({ ...base, circles: new Map(base.circles).set("agents", mixed) }, as("agent-1"), 0)
         .size,
@@ -160,7 +170,7 @@ describe("agent keys (K-718)", () => {
       clientId: "m1-token",
       tunnelId: "t",
     };
-    const state = { ...base, resources, places, machines: new Map([["m1", m1]]) };
+    const state: State = { ...base, resources, places, machines: new Map([["m1", m1]]) };
     expect(agentMayRunOn(state, as("agent-1"), "m1", 0)).toBe(false);
     const inside = { ...state, places: new Map(places).set("app", { x: 0, y: 1000 }) };
     expect(agentMayRunOn(inside, as("agent-1"), "m1", 0)).toBe(true);
@@ -168,14 +178,11 @@ describe("agent keys (K-718)", () => {
     const home = inside.circles.get("home")!;
     const circles = new Map(inside.circles).set("home", {
       ...home,
-      members: [{ _tag: "machine", machineId: "m1" }],
+      members: [chip(machineKey("m1"))],
     });
     expect(agentMayRunOn({ ...inside, circles }, as("agent-1"), "m1", 0)).toBe(false);
-    // An agent key has no closed commands: it stays under the full limit (K-1732).
+    // A token actor has no closed commands: it stays under the full limit.
     expect(agentMayCommand({ ...inside, circles }, as("agent-1"), "m1", "restart", 0)).toBe(false);
-  });
-  it("calls a device an agent only when it has an agent circle", () => {
-    expect(isAgentKey(start(), { _tag: "device", tokenId: "t9", clientId: "tv", name: "TV" }, 0)).toBe(false);
   });
   it("refuses a move that takes along a stacked card the key does not manage", () => {
     const base = start();
@@ -228,12 +235,12 @@ describe("agent keys (K-718)", () => {
   });
 });
 
-/** The start state with these rights on the agent member of one circle. */
-function withRights(circleId: string, rights: Partial<Record<AgentRight, true>>): State {
+/** The start state with these key flags on the chip of the key in one circle. */
+function withRights(circleId: string, rights: KeyFlags): State {
   const base = start();
   const circle = base.circles.get(circleId)!;
   const members = circle.members.map((member) =>
-    member._tag === "device" ? { ...member, ...rights } : member,
+    member._tag === "actor" && member.actorId === actorIdOf(KEY) ? keyChip(rights) : member,
   );
   return { ...base, circles: new Map(base.circles).set(circleId, { ...circle, members }) };
 }
@@ -244,11 +251,13 @@ const overlapSpot = (state: State) =>
 
 describe("agent keys that add and publish apps (K-718, K-819)", () => {
   it("has no right by default, and only an agent circle gives one", () => {
-    expect(agentHas(start(), as("agent-1"), "addsApps", 0)).toBe(false);
-    expect(agentHas(start(), as("agent-1"), "publishes", 0)).toBe(false);
-    expect(agentHas(withRights("agents", { addsApps: true }), as("agent-1"), "addsApps", 0)).toBe(true);
+    expect(agentHas(start(), as("agent-1"), "addsApps", 0, null)).toBe(false);
+    expect(agentHas(start(), as("agent-1"), "publishes", 0, null)).toBe(false);
+    expect(agentHas(withRights("agents", { addsApps: true }), as("agent-1"), "addsApps", 0, null)).toBe(true);
     // "public" holds Everyone, so it is no agent circle.
-    expect(agentHas(withRights("public", { publishes: true }), as("agent-1"), "publishes", 0)).toBe(false);
+    expect(agentHas(withRights("public", { publishes: true }), as("agent-1"), "publishes", 0, null)).toBe(
+      false,
+    );
   });
   it("publishes a card that it added into the overlap of its agent circle and Everyone, and keeps managing it", () => {
     const state = overlapping({ publishes: true });
@@ -267,7 +276,7 @@ describe("agent keys that add and publish apps (K-718, K-819)", () => {
     const place = overlapSpot(overlapping({ publishes: true }));
     const into = (state: State, added: ReadonlySet<string>) => {
       const changes = resolveEdits(state, [{ _tag: "place", id: "site", after: place }]);
-      return agentRefusal(state, applyChanges(state, changes), as("agent-1"), changes, 0, added);
+      return agentRefusal(state, applyChanges(state, changes), as("agent-1"), changes, 0, added, null);
     };
     expect(into(overlapping({}), new Set(["site"]))).toMatch(/Everyone/);
     expect(into(overlapping({ publishes: true }), new Set())).toMatch(/Everyone/);
@@ -295,24 +304,24 @@ describe("agent keys that add and publish apps (K-718, K-819)", () => {
   });
   it("places an upload in the tray, in one of its agent circles, or with the right in the overlap with Everyone (K-1116)", () => {
     const plain = overlapping({});
-    expect(agentUploadPlace(plain, as("agent-1"), null, false, 0)).toBeNull();
-    const inAgents = agentUploadPlace(plain, as("agent-1"), "agents", false, 0) as Point;
+    expect(agentUploadPlace(plain, as("agent-1"), null, false, 0, null)).toBeNull();
+    const inAgents = agentUploadPlace(plain, as("agent-1"), "agents", false, 0, null) as Point;
     expect(circlesHolding(moved(plain, inAgents), "site").map((circle) => circle.id)).toEqual(["agents"]);
     // By name too, and never a circle that is not an agent circle of the key with control.
-    expect(agentUploadPlace(plain, as("agent-1"), "watch", false, 0)).toMatch(/not an agent circle/);
-    expect(agentUploadPlace(plain, as("agent-1"), "everyone", false, 0)).toMatch(/not an agent circle/);
-    expect(agentUploadPlace(plain, as("stranger"), null, true, 0)).toMatch(/no agent circle/);
-    expect(agentUploadPlace(plain, as("agent-1"), null, true, 0)).toMatch(/may not publish/);
+    expect(agentUploadPlace(plain, as("agent-1"), "watch", false, 0, null)).toMatch(/not an agent circle/);
+    expect(agentUploadPlace(plain, as("agent-1"), "everyone", false, 0, null)).toMatch(/not an agent circle/);
+    expect(agentUploadPlace(plain, as("stranger"), null, true, 0, null)).toMatch(/no agent circle/);
+    expect(agentUploadPlace(plain, as("agent-1"), null, true, 0, null)).toMatch(/may not publish/);
     const right = overlapping({ publishes: true });
-    const open = agentUploadPlace(right, as("agent-1"), null, true, 0) as Point;
+    const open = agentUploadPlace(right, as("agent-1"), null, true, 0, null) as Point;
     expect(
       circlesHolding(moved(right, open), "site")
         .map((circle) => circle.id)
         .sort(),
     ).toEqual(["agents", "everyone"]);
-    expect(agentUploadPlace(withRights("agents", { publishes: true }), as("agent-1"), null, true, 0)).toMatch(
-      /overlaps Everyone/,
-    );
+    expect(
+      agentUploadPlace(withRights("agents", { publishes: true }), as("agent-1"), null, true, 0, null),
+    ).toMatch(/overlaps Everyone/);
   });
   it("lets a page or a file that the key published become public, as an app of a repo that it allowed", () => {
     const state = overlapping({ publishes: true });
@@ -338,7 +347,7 @@ describe("agent keys that add and publish apps (K-718, K-819)", () => {
     const state = overlapping({ publishes: true });
     const place = overlapSpot(state);
     const everyone = state.circles.get("everyone")!;
-    const members = [...everyone.members, { _tag: "email", email: "her@example.com" } as const];
+    const members = [...everyone.members, chip(HER)];
     const repurposed = {
       ...state,
       circles: new Map(state.circles).set("everyone", { ...everyone, members }),
@@ -379,7 +388,7 @@ describe("agent keys that add and publish apps (K-718, K-819)", () => {
 });
 
 /** The agent circle overlaps Everyone (at 760, 0 with r 260), and the site sits in the agent circle alone. */
-function overlapping(rights: Partial<Record<AgentRight, true>>): State {
+function overlapping(rights: KeyFlags): State {
   const state = withRights("agents", rights);
   const agents = state.circles.get("agents")!;
   return {
@@ -404,7 +413,7 @@ describe("rights of machines with a mode (K-1720, K-1730)", () => {
     clientId: "vps-token",
     tunnelId: "t",
   };
-  const withMachine = (rights: Extract<Circle["members"][number], { _tag: "machine" }>["rights"]) => {
+  const withMachine = (rights: Partial<Record<Right, RightMode>> | undefined): State => {
     const base = start();
     const circle = base.circles.get("agents")!;
     return {
@@ -412,36 +421,76 @@ describe("rights of machines with a mode (K-1720, K-1730)", () => {
       machines: new Map([["vps", vps]]),
       circles: new Map(base.circles).set("agents", {
         ...circle,
-        members: [...circle.members, { _tag: "machine", machineId: "vps", ...(rights ? { rights } : {}) }],
+        members: [...circle.members, chip(machineKey("vps"), rights)],
       }),
     };
   };
 
   it("is off by default, and a circle of devices and machines is its agent circle", () => {
-    expect(machineRightMode(withMachine(undefined), "vps", "addsApps", 0)).toBeNull();
-    expect(agentHas(withMachine(undefined), as("vps-token"), "addsApps", 0)).toBe(false);
+    expect(machineRightMode(withMachine(undefined), "vps", "addsApps", 0, null)).toBeNull();
+    expect(agentHas(withMachine(undefined), as("vps-token"), "addsApps", 0, null)).toBe(false);
   });
 
   it("runs an automatic right at once, and an ask right only with its approval", () => {
     const automatic = withMachine({ addsApps: { mode: "automatic" } });
-    expect(agentHas(automatic, as("vps-token"), "addsApps", 0)).toBe(true);
+    expect(agentHas(automatic, as("vps-token"), "addsApps", 0, null)).toBe(true);
     const asking = withMachine({ addsApps: { mode: "ask", circleId: "owner" } });
-    expect(machineRightMode(asking, "vps", "addsApps", 0)).toEqual({ mode: "ask", circleId: "owner" });
-    expect(agentHas(asking, as("vps-token"), "addsApps", 0)).toBe(false);
-    expect(agentHas(asking, as("vps-token"), "addsApps", 0, ["addsApps"])).toBe(true);
+    expect(machineRightMode(asking, "vps", "addsApps", 0, null)).toEqual({ mode: "ask", circleId: "owner" });
+    expect(agentHas(asking, as("vps-token"), "addsApps", 0, null)).toBe(false);
+    expect(agentHas(asking, as("vps-token"), "addsApps", 0, null, ["addsApps"])).toBe(true);
     // An approval of one right gives no other right.
-    expect(agentHas(asking, as("vps-token"), "publishes", 0, ["addsApps"])).toBe(false);
+    expect(agentHas(asking, as("vps-token"), "publishes", 0, null, ["addsApps"])).toBe(false);
   });
 
-  it("gives an agent key no new control from a machine in its circle (K-1730)", () => {
-    // "agents" now holds the key and a machine: it stays an agent circle of the machine, and is none of the key,
-    // as before machines could be agents.
+  it("makes a circle of actors that are not people the agent circle of each actor with a right set there (K-1778)", () => {
     const state = withMachine({ deploys: { mode: "automatic" } });
     expect(circlesOf(state, as("vps-token"), 0).has("agents")).toBe(true);
+    expect(circlesOf(state, as("agent-1"), 0).has("agents")).toBe(true);
     // A machine with no right set there gets nothing new from an older circle (K-1730).
     expect(circlesOf(withMachine(undefined), as("vps-token"), 0).has("agents")).toBe(false);
-    expect(circlesOf(state, as("agent-1"), 0).has("agents")).toBe(false);
-    expect(circlesOf(start(), as("agent-1"), 0).has("agents")).toBe(true);
+    // A person in the circle makes it no agent circle, and a passkey circle never is one.
+    const agents = state.circles.get("agents")!;
+    const person = {
+      ...state,
+      circles: new Map(state.circles).set("agents", { ...agents, members: [...agents.members, chip(HER)] }),
+    };
+    expect(circlesOf(person, as("vps-token"), 0).has("agents")).toBe(false);
+    const passkey = {
+      ...state,
+      circles: new Map(state.circles).set("agents", { ...agents, needsPasskey: true }),
+    };
+    expect(circlesOf(passkey, as("vps-token"), 0).has("agents")).toBe(false);
+  });
+
+  it("gives an agent actor its rights only for calls with its verified labels (K-1754, K-1778)", () => {
+    const conditions: ReadonlyArray<RightCondition> = [{ key: "t3.project.name", values: ["kitshn"] }];
+    const agent = {
+      ...actorOf(machineKey("vps"), "kitshn builder"),
+      id: actorIdOf(machineKey("vps"), conditions),
+      conditions,
+    };
+    const base = withActors(withMachine({ deploys: { mode: "ask", circleId: "owner" } }), [agent]);
+    const agents = base.circles.get("agents")!;
+    const state: State = {
+      ...base,
+      circles: new Map(base.circles).set("agents", {
+        ...agents,
+        members: [
+          ...agents.members,
+          { _tag: "actor", actorId: agent.id, rights: { deploys: { mode: "automatic" } } },
+        ],
+      }),
+    };
+    const kitshn = { labels: { "t3.project.name": "kitshn" }, prefixes: ["t3."] };
+    expect(machineRightMode(state, "vps", "deploys", 0, kitshn)).toEqual({ mode: "automatic" });
+    // A bare call, another project, a claimed label (no provider prefix) or a provider that the machine lacks: the machine chip.
+    expect(machineRightMode(state, "vps", "deploys", 0, null)).toEqual({ mode: "ask", circleId: "owner" });
+    const other = { labels: { "t3.project.name": "riffle" }, prefixes: ["t3."] };
+    expect(machineRightMode(state, "vps", "deploys", 0, other)).toEqual({ mode: "ask", circleId: "owner" });
+    expect(machineRightMode(state, "vps", "deploys", 0, { ...kitshn, prefixes: [] })).toEqual({
+      mode: "ask",
+      circleId: "owner",
+    });
   });
 
   it("gives a code right only for a repo that a card in the same agent circle covers (K-1733, K-1761)", () => {
@@ -461,14 +510,16 @@ describe("rights of machines with a mode (K-1720, K-1730)", () => {
       resources: new Map(base.resources).set(group.id, group),
       places: new Map(base.places).set(group.id, { x: 0, y: 1000 }),
     };
-    expect(codeRightMode(state, "vps", "writesCode", "Yarden-zamir/riffle", 0)).toEqual({
+    expect(codeRightMode(state, "vps", "writesCode", "Yarden-zamir/riffle", 0, null)).toEqual({
       mode: "automatic",
     });
     // "writes code" includes "reads code".
-    expect(codeRightMode(state, "vps", "readsCode", "Yarden-zamir/riffle", 0)).toEqual({ mode: "automatic" });
-    expect(codeRightMode(state, "vps", "writesCode", "qlik-trial/app", 0)).toBeNull();
+    expect(codeRightMode(state, "vps", "readsCode", "Yarden-zamir/riffle", 0, null)).toEqual({
+      mode: "automatic",
+    });
+    expect(codeRightMode(state, "vps", "writesCode", "qlik-trial/app", 0, null)).toBeNull();
     // Without the group in the circle, no repo is covered.
-    expect(codeRightMode(base, "vps", "writesCode", "Yarden-zamir/riffle", 0)).toBeNull();
+    expect(codeRightMode(base, "vps", "writesCode", "Yarden-zamir/riffle", 0, null)).toBeNull();
   });
 
   it("takes automatic from any agent circle over ask from another", () => {
@@ -478,11 +529,9 @@ describe("rights of machines with a mode (K-1720, K-1730)", () => {
       ...state,
       circles: new Map(state.circles).set("staging", {
         ...staging,
-        members: [
-          { _tag: "machine" as const, machineId: "vps", rights: { deploys: { mode: "automatic" as const } } },
-        ],
+        members: [chip(machineKey("vps"), { deploys: { mode: "automatic" } })],
       }),
     };
-    expect(machineRightMode(both, "vps", "deploys", 0)).toEqual({ mode: "automatic" });
+    expect(machineRightMode(both, "vps", "deploys", 0, null)).toEqual({ mode: "automatic" });
   });
 });

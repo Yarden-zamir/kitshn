@@ -5,7 +5,7 @@ A card inside a circle is shared with that circle. This file holds the rules for
 ## Circles and shares
 
 - **K-201** A circle has a name, a colour, a default level, members, a match mode (K-203), an optional end date, and the flag "needs passkey".
-- **K-202** Member kinds: an email, an email domain, an IP range, a device token, a machine, and "everyone". "Everyone" means anyone who can reach the address, with no login.
+- **K-202** A circle holds actors (K-1778) and rules: an email domain, an IP range, and "everyone". "Everyone" means anyone who can reach the address, with no login.
 - **K-203** A circle has one of two match modes. With "Any" (the default), the visitor matches at least one member, and the members become Access include rules. With "All must match", the visitor matches every member, and the members become require rules. With "needs passkey", the visitor also passes a passkey check in both modes.
 - **K-204** A card is shared with every circle that it sits inside. Circles overlap freely, with no limit on their number.
 - **K-205** A share uses the default level of its circle. One card can override the level for one circle.

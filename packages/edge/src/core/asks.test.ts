@@ -4,7 +4,6 @@ import {
   ASK_ACTIONS,
   WINDOW_ACTIONS,
   askRequest,
-  conditionProblem,
   formatConditions,
   labelProblem,
   parseConditions,
@@ -12,6 +11,11 @@ import {
   selfApprovers,
 } from "./asks.ts";
 import type { Circle } from "./model.ts";
+import { actorOf, chip, login, machineKey } from "./testkit.ts";
+import { conditionsHold } from "./visitor.ts";
+
+const VPS = actorOf(machineKey("vps"), "vps");
+const ACTORS = new Map([VPS, actorOf(login("o@example.com"))].map((actor) => [actor.id, actor]));
 
 describe("asks of agents on machines (K-1710, K-1711, K-1750)", () => {
   it("knows the same actions as the daemon, and the same actions whose approval opens a window", () => {
@@ -62,13 +66,14 @@ describe("warnings of machine rights (K-1725)", () => {
     r: 1,
   });
   const circles = new Map([
-    ["owner", circle("owner", [{ _tag: "email", email: "o@example.com" }])],
-    ["bots", circle("bots", [{ _tag: "machine", machineId: "vps" }])],
+    ["owner", circle("owner", [chip(login("o@example.com"))])],
+    ["bots", circle("bots", [chip(machineKey("vps"))])],
   ]);
+  const state = { circles, actors: ACTORS, machines: new Map() };
 
   it("warns and allows: self-approval, no person for a high-risk right, agent approvers, automatic code writes", () => {
-    expect(rightWarnings(circles, "vps", { runsCommands: { mode: "ask", circleId: "owner" } })).toEqual([]);
-    const warnings = rightWarnings(circles, "vps", {
+    expect(rightWarnings(state, VPS, { runsCommands: { mode: "ask", circleId: "owner" } })).toEqual([]);
+    const warnings = rightWarnings(state, VPS, {
       runsCommands: { mode: "ask", circleId: "bots" },
       writesCode: { mode: "automatic" },
     });
@@ -93,45 +98,41 @@ describe("self-approval (K-1727)", () => {
       ...base,
       id: "bots",
       name: "bots",
-      members: [{ _tag: "machine" as const, machineId: "vps" }],
+      members: [chip(machineKey("vps"))],
     };
     const agents = {
       ...base,
       id: "agents",
       name: "agents",
-      members: [
-        {
-          _tag: "machine" as const,
-          machineId: "vps",
-          rights: { deploys: { mode: "ask" as const, circleId: "bots" } },
-        },
-      ],
+      members: [chip(machineKey("vps"), { deploys: { mode: "ask", circleId: "bots" } })],
     };
-    const circles = new Map([
+    const circles = new Map<string, Circle>([
       ["bots", bots],
       ["agents", agents],
     ]);
-    expect(selfApprovers(circles, bots)).toEqual(["vps"]);
+    expect(selfApprovers(circles, bots)).toEqual([VPS.id]);
     expect(selfApprovers(circles, agents)).toEqual([]);
-    // In a passkey circle, a machine approves only with "machines may approve", and the rule warning names it.
+    // In a passkey circle, a machine approves only with "approves without passkey", and the rule warning names it.
     const locked: Circle = { ...bots, needsPasskey: true };
     const lockedCircles = new Map<string, Circle>([
       [locked.id, locked],
       [agents.id, agents],
     ]);
     expect(selfApprovers(lockedCircles, locked)).toEqual([]);
-    expect(rightWarnings(lockedCircles, "vps", { deploys: { mode: "ask", circleId: "bots" } })).toEqual([
+    const lockedState = { circles: lockedCircles, actors: ACTORS, machines: new Map() };
+    expect(rightWarnings(lockedState, VPS, { deploys: { mode: "ask", circleId: "bots" } })).toEqual([
       expect.stringContaining("no person"),
     ]);
-    const open: Circle = { ...locked, machinesMayApprove: true };
+    const open: Circle = { ...locked, approvesWithoutPasskey: true };
     const openCircles = new Map<string, Circle>([
       [open.id, open],
       [agents.id, agents],
     ]);
-    expect(selfApprovers(openCircles, open)).toEqual(["vps"]);
-    expect(
-      rightWarnings(openCircles, "vps", { deploys: { mode: "ask", circleId: "bots" } }).join(" "),
-    ).toMatch(/"machines may approve" is on/);
+    expect(selfApprovers(openCircles, open)).toEqual([VPS.id]);
+    const openState = { circles: openCircles, actors: ACTORS, machines: new Map() };
+    expect(rightWarnings(openState, VPS, { deploys: { mode: "ask", circleId: "bots" } }).join(" ")).toMatch(
+      /"approves without passkey" is on/,
+    );
   });
 });
 
@@ -139,12 +140,12 @@ describe("conditions on attested labels (K-1754)", () => {
   const conditions = [{ key: "t3.project.name", values: ["kitshn", "riffle"] }];
 
   it("holds only for a verified label with one of its values, on the prefix of a provider of the machine", () => {
-    expect(conditionProblem(conditions, { "t3.project.name": "kitshn" }, ["t3."])).toBeNull();
-    expect(conditionProblem(conditions, { "t3.project.name": "other" }, ["t3."])).toMatch(/kitshn or riffle/);
-    expect(conditionProblem(conditions, {}, ["t3."])).toMatch(/no such verified label/);
-    expect(conditionProblem(conditions, { "t3.project.name": "kitshn" }, [])).toMatch(
-      /no provider on this machine/,
-    );
+    const attested = (labels: Record<string, string>, prefixes = ["t3."]) => ({ labels, prefixes });
+    expect(conditionsHold(conditions, attested({ "t3.project.name": "kitshn" }))).toBe(true);
+    expect(conditionsHold(conditions, attested({ "t3.project.name": "other" }))).toBe(false);
+    expect(conditionsHold(conditions, attested({}))).toBe(false);
+    expect(conditionsHold(conditions, attested({ "t3.project.name": "kitshn" }, []))).toBe(false);
+    expect(conditionsHold(conditions, null)).toBe(false);
   });
 
   it("reads and writes the editor text", () => {

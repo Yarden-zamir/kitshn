@@ -8,9 +8,11 @@ import {
   type Resource,
   type RightMode,
   type State,
+  actorIdOf,
   circlesHolding,
   shareKey,
 } from "./model.ts";
+import { actorOf, chip, login, machineKey } from "./testkit.ts";
 
 const machineOf = (id: string): Machine => ({
   id,
@@ -58,11 +60,18 @@ const circle = (id: string, members: ReadonlyArray<Member>, at: { x: number; r: 
   y: 0,
   r: at.r,
 });
-const mac = (runsCommands?: RightMode): Member => ({
-  _tag: "machine",
-  machineId: "mac",
-  rights: { readsCode: { mode: "automatic" }, ...(runsCommands ? { runsCommands } : {}) },
-});
+const mac = (runsCommands?: RightMode): Member =>
+  chip(machineKey("mac"), { readsCode: { mode: "automatic" }, ...(runsCommands ? { runsCommands } : {}) });
+const OWNER_CHIP = chip(login("owner@example.com"));
+const HER_CHIP = chip(login("her@example.com"));
+const ACTORS = new Map(
+  [
+    actorOf(machineKey("mac"), "mac"),
+    actorOf(machineKey("vps"), "vps"),
+    actorOf(login("owner@example.com")),
+    actorOf(login("her@example.com")),
+  ].map((actor) => [actor.id, actor]),
+);
 
 /** The Machines circle at x 0 holds mac's member and the cards in `inside`; Owner at x 300 holds the rest. */
 function world(member: Member, inside: ReadonlyArray<string>, extra: Partial<State> = {}): State {
@@ -74,7 +83,7 @@ function world(member: Member, inside: ReadonlyArray<string>, extra: Partial<Sta
   return {
     circles: new Map([
       ["machines", circle("machines", [member], { x: 0, r: 100 })],
-      ["owner", circle("owner", [{ _tag: "email", email: "owner@example.com" }], { x: 300, r: 100 })],
+      ["owner", circle("owner", [OWNER_CHIP], { x: 300, r: 100 })],
     ]),
     resources: new Map(cards.map((item) => [item.id, item])),
     places: new Map(
@@ -88,6 +97,7 @@ function world(member: Member, inside: ReadonlyArray<string>, extra: Partial<Sta
       ["mac", machineOf("mac")],
       ["vps", machineOf("vps")],
     ]),
+    actors: ACTORS,
     ...extra,
   };
 }
@@ -99,12 +109,21 @@ describe("exec on another machine (K-722)", () => {
     expect(execMachinesOf(viaMachine, "vps", 0)).toEqual(["mac"]);
     const viaApp = world(mac({ mode: "automatic" }), ["vps/t3/app"]);
     expect(mayExecOn(viaApp, "mac", "vps", 0)).toBe(true);
-    // "ask" or a label condition never gives the exec right to `check`; the run itself still may ask.
+    // "ask" or an agent actor with conditions never gives the exec right to `check`; the run itself still may ask.
     const asks = world(mac({ mode: "ask", circleId: "owner" }), ["vps"]);
     expect([mayExecOn(asks, "mac", "vps", 0), execMachinesOf(asks, "vps", 0)]).toEqual([true, []]);
+    const conditions = [{ key: "t3.subagent", values: ["false"] }];
+    const agent = {
+      ...actorOf(machineKey("mac"), "mac main"),
+      id: actorIdOf(machineKey("mac"), conditions),
+      conditions,
+    };
     const conditioned = world(
-      mac({ mode: "automatic", conditions: [{ key: "t3.subagent", values: ["false"] }] }),
+      { _tag: "actor", actorId: agent.id, rights: { runsCommands: { mode: "automatic" } } },
       ["vps"],
+      {
+        actors: new Map([...ACTORS, [agent.id, agent]]),
+      },
     );
     expect(execMachinesOf(conditioned, "vps", 0)).toEqual([]);
     expect(mayExecOn(world(mac({ mode: "automatic" }), []), "mac", "vps", 0)).toBe(false);
@@ -164,7 +183,7 @@ describe("the t3.agents migration (K-722, migration 42)", () => {
     const overlapping = world(mac(), ["vps/t3/agents"], {
       circles: new Map([
         ["machines", circle("machines", [mac()], { x: 0, r: 100 })],
-        ["owner", circle("owner", [{ _tag: "email", email: "owner@example.com" }], { x: 150, r: 100 })],
+        ["owner", circle("owner", [OWNER_CHIP], { x: 150, r: 100 })],
       ]),
       places: new Map([
         ["vps", { x: 150, y: 0 }],
@@ -211,7 +230,7 @@ describe("the t3.agents migration (K-722, migration 42)", () => {
     const timed = world(mac({ mode: "off" }), ["vps/t3/agents"], {
       circles: new Map([
         ["machines", circle("machines", [mac({ mode: "off" })], { x: 0, r: 100 })],
-        ["owner", circle("owner", [{ _tag: "email", email: "owner@example.com" }], { x: 150, r: 100 })],
+        ["owner", circle("owner", [OWNER_CHIP], { x: 150, r: 100 })],
       ]),
       places: new Map([
         ["vps", { x: 150, y: 0 }],
@@ -227,12 +246,7 @@ describe("the t3.agents migration (K-722, migration 42)", () => {
   it("moves no share of a circle that holds more than machines, and sets no right that would cover another machine", () => {
     // A person in the circle would get T3 itself with the app card, so the card stays where it is.
     const people = world(mac(), ["vps/t3/agents"], {
-      circles: new Map([
-        [
-          "machines",
-          circle("machines", [mac(), { _tag: "email", email: "her@example.com" }], { x: 0, r: 100 }),
-        ],
-      ]),
+      circles: new Map([["machines", circle("machines", [mac(), HER_CHIP], { x: 0, r: 100 })]]),
     });
     expect(migrateAgentShares(people)).toEqual({
       changes: [],

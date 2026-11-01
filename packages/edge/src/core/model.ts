@@ -80,32 +80,72 @@ export const EVERYONE_CIRCLE_ID = "everyone";
 /** Milliseconds since the epoch. */
 export type Time = number;
 
+/** K-1778: what proves one call. A login and a token belong to exactly one actor; a machine key may serve several. */
+export type Credential =
+  | { readonly _tag: "login"; readonly email: string }
+  /** An Access service token (K-106). `tokenId` is the token id; `clientId` is what the JWT carries. */
+  | { readonly _tag: "token"; readonly tokenId: string; readonly clientId: string; readonly name: string }
+  /** K-107: the service token and key pair of a joined machine. */
+  | { readonly _tag: "machine"; readonly machineId: string };
+
+/**
+ * K-1778: a name in the map that can act: a person, a script, a machine, or an agent on a machine. Only an actor with a
+ * machine credential has conditions: attested labels that a call must carry to be this actor (K-1754).
+ */
+export interface Actor {
+  readonly id: string;
+  readonly name: string;
+  readonly credentials: ReadonlyArray<Credential>;
+  readonly conditions?: ReadonlyArray<RightCondition>;
+}
+
+/** K-1778: one key per credential, so kitshn finds a second owner of a login or a token. */
+export const credentialKey = (credential: Credential) => {
+  switch (credential._tag) {
+    case "login":
+      return `login/${credential.email.toLowerCase()}`;
+    case "token":
+      return `token/${credential.tokenId}`;
+    case "machine":
+      return `machine/${credential.machineId}`;
+  }
+};
+
+/** K-1778: an actor id comes from its first credential and conditions, so one email gets one actor id. */
+export const actorIdOf = (credential: Credential, conditions: ReadonlyArray<RightCondition> = []) => {
+  const key =
+    conditions.length === 0
+      ? credentialKey(credential)
+      : `${credentialKey(credential)}/${JSON.stringify(conditions)}`;
+  return `a-${fnv(key)}${fnv(key, 0x050c5d1f)}`;
+};
+
+/** K-1778: a person can log in; passkey circles (K-103) and approver policies (K-1723) let only people in. */
+export const isPerson = (actor: Actor) => actor.credentials.some((credential) => credential._tag === "login");
+
+/** K-1778: the actor of a machine itself: its machine credential and no conditions. */
+export const machineActorId = (machineId: string) => actorIdOf({ _tag: "machine", machineId });
+
+/** K-1778: the machine of an actor with a machine credential, or null. */
+export const machineIdOf = (actor: Actor) =>
+  actor.credentials.find((credential) => credential._tag === "machine")?.machineId ?? null;
+
+/**
+ * K-1778: a circle holds actors, each with its rights in this circle (K-1720), and rules that match many visitors and
+ * name nobody: an email domain, a network and everyone (K-202).
+ */
 export type Member =
-  | { readonly _tag: "email"; readonly email: string }
+  | {
+      readonly _tag: "actor";
+      readonly actorId: string;
+      readonly rights?: Readonly<Partial<Record<Right, RightMode>>>;
+    }
   | { readonly _tag: "domain"; readonly domain: string }
   | { readonly _tag: "ip"; readonly range: string }
-  /**
-   * An Access service token (K-106). `tokenId` is the token id; `clientId` is what the JWT carries.
-   * An agent key (K-718) may also add apps and publish them; a missing right is off.
-   */
-  | {
-      readonly _tag: "device";
-      readonly tokenId: string;
-      readonly clientId: string;
-      readonly name: string;
-      readonly addsApps?: true;
-      readonly publishes?: true;
-    }
-  /** K-1730: a machine; in an agent circle it may also have agent rights, each with its mode (K-1720). */
-  | {
-      readonly _tag: "machine";
-      readonly machineId: string;
-      readonly rights?: Readonly<Partial<Record<MachineRight, RightMode>>>;
-    }
   | { readonly _tag: "everyone" };
 
-/** K-1730: the agent rights of a machine. Every right starts off. */
-export const MACHINE_RIGHTS = [
+/** K-1730: the rights of an actor in a circle. Every right starts at "default". */
+export const RIGHTS = [
   "addsApps",
   "publishes",
   "deploys",
@@ -120,9 +160,11 @@ export const MACHINE_RIGHTS = [
   "maintains",
   /** K-1777: the full map read of `kitshn state`, through AGENT_READ. */
   "readsMap",
+  /** K-1778: the calls that the Owner decides: rows of scope "never", a target out of scope, access raises (K-715). */
+  "raisesAccess",
 ] as const;
-export type MachineRight = (typeof MACHINE_RIGHTS)[number];
-export const MACHINE_RIGHT_NAMES: Record<MachineRight, string> = {
+export type Right = (typeof RIGHTS)[number];
+export const RIGHT_NAMES: Record<Right, string> = {
   addsApps: "adds apps",
   publishes: "publishes",
   deploys: "deploys",
@@ -135,9 +177,11 @@ export const MACHINE_RIGHT_NAMES: Record<MachineRight, string> = {
   restores: "restores",
   maintains: "maintains",
   readsMap: "reads the map",
+  raisesAccess: "raises access",
 };
 /** K-1725: the rights that the map warns about when no person approves them. */
-export const HIGH_RISK_RIGHTS: ReadonlySet<MachineRight> = new Set([
+export const HIGH_RISK_RIGHTS: ReadonlySet<Right> = new Set([
+  "raisesAccess",
   "runsCommands",
   "deploys",
   "writesCode",
@@ -151,27 +195,13 @@ export interface RightCondition {
   readonly values: ReadonlyArray<string>;
 }
 
-/**
- * K-1720: a right that is on runs at once, or asks one circle. A right that is off has no mode. K-1754: its conditions
- * on attested labels must all hold.
- */
-/**
- * K-1720, K-1776: the mode of one right. A right that no circle sets asks the Owner; only "off" refuses.
- */
+/** K-1720, K-1776: the mode of one right. A right that no circle sets asks the Owner; only "off" refuses. */
 export type RightMode =
-  | { readonly mode: "automatic"; readonly conditions?: ReadonlyArray<RightCondition> }
-  | { readonly mode: "ask"; readonly circleId: string; readonly conditions?: ReadonlyArray<RightCondition> }
+  | { readonly mode: "automatic" }
+  | { readonly mode: "ask"; readonly circleId: string }
   | { readonly mode: "off" };
 /** A mode that lets a call through, now or after an approval. */
 export type OpenRightMode = Exclude<RightMode, { readonly mode: "off" }>;
-
-/** K-718: the rights that the owner can give an agent key on its device member. */
-export const AGENT_RIGHTS = ["addsApps", "publishes"] as const;
-export type AgentRight = (typeof AGENT_RIGHTS)[number];
-export const AGENT_RIGHT_NAMES: Record<AgentRight, string> = {
-  addsApps: "may add apps",
-  publishes: "may publish",
-};
 
 export interface Circle {
   readonly id: string;
@@ -181,8 +211,8 @@ export interface Circle {
   readonly members: ReadonlyArray<Member>;
   readonly match: "any" | "all";
   readonly needsPasskey: boolean;
-  /** K-1727: in a circle that needs a passkey, a machine approves asks only while this is on. Off by default. */
-  readonly machinesMayApprove?: boolean;
+  /** K-1727: in a circle that needs a passkey, a proof without a passkey approves only while this is on. */
+  readonly approvesWithoutPasskey?: boolean;
   readonly endsAt: Time | null;
   readonly x: number;
   readonly y: number;
@@ -269,8 +299,10 @@ export interface State {
    * "keep-public" also keeps the shares of public circles; "lockdown" closes those too.
    */
   readonly paused: PauseMode | null;
-  /** Joined machines (K-602); a machine member matches its service token (K-107). */
+  /** Joined machines (K-602); a machine credential matches its service token (K-107). */
   readonly machines: ReadonlyMap<string, Machine>;
+  /** K-1778: the actors that circles name. */
+  readonly actors: ReadonlyMap<string, Actor>;
 }
 
 export type PauseMode = "keep-public" | "lockdown";
@@ -409,19 +441,30 @@ export function pauseReach(state: State, now: number): PauseReach {
 
 export const isPublicCircle = (circle: Circle) => circle.members.some((member) => member._tag === "everyone");
 
-export const memberLabel = (member: Member): string => {
+/** K-1778: the actors and machines that a member names, so a match or a label needs no whole state. */
+export type Directory = Pick<State, "actors" | "machines">;
+
+export const memberLabel = (member: Member, directory: Directory): string => {
   switch (member._tag) {
-    case "email":
-      return member.email;
+    case "actor":
+      return directory.actors.get(member.actorId)?.name ?? member.actorId;
     case "domain":
       return `@${member.domain}`;
     case "ip":
       return member.range;
-    case "device":
-      return member.name;
-    case "machine":
-      return member.machineId;
     case "everyone":
       return "everyone";
   }
+};
+
+/** K-1778: the actor that a member names, or undefined for a rule or a missing actor. */
+export const memberActor = (member: Member, directory: Directory) =>
+  member._tag === "actor" ? directory.actors.get(member.actorId) : undefined;
+
+/** K-1778: the machine of a member that names a machine actor itself (no conditions), or null. */
+export const machineOfMember = (directory: Directory, member: Member) => {
+  const actor = memberActor(member, directory);
+  return actor && (actor.conditions ?? []).length === 0 && actor.credentials.length === 1
+    ? machineIdOf(actor)
+    : null;
 };

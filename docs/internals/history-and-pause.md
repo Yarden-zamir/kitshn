@@ -17,7 +17,7 @@ Every change is a revision, Undo reverses a revision, and the pause closes acces
 
 - **K-1504** "Emergency pause" is a big red button under a flip-up lid. One press pauses at once, with no confirm, because a pause only lowers access and Resume undoes it. The lid is part of the button, not a confirm. Rules:
   - The pause moves no card. It keeps the admin share of the Owner circle for its people, and the shares of public circles on sites, pages and files, so public sites stay up. "Close public sites too" makes it a lockdown, which closes those too.
-  - It closes every other share, and every share of devices, agent keys and machines, so agents stop moving, deploying and running jobs. It denies every open agent proposal and revokes every GitHub token that kitshn holds (K-1716).
+  - It closes every other share, and every share of tokens and machines, so agents stop moving, deploying and running jobs. It denies every open agent proposal and revokes every GitHub token that kitshn holds (K-1716).
   - New deploys from GitHub wait until Resume. A preview teardown still runs.
   - It sends "stop all agents" to every provider that has the command.
   - Pages and files close at once. Access applications close through the alarm queue (K-406), so many applications take a few alarm runs. Machines stay connected, and their apps run behind closed doors.
