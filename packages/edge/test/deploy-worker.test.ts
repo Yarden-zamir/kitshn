@@ -1960,16 +1960,15 @@ describe("Browser Integrity Check on private cards (K-412)", () => {
   });
 });
 
-describe("placement (K-823, K-824, K-827)", () => {
-  it('runs an "every" app on each machine, each other instance at its own address, and waits for every job', async () => {
-    fakeCloudflare();
-    const app = repo("71", "everywhere");
-    await allow(app);
-    const stub = env.KITSHN.getByName("kitshn");
-    const machines = [
-      { id: "m-71a", name: "Mac", order: 0 },
-      { id: "m-71b", name: "Oracle VPS", order: 1 },
-    ];
+describe("placement (K-823, K-824, K-827, K-828)", () => {
+  const stub = env.KITSHN.getByName("kitshn");
+  const composeRecipe = {
+    compose: { placement: "every" },
+    deploy: [{ on: "push", branch: "main", name: "prod", startsIn: "Everyone" }],
+  };
+
+  /** Machines with the label `deploy`; the Durable Object reads them again when it starts. */
+  async function addMachines(machines: ReadonlyArray<{ id: string; name: string; order: number }>) {
     await runInDurableObject(stub, (_instance, durable) => {
       for (const item of machines) {
         const machine: Machine = {
@@ -1987,37 +1986,54 @@ describe("placement (K-823, K-824, K-827)", () => {
       }
     });
     await evictDurableObject(stub);
-    const status: MachineStatus = {
-      version: "0123456789ab",
-      os: "linux",
-      arch: "x64",
-      hostname: "host",
-      tunnel: "running",
-      capabilities: ["compose-guard"],
-    };
-    const sockets = await runInDurableObject(stub, (_instance, durable) =>
-      machines.map((item) => {
-        const pair = new WebSocketPair();
-        durable.acceptWebSocket(pair[1], [item.id, "machines"]);
-        pair[0].accept();
-        pair[1].serializeAttachment({
-          kind: "machine",
-          machineId: item.id,
-          since: Date.now(),
-          challenge: "",
-          check: "signed",
-          answered: true,
-          rotateBy: null,
-          status,
-          sample: null,
-        });
-        return pair[1];
-      }),
-    );
-    const composeRecipe = {
-      compose: { placement: "every" },
-      deploy: [{ on: "push", branch: "main", name: "prod", startsIn: "Everyone" }],
-    };
+  }
+
+  /** A signed daemon connection with a Compose-ready status. */
+  const connect = (machineId: string) =>
+    runInDurableObject(stub, (_instance, durable) => {
+      const status: MachineStatus = {
+        version: "0123456789ab",
+        os: "linux",
+        arch: "x64",
+        hostname: "host",
+        tunnel: "running",
+        capabilities: ["compose-guard"],
+      };
+      const pair = new WebSocketPair();
+      durable.acceptWebSocket(pair[1], [machineId, "machines"]);
+      pair[0].accept();
+      pair[1].serializeAttachment({
+        kind: "machine",
+        machineId,
+        since: Date.now(),
+        challenge: "",
+        check: "signed",
+        answered: true,
+        rotateBy: null,
+        status,
+        sample: null,
+      });
+      return pair[1];
+    });
+
+  const disconnect = (socket: WebSocket) =>
+    runInDurableObject(stub, async (instance) => {
+      socket.close(1001, "gone");
+      await instance.webSocketClose(socket);
+    });
+
+  const send = (socket: WebSocket, message: object) =>
+    runInDurableObject(stub, (instance) => instance.webSocketMessage(socket, JSON.stringify(message)));
+
+  it('runs an "every" app on each machine, each other instance at its own address, and waits for every job', async () => {
+    fakeCloudflare();
+    const app = repo("71", "everywhere");
+    await allow(app);
+    await addMachines([
+      { id: "m-71a", name: "Mac", order: 0 },
+      { id: "m-71b", name: "Oracle VPS", order: 1 },
+    ]);
+    const sockets = [await connect("m-71a"), await connect("m-71b")];
     const planned = await step(app, "/deploy/plan", { recipe: composeRecipe, event: {} });
     expect(planned.status, JSON.stringify(planned.body)).toBe(200);
     const deployId = String(planned.body["deployId"]);
@@ -2071,27 +2087,113 @@ describe("placement (K-823, K-824, K-827)", () => {
         { machine: "m-71b", address: instanceAddress, status: "deploying" },
       ],
     });
-    const finish = (index: number) =>
-      runInDurableObject(stub, async (instance) => {
-        const job = jobs[index];
-        const socket = sockets[index];
-        if (!job || !socket) throw new Error("no job");
-        await instance.webSocketMessage(
-          socket,
-          JSON.stringify({ type: "jobResult", id: job.id, result: { ok: true, exitCode: 0, output: "up" } }),
-        );
-      });
+    const finish = (index: number) => {
+      const job = jobs[index];
+      const socket = sockets[index];
+      if (!job || !socket) throw new Error("no job");
+      return send(socket, { type: "jobResult", id: job.id, result: { ok: true, exitCode: 0, output: "up" } });
+    };
     await finish(0);
     expect((await step(app, "/deploy/status", { deployId })).body["state"]).toBe("running");
     await finish(1);
     const done = await step(app, "/deploy/status", { deployId });
     expect(done.body["state"]).toBe("done");
     expect(String(done.body["output"])).toContain("--- Oracle VPS: done");
-    await runInDurableObject(stub, async (instance) => {
-      for (const socket of sockets) {
-        socket.close(1001, "gone");
-        await instance.webSocketClose(socket);
-      }
+    for (const socket of sockets) await disconnect(socket);
+  });
+
+  it("moves the main address to the first healthy instance in the owner's order, and back", async () => {
+    fakeCloudflare();
+    const app = repo("72", "failover");
+    await allow(app);
+    await addMachines([
+      { id: "m-72a", name: "Mac", order: 0 },
+      { id: "m-72b", name: "VPS", order: 1 },
+    ]);
+    const sockets = [await connect("m-72a"), await connect("m-72b")];
+    const planned = await step(app, "/deploy/plan", { recipe: composeRecipe, event: {} });
+    const deployId = String(planned.body["deployId"]);
+    let started = await step(app, "/deploy/start", { deployId });
+    for (let attempt = 0; attempt < 10 && started.status === 503; attempt++)
+      started = await step(app, "/deploy/start", { deployId });
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    const jobs = await runInDurableObject(stub, (_instance, durable) =>
+      durable.storage.sql
+        .exec<{ id: number; machine_id: string }>(
+          `SELECT id, machine_id FROM jobs WHERE json_extract(command, '$.kind') = 'compose'
+           AND json_extract(command, '$.project') = ? ORDER BY id`,
+          app.card,
+        )
+        .toArray(),
+    );
+    expect(jobs.map((job) => job.machine_id)).toEqual(["m-72a", "m-72b"]);
+    for (const [index, job] of jobs.entries())
+      await send(sockets[index]!, {
+        type: "jobResult",
+        id: job.id,
+        result: { ok: true, exitCode: 0, output: "" },
+      });
+    // Each daemon reports the socket of its instance under the name of its job.
+    const names = ["failover", "failover-vps"];
+    const report = (index: number, up: boolean) =>
+      send(sockets[index]!, {
+        type: "sites",
+        sites: [{ name: names[index], target: `unix:/run/${names[index]}.sock`, up }],
+      });
+    await report(0, true);
+    await report(1, true);
+    type Internals = {
+      load(): void;
+      api(): unknown;
+      syncAccessLocked(api: unknown, budget: number): Promise<unknown>;
+      syncDns(api: unknown, budget: number): Promise<void>;
+    };
+    await runInDurableObject(stub, (instance, durable) => {
+      // The address checks of K-1111 call Cloudflare from the alarm; this test takes them as passed.
+      durable.storage.sql.exec("UPDATE live_sites SET state = 'ok'");
+      (instance as unknown as Internals).load();
     });
+    /** The DNS sync of the alarm, then where the record of an address points. */
+    const record = (address: string) =>
+      runInDurableObject(stub, async (instance, durable) => {
+        const internals = instance as unknown as Internals;
+        const api = internals.api();
+        await internals.syncAccessLocked(api, 50);
+        await internals.syncDns(api, 50);
+        return durable.storage.sql
+          .exec<{ content: string }>("SELECT content FROM dns_objects WHERE address = ?", address)
+          .one().content;
+      });
+    const setOrder = (machineId: string, order: number) =>
+      runInDurableObject(stub, (instance, durable) => {
+        const [row] = durable.storage.sql
+          .exec<{ body: string }>("SELECT body FROM machines WHERE id = ?", machineId)
+          .toArray();
+        const machine = JSON.parse(row?.body ?? "{}") as Machine;
+        durable.storage.sql.exec(
+          "UPDATE machines SET body = ? WHERE id = ?",
+          JSON.stringify({ ...machine, order }),
+          machineId,
+        );
+        (instance as unknown as Internals).load();
+      });
+    // K-828: both are healthy, so the first in the owner's order has the main address.
+    expect(await record(app.address)).toBe("tunnel-m-72a.cfargotunnel.com");
+    // Each own address stays on its own machine.
+    expect(await record("failover-mac.example.com")).toBe("tunnel-m-72a.cfargotunnel.com");
+    expect(await record("failover-vps.example.com")).toBe("tunnel-m-72b.cfargotunnel.com");
+    await setOrder("m-72a", 2);
+    expect(await record(app.address)).toBe("tunnel-m-72b.cfargotunnel.com");
+    await setOrder("m-72a", 0);
+    expect(await record(app.address)).toBe("tunnel-m-72a.cfargotunnel.com");
+    // The primary's site goes down and its machine goes offline: the record moves to the next healthy instance.
+    await report(0, false);
+    await disconnect(sockets[0]!);
+    expect(await record(app.address)).toBe("tunnel-m-72b.cfargotunnel.com");
+    // The first machine comes back with its site up: the record moves back.
+    sockets[0] = await connect("m-72a");
+    await report(0, true);
+    expect(await record(app.address)).toBe("tunnel-m-72a.cfargotunnel.com");
+    for (const socket of sockets) await disconnect(socket);
   });
 });
