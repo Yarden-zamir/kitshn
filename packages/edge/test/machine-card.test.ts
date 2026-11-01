@@ -123,6 +123,7 @@ it("sends a daemon of another protocol major only care jobs at connect, from the
         );
       job({ kind: "shell", script: "true" });
       job({ kind: "diagnostics" });
+      state.storage.sql.exec("INSERT INTO forgotten_providers (machine_id, name) VALUES ('vps', 'old')");
       kitshn.load();
       const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
       state.acceptWebSocket(server, ["vps"]);
@@ -154,5 +155,7 @@ it("sends a daemon of another protocol major only care jobs at connect, from the
     },
   );
   expect(outcome.atConnect).toEqual(["shell queued", "diagnostics sent"]);
-  await vi.waitFor(() => expect(outcome.received.map((message) => message.type)).toContain("accepted"));
+  // "name" follows "accepted", and a forgotten provider would follow "name": that push does not go either.
+  await vi.waitFor(() => expect(outcome.received.map((message) => message.type)).toContain("name"));
+  expect(outcome.received.map((message) => message.type)).not.toContain("forgetProvider");
 });

@@ -6886,7 +6886,8 @@ export class Kitshn extends DurableObject<Env> {
       const attachment = attachmentOf(item);
       return attachment?.kind === "machine" && attachment.check === "signed";
     });
-    if (!socket) return;
+    // K-724: a daemon of another protocol major gets no push, and this is one.
+    if (!socket || this.protocolRefusal(machineId) !== null) return;
     for (const { name } of this.sql<{ name: string }>(
       "SELECT name FROM forgotten_providers WHERE machine_id = ?",
       machineId,

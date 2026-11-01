@@ -150,15 +150,17 @@ export function runStep(marker: UpdateMarker | null, version: string): RunStep {
 
 /**
  * K-636: why the new daemon must not confirm its update: a provider that was online before the swap is refused or not
- * online now. Null when each one is back.
+ * online now. Null when each one is back. A provider refused only for its older major (`olderMajor`) counts as back:
+ * it connected again, and it waits for its own release after a major bump (K-724).
  */
 export function providersBack(
   before: ReadonlyArray<string>,
   states: ReadonlyArray<{ readonly name: string; readonly online: boolean; readonly refusal: string | null }>,
+  olderMajor: ReadonlySet<string>,
 ): string | null {
   for (const provider of before) {
     const state = states.find((item) => item.name === provider);
-    if (state?.online === true) continue;
+    if (state?.online === true || olderMajor.has(provider)) continue;
     if (state?.refusal) return `The new daemon refused the provider ${provider}: ${state.refusal}`;
     return `The provider ${provider} did not register again within 3 minutes.`;
   }

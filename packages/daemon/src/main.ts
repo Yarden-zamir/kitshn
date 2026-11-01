@@ -1182,7 +1182,11 @@ function updateDropped() {
 function confirmUpdate() {
   const watch = updateWatch;
   if (!watch) return;
-  const lost = providersBack(watch.marker.providers ?? [], registry().states());
+  const lost = providersBack(
+    watch.marker.providers ?? [],
+    registry().states(),
+    registry().refusedForOlderMajor(),
+  );
   if (lost !== null) {
     void rollBackUpdate(watch.marker, lost);
     return;

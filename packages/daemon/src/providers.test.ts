@@ -72,6 +72,10 @@ describe("the providers of a machine (K-704, K-705)", () => {
         `this daemon speaks kitshn protocol ${KITSHN_PROTOCOL} and the provider t3 speaks 3.0.0`,
       ),
     });
+    // A newer major is not an older one, so the update check of K-636 still counts it as refused.
+    expect(registry.refusedForOlderMajor().has("t3")).toBe(false);
+    registry.register(register([], { protocol: 1, protocolVersion: "1.4.0" }), caller(1));
+    expect(registry.refusedForOlderMajor().has("t3")).toBe(true);
     expect(registry.register(register([], { protocolVersion: "2.0.9" }), caller(1))).toMatchObject({
       ok: true,
       warning: /the provider t3 speaks 2.0.9: the provider t3 ignores what it does not know/,

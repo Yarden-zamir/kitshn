@@ -144,6 +144,8 @@ export class Providers {
   private readonly entries = new Map<string, Entry>();
   // Known limit: memory only, so a daemon restart forgets a refusal until the provider tries again.
   private readonly refusals = new Map<string, ProviderRefusal>();
+  /** K-724: the providers whose last register was refused only because they speak an older major. */
+  private readonly olderMajor = new Set<string>();
   private pushed: Record<string, unknown>;
   private readonly owners: Map<string, number>;
   private readonly execUsers: Map<string, number>;
@@ -224,18 +226,21 @@ export class Providers {
   register(request: Extract<ProviderRequest, { type: "register" }>, caller: ProviderCaller): ProviderOutcome {
     const now = caller.now ?? Date.now();
     const name = request.provider;
+    const version =
+      request.protocolVersion ?? (request.protocol === undefined ? "none" : legacyProtocol(request.protocol));
     const protocol = matchProtocol(
       { name: "this daemon", version: KITSHN_PROTOCOL, update: ROLLOUT_FIX },
       {
         name: `the provider ${name}`,
-        version:
-          request.protocolVersion ??
-          (request.protocol === undefined ? "none" : legacyProtocol(request.protocol)),
+        version,
         update: `install a release of ${name} that speaks kitshn protocol ${KITSHN_PROTOCOL}`,
       },
     );
     if (protocol.outcome === "refuse") {
       this.refuse(name, protocol.reason, now);
+      const major = parseProtocol(version)?.major;
+      if (major !== undefined && major < (parseProtocol(KITSHN_PROTOCOL)?.major ?? 0))
+        this.olderMajor.add(name);
       return { ok: false, error: protocol.reason };
     }
     // K-724: the two fields of one register name one major, or the daemon cannot tell which one the provider speaks.
@@ -316,6 +321,7 @@ export class Providers {
       (id) => `resources[${indexOf.get(id) ?? "?"}]`,
     );
     problems.push(...screened.problems);
+    this.olderMajor.delete(name);
     if (this.refusals.delete(name)) this.refusalsChanged();
     const replaced = old?.connection != null && old.connection !== caller.connection ? old.connection : null;
     this.entries.set(name, {
@@ -418,6 +424,7 @@ export class Providers {
    */
   refuse(provider: string, reason: string, now = Date.now()): void {
     if (!isProviderName(provider)) return;
+    this.olderMajor.delete(provider);
     const clipped = reason.slice(0, MAX_REFUSAL_LENGTH);
     if (this.refusals.get(provider)?.reason === clipped) return;
     this.refusals.delete(provider);
@@ -491,6 +498,11 @@ export class Providers {
       refusal: this.refusals.get(name)?.reason ?? entry.conflict,
       execUser: this.execUserOf(name),
     }));
+  }
+
+  /** K-724: the providers that wait refused for their own release, because they speak an older major. */
+  refusedForOlderMajor(): ReadonlySet<string> {
+    return this.olderMajor;
   }
 
   /** The connection of an online provider, or null. */

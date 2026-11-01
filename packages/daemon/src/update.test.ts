@@ -221,13 +221,18 @@ describe("the install of an update (K-629)", () => {
 describe("the provider check before done (K-636)", () => {
   const state = (name: string, online: boolean, refusal: string | null = null) => ({ name, online, refusal });
   it("confirms only when each provider that was online before is online again and not refused", () => {
-    expect(providersBack(["t3"], [state("t3", true), state("other", false)])).toBeNull();
-    expect(providersBack(["t3"], [state("t3", false, "the major versions differ")])).toBe(
+    const none = new Set<string>();
+    expect(providersBack(["t3"], [state("t3", true), state("other", false)], none)).toBeNull();
+    expect(providersBack(["t3"], [state("t3", false, "the major versions differ")], none)).toBe(
       "The new daemon refused the provider t3: the major versions differ",
     );
-    expect(providersBack(["t3"], [state("t3", false)])).toBe(
+    // K-724: after a major bump, a provider of the older major connects again and waits refused for its release.
+    expect(
+      providersBack(["t3"], [state("t3", false, "the major versions differ")], new Set(["t3"])),
+    ).toBeNull();
+    expect(providersBack(["t3"], [state("t3", false)], none)).toBe(
       "The provider t3 did not register again within 3 minutes.",
     );
-    expect(providersBack(["t3"], [])).toBe("The provider t3 did not register again within 3 minutes.");
+    expect(providersBack(["t3"], [], none)).toBe("The provider t3 did not register again within 3 minutes.");
   });
 });
