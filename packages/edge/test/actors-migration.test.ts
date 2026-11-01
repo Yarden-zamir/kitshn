@@ -36,6 +36,9 @@ const migrateFrom43 = (name: string, members: LegacyCircle["members"]) =>
     const instance = object as unknown as Instance;
     const sql = durable.storage.sql;
     const body = JSON.stringify(owner(members));
+    // Migration 45 comes after it, so the test takes its column away too.
+    sql.exec("DROP INDEX proposals_credential");
+    sql.exec("ALTER TABLE proposals DROP COLUMN credential");
     sql.exec("DROP TABLE actors");
     sql.exec("DROP TABLE circles_before_actors");
     sql.exec("ALTER TABLE device_invites DROP COLUMN actor_id");
