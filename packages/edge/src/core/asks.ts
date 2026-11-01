@@ -233,6 +233,10 @@ export const WINDOW_ACTIONS: ReadonlySet<AskAction> = new Set(["github-token", "
 /** K-1723: an approval of an ask for these effects needs a passkey proof, because they raise access or hand out secrets. */
 export const PASSKEY_EFFECTS: ReadonlySet<Effect> = new Set(["shares", "secrets"]);
 
+/** K-1723: the approve path of an ask; a passkey circle and an ask of a passkey effect go through the passkey check. */
+export const approveVia = (circle: Pick<Circle, "needsPasskey"> | undefined, right: Effect) =>
+  circle?.needsPasskey === true || PASSKEY_EFFECTS.has(right) ? "passkey" : "login";
+
 /** K-1727: a proof without a passkey answers the asks of this circle; in a passkey circle only with the setting on. */
 export const approvesWithoutPasskey = (circle: Circle) =>
   !circle.needsPasskey || circle.approvesWithoutPasskey === true;

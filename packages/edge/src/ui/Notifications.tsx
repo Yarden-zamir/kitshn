@@ -4,6 +4,7 @@ import { type Mute, type Notification, muted } from "../core/notifications.ts";
 import { Menu, MenuItem } from "./controls.tsx";
 import type { Rect } from "./popover.ts";
 import type { ProposalView } from "../core/protocol.ts";
+import { approveVia } from "../core/asks.ts";
 import { AskList } from "./Asks.tsx";
 import { PushSection } from "./Push.tsx";
 import { callApi } from "./store.ts";
@@ -49,8 +50,9 @@ export function NotificationsView(props: {
       "GET",
       "/api/notifications",
     ).then((result) => {
-      if ("error" in result) props.onToast(result.error, true);
-      else setList(result);
+      if ("error" in result) return props.onToast(result.error, true);
+      setList(result);
+      void closeStalePushes(result.notifications);
     });
   }, [props.bell, version]);
 
@@ -104,7 +106,7 @@ export function NotificationsView(props: {
       <AskList
         proposals={asks}
         circleName={(id) => props.state.circles.get(id)?.name ?? id}
-        needsPasskey={(id) => props.state.circles.get(id)?.needsPasskey === true}
+        via={(proposal) => approveVia(props.state.circles.get(proposal.circleId), proposal.right)}
         onToast={props.onToast}
       />
       <PushSection onToast={props.onToast} />
@@ -155,6 +157,19 @@ export function NotificationsView(props: {
       ) : null}
     </div>
   );
+}
+
+/**
+ * K-1905, K-1907: a closed notification sends no push, except an ask, so this browser can still show one that closed
+ * elsewhere. The open list is the truth: each push of this browser that names no open notification closes.
+ */
+async function closeStalePushes(notifications: ReadonlyArray<Notification>) {
+  const registration = await navigator.serviceWorker?.getRegistration().catch(() => undefined);
+  if (!registration) return;
+  const open = new Set(
+    notifications.flatMap((each) => (each.state === "open" ? [`${each.source}:${each.key}`] : [])),
+  );
+  for (const shown of await registration.getNotifications()) if (!open.has(shown.tag)) shown.close();
 }
 
 /** K-1905: one notification with its state, its source and card, and its actions. */

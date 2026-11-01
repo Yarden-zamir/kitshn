@@ -61,14 +61,32 @@ export function deviceWants(
   return urgent || !isQuiet(device.quiet, now);
 }
 
-/** K-1907: what the push service carries, encrypted: never an address, a reason text or a secret. */
+/**
+ * K-1907: what the push service carries, encrypted: never an address, a reason text or a secret. The service worker
+ * reads the text of an ask over the browser's own login, and runs the actions with it.
+ */
 export function pushMessage(notification: Notification, cardName: string | null) {
+  const ask = notification.source === "kitshn.ask";
   return {
     // K-1908: an app writes its own title, so its push shows only that the card has news; the map shows the rest.
     title: notification.source === "app" ? `${cardName ?? "An app"} has news` : notification.title,
-    body: cardName === null ? notification.source : `${notification.source} · ${cardName}`,
+    body: ask
+      ? "An agent waits for your answer."
+      : cardName === null
+        ? notification.source
+        : `${notification.source} · ${cardName}`,
     id: notification.id,
     tag: `${notification.source}:${notification.key}`,
     path: "/#notifications",
+    /** "open", or the answer that closed it, such as "approved" (K-1722). */
+    state: notification.state,
+    /** K-1722: the proposal id of an ask; its Approve and Deny come from the ask that the service worker reads. */
+    ask: ask ? notification.key : null,
+    /** K-1903: the run actions, such as Allow and Block of a repo. Android shows at most 2. */
+    actions: ask
+      ? []
+      : notification.actions.flatMap((action) =>
+          action.kind === "run" ? [{ id: action.id, label: action.label }] : [],
+        ),
   };
 }

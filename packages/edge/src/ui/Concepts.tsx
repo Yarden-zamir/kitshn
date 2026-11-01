@@ -638,6 +638,7 @@ function Agents(props: { base: State }) {
         <AskRow
           proposal={proposal}
           circleName={(id) => props.base.circles.get(id)?.name ?? id}
+          via="passkey"
           busy={false}
           onApprove={noop}
           onDeny={noop}

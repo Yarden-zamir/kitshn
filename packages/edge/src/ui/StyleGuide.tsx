@@ -828,6 +828,7 @@ function Lists(props: { state: State }) {
           <AskRow
             proposal={proposal}
             circleName={(id) => props.state.circles.get(id)?.name ?? id}
+            via="login"
             busy={false}
             onApprove={noop}
             onDeny={noop}

@@ -154,6 +154,24 @@ it("sends at most 5 pushes in one run and keeps the rest for the next alarm (K-1
   expect(waiting).toBe(2);
 });
 
+it("sends the push of an ask at once, not with the next alarm, and still at most 5 (K-1722, K-1907)", async () => {
+  const { stub, pushesIn } = await pushObject("push-now", [31, 32, 33, 34, 35, 36]);
+  const sent = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async () => new Response(null, { status: 201 }));
+  const left = await runInDurableObject(stub, async (instance) => {
+    const kitshn = instance as unknown as Pushes & {
+      queuePush(notification: Notification): void;
+      pushNow: Promise<void> | null;
+    };
+    kitshn.queuePush({ ...failed, source: "kitshn.ask", key: "p1", priority: "high" });
+    await kitshn.pushNow;
+    return kitshn.pushQueue.length;
+  });
+  expect(pushesIn(sent)).toHaveLength(5);
+  expect(left).toBe(1);
+});
+
 it("sends at most 5 pushes in one alarm run, also when its reconcile opens another notification (K-1907, K-406)", async () => {
   // Exactly 5 devices: a first flush empties the queue, so before the fix the reconcile's push started a second one.
   const { stub, pushesIn } = await pushObject("push-budget", [11, 12, 13, 14, 15]);

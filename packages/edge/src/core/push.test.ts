@@ -57,5 +57,38 @@ describe("Web Push (K-1907)", () => {
       title: "riffle has news",
       body: "app · riffle",
     });
+    // K-1722: an ask carries its proposal id and its state; the command and the reason stay out of the push.
+    const ask = pushMessage(
+      {
+        ...notification,
+        source: "kitshn.ask",
+        key: "p1",
+        card: null,
+        title: "vps asks: runs",
+        text: "Run on vps: cat .env · token=abc",
+        state: "approved",
+        actions: [
+          { id: "approve", label: "Approve", kind: "link", path: "/api/approve/login/start?approve=p1" },
+          { id: "deny", label: "Deny", kind: "run" },
+        ],
+      },
+      null,
+    );
+    expect(ask).toMatchObject({ ask: "p1", state: "approved", actions: [] });
+    expect(JSON.stringify(ask)).not.toContain("token=abc");
+    // K-1903: a run action goes with its id, so the push can run it; a link action stays in the map.
+    expect(
+      pushMessage(
+        {
+          ...notification,
+          source: "repo",
+          actions: [
+            { id: "allow", label: "Allow", kind: "run" },
+            { id: "show", label: "Show", kind: "link", path: "#map/x" },
+          ],
+        },
+        null,
+      ).actions,
+    ).toEqual([{ id: "allow", label: "Allow" }]);
   });
 });

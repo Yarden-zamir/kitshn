@@ -2360,6 +2360,21 @@ a > code {
   align-items: center;
   flex-wrap: wrap;
 }
+/* K-1722: an ask reads top to bottom: who asks for what, the exact text, why, then the answer. */
+.repo-list li.ask {
+  display: grid;
+  gap: 4px;
+}
+.ask-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.ask p,
+.ask .row {
+  margin: 0;
+}
 
 /* K-526: the one add button of the toolbar; a big "+" so it reads as add, not as a dot. */
 .bar .btn.add {

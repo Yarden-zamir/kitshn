@@ -298,6 +298,7 @@ import {
   shownAsk,
   shownHash,
   PASSKEY_EFFECTS,
+  approveVia,
   WINDOW_ACTIONS,
   answerRefusal,
 } from "../core/asks.ts";
@@ -11890,15 +11891,8 @@ export class Kitshn extends DurableObject<Env> {
         readonly line: string;
       }
   > {
-    const [open] = this.sql<{ id: string; expires_at: number }>(
-      `SELECT id, expires_at FROM proposals WHERE credential = ? AND action = 'forward' AND shown_hash = ? AND circle_id = ?
-       AND state = 'pending' AND expires_at > ? AND json_extract(labels, '$."t3.thread.id"') IS ? LIMIT 1`,
-      asker.credential,
-      hash,
-      wait.circleId,
-      now,
-      thread,
-    );
+    // propose finds the same open call too; this read only gives its expiry.
+    const open = this.openTwin(asker.credential, "forward", hash, wait.circleId, thread, now);
     const made = open
       ? { outcome: "waiting" as const, proposalId: open.id }
       : await this.propose(asker, "forward", target, body, null, labels, wait.right, wait.circleId, now);
@@ -13292,6 +13286,12 @@ export class Kitshn extends DurableObject<Env> {
     circleId: string,
     now: number,
   ): Promise<AskOutcome> {
+    const shown = shownAsk(action, target, body);
+    const hash = await shownHash(shown);
+    // K-1722: the same ask again, for example after the CLI stopped waiting, waits on the open proposal, so the
+    // approvers get one notification and one answer runs it.
+    const twin = this.openTwin(asker.credential, action, hash, circleId, labels["t3.thread.id"] ?? null, now);
+    if (twin) return { outcome: "waiting", proposalId: twin.id };
     // K-1722, K-1778: a loop of asks cannot fill the Inbox or each snapshot; the cap holds for each credential.
     const [open] = this.sql<{ count: number }>(
       "SELECT COUNT(*) AS count FROM proposals WHERE credential = ? AND state = 'pending'",
@@ -13302,7 +13302,6 @@ export class Kitshn extends DurableObject<Env> {
         outcome: "refused",
         reason: `This actor has ${MAX_OPEN_PROPOSALS} open asks already. Wait for their answers (K-1722).`,
       };
-    const shown = shownAsk(action, target, body);
     if (shown.length > MAX_SHOWN)
       return {
         outcome: "refused",
@@ -13323,7 +13322,7 @@ export class Kitshn extends DurableObject<Env> {
       right,
       circleId,
       shown,
-      await shownHash(shown),
+      hash,
       now,
       now + PROPOSAL_MS,
       JSON.stringify(asker.machineId === null ? [] : this.verifiedKeys(asker.machineId, labels)),
@@ -13331,6 +13330,28 @@ export class Kitshn extends DurableObject<Env> {
     this.broadcast();
     void this.scheduleAlarm();
     return { outcome: "waiting", proposalId: id };
+  }
+
+  /** K-1722, K-1714: the open proposal of the same call of the same credential and thread, read by its index. */
+  private openTwin(
+    credential: string,
+    action: ProposalAction,
+    hash: string,
+    circleId: string,
+    thread: string | null,
+    now: number,
+  ) {
+    const [open] = this.sql<{ id: string; expires_at: number }>(
+      `SELECT id, expires_at FROM proposals WHERE credential = ? AND state = 'pending' AND action = ? AND shown_hash = ?
+       AND circle_id = ? AND expires_at > ? AND json_extract(labels, '$."t3.thread.id"') IS ? LIMIT 1`,
+      credential,
+      action,
+      hash,
+      circleId,
+      now,
+      thread,
+    );
+    return open;
   }
 
   /**
@@ -17370,7 +17391,7 @@ export class Kitshn extends DurableObject<Env> {
     const asks = new Set<string>();
     for (const proposal of this.openProposals()) {
       asks.add(proposal.id);
-      const kind = this.state.circles.get(proposal.circleId)?.needsPasskey ? "passkey" : "login";
+      const kind = approveVia(this.state.circles.get(proposal.circleId), proposal.right);
       this.notify({
         source: "kitshn.ask",
         key: proposal.id,
@@ -17392,9 +17413,15 @@ export class Kitshn extends DurableObject<Env> {
         ],
       });
     }
+    // The notification closes with the answer, so every device and the list say what happened (K-1722).
     for (const notification of this.openNotifications.values())
-      if (notification.source === "kitshn.ask" && !asks.has(notification.key))
-        this.setNotificationState("kitshn.ask", notification.key, "closed");
+      if (notification.source === "kitshn.ask" && !asks.has(notification.key)) {
+        const [row] = this.sql<{ state: string }>(
+          "SELECT state FROM proposals WHERE id = ?",
+          notification.key,
+        );
+        this.setNotificationState("kitshn.ask", notification.key, row?.state ?? "closed");
+      }
   }
 
   /** K-1902: the owner gets every notification; a circle adds its people. */
@@ -17478,6 +17505,31 @@ export class Kitshn extends DurableObject<Env> {
     const notification = [...this.openNotifications.values()].find((each) => String(each.id) === id);
     if (!notification || !this.receives(caller.visitor, notification))
       return Response.json({ error: "No such open notification for you." }, { status: 404 });
+    // K-1907: a push carries ids only, so the service worker reads the text here, over the browser's own login. An
+    // ask also gives what its Approve needs: the full text, its hash and the approve path (K-1722).
+    if (verb === "" && request.method === "GET") {
+      const [row] =
+        notification.source === "kitshn.ask"
+          ? this.sql<ProposalRow>(
+              "SELECT * FROM proposals WHERE id = ? AND state = 'pending'",
+              notification.key,
+            )
+          : [];
+      const proposal = row ? proposalOf(row) : null;
+      return Response.json({
+        notification,
+        ask: proposal && {
+          id: proposal.id,
+          machineName: this.askerName(proposal),
+          right: proposal.right,
+          shown: proposal.shown,
+          shownHash: proposal.shownHash,
+          reason: proposal.reason,
+          expiresAt: proposal.expiresAt,
+          via: approveVia(this.state.circles.get(proposal.circleId), proposal.right),
+        },
+      });
+    }
     if (verb === "snooze" && request.method === "POST") {
       const until = isRecord(body) ? body["until"] : undefined;
       if (until !== null && (typeof until !== "number" || until <= now))
@@ -17545,13 +17597,29 @@ export class Kitshn extends DurableObject<Env> {
 
   /**
    * K-1907: pushes wait until the change commits. Each entry is one notification for every device (`device` null),
-   * or one send that waits or failed once. Only the alarm sends, once at its end, so one invocation sends at most
-   * PUSH_SENDS_PER_RUN (K-406). Known limit: the queue lives in memory, so a wake drops what waits; the alarm runs
-   * within a second while it holds anything. Revisit if pushes get lost.
+   * or one send that waits or failed once. The alarm sends once at its end; a priority high push also goes out at
+   * once, outside the alarm. Either way one invocation sends at most PUSH_SENDS_PER_RUN (K-406). Known limit: the
+   * queue lives in memory, so a wake drops what waits; the alarm runs within a second while it holds anything.
+   * Revisit if pushes get lost.
    */
   private pushQueue: Array<{ notification: Notification; device: number | null; tries: number }> = [];
+  /** The send of priority high pushes outside the alarm, while it runs; tests await it. */
+  private pushNow: Promise<void> | null = null;
+  /** K-406: true while the alarm runs, so its own flush at the end sends what its steps queue. */
+  private alarmRunning = false;
   private queuePush(notification: Notification) {
     this.pushQueue.push({ notification, device: null, tries: 0 });
+    // K-1722: an agent waits on an ask, so its push does not wait for the alarm. The microtask runs after the change
+    // of this invocation, and the output gate holds the send until that change is stored.
+    if (notification.priority === "high" && !this.alarmRunning && this.pushNow === null) {
+      this.pushNow = Promise.resolve()
+        .then(() => this.flushPushes())
+        .catch((error: unknown) => console.error(`kitshn could not send pushes: ${String(error)}`))
+        .finally(() => {
+          this.pushNow = null;
+        });
+      return;
+    }
     if (this.pushQueue.length === 1) void this.scheduleAlarm();
   }
 
@@ -17710,6 +17778,15 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   override async alarm() {
+    this.alarmRunning = true;
+    try {
+      await this.alarmRun();
+    } finally {
+      this.alarmRunning = false;
+    }
+  }
+
+  private async alarmRun() {
     const now = Date.now();
     const failedBefore = this.failedAlarmSteps();
     await this.finishPendingRestore().catch((error: unknown) =>
