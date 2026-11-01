@@ -63,6 +63,10 @@ const migrateFrom43 = (name: string, members: LegacyCircle["members"]) =>
         : null,
       owner: sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = 'owner'").one().body,
       circles: error === null ? [...instance.state.circles.values()].map((circle) => circle.name) : [],
+      devices:
+        error === null
+          ? [...instance.state.circles.values()].find((circle) => circle.name.endsWith("'s devices"))?.members
+          : undefined,
       violation: error === null ? ruleViolation(instance.state) : null,
       undo: (() => {
         if (error !== null) return null;
@@ -89,7 +93,9 @@ describe("migration 44 on a database of migration 43 (K-1778)", () => {
     expect(JSON.parse(after.owner).members).toEqual([
       { _tag: "actor", actorId: actorIdOf({ _tag: "login", email: "owner@example.com" }) },
     ]);
-    expect(after.circles).toContain("owner@example.com's devices");
+    // M1: the devices circle holds only the token, so the login opens nothing new there without a passkey.
+    expect(after.circles).toContain("Phone's devices");
+    expect(after.devices).toEqual([{ _tag: "actor", actorId: actorIdOf({ ...phone, _tag: "token" }) }]);
     expect(after.violation).toBeNull();
     // L2: the refusal of an Undo from before it names the migration.
     expect(after.undo).toMatch(/before migration 44/);

@@ -78,9 +78,9 @@ const KEY_RIGHTS = ["addsApps", "publishes"] as const;
  *   token actor. Its flags become "automatic" and its other rights "off", as before (K-1732).
  * - Another device becomes a token of the one person that every circle of the device also holds, else its own actor.
  *   The person's token then also opens the person's other circles (decision 1).
- * - A token in a circle that needs a passkey gets nothing there (the passkey line). So its actor goes into a new circle
- *   "<actor>'s devices" without a passkey, with the place, the level and the share settings of that circle, and no
- *   share of the admin. The token keeps its cards; the login of a person actor also gets them without a passkey.
+ * - A token in a circle that needs a passkey gets nothing there (the passkey line), and it stays its own actor. Its
+ *   actor goes into a new circle "<actor>'s devices" without a passkey, with the place, the level and the share
+ *   settings of that circle, and no share of the admin. The token keeps its cards; no login gets them without a passkey.
  */
 export function migrateMembers(
   circles: ReadonlyArray<LegacyCircle>,
@@ -140,9 +140,12 @@ export function migrateMembers(
     const token: Credential = { _tag: "token", tokenId, clientId: device.clientId, name: device.name };
     const key = held.some(isAgentCircle) && !held.some(holdsAdmin);
     if (key) keys.add(tokenId);
+    // A token in a passkey circle stays its own actor, so its devices circle never opens the login without a passkey.
     const [first, ...rest] = held.map(emailsOf);
     const shared =
-      key || !first ? [] : [...first].filter((email) => rest.every((emails) => emails.has(email)));
+      key || !first || held.some((circle) => circle.needsPasskey)
+        ? []
+        : [...first].filter((email) => rest.every((emails) => emails.has(email)));
     const [email] = shared;
     if (email !== undefined && shared.length === 1) {
       const id = person(email);

@@ -151,28 +151,44 @@ const stateOf = (migration: ActorMigration): State => ({
 
 const byId = (circles: ReadonlyArray<Circle>, id: string) => circles.find((each) => each.id === id)!;
 const yardenId = actorIdOf(login("yarden@example.com"));
+const phoneId = actorIdOf(token("t-phone", "phone.access", "Yarden's phone"));
 
 describe("the migration of members into actors (K-1778, migration 44)", () => {
-  it("makes one person per email and adds the phone of the owner to that person", () => {
-    const { actors, circles } = migrated();
-    const yarden = actors.find((actor) => actor.id === yardenId)!;
-    expect(yarden.credentials).toEqual([
-      login("yarden@example.com"),
+  it("makes one person per email and adds a token to the one person of all its circles", () => {
+    const { actors, circles } = migrateMembers(
+      [
+        circle("a", 1000, [{ _tag: "email", email: "a@example.com" }, phone]),
+        circle("b", 2000, [{ _tag: "email", email: "A@example.com" }, phone]),
+      ],
+      new Map(),
+      null,
+      new Map(),
+    );
+    const a = actorIdOf(login("a@example.com"));
+    expect(actors.find((actor) => actor.id === a)?.credentials).toEqual([
+      login("a@example.com"),
       token("t-phone", "phone.access", "Yarden's phone"),
     ]);
-    expect(byId(circles, "owner").members).toEqual([{ _tag: "actor", actorId: yarden.id }]);
+    expect(byId(circles, "b").members).toEqual([{ _tag: "actor", actorId: a }]);
+    expect(byId(migrated().circles, "everyone").members).toEqual([{ _tag: "everyone" }]);
+  });
+
+  it("keeps a token in a passkey circle as its own actor, with a chip in its other circles", () => {
+    const { actors, circles } = migrated();
+    expect(actors.find((actor) => actor.id === yardenId)?.credentials).toEqual([login("yarden@example.com")]);
+    expect(byId(circles, "owner").members).toEqual([{ _tag: "actor", actorId: yardenId }]);
     expect(byId(circles, "friends").members).toEqual([
-      { _tag: "actor", actorId: yarden.id },
+      { _tag: "actor", actorId: yardenId },
+      { _tag: "actor", actorId: phoneId },
       { _tag: "domain", domain: "qlik.com" },
     ]);
-    expect(byId(circles, "everyone").members).toEqual([{ _tag: "everyone" }]);
   });
 
   it("keeps every card of a passkey circle for its token in a devices circle, except the admin (H2)", () => {
     const migration = migrated();
-    const devices = migration.circles.find((each) => each.name === "yarden@example.com's devices")!;
+    const devices = migration.circles.find((each) => each.name === "Yarden's phone's devices")!;
     expect(devices).toMatchObject({
-      members: [{ _tag: "actor", actorId: yardenId }],
+      members: [{ _tag: "actor", actorId: phoneId }],
       needsPasskey: false,
       level: "control",
       x: 0,
@@ -185,11 +201,16 @@ describe("the migration of members into actors (K-1778, migration 44)", () => {
     const levels = (visitor: Visitor) =>
       [admin, site, machineCard].map((each) => visitorLevel(state, each, visitor, 0));
     expect(levels(phoneVisitor)).toEqual([null, "view", "use"]);
-    expect(levels({ ...phoneVisitor, email: "yarden@example.com", clientId: null })).toEqual([
-      "control",
-      "view",
-      "use",
-    ]);
+    // M1: Access asks the login for a passkey in Owner, so without one it opens only circles that need no passkey.
+    const withoutPasskey = stateOf({
+      ...migration,
+      circles: migration.circles.filter((each) => !each.needsPasskey),
+    });
+    expect(
+      [admin, site, machineCard].map((each) =>
+        visitorLevel(withoutPasskey, each, { email: "yarden@example.com", clientId: null, ip: null }, 0),
+      ),
+    ).toEqual([null, null, null]);
   });
 
   it("keeps a token of its own when no one person shares every circle of it", () => {
