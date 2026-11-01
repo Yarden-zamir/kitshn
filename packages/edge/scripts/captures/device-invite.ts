@@ -33,7 +33,7 @@ export default {
     await page.waitForTimeout(600);
     await page.locator('[data-head="agents"]').first().click();
     await page.waitForTimeout(500);
-    await page.getByRole("button", { name: "device", exact: true }).click();
+    await page.getByRole("button", { name: "token", exact: true }).click();
     await page.getByRole("textbox", { name: "New device name" }).fill("Pixel");
     await page.getByRole("button", { name: "Invite app" }).click();
     await page.getByRole("dialog", { name: "Invite of Pixel" }).waitFor();

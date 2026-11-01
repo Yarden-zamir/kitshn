@@ -153,7 +153,7 @@ import { LibraryView } from "./Library.tsx";
 import { AddMachine, MachinePanel, MachinesView, queueJob, setAutoUpdate } from "./Machines.tsx";
 import { ACCESS_TIPS, ALONE_KEY, MapView, type Selection, TrayCard, type View, measureMap } from "./Map.tsx";
 import { type DropTarget, dropPlan, givesNoOne } from "./drop.ts";
-import { joinPlan, leaveEdit, machineMember } from "./members.ts";
+import { joinPlan, leaveEdit, machineMember, memberKind } from "./members.ts";
 import { connectChecklist, isNewMachine } from "./machine-signs.ts";
 import { overlay } from "./held.ts";
 import { HistoryView } from "./History.tsx";
@@ -919,7 +919,7 @@ export function App() {
         .slice(0, 2)
         .map((diff) =>
           diff.to
-            ? (givesNoOne(diff.resource, diff.circle, state?.machines ?? new Map()) ??
+            ? (givesNoOne(diff.resource, diff.circle, state ?? { machines: new Map(), actors: new Map() }) ??
               `Shared ${diff.resource.name} with ${diff.circle.name} · ${diff.to}`)
             : `Removed ${diff.resource.name} from ${diff.circle.name}`,
         )
@@ -3203,8 +3203,8 @@ function CardPanel(props: {
                 </div>
                 <div class="row">
                   {circle.members.map((member, index) => (
-                    <span class="chip" key={index} data-tip={MEMBER_HELP[member._tag]}>
-                      {MEMBER_ICONS[member._tag]} {memberLabel(member)}
+                    <span class="chip" key={index} data-tip={MEMBER_HELP[memberKind(member, state)]}>
+                      {MEMBER_ICONS[memberKind(member, state)]} {memberLabel(member, state)}
                     </span>
                   ))}
                 </div>

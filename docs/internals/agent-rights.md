@@ -11,7 +11,7 @@ kitshn reaches an outside service in one of four ways, in this order of preferen
 
 Agent parity: every action of the owner has an agent path (K-1777). A call runs, waits for a person, or refuses because the rule also refuses the owner. What stays different: a person proves things with a passkey, and raising access always needs a person (K-715). Check this in every new feature.
 
-Every new right starts off for every existing machine and agent key, so a new right never gives access by itself. The one exception is "maintains", machine care and the closing of invites and asks, and the read of "reads the map" (K-1777).
+Every new right starts at default for every existing actor, so a new right never gives access by itself. The one exception is "maintains", machine care and the closing of invites and asks, and the read of "reads the map" (K-1777).
 
 ## Machine key pairs
 
@@ -50,19 +50,19 @@ Every new right starts off for every existing machine and agent key, so a new ri
   - While any machine is joined, the Owner circle is an approver circle, because an unset right asks the Owner.
   - The approve page shows the full text of the ask and approves only when it has the hash that the Approve button carried. A link alone never approves.
   - "Resume" stays with the owner emails on `/api/fresh`. An approver policy never opens it.
-  - A machine approves with the `approve` action over its signed connection. In a passkey circle, only while "machines may approve" is on (off by default). A machine never approves a job or deploy outside the K-718 limit of the asker.
+  - A machine approves with the `approve` action over its signed connection. In a passkey circle, only while "approves without passkey" is on (off by default), because a machine has no passkey (K-1778). A machine never approves a job or deploy outside the K-718 limit of the asker.
   - A service token alone never approves. "Deny" needs no fresh proof, because it lowers access.
   - A proposal gets one answer, through one conditional write.
   - No proposal row holds a token. An approved `github-token` or `pass` sends "approved", and the daemon asks again. The same ask of that machine runs at once for 1 hour after the approval.
 - **K-1724** A deny and an expiry after 24 hours reach the agent as "denied" or "expired", with the proposal id.
 - **K-1725** The map warns, and does not refuse, when:
   - the approver circle holds the machine that asks, so it can approve itself (K-1727);
-  - a passkey approver circle has "machines may approve" on;
+  - a passkey approver circle has "approves without passkey" on;
   - a high-risk right ("runs commands", "deploys", "writes code", "adds apps", "restores") asks a circle with no person;
   - an approver circle with a machine member reads requester text, which an agent can write to fool another agent;
-  - "writes code" is "automatic" with no thread condition (K-1754).
-- **K-1726** An agent that answers for a circle uses `kitshn agent approve` or `kitshn agent deny` with a reason. It sees in `state` the proposals of its circles, in a passkey circle only while "machines may approve" is on.
-- **K-1727** kitshn takes an approve or a deny from the machine that asked when the rules let it: the owner decided that what the rules allow, kitshn allows. The circle editor warns at once when such a rule starts (K-1725).
+  - "writes code" is "automatic" on a machine actor with no conditions (K-1754).
+- **K-1726** An agent that answers for a circle uses `kitshn agent approve` or `kitshn agent deny` with a reason. It sees in `state` the proposals of its circles, in a passkey circle only while "approves without passkey" is on.
+- **K-1727** kitshn takes an approve or a deny from the machine that asked when the rules let it: the owner decided that what the rules allow, kitshn allows. The circle editor warns at once when such a rule starts (K-1725). Step (b) of K-1778 ends this: the credential that asked never approves.
 - **K-1776** A call that no right covers, or whose target fails the scope of its operation (K-1777), asks the Owner, and its approval runs that one call. Rules:
   - A right set to "off" refuses with one line that names the right. "Off" counts only for its own right.
   - A `job` or `deploy` outside the limit of K-718 asks the Owner also when its right is "automatic" or "ask <circle>".
@@ -82,11 +82,22 @@ Every new right starts off for every existing machine and agent key, so a new ri
   - `kitshn ops` prints the table, `kitshn state` the read, and `kitshn <operation> [target] --body <json> --reason <text>` one call. A script on a joined machine uses the daemon and acts as the machine.
   - `src/core/operations.test.ts` fails when an owner route or a call of the map has no row, when a row refuses a machine with unset rights for a reason other than a person gate, and when a row that runs for any target has no right to turn off. `test/operations.test.ts` sends each row, with an Owner approval, to the owner route as a machine call, and fails when the call fails where the owner's call does not, or when its job does not go out. It does not check the scopes. A row whose fixture target does not reach its handler checks fails for both callers, so the test does not see it; the test names these rows.
 
+## Actors
+
+- **K-1778** An actor is a name in the map that can act: a person, a script, a machine, or an agent on a machine. Every caller uses the same operation path and the same gate (K-1777): a person in the map or the CLI, an agent through MCP or the CLI, a script through the CLI. Only the proof differs. Rules:
+  - A credential proves a call: a login, a token (K-106), or a machine key (K-107). A login and a token belong to exactly one actor. A phone or desktop token is a credential of its person, so a circle of that person also opens to the phone.
+  - A circle holds actors and rules (K-202). Rights sit on the chip of an actor in a circle (K-1720). A call is every actor of its credential whose conditions hold, and the rights of their chips add up: "automatic" wins, then the first "ask"; "off" refuses only when no chip opens the right.
+  - An agent actor is a machine key plus conditions on attested labels (K-1754), not one actor per thread. It narrows the machine: it matches only calls with those verified labels. Only an actor with exactly one machine credential has conditions. It never enters Access or a grant table, because Access sees only the machine token.
+  - The passkey line: a circle that needs a passkey holds only a login, because only a person at a device proves a passkey (K-103). kitshn checks this in the Worker and in the Access compile, so no token, machine or network holds such a circle, also a token of the owner. So the admin card (K-104) needs a person with a passkey.
+  - A script on a joined machine may use the daemon and then acts as the machine actor. A token of its own is optional: only for its own name, its own rights or its own revoke, or where no daemon runs.
+  - Migration 44 made one actor per email, each joined machine, each agent key (K-1732) and each set of conditions of a machine right ("<machine> <rights>"). A device became a token of the one person that every circle of the device also holds, else an actor of its own, so no circle let in anyone new. An Undo never reaches a revision from before it.
+  - Known limits: "Delete actor" removes the actor and its chips, but revokes no Cloudflare token. Revisit with the token revoke of step (c). A machine that leaves keeps its actors; "Delete actor" removes them.
+
 ## Rights on machines
 
-- **K-1730** Agent rights belong to machines. The agent circles of a machine are the circles of devices and machines only that name the machine with at least one right set and have not ended. K-718 holds for a machine in its agent circles, with the machine in place of the key. The rights: "adds apps", "publishes", "deploys", "runs commands", "reads code", "writes code", "adds audiences", "gets passes", "adds pages", "restores", "maintains" and "reads the map". Planned: "removes apps it added". Every right starts at "default". "Maintains" covers machine care, and the closing of invites and asks. "Default" of "maintains" and "reads the map" runs at once for a machine in an agent circle (K-1777). A member whose rights are all "off" still reads `state`, logs and page content of its cards.
-- **K-1731** A machine in an agent circle is also an Access member of that circle (K-107), so its service token opens the sites of the circle.
-- **K-1732** An agent key (K-718) is only an exception for an agent that runs on no joined machine. Every new right starts off for keys too. The map marks each key with an "exception" sticker.
+- **K-1730** Rights sit on the chips of actors (K-1778). The agent circles of an actor are the circles of actors that are not people, with no rule, that name it with at least one right set, have not ended and do not need a passkey. K-718 holds for a machine in its agent circles, with the machine in place of the key. The rights: "adds apps", "publishes", "deploys", "runs commands", "reads code", "writes code", "adds audiences", "gets passes", "adds pages", "restores", "maintains" and "reads the map". Planned: "removes apps it added". Every right starts at "default". "Maintains" covers machine care, and the closing of invites and asks. "Default" of "maintains" and "reads the map" runs at once for a machine in an agent circle (K-1777). A member whose rights are all "off" still reads `state`, logs and page content of its cards.
+- **K-1731** A machine actor in an agent circle is also an Access member of that circle (K-107), so its service token opens the sites of the circle. An agent actor with conditions is not: Access sees only the machine token.
+- **K-1732** Migration 44 made each agent key a token actor: its flags became "automatic" and its other rights "off", so a key kept exactly its rights. A new token actor has every right at default.
 - **K-1733** A repo group is a card of the kind `repo.group`. It matches repos by owner or by a name pattern with one `*`. A right on a repo group covers every repo that it matches, also one that kitshn has not seen yet. Known limit: a pattern matches by name, while the gate of K-819 matches by id, so a repo that someone renames into a pattern gets the rights of the group.
 - **K-1734** A click on a repo group card highlights the repo cards that it matches. The panel lists them.
 
@@ -94,9 +105,9 @@ Every new right starts off for every existing machine and agent key, so a new ri
 
 - **K-1750** An ask carries at most 10 labels, each a prefixed key (for example `t3.thread.id`) and a value. kitshn refuses a bad label and names it. Labels that no provider vouched for are claims, and History shows them as "claimed".
 - **K-1751** A provider vouches for its own agents over its own connection (K-704), so no config lists attesters. An agent carries `KITSHN_ATTEST=<provider>:<token>`, and every agent command sends it. The daemon sends `attest` with the token only to that provider's connection. Known limit: the agents of a provider run as the provider's user, so an agent can register the provider again and vouch for labels of its prefix. Revisit when agents run as their own user, and before any grant depends on such a label.
-- **K-1752** The provider answers `attest` within 2 seconds with `active` and at most 16 bare labels. The daemon adds the provider's prefix and marks them "verified by <provider>". A call that carries a token fails closed: no provider connection, a late answer or `active: false` refuses it. It never goes on as the bare machine. A call without a token goes as the bare machine, and a right with a condition refuses it.
+- **K-1752** The provider answers `attest` within 2 seconds with `active` and at most 16 bare labels. The daemon adds the provider's prefix and marks them "verified by <provider>". A call that carries a token fails closed: no provider connection, a late answer or `active: false` refuses it. It never goes on as the bare machine. A call without a token goes as the bare machine, so it matches no agent actor (K-1778).
 - **K-1753** The daemon and kitshn drop every caller label with the prefix of a provider of the machine. Only that provider sets those labels. The prefix `t3.` stays reserved also on a machine without T3.
-- **K-1754** A right can have conditions on attested labels: a key equals a value, or is one of a list. kitshn refuses a condition on a prefix that no provider of the machine has. A failed condition refuses the ask and names the condition.
+- **K-1754** An agent actor has conditions on attested labels: a key equals a value, or is one of a list (K-1778). A condition counts only on the prefix of a provider of the machine, so a claimed label never meets one. A call that fails a condition is not that actor: it gets the modes of the other actors that it is, at least the machine actor.
 - **K-1755** T3 vouches with `thread.id`, `thread.title`, `project.id`, `project.name`, `environment.id`, `provider`, `runtime`, `interaction`, `subagent`, `thread.parent` and `thread.parent.environment`. Known limits: agents and the T3 server run as one OS user, so an agent that steals the token of another thread acts as that thread. An in-process subagent uses its parent's token, so it has `t3.subagent` = `false`. Revisit when agents run as their own users.
 - **K-1756** History is searchable by label: `key=value` in the History view, and `kitshn agent history --label`, at most 50 events. kitshn stores one index row per label, on (key, value, time).
 

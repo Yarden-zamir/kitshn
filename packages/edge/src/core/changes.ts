@@ -1,10 +1,10 @@
 import {
   ADMIN_RESOURCE_ID,
-  AGENT_RIGHTS,
-  AGENT_RIGHT_NAMES,
-  MACHINE_RIGHTS,
-  MACHINE_RIGHT_NAMES,
+  RIGHTS,
+  RIGHT_NAMES,
+  type Actor,
   type Circle,
+  type Directory,
   type Level,
   type Member,
   OWNER_CIRCLE_ID,
@@ -16,9 +16,12 @@ import {
   type State,
   type Time,
   circlesHolding,
+  credentialKey,
   insideCircle,
+  isPerson,
   isPublicCircle,
   levelRank,
+  memberActor,
   shareKey,
   shareLevel,
   stackTitle,
@@ -29,6 +32,8 @@ import type { Machine } from "./machine.ts";
 /** One edit that a client asks for. `after: null` deletes. */
 export type Edit =
   | { readonly _tag: "circle"; readonly id: string; readonly after: Circle | null }
+  /** K-1778: an actor and its credentials. Its rights sit on its chips in circles. */
+  | { readonly _tag: "actor"; readonly id: string; readonly after: Actor | null }
   | { readonly _tag: "place"; readonly id: string; readonly after: Point | null }
   | {
       readonly _tag: "shareSetting";
@@ -62,6 +67,12 @@ export type Change =
       readonly id: string;
       readonly before: Circle | null;
       readonly after: Circle | null;
+    }
+  | {
+      readonly _tag: "actor";
+      readonly id: string;
+      readonly before: Actor | null;
+      readonly after: Actor | null;
     }
   | {
       readonly _tag: "place";
@@ -140,7 +151,7 @@ export type Forget = {
 export const isAction = (changes: ReadonlyArray<Change | Forget>) =>
   changes.every((change) => change._tag === "forget");
 
-export type Actor =
+export type Author =
   | { readonly _tag: "person"; readonly email: string }
   | { readonly _tag: "device"; readonly clientId: string; readonly name: string }
   /** K-1717: a machine that acted for one of its agents. */
@@ -150,7 +161,7 @@ export type Actor =
 export interface Revision {
   readonly id: number;
   readonly at: number;
-  readonly actor: Actor;
+  readonly actor: Author;
   readonly summary: string;
   readonly changes: ReadonlyArray<Change>;
   readonly undoes: number | null;
@@ -174,6 +185,8 @@ const current = (state: State, change: Pick<Change, "_tag" | "id">) => {
   switch (change._tag) {
     case "circle":
       return state.circles.get(change.id) ?? null;
+    case "actor":
+      return state.actors.get(change.id) ?? null;
     case "place":
       return state.places.get(change.id) ?? null;
     case "shareSetting":
@@ -212,8 +225,8 @@ export function resolveEdits(state: State, edits: ReadonlyArray<Edit>): Array<Ch
     const key = `${edit._tag}:${id}`;
     if (seen.has(key)) throw new RuleError(`The same ${edit._tag} "${id}" is edited twice in one change.`);
     seen.add(key);
-    if (edit._tag === "circle" && edit.after && edit.after.id !== edit.id) {
-      throw new RuleError(`A circle edit cannot change the circle id "${edit.id}".`);
+    if ((edit._tag === "circle" || edit._tag === "actor") && edit.after && edit.after.id !== edit.id) {
+      throw new RuleError(`A ${edit._tag} edit cannot change the ${edit._tag} id "${edit.id}".`);
     }
     if (edit._tag === "stack" && edit.after) {
       if (edit.after.id !== edit.id)
@@ -384,7 +397,7 @@ const isMove = (change: Change) => change.before !== null && lands(change);
  */
 export function mergeMoves(
   previous: Pick<Revision, "actor" | "at" | "changes" | "undoes">,
-  actor: Actor,
+  actor: Author,
   now: number,
   changes: ReadonlyArray<Change>,
 ): Array<Change> | null {
@@ -458,7 +471,7 @@ export function revisionTargets(changes: ReadonlyArray<RevisionTarget>): {
     ? "app"
     : tags.has("pause")
       ? "pause"
-      : tags.has("circle")
+      : tags.has("circle") || tags.has("actor")
         ? "circle"
         : tags.has("shareSetting")
           ? "share"
@@ -516,6 +529,7 @@ export function touches(change: Change, item: Item): boolean {
         (change.after?.members.includes(item.id) ?? false)
       );
     case "circle":
+    case "actor":
     case "pause":
       return false;
   }
@@ -571,6 +585,11 @@ function footprint(changes: ReadonlyArray<Change | Forget>, state: State, pool: 
     if (change._tag === "place")
       points.push(...[change.before, change.after].filter((point) => point !== null));
     if (change._tag === "circle") changed.add(change.id);
+    // K-1778: an actor change reaches every circle that names the actor.
+    if (change._tag === "actor")
+      for (const circle of pool)
+        if (circle.members.some((member) => member._tag === "actor" && member.actorId === change.id))
+          changed.add(circle.id);
     if (change._tag === "stack")
       for (const id of [...(change.before?.members ?? []), ...(change.after?.members ?? [])]) cards.add(id);
     if (change._tag === "shareSetting") {
@@ -612,7 +631,7 @@ export function overlaps(
 /** A revision as the undo rules read it. */
 export interface StoredRevision {
   readonly id: number;
-  readonly actor: Actor;
+  readonly actor: Author;
   readonly summary: string;
   readonly changes: ReadonlyArray<Change | Forget>;
   readonly undoes: number | null;
@@ -628,7 +647,7 @@ const isChange = (change: Change | Forget): change is Change => change._tag !== 
 export function undoTarget(
   state: State,
   revisions: ReadonlyArray<StoredRevision>,
-  actor: Actor,
+  actor: Author,
   target: { readonly revision: number } | { readonly item: Item },
 ): { readonly revision: number; readonly changes: ReadonlyArray<Change> } {
   const undone = new Set(
@@ -723,6 +742,7 @@ export function conflictOf(state: State, changes: ReadonlyArray<Change>): Change
 
 export function applyChanges(state: State, changes: ReadonlyArray<Change>): State {
   const circles = new Map(state.circles);
+  const actors = new Map(state.actors);
   const resources = new Map(state.resources);
   const places = new Map(state.places);
   const shareSettings = new Map(state.shareSettings);
@@ -734,6 +754,7 @@ export function applyChanges(state: State, changes: ReadonlyArray<Change>): Stat
     value === null ? map.delete(id) : map.set(id, value);
   for (const change of changes) {
     if (change._tag === "circle") put(circles, change.id, change.after);
+    else if (change._tag === "actor") put(actors, change.id, change.after);
     else if (change._tag === "place") put(places, change.id, change.after);
     else if (change._tag === "shareSetting") put(shareSettings, change.id, change.after);
     else if (change._tag === "stack") put(stacks, change.id, change.after);
@@ -751,7 +772,7 @@ export function applyChanges(state: State, changes: ReadonlyArray<Change>): Stat
       machines.set(change.id, withAutoUpdate(machine, change.after));
     } else paused = change.after;
   }
-  return { ...state, circles, resources, places, shareSettings, stacks, ends, machines, paused };
+  return { ...state, circles, actors, resources, places, shareSettings, stacks, ends, machines, paused };
 }
 
 /**
@@ -760,6 +781,8 @@ export function applyChanges(state: State, changes: ReadonlyArray<Change>): Stat
  */
 export function ruleViolation(state: State): string | null {
   if (!state.circles.has(OWNER_CIRCLE_ID)) return "The Owner circle cannot be deleted.";
+  const actorProblem = actorViolation(state);
+  if (actorProblem) return actorProblem;
   // K-521: a card is in one stack at most, and the cards of a stack share one point.
   const stacked = new Set<string>();
   for (const stack of state.stacks.values()) {
@@ -791,8 +814,11 @@ export function ruleViolation(state: State): string | null {
     (circle) =>
       circle.needsPasskey &&
       circle.endsAt === null &&
-      circle.members.some((member) => member._tag === "email") &&
-      (circle.match === "any" || allCircleCanMatch(circle)) &&
+      circle.members.some((member) => {
+        const actor = memberActor(member, state);
+        return actor !== undefined && isPerson(actor);
+      }) &&
+      (circle.match === "any" || allCircleCanMatch(circle, state)) &&
       shareLevel(state, admin, circle) === "control" &&
       (state.shareSettings.get(shareKey(admin.id, circle.id))?.endsAt ?? null) === null,
   );
@@ -805,19 +831,49 @@ export function ruleViolation(state: State): string | null {
   return null;
 }
 
-/** An "all" circle matches someone only with one person, no device or machine, and domains of that person. */
-function allCircleCanMatch(circle: Circle): boolean {
-  const emails = circle.members.flatMap((member) =>
-    member._tag === "email" ? [member.email.toLowerCase()] : [],
+/**
+ * K-1778: every actor that a member names exists, a login or a token belongs to one actor, and only an actor with exactly
+ * one machine credential has conditions (K-1754).
+ */
+function actorViolation(state: State): string | null {
+  for (const circle of state.circles.values())
+    for (const member of circle.members)
+      if (member._tag === "actor" && !state.actors.has(member.actorId))
+        return `The circle ${circle.name} names an actor that does not exist.`;
+  const owners = new Map<string, string>();
+  for (const actor of state.actors.values()) {
+    if (actor.credentials.length === 0) return `The actor ${actor.name} has no credential.`;
+    if ((actor.conditions ?? []).length > 0) {
+      const [only] = actor.credentials;
+      if (actor.credentials.length !== 1 || only?._tag !== "machine")
+        return `The actor ${actor.name} has conditions, so it has exactly one machine credential and nothing else (K-1754).`;
+      continue;
+    }
+    for (const credential of actor.credentials) {
+      const key = credentialKey(credential);
+      const other = owners.get(key);
+      if (other !== undefined && other !== actor.id)
+        return `${actor.name} and ${state.actors.get(other)?.name ?? other} have the same credential; a login, a token or a machine belongs to one actor (K-1778).`;
+      owners.set(key, actor.id);
+    }
+  }
+  return null;
+}
+
+/** An "all" circle matches someone only with one person of one login, no other actor, and domains of that person. */
+function allCircleCanMatch(circle: Circle, directory: Directory): boolean {
+  const actors = circle.members.flatMap((member) => {
+    const actor = memberActor(member, directory);
+    return actor ? [actor] : [];
+  });
+  const [person] = actors;
+  const logins = (person?.credentials ?? []).flatMap((credential) =>
+    credential._tag === "login" ? [credential.email.toLowerCase()] : [],
   );
-  const [email] = emails;
-  if (emails.length !== 1 || !email) return false;
+  const [email] = logins;
+  if (actors.length !== 1 || logins.length !== 1 || !email) return false;
   return circle.members.every((member) =>
-    member._tag === "device" || member._tag === "machine"
-      ? false
-      : member._tag === "domain"
-        ? email.endsWith(`@${member.domain.toLowerCase()}`)
-        : true,
+    member._tag === "domain" ? email.endsWith(`@${member.domain.toLowerCase()}`) : true,
   );
 }
 
@@ -887,9 +943,19 @@ export function summarize(before: State, after: State, changes: ReadonlyArray<Ch
     const shown = diffs.slice(0, 3).map(describeDiff).join("; ");
     return diffs.length > 3 ? `${shown}; and ${diffs.length - 3} more` : shown;
   }
+  const actors = changes.flatMap((change) => (change._tag === "actor" ? [change] : []));
   const circles = changes.filter((change) => change._tag === "circle");
+  const [actor] = actors;
+  if (actor && circles.length === 0) {
+    const name = (actor.after ?? actor.before)?.name ?? actor.id;
+    return !actor.before
+      ? `Added the actor ${name}`
+      : !actor.after
+        ? `Deleted the actor ${name}`
+        : `Changed the actor ${name}`;
+  }
   if (circles.length === 1 && circles[0]) {
-    const rights = rightChanges(circles[0].before, circles[0].after);
+    const rights = rightChanges(after, circles[0].before, circles[0].after);
     if (rights.length > 0) return rights.join("; ");
     const circle = circles[0].after ?? circles[0].before;
     const verb = !circles[0].before ? "Created" : !circles[0].after ? "Deleted" : "Changed";
@@ -936,36 +1002,23 @@ export function withAutoUpdate(machine: Machine, on: boolean): Machine {
 /** K-212: an end time in History, which every reader reads in UTC: "2026-10-29 15:40 UTC". */
 export const endText = (time: number) => `${new Date(time).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 
-/** K-718: "Gave Bot may publish in Agents" for each agent right that a circle edit turns on or off. */
-function rightChanges(before: Circle | null, after: Circle | null): Array<string> {
+/** K-1720: "Set runs commands of vps to ask Owner in Agents" for each right that a circle edit changes. */
+function rightChanges(state: State, before: Circle | null, after: Circle | null): Array<string> {
   if (!before || !after) return [];
   return after.members.flatMap((member) => {
-    // K-1720: "Set runs commands of vps to ask Owner in Agents".
-    if (member._tag === "machine") {
-      const old = before.members.find(
-        (other) => other._tag === "machine" && other.machineId === member.machineId,
-      );
-      if (old?._tag !== "machine") return [];
-      return MACHINE_RIGHTS.filter((right) => !deepEqual(old.rights?.[right], member.rights?.[right])).map(
-        (right) => {
-          const mode = member.rights?.[right];
-          const text = !mode
-            ? "default (asks the Owner)"
-            : mode.mode === "ask"
-              ? `ask ${mode.circleId}`
-              : mode.mode;
-          return `Set ${MACHINE_RIGHT_NAMES[right]} of ${member.machineId} to ${text} in ${after.name}`;
-        },
-      );
-    }
-    if (member._tag !== "device") return [];
-    const old = before.members.find((other) => other._tag === "device" && other.tokenId === member.tokenId);
-    if (old?._tag !== "device") return [];
-    return AGENT_RIGHTS.filter((right) => old[right] !== member[right]).map((right) =>
-      member[right]
-        ? `Gave ${member.name} ${AGENT_RIGHT_NAMES[right]} in ${after.name}`
-        : `Took ${AGENT_RIGHT_NAMES[right]} from ${member.name} in ${after.name}`,
-    );
+    if (member._tag !== "actor") return [];
+    const old = before.members.find((other) => other._tag === "actor" && other.actorId === member.actorId);
+    if (old?._tag !== "actor") return [];
+    const name = state.actors.get(member.actorId)?.name ?? member.actorId;
+    return RIGHTS.filter((right) => !deepEqual(old.rights?.[right], member.rights?.[right])).map((right) => {
+      const mode = member.rights?.[right];
+      const text = !mode
+        ? "default (asks the Owner)"
+        : mode.mode === "ask"
+          ? `ask ${state.circles.get(mode.circleId)?.name ?? mode.circleId}`
+          : mode.mode;
+      return `Set ${RIGHT_NAMES[right]} of ${name} to ${text} in ${after.name}`;
+    });
   });
 }
 
@@ -999,31 +1052,34 @@ export function refuseResume(changes: Array<Change>): Array<Change> {
  * is the owner's choice, so this looks only at what a change adds. Access cannot ask for a person and a token, or for
  * two tokens, so such a circle gets no policy (K-402); a token added to a network means that only the token gets in.
  */
-export function lockoutReason(
-  before: Circle,
-  after: Circle,
-  machines: ReadonlyMap<string, Machine>,
-): string | null {
+export function lockoutReason(before: Circle, after: Circle, directory: Directory): string | null {
   const keyOf = (member: Member) =>
-    member._tag === "machine" ? `machine:${member.machineId}` : JSON.stringify(member);
+    member._tag === "actor" ? `actor:${member.actorId}` : JSON.stringify(member);
   const had = before.members.map(keyOf);
   const has = after.members.map(keyOf);
   if (had.some((key) => !has.includes(key))) return null;
   if (before.match === after.match && has.length === had.length) return null;
-  const tokens = after.members.filter((member) => member._tag === "device" || member._tag === "machine");
-  const people = after.members.some((member) => member._tag === "email" || member._tag === "domain");
+  const actorOf = (member: Member) => memberActor(member, directory);
+  const tokens = after.members.filter((member) => {
+    const actor = actorOf(member);
+    return actor !== undefined && !isPerson(actor);
+  });
+  const people = after.members.some((member) => {
+    const actor = actorOf(member);
+    return member._tag === "domain" || (actor !== undefined && isPerson(actor));
+  });
   const start = `${after.name} must match all its members, and`;
-  if (circlePolicies(after, machines).size === 0) {
-    if (after.match === "any") return `${after.name} names a machine that kitshn does not know.`;
+  if (circlePolicies(after, directory).size === 0) {
+    if (after.match === "any") return `${after.name} names an actor that Access cannot see.`;
     if (tokens.length > 1)
-      return `${start} Access cannot ask for two machines or devices at once, so no one would get in.`;
+      return `${start} Access cannot ask for two machines or tokens at once, so no one would get in.`;
     if (people && tokens.length > 0)
-      return `${start} Access cannot ask for a person and a machine or device at once, so no one would get in.`;
-    return `${start} it names a machine that kitshn does not know, so no one would get in.`;
+      return `${start} Access cannot ask for a person and a machine or token at once, so no one would get in.`;
+    return `${start} it names an actor that Access cannot see, so no one would get in.`;
   }
   const newToken = tokens.some((member) => !had.includes(keyOf(member)));
-  if (after.match === "all" && newToken && circlePolicies(before, machines).size > 0)
-    return `${start} a machine or device cannot stand in for the others, so only it would get in, and the visitors who get in now would not.`;
+  if (after.match === "all" && newToken && circlePolicies(before, directory).size > 0)
+    return `${start} a machine or token cannot stand in for the others, so only it would get in, and the visitors who get in now would not.`;
   return null;
 }
 
@@ -1031,7 +1087,7 @@ export function lockoutReason(
 export function refuseLockout(before: State, after: State): void {
   for (const [id, circle] of after.circles) {
     const old = before.circles.get(id);
-    const reason = old && old !== circle ? lockoutReason(old, circle, after.machines) : null;
+    const reason = old && old !== circle ? lockoutReason(old, circle, after) : null;
     if (reason) throw new RuleError(reason);
   }
 }
@@ -1058,18 +1114,30 @@ export function refuseRaiseWhilePaused(before: State, after: State): void {
   for (const id of new Set([...before.ends.keys(), ...after.ends.keys()]))
     if (ends(after.ends.get(id)) > ends(before.ends.get(id)) && after.places.has(id))
       throw new RuleError("While paused, access only goes down: a card would end later.");
+  // K-1778: an actor that gains a credential or loses a condition lets in more.
+  for (const actor of after.actors.values()) {
+    const old = before.actors.get(actor.id);
+    if (!old) continue;
+    const had = new Set(old.credentials.map(credentialKey));
+    if (
+      actor.credentials.some((credential) => !had.has(credentialKey(credential))) ||
+      !deepEqual(old.conditions ?? [], actor.conditions ?? [])
+    )
+      throw new RuleError(`While paused, access only goes down: the actor ${actor.name} would let in more.`);
+  }
   for (const circle of after.circles.values()) {
     const old = before.circles.get(circle.id);
     if (!old) continue;
-    // A device stays the same member when its name or an agent right changes; only a right that turns on raises.
+    // An actor stays the same member when a right changes; only a right that opens raises.
     const key = (member: Member) =>
-      JSON.stringify(
-        member._tag === "device" ? { tokenId: member.tokenId, clientId: member.clientId } : member,
-      );
+      member._tag === "actor" ? `actor:${member.actorId}` : JSON.stringify(member);
     const rights = (members: ReadonlyArray<Member>) =>
       members.flatMap((member) =>
-        member._tag === "device"
-          ? AGENT_RIGHTS.filter((right) => member[right]).map((right) => `${key(member)}/${right}`)
+        member._tag === "actor"
+          ? RIGHTS.flatMap((right) => {
+              const mode = member.rights?.[right];
+              return mode && mode.mode !== "off" ? [`${key(member)}/${right}/${JSON.stringify(mode)}`] : [];
+            })
           : [],
       );
     const had = new Set([...old.members.map(key), ...rights(old.members)]);
@@ -1079,7 +1147,7 @@ export function refuseRaiseWhilePaused(before: State, after: State): void {
       // In an "all must match" circle, a member that goes lets more visitors in.
       (old.match === "all" && old.members.some((member) => !has.has(key(member)))) ||
       (old.needsPasskey && !circle.needsPasskey) ||
-      (old.machinesMayApprove !== true && circle.machinesMayApprove === true) ||
+      (old.approvesWithoutPasskey !== true && circle.approvesWithoutPasskey === true) ||
       (old.match === "all" && circle.match === "any") ||
       ends(circle.endsAt) > ends(old.endsAt) ||
       levelRank(circle.level) > levelRank(old.level)
@@ -1138,7 +1206,7 @@ export function prepareUndo(state: State, original: ReadonlyArray<Change>, now: 
 export function undoAnswer(
   state: State,
   revisions: ReadonlyArray<StoredRevision>,
-  actor: Actor,
+  actor: Author,
   target: { readonly revision: number } | { readonly item: Item },
   now: number,
 ): { readonly allowed: true } | { readonly allowed: false; readonly reason: string } {

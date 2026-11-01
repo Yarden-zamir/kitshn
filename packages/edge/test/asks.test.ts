@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { AskOutcome, Machine, ServerToDaemon } from "../src/core/machine.ts";
 import { type Circle, OWNER_CIRCLE_ID, type RightMode } from "../src/core/model.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
+import { insertActors, machine as machineChip, tokenActor } from "./actors.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -44,7 +45,7 @@ async function setup(rights: Partial<Record<string, RightMode>>, circle: Partial
     name: "Agents",
     color: "#ffcc00",
     level: "control",
-    members: [{ _tag: "machine", machineId: "vps", rights }],
+    members: [machineChip("vps", rights)],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -67,6 +68,7 @@ async function setup(rights: Partial<Record<string, RightMode>>, circle: Partial
       "agents",
       JSON.stringify(agents),
     );
+    insertActors(state.storage.sql, [...agents.members, machineChip("mac")]);
     // A card that the agent circle holds, for an ask that stays inside K-718.
     state.storage.sql.exec(
       "INSERT OR REPLACE INTO resources (id, body) VALUES ('managed', ?)",
@@ -238,8 +240,26 @@ it("waits for one answer of its approver circle; a second answer gets already de
     state.storage.sql.exec<{ state: string }>("SELECT state FROM proposals").toArray(),
   );
   expect(states).toEqual([{ state: "denied" }]);
-  // K-1727: in a passkey circle, a member machine answers only while "machines may approve" is on.
-  const locked = await setup({ deploys: { mode: "ask", circleId: "agents" } }, { needsPasskey: true });
+  // K-1727: in a passkey circle, a member machine answers only while "approves without passkey" is on.
+  const locked = await setup({ deploys: { mode: "ask", circleId: "approvers" } });
+  await runInDurableObject(locked, (_, state) => {
+    const agents = JSON.parse(
+      state.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = 'agents'").one().body,
+    ) as Circle;
+    const approvers = {
+      ...agents,
+      id: "approvers",
+      name: "Approvers",
+      needsPasskey: true,
+      x: -5000,
+      members: [machineChip("vps")],
+    };
+    state.storage.sql.exec(
+      "INSERT OR REPLACE INTO circles (id, body) VALUES ('approvers', ?)",
+      JSON.stringify(approvers),
+    );
+  });
+  await evictDurableObject(locked);
   const asked = await ask(locked, "deploy", "managed");
   const machineAnswer = () =>
     runInDurableObject(locked, (instance) =>
@@ -255,8 +275,12 @@ it("waits for one answer of its approver circle; a second answer gets already de
     );
   expect(await machineAnswer()).toMatchObject({
     ok: false,
-    error: expect.stringContaining("machines may approve"),
+    error: expect.stringContaining("approves without passkey"),
   });
+  await runInDurableObject(locked, (_, state) =>
+    state.storage.sql.exec("DELETE FROM circles WHERE id = 'approvers'"),
+  );
+  await evictDurableObject(locked);
 });
 
 it("expires a proposal after its time, so no later answer runs it (K-1724)", async () => {
@@ -588,7 +612,7 @@ it("runs an approved Owner ask of an unset right, and refuses it once the owner 
       name: "Earlier",
       color: "#00ccff",
       level: "control",
-      members: [{ _tag: "machine", machineId: "vps", rights: { readsCode: { mode: "automatic" } } }],
+      members: [machineChip("vps", { readsCode: { mode: "automatic" } })],
       match: "any",
       needsPasskey: false,
       endsAt: null,
@@ -627,13 +651,7 @@ it("runs an approved Owner ask of an unset right, and refuses it once the owner 
       .exec<{ body: string }>("SELECT body FROM circles WHERE id = 'agents'")
       .toArray();
     const circle = JSON.parse(row?.body ?? "{}") as Circle;
-    const members = [
-      {
-        _tag: "machine",
-        machineId: "vps",
-        rights: { addsApps: { mode: "automatic" }, deploys: { mode: "off" } },
-      },
-    ];
+    const members = [machineChip("vps", { addsApps: { mode: "automatic" }, deploys: { mode: "off" } })];
     state.storage.sql.exec(
       "UPDATE circles SET body = ? WHERE id = 'agents'",
       JSON.stringify({ ...circle, members }),
@@ -673,7 +691,7 @@ it("shows a live ask only to who may answer it, on /api/state and on the socket 
     clientId: "mac.access",
     serviceTokenId: "token-mac",
   };
-  // A device and a second machine in the Owner circle, so both may read the map, but neither is in Agents.
+  // A token and a second machine in the Owner circle: the passkey line keeps both out of it (K-1778), and neither is in Agents.
   await runInDurableObject(stub, (_, state) => {
     state.storage.sql.exec(
       "INSERT OR REPLACE INTO machines (id, body) VALUES (?, ?)",
@@ -689,13 +707,17 @@ it("shows a live ask only to who may answer it, on /api/state and on the socket 
       JSON.stringify({
         ...ownerCircle,
         members: [
-          ...ownerCircle.members.filter((member) => member._tag === "email"),
-          { _tag: "device", tokenId: "token-laptop", clientId: "laptop.access", name: "laptop" },
-          { _tag: "machine", machineId: "mac" },
+          ...ownerCircle.members,
+          tokenActor("token-laptop", "laptop.access", "laptop"),
+          machineChip("mac"),
         ],
       }),
       OWNER_CIRCLE_ID,
     );
+    insertActors(state.storage.sql, [
+      tokenActor("token-laptop", "laptop.access", "laptop"),
+      machineChip("mac"),
+    ]);
   });
   await evictDurableObject(stub);
   expect(await ask(stub, "deploy", "managed")).toMatchObject({ outcome: "waiting" });
@@ -706,13 +728,14 @@ it("shows a live ask only to who may answer it, on /api/state and on the socket 
     expect(answer.status).toBe(200);
     return ((await answer.json()) as { proposals: Array<{ machineId: string }> }).proposals;
   };
-  // Outside Agents: no live ask, though each may read the map. History keeps the ask for the owner (K-1717).
+  // Outside Agents: no live ask for the owner. History keeps the ask for the owner (K-1717).
+  expect(await live(person)).toEqual([]);
+  // K-1778: a token or a machine in the Owner circle holds no admin, because the Owner circle needs a passkey.
   for (const jwt of [
-    person,
     await token({ common_name: "laptop.access" }),
     await token({ common_name: "mac.access" }),
   ])
-    expect(await live(jwt)).toEqual([]);
+    expect((await send("/api/state", { headers: { "cf-access-jwt-assertion": jwt } })).status).toBe(403);
   const socket = await send("/api/ws", {
     headers: { upgrade: "websocket", "cf-access-jwt-assertion": person },
   });
@@ -731,24 +754,44 @@ it("shows a live ask only to who may answer it, on /api/state and on the socket 
   ws.close();
   expect(snapshot.proposals).toEqual([]);
 
-  // A machine in a passkey circle answers only while "machines may approve" is on, so only then it sees the ask.
-  const members = [
-    { _tag: "machine", machineId: "vps", rights: { deploys: { mode: "ask", circleId: "agents" } } },
-    { _tag: "machine", machineId: "mac" },
-  ];
-  const locked = await setup({ deploys: { mode: "ask", circleId: "agents" } }, {
-    needsPasskey: true,
-    members,
-  } as Partial<Circle>);
-  expect(await ask(locked, "deploy", "managed")).toMatchObject({ outcome: "waiting" });
-  expect(await live(await token({ common_name: "mac.access" }))).toEqual([]);
-  const open = await setup({ deploys: { mode: "ask", circleId: "agents" } }, {
-    needsPasskey: true,
-    machinesMayApprove: true,
-    members,
-  } as Partial<Circle>);
-  expect(await ask(open, "deploy", "managed")).toMatchObject({ outcome: "waiting" });
-  expect(await live(await token({ common_name: "mac.access" }))).toMatchObject([{ machineId: "vps" }]);
+  // A machine in a passkey approver circle answers only while "approves without passkey" is on, so only then it sees
+  // the ask. The machine reads the asks of its circles through its own ask path, because it holds no admin (K-1778).
+  const approvers = async (approvesWithoutPasskey: boolean) => {
+    const stubbed = await setup({ deploys: { mode: "ask", circleId: "approvers" } });
+    await runInDurableObject(stubbed, (_, state) => {
+      const circle = {
+        ...JSON.parse(
+          state.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = 'agents'").one().body,
+        ),
+        id: "approvers",
+        name: "Approvers",
+        needsPasskey: true,
+        approvesWithoutPasskey,
+        x: -5000,
+        members: [machineChip("mac")],
+      };
+      state.storage.sql.exec(
+        "INSERT OR REPLACE INTO circles (id, body) VALUES ('approvers', ?)",
+        JSON.stringify(circle),
+      );
+    });
+    await evictDurableObject(stubbed);
+    expect(await ask(stubbed, "deploy", "managed")).toMatchObject({ outcome: "waiting" });
+    const seen = await runInDurableObject(stubbed, (instance) =>
+      (
+        instance as unknown as {
+          answerableProposals(visitor: object, attested: null): Array<{ machineId: string }>;
+        }
+      ).answerableProposals({ email: null, clientId: "mac.access", ip: null }, null),
+    );
+    await runInDurableObject(stubbed, (_, state) =>
+      state.storage.sql.exec("DELETE FROM circles WHERE id = 'approvers'"),
+    );
+    await evictDurableObject(stubbed);
+    return seen;
+  };
+  expect(await approvers(false)).toEqual([]);
+  expect(await approvers(true)).toMatchObject([{ machineId: "vps" }]);
 });
 
 /**
@@ -916,10 +959,11 @@ it("only a person lifts the K-718 limit of a machine (K-718, K-1723)", async () 
       JSON.stringify({
         ...circle,
         needsPasskey: false,
-        members: [...circle.members, { _tag: "machine", machineId: "mac" }],
+        members: [...circle.members, machineChip("mac")],
       }),
       OWNER_CIRCLE_ID,
     );
+    insertActors(sql, [machineChip("mac")]);
     return before;
   });
   await evictDurableObject(held);

@@ -1,8 +1,9 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, expect, it, vi } from "vitest";
-import { ADMIN_RESOURCE_ID, type Circle } from "../src/core/model.ts";
+import { ADMIN_RESOURCE_ID, type Circle, actorIdOf } from "../src/core/model.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
+import { ACTOR_ROW, actorRows, person } from "./actors.ts";
 
 /** K-1601: device invites, through the Worker, against a fake of the service token API of Cloudflare. */
 
@@ -92,12 +93,22 @@ it("trades an invite once for a new secret, and keeps neither the code nor a sec
   const code = codeOf(made.body.link);
   const used = await exchange(code);
   expect(used.status).toBe(200);
+  // K-1778: the token joins the person actor of the owner who invited, and the answer names it.
+  const owner = actorIdOf({ _tag: "login", email: "owner@example.com" });
   expect(await used.json()).toEqual({
     clientId: "kitshn device Pixel.access",
     name: "Pixel",
+    actor: { id: owner, name: "owner@example.com" },
     serviceToken: { clientId: "kitshn device Pixel.access", clientSecret: "rotated-1" },
     machines: [],
     machinesUrl: "https://kit.example.com/device/machines",
+  });
+  const [row] = (await sql("SELECT body FROM actors WHERE id = ?", owner)) as Array<{ body: string }>;
+  expect(JSON.parse(row?.body ?? "{}").credentials).toContainEqual({
+    _tag: "token",
+    tokenId: made.body.tokenId,
+    clientId: "kitshn device Pixel.access",
+    name: "Pixel",
   });
   const stored = await everything(sql);
   for (const secret of [code, "created-secret", "rotated-1"]) expect(stored).not.toContain(secret);
@@ -136,7 +147,7 @@ it("lets only the owner make or cancel an invite, not another admin", async () =
     name: "Co-admins",
     color: "#00B3FF",
     level: "control",
-    members: [{ _tag: "email", email: "admin@example.com" }],
+    members: [person("admin@example.com")],
     match: "any",
     needsPasskey: true,
     endsAt: null,
@@ -145,6 +156,7 @@ it("lets only the owner make or cancel an invite, not another admin", async () =
     r: 50,
   };
   await sql("INSERT OR REPLACE INTO circles (id, body) VALUES ('co-admins', ?)", JSON.stringify(admins));
+  for (const [id, body] of actorRows(admins.members)) await sql(ACTOR_ROW, id, body);
   await runInDurableObject(env.KITSHN.getByName("kitshn"), (instance) =>
     (instance as unknown as { load: () => void }).load(),
   );

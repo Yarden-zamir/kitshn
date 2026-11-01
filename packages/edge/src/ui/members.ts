@@ -1,15 +1,40 @@
 import { type Edit, lockoutReason } from "../core/changes.ts";
 import {
   ADMIN_RESOURCE_ID,
+  type Actor,
   type Circle,
+  type Directory,
   type Member,
   type State,
+  actorIdOf,
   circlesHolding,
+  isPerson,
   isPublicCircle,
+  machineActorId,
+  machineIdOf,
+  memberActor,
 } from "../core/model.ts";
+import { isAgentCircle } from "../core/agent.ts";
 import { ipInRange } from "../core/visitor.ts";
 
-/** The kinds the "Add member" input can make. Devices come from the device list; machines from the map. */
+export { isAgentCircle };
+
+/**
+ * K-1778: what the map calls a member. The icon comes from the credentials (person, token, machine, agent); no rule
+ * reads it.
+ */
+export type MemberKind = "person" | "token" | "machine" | "agent" | "domain" | "ip" | "everyone";
+
+export function memberKind(member: Member, directory: Directory): MemberKind {
+  if (member._tag !== "actor") return member._tag;
+  const actor = memberActor(member, directory);
+  if (!actor) return "token";
+  if ((actor.conditions ?? []).length > 0) return "agent";
+  if (isPerson(actor)) return "person";
+  return machineIdOf(actor) !== null ? "machine" : "token";
+}
+
+/** The kinds the "Add member" input can make. Tokens come from the token list; machines from the map. */
 export const TYPED_KINDS = ["auto", "email", "domain", "ip", "everyone"] as const;
 export type TypedKind = (typeof TYPED_KINDS)[number];
 
@@ -31,13 +56,19 @@ function networkRange(text: string): string | null {
 const looksLikeNetwork = (text: string) =>
   text.includes(":") || text.includes("/") || [...text].every((c) => c === "." || (c >= "0" && c <= "9"));
 
+/** What a typed member adds: the member, and the person actor to make when the email has none yet (K-1778). */
+export interface Typed {
+  readonly member: Member;
+  readonly actor: Actor | null;
+}
+
 /**
  * What the owner typed, as a member. With `auto`, the text decides: `name@x.com` is a person, `@x.com` or
  * `x.com` is an email domain, an address or a CIDR range is a network. Returns a reason string otherwise.
  */
-export function memberFrom(kind: TypedKind, value: string): Member | string {
+export function memberFrom(kind: TypedKind, value: string, directory: Directory): Typed | string {
   const text = value.trim().toLowerCase();
-  if (kind === "everyone") return { _tag: "everyone" };
+  if (kind === "everyone") return { member: { _tag: "everyone" }, actor: null };
   if (!text) return "Type an email, a domain or a network first.";
   const at = text.indexOf("@");
   const network = networkRange(text);
@@ -52,30 +83,57 @@ export function memberFrom(kind: TypedKind, value: string): Member | string {
             ? "domain"
             : "auto";
   switch (resolved) {
-    case "email":
-      return at > 0 && text.indexOf(".", at) > at + 1 && !text.includes(" ")
-        ? { _tag: "email", email: text }
-        : "An email looks like name@example.com.";
+    case "email": {
+      if (!(at > 0 && text.indexOf(".", at) > at + 1 && !text.includes(" ")))
+        return "An email looks like name@example.com.";
+      // K-1778: one person actor per email; a token of that person may hold the email as a login already.
+      const login = { _tag: "login", email: text } as const;
+      const existing = [...directory.actors.values()].find((actor) =>
+        actor.credentials.some((credential) => credential._tag === "login" && credential.email === text),
+      );
+      const id = existing?.id ?? actorIdOf(login);
+      return {
+        member: { _tag: "actor", actorId: id },
+        actor: existing ? null : { id, name: text, credentials: [login] },
+      };
+    }
     case "domain": {
       const domain = text.startsWith("@") ? text.slice(1) : text;
       return domain.includes(".") && !domain.includes("@") && !domain.includes(" ")
-        ? { _tag: "domain", domain }
+        ? { member: { _tag: "domain", domain }, actor: null }
         : "A domain looks like example.com.";
     }
     case "ip":
-      return network ? { _tag: "ip", range: network } : "A network looks like 10.0.0.0/8 or 203.0.113.9.";
+      return network
+        ? { member: { _tag: "ip", range: network }, actor: null }
+        : "A network looks like 10.0.0.0/8 or 203.0.113.9.";
     default:
       return "kitshn cannot tell what this is. Type an email, a domain or a network, or pick the kind.";
   }
 }
 
-/** Whether the machine `machineId` is a member of `circle`. */
+/** Whether the machine actor of `machineId` is a member of `circle`. */
 export const machineMember = (circle: Circle, machineId: string) =>
-  circle.members.some((member) => member._tag === "machine" && member.machineId === machineId);
+  circle.members.some((member) => member._tag === "actor" && member.actorId === machineActorId(machineId));
 
-/** K-1730: an agent circle holds devices and machines only, so only there do rights of a machine count. */
-export const isAgentCircle = (circle: Circle) =>
-  circle.members.every((member) => member._tag === "device" || member._tag === "machine");
+/** Whether the actor `actorId` is a member of `circle`. */
+export const actorMember = (circle: Circle, actorId: string) =>
+  circle.members.some((member) => member._tag === "actor" && member.actorId === actorId);
+
+/** K-1778: the edits that delete an actor: its chip in every circle goes first, so no circle names it after. */
+export const deleteActorEdits = (state: State, actorId: string): Array<Edit> => [
+  ...[...state.circles.values()]
+    .filter((circle) => actorMember(circle, actorId))
+    .map((circle): Edit => ({
+      _tag: "circle",
+      id: circle.id,
+      after: {
+        ...circle,
+        members: circle.members.filter((member) => !(member._tag === "actor" && member.actorId === actorId)),
+      },
+    })),
+  { _tag: "actor", id: actorId, after: null },
+];
 
 /** What a machine joining a circle does: the edit, what to say, and a question for a circle that holds kitshn itself. */
 export type JoinPlan =
@@ -102,20 +160,45 @@ export function joinPlan(
     return {
       refused: `${circle.name} is public: anyone opens what it holds, so a machine needs no membership there.`,
     };
-  const added = machines.map((machineId): Member => ({ _tag: "machine", machineId }));
+  const added = machines.map((machineId): Member => ({ _tag: "actor", actorId: machineActorId(machineId) }));
   const after: Circle = { ...circle, members: [...circle.members, ...added] };
+  // K-1778: a machine whose actor was deleted gets it back.
+  const actors = machines.flatMap((machineId): Array<Edit> =>
+    state.actors.has(machineActorId(machineId))
+      ? []
+      : [
+          {
+            _tag: "actor",
+            id: machineActorId(machineId),
+            after: {
+              id: machineActorId(machineId),
+              name: state.machines.get(machineId)?.name ?? machineId,
+              credentials: [{ _tag: "machine", machineId }],
+            },
+          },
+        ],
+  );
   const names = machines.map((id) => state.resources.get(id)?.name ?? id).join(", ");
-  const lockout = lockoutReason(circle, after, state.machines);
+  const directory = {
+    ...state,
+    actors: new Map([
+      ...state.actors,
+      ...actors.flatMap((edit) =>
+        edit._tag === "actor" && edit.after ? [[edit.id, edit.after] as const] : [],
+      ),
+    ]),
+  };
+  const lockout = lockoutReason(circle, after, directory);
   if (lockout) return { refused: lockout };
   const one = machines.length === 1;
   const opens =
     circle.endsAt !== null && circle.endsAt <= now
       ? `${circle.name} has ended, so ${one ? "it opens" : "they open"} nothing.`
       : `${one ? "It opens" : "They open"} what ${circle.name} holds.`;
-  const agents = isAgentCircle(circle);
+  const agents = isAgentCircle(circle, state);
   const holdsAdmin = circlesHolding(state, ADMIN_RESOURCE_ID).some((held) => held.id === circle.id);
   return {
-    edits: [{ _tag: "circle", id: circle.id, after }],
+    edits: [...actors, { _tag: "circle", id: circle.id, after }],
     done: `${names} joined ${circle.name}. ${opens} ${agents ? "No agent rights yet." : "A circle with people gives no agent rights."}`,
     rightsIn: agents ? circle.id : null,
     ask: holdsAdmin
@@ -131,7 +214,7 @@ export const leaveEdit = (circle: Circle, machineId: string): Edit => ({
   after: {
     ...circle,
     members: circle.members.filter(
-      (member) => !(member._tag === "machine" && member.machineId === machineId),
+      (member) => !(member._tag === "actor" && member.actorId === machineActorId(machineId)),
     ),
   },
 });

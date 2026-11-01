@@ -5,17 +5,18 @@ import { type Change, applyChanges } from "./changes.ts";
 import {
   type Circle,
   type Level,
-  type MachineRight,
+  type Right,
   type Member,
   type Point,
   type ShareSetting,
   type State,
   circlesHolding,
   insideCircle,
+  machineOfMember,
   shareKey,
 } from "./model.ts";
 
-const RUNS_COMMANDS: MachineRight = "runsCommands";
+const RUNS_COMMANDS: Right = "runsCommands";
 
 /**
  * K-722: machine A may run commands on machine B when an agent circle of A holds B's machine card, or a provider card
@@ -72,8 +73,8 @@ export function execMachinesOf(state: State, targetId: string, now: number): Arr
   return [...state.machines.keys()]
     .filter((sourceId) => {
       if (!mayExecOn(state, sourceId, targetId, now)) return false;
-      const mode = machineRightMode(state, sourceId, RUNS_COMMANDS, now);
-      return mode?.mode === "automatic" && (mode.conditions ?? []).length === 0;
+      // A bare machine call carries no labels, so only a chip of the machine actor itself counts (K-1778).
+      return machineRightMode(state, sourceId, RUNS_COMMANDS, now, null)?.mode === "automatic";
     })
     .sort();
 }
@@ -170,7 +171,9 @@ export function migrateAgentShares(state: State): AgentsMigration {
     if (agents.kind !== "t3.agents" || agents.machine === null) continue;
     const target = agents.machine;
     const all = circlesHolding(state, agents.id);
-    const holding = all.filter((circle) => circle.members.every((member) => member._tag === "machine"));
+    const holding = all.filter((circle) =>
+      circle.members.every((member) => machineOfMember(state, member) !== null),
+    );
     for (const circle of all)
       if (!holding.includes(circle))
         unmet.push(
@@ -211,17 +214,20 @@ export function migrateAgentShares(state: State): AgentsMigration {
           endsAt,
         });
       if (level !== "control") continue;
-      for (const member of circle.members)
+      for (const member of circle.members) {
+        const source = machineOfMember(state, member);
         if (
-          member._tag === "machine" &&
-          member.machineId !== target &&
+          member._tag === "actor" &&
+          source !== null &&
+          source !== target &&
           member.rights?.runsCommands === undefined
         ) {
-          const entry = rights.get(member.machineId) ?? { circles: new Set(), targets: new Set() };
+          const entry = rights.get(source) ?? { circles: new Set(), targets: new Set() };
           entry.circles.add(circle.id);
           entry.targets.add(target);
-          rights.set(member.machineId, entry);
+          rights.set(source, entry);
         }
+      }
     }
   }
   const moved: ReadonlyArray<Change> = [
@@ -243,7 +249,7 @@ export function migrateAgentShares(state: State): AgentsMigration {
     const withRight = (circle: Circle): Circle => ({
       ...circle,
       members: circle.members.map((member): Member =>
-        member._tag === "machine" && member.machineId === source
+        member._tag === "actor" && machineOfMember(state, member) === source
           ? { ...member, rights: { ...member.rights, runsCommands: { mode: "automatic" } } }
           : member,
       ),

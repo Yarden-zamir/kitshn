@@ -1,6 +1,6 @@
 import type { LogAnswer, LogLine, LogSearch } from "./logs.ts";
 import type { BackupReport } from "./backups.ts";
-import type { MachineRight } from "./model.ts";
+import type { Right } from "./model.ts";
 import type {
   CardSettingValues,
   DesiredParts,
@@ -262,7 +262,7 @@ export type AskOutcome =
   | { readonly outcome: "done"; readonly result: unknown }
   | { readonly outcome: "waiting"; readonly proposalId: string }
   /** K-1776: `need` names the right that refused the call. */
-  | { readonly outcome: "refused"; readonly reason: string; readonly need?: MachineRight }
+  | { readonly outcome: "refused"; readonly reason: string; readonly need?: Right }
   /** K-1760: the owner of the repo is "not kitshn"; the machine uses its own login. */
   | { readonly outcome: "not-kitshn"; readonly reason: string };
 

@@ -2,13 +2,12 @@ import { newJoinCode } from "./machine.ts";
 import {
   ADMIN_RESOURCE_ID,
   type Circle,
-  type Member,
   type Resource,
   type State,
   activeShares,
   isPublicCircle,
 } from "./model.ts";
-import { type Visitor, circleMatches, memberMatches } from "./visitor.ts";
+import { type Visitor, circleMatches, passkeyHolds } from "./visitor.ts";
 
 /** Names on the zone that kitshn itself uses (K-1003, K-1102, K-1208); a live site cannot take them. */
 export { RESERVED_SITE_NAMES } from "kitshn/names";
@@ -229,19 +228,8 @@ export interface ContentVisitor extends Visitor {
   readonly issuedAt: number | null;
 }
 
-const isPerson = (member: Member) => member._tag === "email" || member._tag === "domain";
-
-/**
- * K-103, K-402: Access asks for the passkey only in the people policy. In an "any" circle, a visitor
- * who matches a network, device or machine member comes in through the Service Auth policy, without it.
- */
-function passkeyNeeded(circle: Circle, visitor: ContentVisitor, state: State): boolean {
-  if (!circle.needsPasskey || visitor.passkey) return false;
-  if (circle.match === "all") return circle.members.some(isPerson);
-  return !circle.members.some(
-    (member) => !isPerson(member) && memberMatches(member, visitor, state.machines),
-  );
-}
+/** K-103, K-1778: a passkey circle lets in only a login after the passkey step; no token or network passes it. */
+const passkeyNeeded = (circle: Circle, visitor: ContentVisitor) => circle.needsPasskey && !visitor.passkey;
 
 /**
  * K-1004: what the Worker does with a request for a page or a file.
@@ -272,8 +260,10 @@ export function contentAccess(
     // K-1504: during a pause Access keeps only the people policies, so only an email can match.
     if (state.paused && visitor.email === null) return "deny";
     const who = state.paused ? { ...visitor, ip: null, clientId: null } : visitor;
-    const matching = shares.filter((share) => circleMatches(share.circle, who, state.machines));
-    if (matching.some((share) => !passkeyNeeded(share.circle, who, state))) return "allow";
+    const matching = shares.filter(
+      (share) => passkeyHolds(share.circle, who) && circleMatches(share.circle, who, state),
+    );
+    if (matching.some((share) => !passkeyNeeded(share.circle, who))) return "allow";
     return matching.length > 0 ? "passkey" : "deny";
   });
   if (decisions.includes("allow")) return "allow";

@@ -3,28 +3,26 @@ import { env } from "cloudflare:workers";
 import { afterEach, expect, it, vi } from "vitest";
 import { newMachineKey } from "../src/core/machine.ts";
 import { stubAccessCerts } from "./access.ts";
+import { agent } from "./actors.ts";
 import { forwarded, setup } from "./machine-http.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
 // Its own file: HTTP probes of one file share a runtime, and a refused upload of another test held this one up.
-it("checks the conditions of publishes when a forwarded page goes public (K-1714, K-1754)", async () => {
+it("gives a forwarded public page that misses the agent actor the mode of the machine chip (K-1714, K-1754, K-1778)", async () => {
   stubAccessCerts();
   const key = await newMachineKey();
-  await setup(
-    {
-      addsPages: { mode: "automatic" },
-      publishes: { mode: "automatic", conditions: [{ key: "t3.project.name", values: ["kitshn"] }] },
-    },
-    key,
-  );
+  // "publishes" runs at once only for the agent of project kitshn; the bare machine has it at default, so it asks the Owner.
+  await setup({ addsPages: { mode: "automatic" } }, key, { x: 1100, y: 0 }, [
+    agent("vps", [{ key: "t3.project.name", values: ["kitshn"] }], { publishes: { mode: "automatic" } }),
+  ]);
   const page = { "x-kitshn-name": "p.html", "content-type": "text/html" };
   const open = await forwarded(key, "POST", "/agent/library", "nonce-public-0123456789", "<p>x</p>", {
     ...page,
     "x-kitshn-public": "true",
   });
-  expect(open.status).toBe(403);
-  expect(await open.json()).toEqual({ error: expect.stringContaining("t3.project.name") });
+  expect(open.status).toBe(409);
+  expect(await open.json()).toMatchObject({ outcome: "waiting" });
 });
 
 it("lets one Owner approval run a forwarded public page whose rights are unset, once and only that page (K-1714, K-1776)", async () => {

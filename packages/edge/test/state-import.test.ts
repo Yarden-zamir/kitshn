@@ -6,6 +6,7 @@ import { type StateExport, stateExport } from "../src/worker/backups.ts";
 import { MIGRATIONS } from "../src/worker/migrations.ts";
 import { IMPORT_OBJECT } from "../src/worker/state-import.ts";
 import { send } from "./access.ts";
+import { person } from "./actors.ts";
 
 /** K-1833: an empty install takes a state export of the same account; anything else is refused and changes nothing. */
 
@@ -22,7 +23,7 @@ const circle: Circle = {
   name: "Friends",
   color: "#7c3aed",
   level: "view",
-  members: [{ _tag: "email", email: "friend@example.com" }],
+  members: [person("friend@example.com")],
   match: "any",
   needsPasskey: false,
   endsAt: null,

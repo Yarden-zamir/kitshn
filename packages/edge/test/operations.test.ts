@@ -12,6 +12,7 @@ import {
   opRequest,
 } from "../src/core/operations.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
+import { machine as machineChip } from "./actors.ts";
 import { forwarded, setup, withDaemon } from "./machine-http.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -38,7 +39,7 @@ it("lets an agent do owner actions through /op: care runs, a circle edit waits f
     name: "Builders",
     color: "#ffcc00",
     level: "control",
-    members: [{ _tag: "machine", machineId: "vps", rights: { deploys: { mode: "automatic" } } }],
+    members: [machineChip("vps", { deploys: { mode: "automatic" } })],
     match: "any",
     needsPasskey: false,
     endsAt: null,

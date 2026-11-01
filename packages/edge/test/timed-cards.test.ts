@@ -1,9 +1,10 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, expect, it, vi } from "vitest";
-import type { Actor } from "../src/core/changes.ts";
+import type { Author } from "../src/core/changes.ts";
 import type { Circle, State } from "../src/core/model.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
+import { key, withActors } from "./actors.ts";
 
 /** K-212: a timed card leaves every circle for the tray at its end, as one revision that Undo takes back. */
 
@@ -15,7 +16,7 @@ const agentCircle = (id: string, clientId: string, x: number): Circle => ({
   name: id,
   color: "#7c3aed",
   level: "control",
-  members: [{ _tag: "device", tokenId: `t-${id}`, clientId, name: id }],
+  members: [key(`t-${id}`, clientId, id)],
   match: "any",
   needsPasskey: false,
   endsAt: null,
@@ -34,7 +35,7 @@ const post = async (path: string, token: string, body: unknown, headers: Record<
 interface Seen {
   readonly places: Record<string, { x: number; y: number }>;
   readonly ends: Record<string, number>;
-  readonly revisions: ReadonlyArray<{ id: number; summary: string; actor: Actor }>;
+  readonly revisions: ReadonlyArray<{ id: number; summary: string; actor: Author }>;
 }
 const seen = async () =>
   (await (
@@ -45,8 +46,11 @@ const seen = async () =>
 async function page(clientId: string, x: number) {
   const circle = agentCircle(`c-${x}`, clientId, x);
   expect(
-    (await post("/api/apply", await owner(), { edits: [{ _tag: "circle", id: circle.id, after: circle }] }))
-      .status,
+    (
+      await post("/api/apply", await owner(), {
+        edits: withActors([{ _tag: "circle", id: circle.id, after: circle }]),
+      })
+    ).status,
   ).toBe(200);
   const published = await post("/agent/library", await agent(clientId), "<p>preview</p>", {
     "content-type": "text/html",

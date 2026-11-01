@@ -6,6 +6,7 @@ import type { Machine, MachineStatus } from "../src/core/machine.ts";
 import type { Edit } from "../src/core/changes.ts";
 import type { Circle, Resource } from "../src/core/model.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
+import { key, withActors } from "./actors.ts";
 
 /** K-1804, K-1805: log searches and tails go between a map, the Durable Object and the daemon of the card. */
 
@@ -215,7 +216,7 @@ describe("logs for agent keys (K-1810)", () => {
     name: id,
     color: "#7c3aed",
     level,
-    members: [{ _tag: "device", tokenId: `t-${id}`, clientId, name: id }],
+    members: [key(`t-${id}`, clientId, id)],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -251,7 +252,7 @@ describe("logs for agent keys (K-1810)", () => {
     const applied = await send("/api/apply", {
       method: "POST",
       headers: { "cf-access-jwt-assertion": await owner(), "content-type": "application/json" },
-      body: JSON.stringify({ edits }),
+      body: JSON.stringify({ edits: withActors(edits) }),
     });
     expect(applied.status).toBe(200);
     expect(await asKey("agent-c.access", "app-keys")).toEqual({ status: 200, body: { runs: [] } });

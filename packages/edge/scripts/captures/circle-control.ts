@@ -1,6 +1,7 @@
 // Circle control (K-539), the connect steps (K-633) and the machine sign (K-515). The demo has no circle of machines,
 // so the scenario puts one with Mac in it where the empty Qlik circle is, and T3 on Mac has lost its connection.
 import type { Page } from "playwright";
+import { machineActorId } from "../../src/core/model.ts";
 import { DESKTOP, PHONE, type Scenario } from "../capture-views.ts";
 
 const box = async (page: Page, selector: string) => {
@@ -33,7 +34,7 @@ export default {
             name: "Machines",
             color: "#FFB347",
             level: "control",
-            members: [{ _tag: "machine", machineId: "mac" }],
+            members: [{ _tag: "actor", actorId: machineActorId("mac") }],
             match: "any",
             needsPasskey: false,
             endsAt: null,

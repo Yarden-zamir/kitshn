@@ -8,14 +8,16 @@ import {
   forwardText,
   signText,
 } from "../src/core/machine.ts";
-import type { Circle, RightMode } from "../src/core/model.ts";
+import type { Circle, Member, RightMode } from "../src/core/model.ts";
 import { accessToken, send } from "./access.ts";
+import { insertActors, machine as machineChip } from "./actors.ts";
 
 /** The machine vps in the agent circle "agents" with these rights. */
 export async function setup(
   rights: Partial<Record<string, RightMode>>,
   key: MachinePrivateKey | null = null,
   spot: { readonly x: number; readonly y: number } = { x: 5000, y: 5000 },
+  others: ReadonlyArray<Member> = [],
 ) {
   const machine: Machine = {
     ...(key ? { key: { kind: "public" as const, publicKey: key.x, fingerprint: "f", since: 0 } } : {}),
@@ -32,7 +34,7 @@ export async function setup(
     name: "Agents",
     color: "#ffcc00",
     level: "control",
-    members: [{ _tag: "machine", machineId: "vps", rights }],
+    members: [machineChip("vps", rights), ...others],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -51,6 +53,7 @@ export async function setup(
       "agents",
       JSON.stringify(agents),
     );
+    insertActors(state.storage.sql, agents.members);
     state.storage.sql.exec("DELETE FROM ask_events");
   });
   await evictDurableObject(stub);

@@ -42,6 +42,7 @@ function world(
     stacks: new Map(Object.entries(stacks).map(([id, members]) => [id, { id, name: id, members }])),
     paused: null,
     machines: new Map(),
+    actors: new Map(),
   };
 }
 

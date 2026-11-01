@@ -4,6 +4,8 @@ import { machineFacts } from "../core/facts.ts";
 import { type Machine, newJoinCode, openJoin, sealJoin } from "../core/machine.ts";
 import type { Circle } from "../core/model.ts";
 import { circleMatches } from "../core/visitor.ts";
+import { actorOf, chip, machineKey } from "../core/testkit.ts";
+import { machineActorId } from "../core/model.ts";
 import {
   answerCheck,
   legacyUpdateScript,
@@ -81,13 +83,17 @@ describe("jobs (K-610)", () => {
 
 describe("machine members (K-107)", () => {
   const m1 = machine("m1", 0, []);
-  const machines = new Map([[m1.id, m1]]);
+  const machines = {
+    machines: new Map([[m1.id, m1]]),
+    actors: new Map([[machineActorId("m1"), actorOf(machineKey("m1"))]]),
+  };
+  const unknown = { ...machines, machines: new Map() };
   const circle: Circle = {
     id: "agents",
     name: "Agents",
     color: "#6C5CE7",
     level: "use",
-    members: [{ _tag: "machine", machineId: "m1" }],
+    members: [chip(machineKey("m1"))],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -105,8 +111,8 @@ describe("machine members (K-107)", () => {
   });
 
   it("matches nobody and compiles to nothing for an unknown machine", () => {
-    expect(circleMatches(circle, { email: null, clientId: "m1.access", ip: null }, new Map())).toBe(false);
-    expect(circlePolicies({ ...circle, match: "all" }, new Map()).size).toBe(0);
+    expect(circleMatches(circle, { email: null, clientId: "m1.access", ip: null }, unknown)).toBe(false);
+    expect(circlePolicies({ ...circle, match: "all" }, unknown).size).toBe(0);
   });
 
   it("updates an old daemon with a checked shell script, only for a known platform (K-617)", () => {

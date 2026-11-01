@@ -1,8 +1,12 @@
 import type { Machine } from "./machine.ts";
 import {
+  type Actor,
   type Circle,
+  type Credential,
+  type Directory,
   type Level,
   type Member,
+  type RightCondition,
   type Resource,
   type State,
   activeShares,
@@ -53,41 +57,97 @@ export function ipInRange(ip: string, range: string): boolean {
   return true;
 }
 
-export function memberMatches(
-  member: Member,
+/** K-1754: the verified labels of a machine call, and the label prefixes of the providers of its machine. */
+export interface Attested {
+  readonly labels: Readonly<Record<string, string>>;
+  readonly prefixes: ReadonlyArray<string>;
+}
+
+/**
+ * K-1754: every condition holds on a verified label. A condition counts only on the prefix of a provider of the machine,
+ * because only then the daemon dropped the caller's own labels of it (K-1753).
+ */
+export const conditionsHold = (conditions: ReadonlyArray<RightCondition>, attested: Attested | null) =>
+  conditions.every((condition) => {
+    const value = attested?.labels[condition.key];
+    return (
+      attested !== null &&
+      attested.prefixes.some((prefix) => condition.key.startsWith(prefix)) &&
+      value !== undefined &&
+      condition.values.includes(value)
+    );
+  });
+
+export function credentialMatches(
+  credential: Credential,
   visitor: Visitor,
   machines: ReadonlyMap<string, Machine>,
 ): boolean {
+  switch (credential._tag) {
+    case "login":
+      return visitor.email !== null && visitor.email.toLowerCase() === credential.email.toLowerCase();
+    case "token":
+      return visitor.clientId !== null && visitor.clientId === credential.clientId;
+    case "machine": {
+      const machine = machines.get(credential.machineId);
+      return machine !== undefined && visitor.clientId === machine.clientId;
+    }
+  }
+}
+
+/**
+ * K-1778: a proof is this actor when one of its credentials proved the call, and every condition holds on a verified
+ * label. Access sees no label, so an actor with conditions never matches there (`attested` null).
+ */
+export const actorMatches = (
+  actor: Actor,
+  visitor: Visitor,
+  machines: ReadonlyMap<string, Machine>,
+  attested: Attested | null,
+) =>
+  actor.credentials.some((credential) => credentialMatches(credential, visitor, machines)) &&
+  ((actor.conditions ?? []).length === 0 || conditionsHold(actor.conditions ?? [], attested));
+
+export function memberMatches(
+  member: Member,
+  visitor: Visitor,
+  directory: Directory,
+  attested: Attested | null = null,
+): boolean {
   const email = visitor.email?.toLowerCase() ?? null;
   switch (member._tag) {
-    case "email":
-      return email !== null && email === member.email.toLowerCase();
+    case "actor": {
+      const actor = directory.actors.get(member.actorId);
+      return actor !== undefined && actorMatches(actor, visitor, directory.machines, attested);
+    }
     case "domain":
       return email !== null && email.endsWith(`@${member.domain.toLowerCase()}`);
     case "ip":
       return typeof visitor.ip === "string" && ipInRange(visitor.ip, member.range);
-    case "device":
-      return visitor.clientId !== null && visitor.clientId === member.clientId;
-    case "machine": {
-      const machine = machines.get(member.machineId);
-      return machine !== undefined && visitor.clientId === machine.clientId;
-    }
     case "everyone":
       return true;
   }
 }
 
-/** K-203. An empty circle matches nobody. The passkey check runs in Access, not here (K-103). */
+/** K-203. An empty circle matches nobody. The passkey check runs in Access (K-103); see `passkeyHolds`. */
 export function circleMatches(
   circle: Circle,
   visitor: Visitor,
-  machines: ReadonlyMap<string, Machine>,
+  directory: Directory,
+  attested: Attested | null = null,
 ): boolean {
   if (circle.members.length === 0) return false;
   return circle.match === "all"
-    ? circle.members.every((member) => memberMatches(member, visitor, machines))
-    : circle.members.some((member) => memberMatches(member, visitor, machines));
+    ? circle.members.every((member) => memberMatches(member, visitor, directory, attested))
+    : circle.members.some((member) => memberMatches(member, visitor, directory, attested));
 }
+
+/**
+ * K-1778: the passkey line. A circle that needs a passkey holds a visitor only with a login, because only a person at a
+ * device proves a passkey (K-103). So no token, machine or network holds such a circle, also a token of the owner.
+ */
+export const passkeyHolds = (circle: Circle, visitor: Visitor) =>
+  !circle.needsPasskey || visitor.email !== null;
 
 /** K-207: the highest level of the shares whose circle matches the visitor, or null. */
 export function visitorLevel(state: State, resource: Resource, visitor: Visitor, now: number): Level | null {
@@ -95,7 +155,8 @@ export function visitorLevel(state: State, resource: Resource, visitor: Visitor,
   for (const share of activeShares(state, resource, now)) {
     // K-1504: during a pause only people and public circles pass, as in Access: no device, machine or network-only visitor.
     if (state.paused && visitor.email === null && !isPublicCircle(share.circle)) continue;
-    if (!circleMatches(share.circle, visitor, state.machines)) continue;
+    if (!passkeyHolds(share.circle, visitor)) continue;
+    if (!circleMatches(share.circle, visitor, state)) continue;
     if (best === null || levelRank(share.level) > levelRank(best)) best = share.level;
   }
   return best;

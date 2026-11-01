@@ -1,12 +1,11 @@
 import type { Change } from "./changes.ts";
 import type { Command } from "./machine.ts";
 import {
-  ADMIN_RESOURCE_ID,
-  type AgentRight,
   CIRCLE_ALONE_KEY,
   type Circle,
+  type Directory,
   EVERYONE_CIRCLE_ID,
-  type MachineRight,
+  type Right,
   type Member,
   type OpenRightMode,
   type Point,
@@ -15,80 +14,132 @@ import {
   activeShares,
   circlesHolding,
   isPublicCircle,
+  isPerson,
+  memberActor,
   shareKey,
   type CardKind,
 } from "./model.ts";
 import { placeInside } from "./place.ts";
 import { coveringCards } from "./repoGroups.ts";
-import { type Visitor, circleMatches, visitorLevel } from "./visitor.ts";
-
-/** K-718, K-1730: true when the member is the agent that the visitor is: an agent key, or a machine by its token. */
-/**
- * K-718, K-1730: true when the member is the agent that the visitor is: an agent key, or a machine by its token. A machine
- * counts only where the owner set one of its rights, so an older circle of machines gives them nothing new.
- */
-const namesAgent = (state: State, member: Member, visitor: Visitor) =>
-  (member._tag === "device" && member.clientId === visitor.clientId) ||
-  (member._tag === "machine" &&
-    visitor.clientId !== null &&
-    state.machines.get(member.machineId)?.clientId === visitor.clientId &&
-    Object.values(member.rights ?? {}).some((mode) => mode !== undefined));
+import { type Attested, type Visitor, actorMatches, circleMatches, visitorLevel } from "./visitor.ts";
 
 /**
- * K-718: the agent circles of a device: circles of devices only that name it, have not ended, and that it matches.
- * K-1730: a machine's agent circles may also hold machines; an agent key keeps exactly its old circles, so a machine
- * in a circle gives a key no new control. A circle with people, networks, domains or Everyone is never an agent
- * circle, so an agent cannot move a card to anyone but other devices and machines, except a site that it added
- * into Everyone (agentRefusal).
+ * K-718, K-1730, K-1778: true when the member is an actor that the proof is, with at least one right set in this circle,
+ * so an older circle of machines gives them nothing new.
  */
-export const circlesOf = (state: State, visitor: Visitor, now: number) => {
-  const machine = machineOf(state, visitor) !== undefined;
-  return new Set(
+const namesAgent = (state: State, member: Member, visitor: Visitor, attested: Attested | null) => {
+  const actor = memberActor(member, state);
+  return (
+    member._tag === "actor" &&
+    actor !== undefined &&
+    Object.values(member.rights ?? {}).some((mode) => mode !== undefined) &&
+    actorMatches(actor, visitor, state.machines, attested)
+  );
+};
+
+/** K-718, K-1778: an agent circle holds actors that are not people, and no rule, so an agent never shares with a person. */
+export const isAgentCircle = (circle: Circle, directory: Directory) =>
+  circle.members.every((member) => {
+    const actor = memberActor(member, directory);
+    return actor !== undefined && !isPerson(actor);
+  });
+
+/**
+ * K-718, K-1730: the agent circles of a proof: agent circles that name one of its actors with a right set, have not ended,
+ * and that it matches. A passkey circle is never one (K-1778). So an agent cannot move a card to anyone but other agents,
+ * except a site that it added into Everyone (agentRefusal).
+ */
+export const circlesOf = (state: State, visitor: Visitor, now: number, attested: Attested | null = null) =>
+  new Set(
     visitor.clientId === null
       ? []
       : [...state.circles.values()]
           .filter(
             (circle) =>
-              circle.members.every(
-                (member) => member._tag === "device" || (machine && member._tag === "machine"),
-              ) &&
-              circle.members.some((member) => namesAgent(state, member, visitor)) &&
+              !circle.needsPasskey &&
+              isAgentCircle(circle, state) &&
+              circle.members.some((member) => namesAgent(state, member, visitor, attested)) &&
               (circle.endsAt === null || circle.endsAt > now) &&
-              circleMatches(circle, visitor, state.machines),
+              circleMatches(circle, visitor, state, attested),
           )
           .map((circle) => circle.id),
   );
+
+/** K-1778: the proof of a bare machine call, from its token. */
+const machineVisitor = (state: State, machineId: string): Visitor | null => {
+  const machine = state.machines.get(machineId);
+  return machine ? { email: null, clientId: machine.clientId, ip: null } : null;
 };
 
 /**
- * K-1720, K-1730: the mode of one right of a machine through its agent circles: "automatic" from any circle wins,
- * else the first "ask <circle>". Null means off.
+ * K-1720, K-1730: the mode of one right of a proof through its agent circles: "automatic" from any matched chip wins,
+ * else the first "ask <circle>". Null means that no chip opens it.
  */
+export const rightMode = (
+  state: State,
+  visitor: Visitor,
+  right: Right,
+  now: number,
+  attested: Attested | null,
+): OpenRightMode | null => pickMode(rightModes(state, visitor, right, now, attested));
+
+/** K-1776: true when a matched chip sets this right to "off" and no matched chip opens it. */
+export const rightOff = (
+  state: State,
+  visitor: Visitor,
+  right: Right,
+  now: number,
+  attested: Attested | null,
+) =>
+  rightModes(state, visitor, right, now, attested).some((mode) => mode.mode === "off") &&
+  rightMode(state, visitor, right, now, attested) === null;
+
+/** K-1720: `rightMode` for a call of a machine's daemon, with the verified labels of the call (null: none). */
 export function machineRightMode(
   state: State,
   machineId: string,
-  right: MachineRight,
+  right: Right,
   now: number,
+  attested: Attested | null,
 ): OpenRightMode | null {
-  return pickMode(machineModes(state, machineId, right, now));
+  const visitor = machineVisitor(state, machineId);
+  return visitor ? rightMode(state, visitor, right, now, attested) : null;
 }
 
-/** K-1776: true when a circle of the machine sets this right to "off", so a call refuses instead of asking the Owner. */
-export const machineRightOff = (state: State, machineId: string, right: MachineRight, now: number) =>
-  machineModes(state, machineId, right, now).some((mode) => mode.mode === "off") &&
-  machineRightMode(state, machineId, right, now) === null;
+/** K-1776: `rightOff` for a call of a machine's daemon. */
+export const machineRightOff = (
+  state: State,
+  machineId: string,
+  right: Right,
+  now: number,
+  attested: Attested | null,
+) => {
+  const visitor = machineVisitor(state, machineId);
+  return visitor !== null && rightOff(state, visitor, right, now, attested);
+};
 
-function machineModes(state: State, machineId: string, right: MachineRight, now: number): Array<RightMode> {
-  const machine = state.machines.get(machineId);
-  if (!machine) return [];
-  const visitor = { email: null, clientId: machine.clientId, ip: null };
-  return [...circlesOf(state, visitor, now)].flatMap((id) =>
+/** K-1778: the chips of the actors that the proof is, in its agent circles. */
+const matchedChips = (state: State, visitor: Visitor, now: number, attested: Attested | null) =>
+  [...circlesOf(state, visitor, now, attested)].flatMap((id) =>
     (state.circles.get(id)?.members ?? []).flatMap((member) => {
-      const mode =
-        member._tag === "machine" && member.machineId === machineId ? member.rights?.[right] : undefined;
-      return mode ? [mode] : [];
+      const actor = memberActor(member, state);
+      return member._tag === "actor" && actor && actorMatches(actor, visitor, state.machines, attested)
+        ? [{ circleId: id, member }]
+        : [];
     }),
   );
+
+function rightModes(
+  state: State,
+  visitor: Visitor,
+  right: Right,
+  now: number,
+  attested: Attested | null,
+): Array<RightMode> {
+  return matchedChips(state, visitor, now, attested).flatMap(({ member }) => {
+    const mode = member._tag === "actor" ? member.rights?.[right] : undefined;
+    return mode ? [mode] : [];
+  });
 }
 
 /** K-1720: automatic wins over ask; "off" never lets a call through. */
@@ -97,36 +148,26 @@ const pickMode = (modes: ReadonlyArray<RightMode>): OpenRightMode | null => {
   return open.find((mode) => mode.mode === "automatic") ?? open[0] ?? null;
 };
 
-/** K-1730: the machine whose token the visitor carries, or undefined for a person or an agent key. */
+/** K-1730: the machine whose token the visitor carries, or undefined for a person or a token actor. */
 export const machineOf = (state: State, visitor: Visitor) =>
   visitor.clientId === null
     ? undefined
     : [...state.machines.values()].find((machine) => machine.clientId === visitor.clientId);
 
 /**
- * K-718: a key has a right when one of its agent circles names it with that right. Both are off by default.
- * K-1720: a machine has it when the right is "automatic", or when an approval of its circle (`approved`) gave it
- * for this one ask.
+ * K-1720: a proof has a right when the right is "automatic" on a chip of its actors, or when an approval of its circle
+ * (`approved`) gave it for this one call. K-1723, K-1776: an approval of exactly this call counts also for a right that
+ * no circle sets; "off" never gets this far, because the approval refuses first (proposalGone).
  */
 export function agentHas(
   state: State,
   visitor: Visitor,
-  right: AgentRight,
+  right: Right,
   now: number,
-  approved: ReadonlyArray<MachineRight> = [],
+  attested: Attested | null,
+  approved: ReadonlyArray<Right> = [],
 ) {
-  const machine = machineOf(state, visitor);
-  // K-1723, K-1776: an approval of exactly this call counts also for a right that no circle sets; "off" never gets
-  // this far, because the approval refuses first (proposalGone).
-  if (machine)
-    return approved.includes(right) || machineRightMode(state, machine.id, right, now)?.mode === "automatic";
-  return [...circlesOf(state, visitor, now)].some((id) =>
-    state.circles
-      .get(id)
-      ?.members.some(
-        (member) => member._tag === "device" && member.clientId === visitor.clientId && member[right],
-      ),
-  );
+  return approved.includes(right) || rightMode(state, visitor, right, now, attested)?.mode === "automatic";
 }
 
 /**
@@ -138,14 +179,15 @@ export const agentHomeCircle = (
   clientId: string,
   now: number,
   holding: ReadonlyArray<Circle> = [],
+  attested: Attested | null = null,
 ) => {
-  const homes = controlCircles(state, { email: null, clientId, ip: null }, now);
+  const homes = controlCircles(state, { email: null, clientId, ip: null }, now, attested);
   return homes.find((home) => holding.some((circle) => circle.id === home.id)) ?? homes[0];
 };
 
 /** K-718: the agent circles of a key at the level `control`, in map order. */
-const controlCircles = (state: State, visitor: Visitor, now: number) =>
-  [...circlesOf(state, visitor, now)]
+const controlCircles = (state: State, visitor: Visitor, now: number, attested: Attested | null) =>
+  [...circlesOf(state, visitor, now, attested)]
     .flatMap((id) => state.circles.get(id) ?? [])
     .filter((circle) => circle.level === "control");
 
@@ -161,8 +203,13 @@ export const mayDeployOn = (state: State, allowedBy: string | null, machineId: s
  * `control` (or a `control` override). This is the level of the circle, before a kind cuts it down: a site
  * has only `view` (K-301), and an agent key still manages it.
  */
-export function cardsControlledBy(state: State, visitor: Visitor, now: number) {
-  const own = circlesOf(state, visitor, now);
+export function cardsControlledBy(
+  state: State,
+  visitor: Visitor,
+  now: number,
+  attested: Attested | null = null,
+) {
+  const own = circlesOf(state, visitor, now, attested);
   return new Set(
     [...state.resources.values()]
       .filter((resource) =>
@@ -182,8 +229,14 @@ const levelIn = (state: State, resourceId: string, circle: Circle) =>
  * K-718: an agent key runs jobs on a machine only when it manages the machine card, every card that runs on
  * the machine, and every card that the machine's own token opens (K-107), because a shell there reaches all.
  */
-export function agentMayRunOn(state: State, visitor: Visitor, machineId: string, now: number) {
-  const managed = cardsControlledBy(state, visitor, now);
+export function agentMayRunOn(
+  state: State,
+  visitor: Visitor,
+  machineId: string,
+  now: number,
+  attested: Attested | null = null,
+) {
+  const managed = cardsControlledBy(state, visitor, now, attested);
   const machine = state.machines.get(machineId);
   const token = { email: null, clientId: machine?.clientId ?? null, ip: null };
   return (
@@ -207,8 +260,7 @@ export const CLOSED_COMMANDS: ReadonlySet<Command["kind"]> = new Set([
 
 /**
  * K-718: whether this sender may run this command on a machine without a person. For a closed command, an agent on a
- * machine needs only the machine card. An agent key stays under the full limit (K-1732).
- * Limit: the closed commands share the right "runs commands". Revisit when the right "maintains" lands.
+ * machine needs only the machine card. A token actor stays under the full limit.
  */
 export function agentMayCommand(
   state: State,
@@ -216,10 +268,11 @@ export function agentMayCommand(
   machineId: string,
   kind: Command["kind"],
   now: number,
+  attested: Attested | null = null,
 ) {
   return CLOSED_COMMANDS.has(kind) && machineOf(state, visitor) !== undefined
-    ? state.machines.has(machineId) && cardsControlledBy(state, visitor, now).has(machineId)
-    : agentMayRunOn(state, visitor, machineId, now);
+    ? state.machines.has(machineId) && cardsControlledBy(state, visitor, now, attested).has(machineId)
+    : agentMayRunOn(state, visitor, machineId, now, attested);
 }
 
 /** K-718: the kinds that an agent key may publish. A live site serves a dev server on a machine, so never. */
@@ -256,11 +309,12 @@ export function agentRefusal(
   changes: ReadonlyArray<Change>,
   now: number,
   added: ReadonlySet<string>,
-  approved: ReadonlyArray<MachineRight> = [],
+  attested: Attested | null,
+  approved: ReadonlyArray<Right> = [],
 ) {
-  const controlled = cardsControlledBy(state, visitor, now);
-  const own = circlesOf(state, visitor, now);
-  const publishes = agentHas(state, visitor, "publishes", now, approved);
+  const controlled = cardsControlledBy(state, visitor, now, attested);
+  const own = circlesOf(state, visitor, now, attested);
+  const publishes = agentHas(state, visitor, "publishes", now, attested, approved);
   for (const edit of changes) {
     if (edit._tag !== "place") return `An agent may only move cards; it cannot change a ${edit._tag}.`;
     if (!controlled.has(edit.id))
@@ -281,16 +335,16 @@ export function agentRefusal(
         (circle) => own.has(circle.id) && levelIn(side, edit.id, circle) === "control",
       );
       if (side === after && holding.some(isEveryoneCircle) && !keeps)
-        return publishRefusal(state, visitor, now);
+        return publishRefusal(state, visitor, now, attested);
     }
   }
   return null;
 }
 
 /** K-718: why a published card would leave every agent circle of the key. */
-function publishRefusal(state: State, visitor: Visitor, now: number) {
+function publishRefusal(state: State, visitor: Visitor, now: number, attested: Attested | null) {
   const everyone = [...state.circles.values()].find(isEveryoneCircle);
-  const overlaps = controlCircles(state, visitor, now).some(
+  const overlaps = controlCircles(state, visitor, now, attested).some(
     (circle) =>
       everyone !== undefined &&
       Math.hypot(circle.x - everyone.x, circle.y - everyone.y) < circle.r + everyone.r,
@@ -312,10 +366,11 @@ export function agentUploadPlace(
   circleId: string | null,
   publish: boolean,
   now: number,
-  approved: ReadonlyArray<MachineRight> = [],
+  attested: Attested | null,
+  approved: ReadonlyArray<Right> = [],
 ): Point | null | string {
   if (circleId === null && !publish) return null;
-  const homes = controlCircles(state, visitor, now);
+  const homes = controlCircles(state, visitor, now, attested);
   const home =
     circleId === null ? homes[0] : homes.find((circle) => circle.id === circleId || circle.name === circleId);
   if (!home)
@@ -328,25 +383,13 @@ export function agentUploadPlace(
       placeInside(state, home, new Set([home.id]), taken) ??
       `kitshn finds no free spot inside "${home.name}".`
     );
-  if (!agentHas(state, visitor, "publishes", now, approved))
+  if (!agentHas(state, visitor, "publishes", now, attested, approved))
     return 'This agent may not publish. The owner turns on "may publish" for it (K-718).';
   const everyone = [...state.circles.values()].find(isEveryoneCircle);
   if (!everyone) return "The map has no Everyone circle.";
   return (
-    placeInside(state, home, new Set([home.id, everyone.id]), taken) ?? publishRefusal(state, visitor, now)
-  );
-}
-
-/** K-718: a device member in an agent circle, without the admin card. The map calls it an agent. */
-export function isAgentKey(state: State, member: Member, now: number): boolean {
-  if (member._tag !== "device") return false;
-  const visitor = { email: null, clientId: member.clientId, ip: null };
-  const admin = state.resources.get(ADMIN_RESOURCE_ID);
-  // The pause takes every device off the admin for a while; that does not make the owner's devices agents.
-  const unpaused = { ...state, paused: null };
-  return (
-    circlesOf(state, visitor, now).size > 0 &&
-    (!admin || visitorLevel(unpaused, admin, visitor, now) !== "control")
+    placeInside(state, home, new Set([home.id, everyone.id]), taken) ??
+    publishRefusal(state, visitor, now, attested)
   );
 }
 
@@ -432,7 +475,8 @@ export const codeRightMode = (
   right: "readsCode" | "writesCode",
   fullName: string,
   now: number,
-): OpenRightMode | null => pickMode(codeModes(state, machineId, right, fullName, now));
+  attested: Attested | null,
+): OpenRightMode | null => pickMode(codeModes(state, machineId, right, fullName, now, attested));
 
 /** K-1776: true when a card that covers the repo sets the code right to "off" and none lets it through. */
 export const codeRightOff = (
@@ -441,9 +485,10 @@ export const codeRightOff = (
   right: "readsCode" | "writesCode",
   fullName: string,
   now: number,
+  attested: Attested | null,
 ) =>
-  codeModes(state, machineId, right, fullName, now, true).some((mode) => mode.mode === "off") &&
-  codeRightMode(state, machineId, right, fullName, now) === null;
+  codeModes(state, machineId, right, fullName, now, attested, true).some((mode) => mode.mode === "off") &&
+  codeRightMode(state, machineId, right, fullName, now, attested) === null;
 
 function codeModes(
   state: State,
@@ -451,30 +496,24 @@ function codeModes(
   right: "readsCode" | "writesCode",
   fullName: string,
   now: number,
+  attested: Attested | null,
   exact = false,
 ): Array<RightMode> {
   const machine = state.machines.get(machineId);
   if (!machine) return [];
   const covering = coveringCards(state, fullName);
   // "writes code" includes reading for an open mode; "off" counts only for its own right (K-1776).
-  const rights: ReadonlyArray<MachineRight> =
+  const rights: ReadonlyArray<Right> =
     right === "readsCode" && !exact ? ["readsCode", "writesCode"] : [right];
-  const modes = [...circlesOf(state, { email: null, clientId: machine.clientId, ip: null }, now)].flatMap(
-    (id) => {
-      const circle = state.circles.get(id);
-      if (!circle) return [];
-      const holds = covering.some(
-        (card) =>
-          circlesHolding(state, card.id).some((held) => held.id === id) &&
-          levelIn(state, card.id, circle) === "control",
-      );
-      if (!holds) return [];
-      return circle.members.flatMap((member) =>
-        member._tag === "machine" && member.machineId === machineId
-          ? rights.flatMap((each) => (member.rights?.[each] ? [member.rights[each]] : []))
-          : [],
-      );
-    },
-  );
-  return modes;
+  const visitor = { email: null, clientId: machine.clientId, ip: null };
+  return matchedChips(state, visitor, now, attested).flatMap(({ circleId, member }) => {
+    const circle = state.circles.get(circleId);
+    if (!circle || member._tag !== "actor") return [];
+    const holds = covering.some(
+      (card) =>
+        circlesHolding(state, card.id).some((held) => held.id === circleId) &&
+        levelIn(state, card.id, circle) === "control",
+    );
+    return holds ? rights.flatMap((each) => (member.rights?.[each] ? [member.rights[each]] : [])) : [];
+  });
 }

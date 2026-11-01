@@ -274,6 +274,7 @@ export function toState(snapshot: Snapshot): State {
     stacks: new Map(snapshot.stacks.map((stack) => [stack.id, stack])),
     paused: snapshot.paused,
     machines: new Map(snapshot.machines.map((view) => [view.machine.id, view.machine])),
+    actors: new Map(snapshot.actors.map((actor) => [actor.id, actor])),
   };
 }
 

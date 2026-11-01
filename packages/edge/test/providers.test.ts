@@ -6,6 +6,7 @@ import type { Machine, MachineStatus } from "../src/core/machine.ts";
 import { type Circle, OWNER_CIRCLE_ID, type Resource, providerCardId } from "../src/core/model.ts";
 import { type ActionProgress, currentStep } from "../src/core/progress.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
+import { ACTOR_ROW, actorRows, machine as machineChip, tokenActor } from "./actors.ts";
 
 const machine: Machine = {
   id: "vps",
@@ -239,7 +240,7 @@ it("stores desired state from a provider, and runs a provider command that an ag
     name: "Agents",
     color: "#ffcc00",
     level: "control",
-    members: [{ _tag: "machine", machineId: "vps", rights: { runsCommands: { mode: "automatic" } } }],
+    members: [machineChip("vps", { runsCommands: { mode: "automatic" } })],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -248,6 +249,7 @@ it("stores desired state from a provider, and runs a provider command that an ag
     r: 200,
   };
   await sql("INSERT OR REPLACE INTO circles (id, body) VALUES ('agents', ?)", JSON.stringify(agents));
+  for (const [id, body] of actorRows(agents.members)) await sql(ACTOR_ROW, id, body);
   await sql("INSERT OR REPLACE INTO places (id, x, y) VALUES ('vps', 5000, 5000)");
   await sql("INSERT OR REPLACE INTO places (id, x, y) VALUES (?, 5000, 5000)", appId);
   const command = { kind: "provider", provider: "t3", command: "restart", resource: appId };
@@ -394,7 +396,7 @@ it("records the forwarded tool calls of a machine on machines that it reaches, a
     name: "Links",
     color: "#7CFF8A",
     level: "use",
-    members: [{ _tag: "machine", machineId: "vps" }],
+    members: [machineChip("vps")],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -405,6 +407,7 @@ it("records the forwarded tool calls of a machine on machines that it reaches, a
   await sql("INSERT OR REPLACE INTO machines (id, body) VALUES ('mac', ?)", JSON.stringify(mac));
   await sql("INSERT OR REPLACE INTO resources (id, body) VALUES (?, ?)", macCard.id, JSON.stringify(macCard));
   await sql("INSERT OR REPLACE INTO circles (id, body) VALUES ('links', ?)", JSON.stringify(links));
+  for (const [id, body] of actorRows(links.members)) await sql(ACTOR_ROW, id, body);
   await sql("INSERT OR REPLACE INTO places (id, x, y) VALUES (?, 7000, 7000)", macCard.id);
   await sql("DELETE FROM link_events");
   const call = { type: "linkCall", target: "mac", name: "read_file", status: 200 };
@@ -642,7 +645,7 @@ it("lists for a device the provider cards with an address that its token opens, 
     name: "Phone",
     color: "#00B3FF",
     level: "use",
-    members: [{ _tag: "device", tokenId: "t-phone", clientId: "phone.access", name: "Yarden's phone" }],
+    members: [tokenActor("t-phone", "phone.access", "Yarden's phone")],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -651,6 +654,7 @@ it("lists for a device the provider cards with an address that its token opens, 
     r: 200,
   };
   await sql("INSERT OR REPLACE INTO circles (id, body) VALUES ('phone', ?)", JSON.stringify(phone));
+  for (const [id, body] of actorRows(phone.members)) await sql(ACTOR_ROW, id, body);
   await message("signed", [
     report([
       { ...app, site: { name: "t3-vps", port: 3773 } },

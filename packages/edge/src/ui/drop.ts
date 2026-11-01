@@ -2,6 +2,7 @@ import { circlePolicies } from "../core/access.ts";
 import { type Edit, type ShareDiff, applyChanges, resolveEdits, shareDiff } from "../core/changes.ts";
 import {
   type Circle,
+  type Directory,
   type Point,
   type Resource,
   type State,
@@ -55,12 +56,12 @@ const MAX_LINES = 6;
 export function givesNoOne(
   resource: Resource,
   circle: Circle,
-  machines: State["machines"],
+  directory: Directory,
   now = Date.now(),
 ): string | null {
   if (circle.endsAt !== null && circle.endsAt <= now)
     return `${circle.name} has ended: it gives no one ${resource.name}`;
-  return circlePolicies(circle, machines).size === 0
+  return circlePolicies(circle, directory).size === 0
     ? `${circle.name} lets no one in, so it gives no one ${resource.name}`
     : null;
 }
@@ -71,13 +72,13 @@ export function givesNoOne(
  */
 export function shareLines(
   diffs: ReadonlyArray<ShareDiff>,
-  machines: State["machines"],
+  directory: Directory,
   now = Date.now(),
 ): ReadonlyArray<DropLine> {
   const lines = diffs.slice(0, MAX_LINES).map(({ resource, circle, to }): DropLine => {
     if (to === null)
       return { text: `\u2212 ${circle.name} can no longer open ${resource.name}`, minus: true };
-    const nobody = givesNoOne(resource, circle, machines, now);
+    const nobody = givesNoOne(resource, circle, directory, now);
     if (nobody) return { text: nobody };
     return { text: `+ ${circle.name} can ${levelName(resource, to)} ${resource.name}` };
   });
@@ -127,7 +128,7 @@ export function dropHover(
   }
   const shares = shareLines(
     shareDiff(state, applyChanges(state, resolveEdits(state, plan.edits))),
-    state.machines,
+    state,
     now,
   );
   const circle = target._tag === "title" ? state.circles.get(target.id) : undefined;

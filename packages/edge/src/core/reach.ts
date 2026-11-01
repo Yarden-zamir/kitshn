@@ -1,5 +1,12 @@
 import { circlePolicies } from "./access.ts";
-import { type Level, type Resource, type State, activeShares, isPublicCircle } from "./model.ts";
+import {
+  type Level,
+  type Resource,
+  type State,
+  activeShares,
+  isPublicCircle,
+  machineOfMember,
+} from "./model.ts";
 import { type Visitor, circleMatches, visitorLevel } from "./visitor.ts";
 
 /** Where a reach line starts: a card on the map, or the head of a circle for its members without a card. */
@@ -44,7 +51,7 @@ export function reachOf(state: State, cardId: string, now: number): Array<ReachL
   const reached = (from: ReachEnd, to: Resource, visitor: Visitor) => {
     const level = visitorLevel(state, to, visitor, now);
     const via = activeShares(state, to, now)
-      .filter((share) => share.level === level && circleMatches(share.circle, visitor, state.machines))
+      .filter((share) => share.level === level && circleMatches(share.circle, visitor, state))
       .map((share) => share.circle);
     if (level && !via.every(isPublicCircle))
       add({ from, to: to.id, level, runs: false, via: via.map((circle) => circle.name), members: 0 });
@@ -59,15 +66,15 @@ export function reachOf(state: State, cardId: string, now: number): Array<ReachL
   const placed = new Set(placedMachines.map((machine) => machine.id));
   for (const share of activeShares(state, card, now)) {
     // K-402: a circle that Access makes no policy for, such as "all must match" a machine and a person, lets no one in.
-    if (circlePolicies(share.circle, state.machines).size === 0) continue;
+    if (circlePolicies(share.circle, state).size === 0) continue;
     // K-203: "all must match" members get in only together, so the line stands for all of them.
     const others =
       share.circle.match === "all"
         ? share.circle.members
-        : share.circle.members.filter(
-            (member) =>
-              member._tag !== "machine" || (member.machineId !== cardId && !placed.has(member.machineId)),
-          );
+        : share.circle.members.filter((member) => {
+            const machineId = machineOfMember(state, member);
+            return machineId === null || (machineId !== cardId && !placed.has(machineId));
+          });
     if (others.length === 0) continue;
     add({
       from: { _tag: "circle", id: share.circle.id },

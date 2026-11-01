@@ -1,6 +1,6 @@
 // Schemas for input that crosses the wire. The UI imports only model.ts, so effect stays out of its bundle.
 import { Schema } from "effect";
-import type { Edit, Actor } from "./changes.ts";
+import type { Edit, Author } from "./changes.ts";
 import * as Model from "./model.ts";
 
 const Id = Schema.String.check(Schema.isPattern(/^[a-z0-9][a-z0-9-]{0,62}$/));
@@ -10,7 +10,7 @@ const Time = Schema.Finite;
 
 export const Level = Schema.Literals(Model.LEVELS);
 
-/** K-1720: the mode of one right that is on. */
+/** K-1754: the conditions of an agent actor on attested labels. */
 const Conditions = Schema.Array(
   Schema.Struct({
     key: Schema.String.check(Schema.isMinLength(3), Schema.isMaxLength(64)),
@@ -20,13 +20,14 @@ const Conditions = Schema.Array(
     ),
   }),
 ).check(Schema.isMaxLength(10));
+/** K-1720: the mode of one right. */
 const RightMode = Schema.Union([
-  Schema.Struct({ mode: Schema.Literal("automatic"), conditions: Schema.optionalKey(Conditions) }),
-  Schema.Struct({ mode: Schema.Literal("ask"), circleId: Id, conditions: Schema.optionalKey(Conditions) }),
+  Schema.Struct({ mode: Schema.Literal("automatic") }),
+  Schema.Struct({ mode: Schema.Literal("ask"), circleId: Id }),
   Schema.Struct({ mode: Schema.Literal("off") }),
 ]);
-/** K-1730, K-1776: each right of a machine in an agent circle; a missing right asks the Owner, "off" refuses. */
-const MachineRights = Schema.Struct({
+/** K-1730, K-1776: each right of an actor in a circle; a missing right asks the Owner, "off" refuses. */
+const Rights = Schema.Struct({
   addsApps: Schema.optionalKey(RightMode),
   publishes: Schema.optionalKey(RightMode),
   deploys: Schema.optionalKey(RightMode),
@@ -40,28 +41,31 @@ const MachineRights = Schema.Struct({
   maintains: Schema.optionalKey(RightMode),
   readsMap: Schema.optionalKey(RightMode),
 });
-// A new right of MACHINE_RIGHTS fails here until the schema decodes it.
-const _everyRight: Record<Model.MachineRight, unknown> = MachineRights.fields;
+// A new right of RIGHTS fails here until the schema decodes it.
+const _everyRight: Record<Model.Right, unknown> = Rights.fields;
+
+const Email = Schema.String.check(Schema.isPattern(/^[^\s@]+@[^\s@]+\.[^\s@]+$/));
+
+/** K-1778: the credentials of an actor. */
+export const Credential = Schema.Union([
+  Schema.TaggedStruct("login", { email: Email }),
+  Schema.TaggedStruct("token", { tokenId: Schema.String, clientId: Schema.String, name: Name }),
+  Schema.TaggedStruct("machine", { machineId: Id }),
+]);
+
+export const Actor = Schema.Struct({
+  id: Id,
+  name: Name,
+  credentials: Schema.Array(Credential).check(Schema.isMinLength(1), Schema.isMaxLength(50)),
+  conditions: Schema.optionalKey(Conditions),
+});
 
 export const Member = Schema.Union([
-  Schema.TaggedStruct("email", {
-    email: Schema.String.check(Schema.isPattern(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)),
-  }),
+  Schema.TaggedStruct("actor", { actorId: Id, rights: Schema.optionalKey(Rights) }),
   Schema.TaggedStruct("domain", {
     domain: Schema.String.check(Schema.isPattern(/^[a-z0-9.-]+\.[a-z]{2,}$/)),
   }),
   Schema.TaggedStruct("ip", { range: Schema.String.check(Schema.isPattern(/^[0-9a-fA-F:.]+\/\d{1,3}$/)) }),
-  Schema.TaggedStruct("device", {
-    tokenId: Schema.String,
-    clientId: Schema.String,
-    name: Name,
-    addsApps: Schema.optionalKey(Schema.Literal(true)),
-    publishes: Schema.optionalKey(Schema.Literal(true)),
-  }),
-  Schema.TaggedStruct("machine", {
-    machineId: Id,
-    rights: Schema.optionalKey(MachineRights),
-  }),
   Schema.TaggedStruct("everyone", {}),
 ]);
 
@@ -73,7 +77,7 @@ export const Circle = Schema.Struct({
   members: Schema.Array(Member).check(Schema.isMaxLength(200)),
   match: Schema.Literals(["any", "all"]),
   needsPasskey: Schema.Boolean,
-  machinesMayApprove: Schema.optionalKey(Schema.Boolean),
+  approvesWithoutPasskey: Schema.optionalKey(Schema.Boolean),
   endsAt: Schema.NullOr(Time),
   x: Coordinate,
   y: Coordinate,
@@ -86,6 +90,7 @@ export const ShareSetting = Schema.Struct({ level: Schema.NullOr(Level), endsAt:
 
 export const Edit_ = Schema.Union([
   Schema.TaggedStruct("circle", { id: Schema.String, after: Schema.NullOr(Circle) }),
+  Schema.TaggedStruct("actor", { id: Schema.String, after: Schema.NullOr(Actor) }),
   Schema.TaggedStruct("place", { id: Schema.String, after: Schema.NullOr(Point) }),
   Schema.TaggedStruct("cardEnd", { id: Schema.String, after: Schema.NullOr(Time) }),
   Schema.TaggedStruct("shareSetting", {
@@ -106,7 +111,7 @@ export const Edit_ = Schema.Union([
   }),
 ]);
 
-export const Actor_ = Schema.Union([
+export const Author_ = Schema.Union([
   Schema.TaggedStruct("person", { email: Schema.String }),
   Schema.TaggedStruct("device", { clientId: Schema.String, name: Schema.String }),
   Schema.TaggedStruct("machine", { machineId: Schema.String, name: Schema.String }),
@@ -176,7 +181,8 @@ type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 const agree = <T extends true>(_: T) => _;
 agree<Same<typeof Member.Type, Model.Member>>(true);
 agree<Same<typeof Circle.Type, Model.Circle>>(true);
+agree<Same<typeof Actor.Type, Model.Actor>>(true);
 agree<Same<typeof Point.Type, Model.Point>>(true);
 agree<Same<typeof ShareSetting.Type, Model.ShareSetting>>(true);
 agree<Same<typeof Edit_.Type, Edit>>(true);
-agree<Same<typeof Actor_.Type, Actor>>(true);
+agree<Same<typeof Author_.Type, Author>>(true);

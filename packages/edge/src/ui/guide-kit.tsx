@@ -27,6 +27,7 @@ export function fixtureState(): State {
     stacks: new Map(),
     paused: null,
     machines: new Map(DEMO_MACHINES.map(({ machine }) => [machine.id, machine])),
+    actors: new Map([...initial.actors, ...extra.actors].map((actor) => [actor.id, actor])),
   };
 }
 

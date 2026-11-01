@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { Machine } from "../src/core/machine.ts";
 import { type Circle, OWNER_CIRCLE_ID, type Resource } from "../src/core/model.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
+import { machine as machineChip, person, withActors } from "./actors.ts";
 import { setup as agentSetup } from "./machine-http.ts";
 
 /** K-1131: the site wizard only makes new sites, through one service that queues `kitshn expose --new`. */
@@ -184,16 +185,16 @@ it("ends a wizard site as the owner who asked, who can undo it; a failed request
   const ownerCircle = circles.find((circle) => circle.id === OWNER_CIRCLE_ID);
   if (!ownerCircle) throw new Error("no Owner circle");
   const joined = await post(owner, "/api/apply", {
-    edits: [
+    edits: withActors([
       {
         _tag: "circle",
         id: OWNER_CIRCLE_ID,
         after: {
           ...ownerCircle,
-          members: [...ownerCircle.members, { _tag: "email", email: "other@example.com" }],
+          members: [...ownerCircle.members, person("other@example.com")],
         },
       },
-    ],
+    ]),
   });
   expect(joined.status, await joined.clone().text()).toBe(200);
   // The owner asks for an hour; another owner asks for the same name for two hours, and `expose --new` fails.
@@ -283,14 +284,16 @@ it("refuses on the server a change that would admit no one whom a circle admits 
     send("/api/apply", {
       method: "POST",
       headers: { "cf-access-jwt-assertion": owner, "content-type": "application/json" },
-      body: JSON.stringify({ edits: [{ _tag: "circle", id: "people", after: circle }] }),
+      body: JSON.stringify({
+        edits: withActors([{ _tag: "circle", id: "people", after: circle as Circle }]),
+      }),
     });
   const people = {
     id: "people",
     name: "People",
     color: "#FF5277",
     level: "view",
-    members: [{ _tag: "email", email: "her@example.com" }],
+    members: [person("her@example.com")],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -300,7 +303,7 @@ it("refuses on the server a change that would admit no one whom a circle admits 
   };
   const made = await apply(people);
   expect(made.status, await made.clone().text()).toBe(200);
-  const members = [...people.members, { _tag: "machine", machineId: "vps" }];
+  const members = [...people.members, machineChip("vps")];
   // Any may match, so the machine joins; then the switch to "all must match" would lock her out.
   const joined = await apply({ ...people, members });
   expect(joined.status, await joined.clone().text()).toBe(200);

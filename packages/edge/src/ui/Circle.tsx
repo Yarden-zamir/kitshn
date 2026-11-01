@@ -1,16 +1,18 @@
-import { useEffect, useId, useRef, useState } from "preact/hooks";
+import { useId, useRef, useState } from "preact/hooks";
 import { type Edit, deepEqual } from "../core/changes.ts";
 import {
-  AGENT_RIGHTS,
-  AGENT_RIGHT_NAMES,
-  type AgentRight,
+  type Actor,
   type Circle,
   LEVELS,
   type Level,
   type Member,
   type Resource,
   type State,
+  actorIdOf,
   circlesHolding,
+  isPerson,
+  machineIdOf,
+  memberActor,
   memberLabel,
   shareKey,
   shareLevel,
@@ -18,25 +20,35 @@ import {
   levelsOf,
 } from "../core/model.ts";
 import { CIRCLE_COLORS, LEVEL_COLORS, LEVEL_TILTS, MEMBER_ICONS } from "./kinds.ts";
-import { TYPED_KINDS, type TypedKind, isAgentCircle, machineMember, memberFrom } from "./members.ts";
-import { isAgentKey } from "../core/agent.ts";
+import {
+  type MemberKind,
+  TYPED_KINDS,
+  type TypedKind,
+  actorMember,
+  deleteActorEdits,
+  isAgentCircle,
+  machineMember,
+  memberFrom,
+  memberKind,
+} from "./members.ts";
 import { callApi } from "./store.ts";
-import { Check, Switch, useDialogEscape } from "./controls.tsx";
+import { Switch, useDialogEscape } from "./controls.tsx";
 import { ItemIcon } from "./ItemIcon.tsx";
-import { MachineRights, withMode } from "./MachineRights.tsx";
-import { selfApprovers } from "../core/asks.ts";
+import { ActorRights, withMode } from "./ActorRights.tsx";
+import { formatConditions, parseConditions, selfApprovers } from "../core/asks.ts";
 import type { ComponentChildren } from "preact";
 import { levelEdit } from "./actions.ts";
 import { type DeviceInvite, InviteDialog } from "./Invite.tsx";
 import { whenText } from "./time.ts";
 
 /** The sticker of each member kind: its name and a light sticker colour with black text. */
-const MEMBER_STICKERS: Record<Member["_tag"], { readonly label: string; readonly color: string }> = {
-  email: { label: "person", color: "var(--green)" },
+const MEMBER_STICKERS: Record<MemberKind, { readonly label: string; readonly color: string }> = {
+  person: { label: "person", color: "var(--green)" },
+  token: { label: "token", color: "var(--pink)" },
+  machine: { label: "machine", color: "var(--yellow)" },
+  agent: { label: "agent", color: "var(--yellow)" },
   domain: { label: "domain", color: "var(--info)" },
   ip: { label: "network", color: "var(--warning)" },
-  device: { label: "device", color: "var(--pink)" },
-  machine: { label: "machine", color: "var(--yellow)" },
   everyone: { label: "everyone", color: "var(--green)" },
 };
 
@@ -49,29 +61,32 @@ const COLOR_NAMES: Record<string, string> = {
   "#14B8A6": "teal",
 };
 
-/** What each member kind matches, with an example (K-106, K-107, K-202). */
-export const MEMBER_HELP: Record<Member["_tag"], string> = {
-  email: "Person: one email that logs in, for example name@example.com.",
+/** What each member kind matches, with an example (K-106, K-107, K-202, K-1778). */
+export const MEMBER_HELP: Record<MemberKind, string> = {
+  person:
+    "Person: an actor who logs in with an email, and the tokens of their phone and desktop apps. A passkey circle lets in only the login.",
+  token: "Token: an actor that proves itself with an Access service token, for example a script.",
+  machine: "Machine: a machine with a daemon, and every agent on it that no agent actor narrows.",
+  agent:
+    "Agent: the calls of a machine that carry these attested labels, for example the threads of one project. It never opens a site.",
   domain: "Domain: every email of an email domain that logs in, for example example.com.",
   ip: "Network: a visitor from an IP range, with no login, for example 10.0.0.0/8 or 203.0.113.9.",
-  device: "Device: a device that proves itself with an Access service token, for example Yarden's phone.",
-  machine: "Machine: a machine with a daemon, so a share can give one machine access to another resource.",
   everyone: "Everyone: anyone who can reach the address, with no login.",
 };
 
-const KIND_OPTIONS: Record<
-  TypedKind | "device" | "machine",
-  { readonly label: string; readonly tip: string }
-> = {
+type AddKind = TypedKind | "actor" | "token" | "machine";
+
+const KIND_OPTIONS: Record<AddKind, { readonly label: string; readonly tip: string }> = {
   auto: {
     label: "auto",
     tip: "Auto: the text decides the kind, for example name@example.com is a person, example.com a domain and 10.0.0.0/8 a network.",
   },
-  email: { label: "person", tip: MEMBER_HELP.email },
+  email: { label: "person", tip: MEMBER_HELP.person },
   domain: { label: "domain", tip: MEMBER_HELP.domain },
   ip: { label: "network", tip: MEMBER_HELP.ip },
   everyone: { label: "everyone", tip: MEMBER_HELP.everyone },
-  device: { label: "device", tip: `${MEMBER_HELP.device} Pick one or make a new token.` },
+  actor: { label: "actor", tip: "Actor: pick a person, token or agent that is in another circle already." },
+  token: { label: "token", tip: `${MEMBER_HELP.token} Invite an app or make a token for a new actor.` },
   machine: { label: "machine", tip: `${MEMBER_HELP.machine} Pick one of the joined machines.` },
 };
 
@@ -246,90 +261,52 @@ export function LevelOverride(props: {
 
 function MemberSticker(props: {
   member: Member;
-  agent: boolean;
+  state: State;
   onRemove: () => void;
-  /** Set only for an agent key in an agent circle: a right turns on or off. */
-  onRight: ((right: AgentRight, on: boolean) => void) | null;
-  /** K-1720: the rights of a machine in an agent circle. */
   extra?: ComponentChildren;
 }) {
-  const { member, onRight } = props;
-  const kind = MEMBER_STICKERS[member._tag];
+  const { member, state } = props;
+  const kind = memberKind(member, state);
+  const label = memberLabel(member, state);
+  const actor = memberActor(member, state);
+  const credentials = actor?.credentials.length ?? 0;
   return (
     <li class="member">
-      <span class="sticker" style={{ background: kind.color }} data-tip={MEMBER_HELP[member._tag]}>
-        {kind.label}
+      <span class="sticker" style={{ background: MEMBER_STICKERS[kind].color }} data-tip={MEMBER_HELP[kind]}>
+        {MEMBER_STICKERS[kind].label}
       </span>
-      {props.agent ? (
-        <span class="sticker" style={{ background: "var(--yellow)" }} data-tip={AGENT_TIP}>
-          agent
-        </span>
-      ) : null}
-      {member._tag === "device" && onRight ? <RightStickers member={member} /> : null}
-      <span class="who">
-        {MEMBER_ICONS[props.member._tag]} {memberLabel(props.member)}
+      <span class="who" data-tip={actor ? credentialTip(actor) : undefined}>
+        {MEMBER_ICONS[kind]} {label}
+        {credentials > 1 ? <span class="muted"> · {credentials} credentials</span> : null}
       </span>
       <button
         type="button"
         class="remove"
-        aria-label={`Remove ${memberLabel(props.member)}`}
-        data-tip={`Remove ${memberLabel(props.member)} from this circle.`}
+        aria-label={`Remove ${label}`}
+        data-tip={`Remove ${label} from this circle. The actor stays.`}
         onClick={props.onRemove}
       >
         ×
       </button>
-      {member._tag === "device" && onRight ? (
-        <div class="rights">
-          {AGENT_RIGHTS.map((right) => (
-            <Check
-              key={right}
-              checked={member[right] === true}
-              label={AGENT_RIGHT_NAMES[right]}
-              tip={RIGHT_HELP[right]}
-              onChange={(on) => onRight(right, on)}
-            />
-          ))}
-          <span class="help">A right counts from any agent circle of this key.</span>
-        </div>
-      ) : null}
       {props.extra}
     </li>
   );
 }
 
-type DeviceMember = Extract<Member, { _tag: "device" }>;
-
-const RIGHT_STICKERS: Record<AgentRight, string> = { addsApps: "adds apps", publishes: "publishes" };
-const RIGHT_HELP: Record<AgentRight, string> = {
-  addsApps:
-    "Adds apps: the key allows a waiting repo. Its new cards start in the key's first agent circle at control.",
-  publishes:
-    "Publishes: the key publishes a card of a repo that it allowed, into the overlap of an agent circle and Everyone.",
-};
+/** K-1778: the credentials of an actor, for its tip: each login, token and machine. */
+const credentialTip = (actor: Actor) =>
+  actor.credentials
+    .map((credential) =>
+      credential._tag === "login"
+        ? `login ${credential.email}`
+        : credential._tag === "token"
+          ? `token ${credential.name}`
+          : `machine key ${credential.machineId}`,
+    )
+    .join(", ");
 
 export const AGENT_TIP =
-  "Agent: a device member without the admin card. It manages only the cards that its agent circles hold at control.";
-
-/** K-718: a sticker for each right of an agent key, on its chip in the circle editor and on the map. */
-export function RightStickers(props: { member: DeviceMember }) {
-  return (
-    <>
-      {AGENT_RIGHTS.filter((right) => props.member[right]).map((right) => (
-        <span key={right} class="sticker right" data-tip={RIGHT_HELP[right]}>
-          {RIGHT_STICKERS[right]}
-        </span>
-      ))}
-    </>
-  );
-}
-
-/** A missing right is off, so turning one off removes its key. */
-function withRight(member: DeviceMember, right: AgentRight, on: boolean): DeviceMember {
-  const { [right]: _, ...rest } = member;
-  return on ? { ...rest, [right]: true } : rest;
-}
-
-type Device = Omit<DeviceMember, "_tag">;
+  "Agent: an actor that is not a person. It manages only the cards that its agent circles hold at control.";
 
 /** K-106: the service tokens of the account, and a new one; its secret shows once. */
 export interface DeviceSecret {
@@ -384,25 +361,23 @@ export function SecretDialog(props: { secret: DeviceSecret; onClose: () => void 
   );
 }
 
-function DeviceList(props: {
-  taken: ReadonlySet<string>;
-  onAdd: (member: DeviceMember) => Promise<string | null>;
+/**
+ * K-1601, K-1778: a new token for an actor. "Invite app" makes an invite whose token joins `actorId` at the exchange, or
+ * a new actor when `actorId` is null; "Make token" makes a token and shows its secret once.
+ */
+function NewToken(props: {
+  actorId: string | null;
+  /** What the new token becomes: a credential of the actor, or a new actor; null when kitshn refused it. */
+  onToken: (token: { tokenId: string; clientId: string; name: string }) => Promise<string | null>;
   onSecret: (secret: DeviceSecret) => void;
   onInvite: (invite: DeviceInvite) => void;
 }) {
-  const [devices, setDevices] = useState<ReadonlyArray<Device> | null>(null);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    void callApi<Array<Device>>("GET", "/api/devices").then((result) => {
-      if ("error" in result) setError(result.error);
-      else setDevices(result);
-    });
-  }, [attempt]);
   const run = async (work: () => Promise<void>) => {
     if (busy) return;
+    if (!name.trim()) return setError("Name the new device or script, for example Her phone.");
     setBusy(true);
     try {
       await work();
@@ -410,164 +385,167 @@ function DeviceList(props: {
       setBusy(false);
     }
   };
-  return (
-    <div>
-      {error ? (
-        <p class="error">
-          {error}{" "}
-          {devices === null ? (
-            <button
-              type="button"
-              class="btn"
-              data-tip="Load the device list again."
-              onClick={() => {
-                setError(null);
-                setAttempt(attempt + 1);
-              }}
-            >
-              Try again
-            </button>
-          ) : null}
-        </p>
-      ) : devices === null ? (
-        <p class="help">Loading the devices…</p>
-      ) : null}
-      <ul class="picks">
-        {(devices ?? [])
-          .filter((device) => !props.taken.has(device.tokenId))
-          .map((device) => (
-            <li key={device.tokenId}>
-              <button
-                type="button"
-                disabled={busy}
-                data-tip={`Add the device ${device.name} to this circle.`}
-                onClick={() =>
-                  void run(async () => setError(await props.onAdd({ _tag: "device", ...device })))
-                }
-              >
-                📱 {device.name}
-              </button>
-            </li>
-          ))}
-        <li>
-          <form
-            class="row"
-            onSubmit={(event) => {
-              event.preventDefault();
-              invite();
-            }}
-          >
-            <input
-              class="field field-block grow"
-              value={name}
-              aria-label="New device name"
-              data-tip="The name of a new device. kitshn makes its token and adds the device to this circle."
-              placeholder="+ New device, for example Her phone"
-              onInput={(event) => setName((event.target as HTMLInputElement).value)}
-            />
-            <button
-              class="btn primary"
-              disabled={busy}
-              data-tip="Invite the T3 Code app on a phone or a desktop: a QR code and a link that work once for 15 minutes."
-            >
-              Invite app
-            </button>
-            <button
-              type="button"
-              class="btn"
-              disabled={busy}
-              data-tip="Make a service token for a script or an agent key, and show its secret once."
-              onClick={makeToken}
-            >
-              Make token
-            </button>
-          </form>
-        </li>
-      </ul>
-    </div>
-  );
-
-  function makeToken() {
-    if (!name.trim()) return setError("Name the new device, for example Her phone.");
+  const invite = () =>
     void run(async () => {
-      const result = await callApi<DeviceMember & { clientSecret: string }>("POST", "/api/devices", {
+      const result = await callApi<DeviceInvite>("POST", "/api/devices/invites", {
         name: name.trim(),
+        ...(props.actorId ? { actor: props.actorId } : {}),
       });
-      if ("error" in result) return setError(result.error);
-      setError(null);
-      setName("");
-      props.onSecret({
-        name: result.name,
-        clientId: result.clientId,
-        clientSecret: result.clientSecret,
-      });
-      setDevices([
-        ...(devices ?? []),
-        { tokenId: result.tokenId, clientId: result.clientId, name: result.name },
-      ]);
-      const refused = await props.onAdd({
-        _tag: "device",
-        tokenId: result.tokenId,
-        clientId: result.clientId,
-        name: result.name,
-      });
-      if (refused) setError(`The token exists, but the circle did not take it: ${refused}`);
-    });
-  }
-
-  /** K-1601: a new device token and its invite; kitshn keeps no secret, and the app gets one at the exchange. */
-  function invite() {
-    if (!name.trim()) return setError("Name the new device, for example Her phone.");
-    void run(async () => {
-      const result = await callApi<DeviceInvite>("POST", "/api/devices/invites", { name: name.trim() });
       if ("error" in result) return setError(result.error);
       setError(null);
       setName("");
       props.onInvite(result);
-      const refused = await props.onAdd({
-        _tag: "device",
-        tokenId: result.tokenId,
-        clientId: result.clientId,
-        name: result.name,
-      });
-      if (refused) setError(`The invite works, but the circle did not take the device: ${refused}`);
     });
-  }
+  const makeToken = () =>
+    void run(async () => {
+      const result = await callApi<{ tokenId: string; clientId: string; clientSecret: string; name: string }>(
+        "POST",
+        "/api/devices",
+        { name: name.trim() },
+      );
+      if ("error" in result) return setError(result.error);
+      setError(null);
+      setName("");
+      props.onSecret({ name: result.name, clientId: result.clientId, clientSecret: result.clientSecret });
+      const refused = await props.onToken(result);
+      if (refused) setError(`The token exists, but kitshn did not take it: ${refused}`);
+    });
+  return (
+    <form
+      class="row"
+      onSubmit={(event) => {
+        event.preventDefault();
+        invite();
+      }}
+    >
+      <input
+        class="field field-block grow"
+        value={name}
+        aria-label="New token name"
+        data-tip="The name of a new device or script. kitshn makes its token."
+        placeholder="+ New device, for example Her phone"
+        onInput={(event) => setName((event.target as HTMLInputElement).value)}
+      />
+      <button
+        class="btn primary"
+        disabled={busy}
+        data-tip="Invite the T3 Code app on a phone or a desktop: a QR code and a link that work once for 15 minutes."
+      >
+        Invite app
+      </button>
+      <button
+        type="button"
+        class="btn"
+        disabled={busy}
+        data-tip="Make a service token for a script, and show its secret once."
+        onClick={makeToken}
+      >
+        Make token
+      </button>
+      {error ? <p class="error">{error}</p> : null}
+    </form>
+  );
+}
+
+/** K-1754, K-1778: "New agent" on a machine chip: an actor of the machine key and conditions on attested labels. */
+function NewAgent(props: {
+  machineId: string;
+  machineName: string;
+  onAdd: (actor: Actor) => Promise<string | null>;
+}) {
+  const [conditions, setConditions] = useState("");
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <form
+      class="row"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const parsed = parseConditions(conditions);
+        if (typeof parsed === "string") return setError(parsed);
+        if (parsed.length === 0)
+          return setError("An agent needs at least one condition, for example t3.project.name=kitshn.");
+        const credential = { _tag: "machine", machineId: props.machineId } as const;
+        const actor: Actor = {
+          id: actorIdOf(credential, parsed),
+          name: name.trim() || `${props.machineName} ${formatConditions(parsed)}`.slice(0, 80),
+          credentials: [credential],
+          conditions: parsed,
+        };
+        void props.onAdd(actor).then((refused) => {
+          setError(refused);
+          if (!refused) {
+            setConditions("");
+            setName("");
+          }
+        });
+      }}
+    >
+      <input
+        class="field grow"
+        value={conditions}
+        aria-label={`Conditions of a new agent of ${props.machineName}`}
+        placeholder="t3.project.name=kitshn; t3.subagent=false"
+        data-tip="Conditions: attested labels that a call of this machine must carry, as key=value,value; key=value (K-1754)."
+        onInput={(event) => setConditions((event.target as HTMLInputElement).value)}
+      />
+      <input
+        class="field"
+        value={name}
+        aria-label="Name of the new agent"
+        placeholder="kitshn builder"
+        data-tip="The name of the agent in the map and in History."
+        onInput={(event) => setName((event.target as HTMLInputElement).value)}
+      />
+      <button
+        class="btn"
+        data-tip={`Add an agent of ${props.machineName} to this circle, with no right set yet.`}
+      >
+        New agent
+      </button>
+      {error ? <p class="error">{error}</p> : null}
+    </form>
+  );
 }
 
 /** One control for every member kind: the text decides the kind, the segment overrides it. */
 function AddMember(props: {
   circle: Circle;
+  state: State;
   /** K-539: the joined machines, for the "machine" kind. */
   machines: ReadonlyArray<{ readonly id: string; readonly name: string }>;
   onJoinMachine: (machineId: string) => void;
-  onAdd: (member: Member) => Promise<string | null>;
+  onAdd: (member: Member, actor: Actor | null) => Promise<string | null>;
   onSecret: (secret: DeviceSecret) => void;
   onInvite: (invite: DeviceInvite) => void;
 }) {
-  const [kind, setKind] = useState<TypedKind | "device" | "machine">("auto");
+  const [kind, setKind] = useState<AddKind>("auto");
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const typed = kind !== "actor" && kind !== "token" && kind !== "machine" ? kind : null;
   const preview =
-    kind === "device" || kind === "machine" || kind === "everyone" || value.trim() === ""
+    typed === null || typed === "everyone" || value.trim() === ""
       ? null
-      : memberFrom(kind, value);
+      : memberFrom(typed, value, props.state);
   const add = async () => {
-    if (kind === "device" || kind === "machine") return;
-    const member = memberFrom(kind, value);
-    if (typeof member === "string") return setError(member);
+    if (typed === null) return;
+    const result = memberFrom(typed, value, props.state);
+    if (typeof result === "string") return setError(result);
     if (busy) return;
     setBusy(true);
     // A server refusal shows as a toast; the input keeps the text so the owner can fix it.
-    const refused = await props.onAdd(member);
+    const refused = await props.onAdd(result.member, result.actor);
     setBusy(false);
     if (!refused) setValue("");
   };
+  const others = [...props.state.actors.values()].filter(
+    (actor) => !actorMember(props.circle, actor.id) && machineIdOf(actor) === null,
+  );
   return (
     <div class="add-member">
       <div class="pills" role="group" aria-label="Member kind">
-        {[...TYPED_KINDS, "device" as const, "machine" as const].map((option) => (
+        {[...TYPED_KINDS, "actor" as const, "token" as const, "machine" as const].map((option) => (
           <button
             key={option}
             type="button"
@@ -601,14 +579,30 @@ function AddMember(props: {
               </button>
             ))}
         </div>
-      ) : kind === "device" ? (
-        <DeviceList
-          taken={
-            new Set(
-              props.circle.members.flatMap((member) => (member._tag === "device" ? [member.tokenId] : [])),
-            )
-          }
-          onAdd={props.onAdd}
+      ) : kind === "actor" ? (
+        <ul class="picks">
+          {others.length === 0 ? <li class="muted">Every actor without a machine is a member.</li> : null}
+          {others.map((actor) => (
+            <li key={actor.id}>
+              <button
+                type="button"
+                disabled={busy}
+                data-tip={`${actor.name} joins ${props.circle.name}. ${credentialTip(actor)}.`}
+                onClick={() => void props.onAdd({ _tag: "actor", actorId: actor.id }, null).then(setError)}
+              >
+                {MEMBER_ICONS[memberKind({ _tag: "actor", actorId: actor.id }, props.state)]} {actor.name}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : kind === "token" ? (
+        <NewToken
+          actorId={null}
+          onToken={(token) => {
+            const credential = { _tag: "token", ...token } as const;
+            const actor: Actor = { id: actorIdOf(credential), name: token.name, credentials: [credential] };
+            return props.onAdd({ _tag: "actor", actorId: actor.id }, actor);
+          }}
           onSecret={props.onSecret}
           onInvite={props.onInvite}
         />
@@ -644,7 +638,8 @@ function AddMember(props: {
         <p class="error">{error}</p>
       ) : preview && typeof preview !== "string" ? (
         <p class="help">
-          Adds a <b>{MEMBER_STICKERS[preview._tag].label}</b>: {memberLabel(preview)}
+          Adds a <b>{MEMBER_STICKERS[memberKind(preview.member, props.state)].label}</b>:{" "}
+          {preview.actor ? preview.actor.name : memberLabel(preview.member, props.state)}
         </p>
       ) : null}
     </div>
@@ -668,26 +663,34 @@ export function CircleEditor(props: {
   latest.current = circle;
   const put = (next: Partial<Circle>) =>
     props.onEdit([{ _tag: "circle", id: circle.id, after: { ...latest.current, ...next } }]);
-  const addMember = (member: Member) => {
+  /** K-1778: a member, and the actor that it names when that actor is new, in one write. */
+  const addMember = (member: Member, actor: Actor | null) => {
     if (latest.current.members.some((other) => deepEqual(other, member)))
-      return Promise.resolve(`${memberLabel(member)} is in ${latest.current.name} already.`);
-    return put({ members: [...latest.current.members, member] });
+      return Promise.resolve(`${memberLabel(member, state)} is in ${latest.current.name} already.`);
+    return props.onEdit([
+      ...(actor ? [{ _tag: "actor", id: actor.id, after: actor } as const] : []),
+      {
+        _tag: "circle",
+        id: circle.id,
+        after: { ...latest.current, members: [...latest.current.members, member] },
+      },
+    ]);
   };
   const [draft, setDraft] = useState<string | null>(null);
   const [invite, setInvite] = useState<DeviceInvite | null>(null);
-  const [inviteError, setInviteError] = useState<string | null>(null);
-  const inviteAgain = async (member: DeviceMember) => {
-    const result = await callApi<DeviceInvite>("POST", "/api/devices/invites", { tokenId: member.tokenId });
-    setInviteError("error" in result ? result.error : null);
-    if (!("error" in result)) setInvite(result);
-  };
   const inside = [...state.resources.values()].filter((resource) =>
     circlesHolding(state, resource.id).includes(circle),
   );
-  // K-718: rights count only in a circle of devices only.
-  // K-1730: an agent circle holds devices and machines only.
-  const agentCircle = isAgentCircle(circle);
-  const hasPeople = circle.members.some((member) => member._tag === "email" || member._tag === "domain");
+  // K-718, K-1778: rights count only in an agent circle: actors that are not people, and no rule.
+  const agentCircle = isAgentCircle(circle, state);
+  const hasPeople = circle.members.some((member) => {
+    const actor = memberActor(member, state);
+    return member._tag === "domain" || (actor !== undefined && isPerson(actor));
+  });
+  const withoutPasskey = circle.members.some((member) => {
+    const actor = memberActor(member, state);
+    return actor !== undefined && !isPerson(actor);
+  });
   return (
     <section class="editor">
       <div class="band" style={{ background: circle.color }} />
@@ -731,61 +734,94 @@ export function CircleEditor(props: {
         Who
       </h3>
       <ul class="members">
-        {circle.members.map((member, index) => (
-          <MemberSticker
-            key={member._tag === "device" ? member.tokenId : `${member._tag}-${memberLabel(member)}`}
-            member={member}
-            agent={isAgentKey(state, member, Date.now())}
-            onRemove={() => void put({ members: circle.members.filter((_, other) => other !== index) })}
-            onRight={
-              member._tag === "device" && agentCircle && isAgentKey(state, member, Date.now())
-                ? (right, on) =>
-                    void put({
-                      members: circle.members.map((other, at) =>
-                        at === index ? withRight(member, right, on) : other,
-                      ),
-                    })
-                : null
-            }
-            extra={
-              member._tag === "device" ? (
-                <button
-                  type="button"
-                  class="btn"
-                  data-tip={`A new invite for ${member.name}: a phone or desktop app gets a new secret of its token, and the old secret ends.`}
-                  onClick={() => void inviteAgain(member)}
-                >
-                  Invite
-                </button>
-              ) : member._tag === "machine" && agentCircle ? (
-                <MachineRights
-                  member={member}
-                  circles={state.circles}
-                  onChange={(right, mode) =>
-                    void put({
-                      members: circle.members.map((other, at) =>
-                        at === index ? withMode(member, right, mode) : other,
-                      ),
-                    })
-                  }
-                />
-              ) : null
-            }
-          />
-        ))}
-        {selfApprovers(state.circles, circle).map((machineId) => (
-          <li key={`self-${machineId}`} class="warning">
-            ⚠️ {state.machines.get(machineId)?.name ?? machineId} can approve its own asks here: a right of it
-            asks this circle (K-1727).
+        {circle.members.map((member, index) => {
+          const actor = memberActor(member, state);
+          const machineId = actor ? machineIdOf(actor) : null;
+          return (
+            <MemberSticker
+              key={member._tag === "actor" ? member.actorId : `${member._tag}-${memberLabel(member, state)}`}
+              member={member}
+              state={state}
+              onRemove={() => void put({ members: circle.members.filter((_, other) => other !== index) })}
+              extra={
+                member._tag === "actor" && actor ? (
+                  <>
+                    {agentCircle && !isPerson(actor) ? (
+                      <ActorRights
+                        member={member}
+                        actor={actor}
+                        state={state}
+                        onChange={(right, mode) =>
+                          void put({
+                            members: circle.members.map((other, at) =>
+                              at === index ? withMode(member, right, mode) : other,
+                            ),
+                          })
+                        }
+                      />
+                    ) : null}
+                    {machineId === null ? (
+                      <details>
+                        <summary data-tip={`Add a phone, desktop app or script to ${actor.name} (K-1601).`}>
+                          Add device
+                        </summary>
+                        <NewToken
+                          actorId={actor.id}
+                          onToken={(token) =>
+                            props.onEdit([
+                              {
+                                _tag: "actor",
+                                id: actor.id,
+                                after: {
+                                  ...actor,
+                                  credentials: [...actor.credentials, { _tag: "token", ...token }],
+                                },
+                              },
+                            ])
+                          }
+                          onSecret={props.onSecret}
+                          onInvite={setInvite}
+                        />
+                      </details>
+                    ) : (actor.conditions ?? []).length === 0 ? (
+                      <details>
+                        <summary data-tip="An agent: the calls of this machine with given attested labels (K-1754).">
+                          New agent
+                        </summary>
+                        <NewAgent
+                          machineId={machineId}
+                          machineName={actor.name}
+                          onAdd={(agent) => addMember({ _tag: "actor", actorId: agent.id }, agent)}
+                        />
+                      </details>
+                    ) : null}
+                    <button
+                      type="button"
+                      class="btn"
+                      data-tip={`Delete ${actor.name}: it leaves every circle, and its tokens act as no one (K-1778).`}
+                      onClick={() => void props.onEdit(deleteActorEdits(state, actor.id))}
+                    >
+                      Delete actor
+                    </button>
+                  </>
+                ) : null
+              }
+            />
+          );
+        })}
+        {selfApprovers(state.circles, circle).map((actorId) => (
+          <li key={`self-${actorId}`} class="warning">
+            ⚠️ {state.actors.get(actorId)?.name ?? actorId} can approve its own asks here: a right of it asks
+            this circle (K-1727).
           </li>
         ))}
         {circle.members.length === 0 ? (
           <li class="help">Nobody yet. A circle with no members matches nobody.</li>
         ) : null}
       </ul>
-      {inviteError ? <p class="error">{inviteError}</p> : null}
       <AddMember
         circle={circle}
+        state={state}
         machines={[...state.machines.values()]}
         onJoinMachine={props.onJoinMachine}
         onAdd={addMember}
@@ -866,12 +902,12 @@ export function CircleEditor(props: {
               </a>
             </p>
           ) : null}
-          {circle.needsPasskey && circle.members.some((member) => member._tag === "machine") ? (
+          {circle.needsPasskey && withoutPasskey ? (
             <Switch
-              checked={circle.machinesMayApprove === true}
-              label="Machines may approve"
-              tip="Machines may approve: a machine of this circle approves asks with no passkey. Off: only people approve (K-1727)."
-              onChange={(machinesMayApprove) => void put({ machinesMayApprove })}
+              checked={circle.approvesWithoutPasskey === true}
+              label="Approves without passkey"
+              tip="Approves without passkey: a machine, agent or token of this circle approves asks with no passkey. Off: only people approve (K-1727)."
+              onChange={(approvesWithoutPasskey) => void put({ approvesWithoutPasskey })}
             />
           ) : null}
         </div>

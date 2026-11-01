@@ -1,4 +1,5 @@
-import type { Level, Member, Resource, ResourceKind } from "../core/model.ts";
+import type { Level, Resource, ResourceKind } from "../core/model.ts";
+import type { MemberKind } from "./members.ts";
 
 export interface KindInfo {
   /** The kind of a group of cards, such as "Static sites", for the Show menu. */
@@ -129,12 +130,14 @@ export const KINDS: Record<ResourceKind, KindInfo> = {
   },
 };
 
-export const MEMBER_ICONS: Record<Member["_tag"], string> = {
-  email: "👤",
+/** K-1778: the icon of each member kind; the kind comes from the credentials of an actor (`memberKind`). */
+export const MEMBER_ICONS: Record<MemberKind, string> = {
+  person: "👤",
+  token: "🔑",
+  machine: "🖥",
+  agent: "🤖",
   domain: "@",
   ip: "🛜",
-  device: "📱",
-  machine: "🖥",
   everyone: "🌍",
 };
 

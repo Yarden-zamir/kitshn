@@ -13,6 +13,7 @@ import {
   siteAudiences,
   reachOf,
 } from "./providers.ts";
+import { actorOf, chip, login, machineKey, token } from "./testkit.ts";
 
 const report: ProviderReport = {
   name: "t3",
@@ -41,6 +42,24 @@ const machine: Machine = {
   tunnelId: "u",
 };
 
+const HER = login("her@example.com");
+const AB = login("a@b.c");
+const OWNER = login("owner@b.c");
+const PHONE = token("d", "phone.access", "phone");
+const VPS_TOKEN = token("t-vps", "vps.access", "kitshn machine vps");
+const ACTORS = new Map(
+  [
+    actorOf(HER),
+    actorOf(AB),
+    actorOf(OWNER),
+    actorOf(PHONE),
+    actorOf(VPS_TOKEN),
+    actorOf(machineKey("vps"), "vps"),
+    actorOf(machineKey("mac"), "mac"),
+    actorOf(machineKey("gone"), "gone"),
+  ].map((actor) => [actor.id, actor]),
+);
+
 const circle = (id: string, members: Circle["members"], extra: Partial<Circle> = {}): Circle => ({
   id,
   name: id,
@@ -67,6 +86,7 @@ function state(circles: ReadonlyArray<Circle>, extra: Partial<State> = {}): Stat
     stacks: new Map(),
     paused: null,
     machines: new Map([[machine.id, machine]]),
+    actors: ACTORS,
     ...extra,
   };
 }
@@ -92,13 +112,7 @@ describe("provider cards (K-705)", () => {
 
 describe("grant tables (K-706)", () => {
   it("names the provider's level and gives devices and machines their Access client id", () => {
-    const value = state([
-      circle("her", [
-        { _tag: "email", email: "Her@Example.com" },
-        { _tag: "machine", machineId: "vps" },
-        { _tag: "device", tokenId: "d", clientId: "phone.access", name: "phone" },
-      ]),
-    ]);
+    const value = state([circle("her", [chip(HER), chip(machineKey("vps")), chip(PHONE)])]);
     expect(grantsOf(value, thread(value), 0)).toEqual([
       {
         circle: {
@@ -117,12 +131,7 @@ describe("grant tables (K-706)", () => {
       },
     ]);
     // A machine's daemon token held as a device member is that machine, so the provider can tell it from a device.
-    const viaToken = state([
-      circle("her", [
-        { _tag: "device", tokenId: "t-vps", clientId: "vps.access", name: "kitshn machine vps" },
-        { _tag: "device", tokenId: "d", clientId: "phone.access", name: "phone" },
-      ]),
-    ]);
+    const viaToken = state([circle("her", [chip(VPS_TOKEN), chip(PHONE)])]);
     expect(grantsOf(viaToken, thread(viaToken), 0)[0]?.circle.rules).toEqual([
       { machine: { machineId: "vps", clientId: "vps.access" } },
       { device: { clientId: "phone.access", name: "phone" } },
@@ -130,7 +139,7 @@ describe("grant tables (K-706)", () => {
   });
 
   it("carries the earlier end date and drops an ended share (K-209)", () => {
-    const her = circle("her", [{ _tag: "email", email: "a@b.c" }], { endsAt: 500 });
+    const her = circle("her", [chip(AB)], { endsAt: 500 });
     const value = state([her]);
     const card = thread(value);
     const withShare = {
@@ -142,30 +151,20 @@ describe("grant tables (K-706)", () => {
   });
 
   it("closes every grant in a pause, and never widens an 'all must match' circle (K-1504, K-006)", () => {
-    const mixed = circle("mixed", [
-      { _tag: "email", email: "a@b.c" },
-      { _tag: "ip", range: "10.0.0.0/8" },
-    ]);
+    const mixed = circle("mixed", [chip(AB), { _tag: "ip", range: "10.0.0.0/8" }]);
     const strict = { ...mixed, id: "strict", match: "all" as const };
     const paused = state([mixed, strict], { paused: "keep-public" });
     // A pause closes every share of a provider card, as for a machine (K-1504).
     expect(grantsOf(paused, thread(paused), 0)).toEqual([]);
-    const unknown = circle(
-      "unknown",
-      [
-        { _tag: "email", email: "a@b.c" },
-        { _tag: "machine", machineId: "gone" },
-      ],
-      {
-        match: "all",
-      },
-    );
+    const unknown = circle("unknown", [chip(AB), chip(machineKey("gone"))], {
+      match: "all",
+    });
     const open = state([unknown]);
     expect(grantsOf(open, thread(open), 0)).toEqual([]);
   });
 
   it("builds one table per resource of the provider, by its own id", () => {
-    const value = state([circle("her", [{ _tag: "email", email: "a@b.c" }])]);
+    const value = state([circle("her", [chip(AB)])]);
     expect(Object.keys(grantTables(value, "vps", "t3", 0)).sort()).toEqual(["app", "th-1"]);
     expect(grantTables(value, "other", "t3", 0)).toEqual({});
   });
@@ -184,7 +183,7 @@ describe("provider commands (K-707)", () => {
 
 describe("forget provider (K-704)", () => {
   it("removes the provider's cards with their places and overrides, and undo brings them back offline", () => {
-    const her = circle("her", [{ _tag: "email", email: "a@b.c" }]);
+    const her = circle("her", [chip(AB)]);
     const value = state([her]);
     const card = thread(value);
     const withOverride = {
@@ -203,7 +202,7 @@ describe("forget provider (K-704)", () => {
   });
 
   it("gives a dropped card no grants while it waits (K-705)", () => {
-    const value = state([circle("her", [{ _tag: "email", email: "a@b.c" }])]);
+    const value = state([circle("her", [chip(AB)])]);
     const card = thread(value);
     const dropped = { ...card, provider: { ...card.provider!, droppedAt: 1 } };
     const waiting = { ...value, resources: new Map([...value.resources, [card.id, dropped]]) };
@@ -303,7 +302,7 @@ describe("pushes to a machine (K-709, K-717, K-1608)", () => {
 describe("reach of a machine (K-1609)", () => {
   it("lists the cards of the provider on other machines that the machine's token opens, with the level name", () => {
     const other: Machine = { ...machine, id: "mac", name: "mac", clientId: "mac.access" };
-    const base = state([circle("links", [{ _tag: "machine", machineId: "mac" }], { level: "use" })]);
+    const base = state([circle("links", [chip(machineKey("mac"))], { level: "use" })]);
     const value: State = { ...base, machines: new Map([...base.machines, ["mac", other]]) };
     // The cards of vps sit in "links", which holds the machine mac.
     expect(reachOf(value, "mac", "t3", 0)).toEqual([
@@ -348,7 +347,7 @@ describe("a busy machine (K-1608)", () => {
 
 describe("owner control (K-719)", () => {
   it("gives the Owner circle the top level of an owner-control card wherever it sits, and refuses an override of it", () => {
-    const owner = circle(OWNER_CIRCLE_ID, [{ _tag: "email", email: "owner@b.c" }], {
+    const owner = circle(OWNER_CIRCLE_ID, [chip(OWNER)], {
       x: 5000,
       y: 5000,
       level: "view",

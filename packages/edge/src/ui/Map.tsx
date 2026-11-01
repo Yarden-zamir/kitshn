@@ -13,16 +13,15 @@ import {
   type CardKind,
 } from "../core/model.ts";
 import type { AccessState, MachineView, Snapshot } from "../core/protocol.ts";
-import { isAgentKey } from "../core/agent.ts";
 import type { ActionProgress } from "../core/progress.ts";
 import { ProgressSticker } from "./Progress.tsx";
-import { AGENT_TIP, LEVEL_TIPS, MATCH_TIPS, MEMBER_HELP, PASSKEY_TIP, RightStickers } from "./Circle.tsx";
-import { MachineRightStickers } from "./MachineRights.tsx";
+import { LEVEL_TIPS, MATCH_TIPS, MEMBER_HELP, PASSKEY_TIP } from "./Circle.tsx";
+import { RightStickers } from "./ActorRights.tsx";
 import { type KindInfo, LEVEL_COLORS, LEVEL_TILTS, MEMBER_ICONS, kindInfo } from "./kinds.ts";
 import { KeySticker, MachineLive, PresenceSticker, QueuedSticker } from "./Machines.tsx";
 import { type MenuTarget, untilText } from "./actions.ts";
 import { type DropTarget, dropHover, landingPoints, shareLines } from "./drop.ts";
-import { isAgentCircle } from "./members.ts";
+import { isAgentCircle, memberKind } from "./members.ts";
 import type { DrawnWire } from "../core/organize.ts";
 import { USER_STACK, headAngle, stacksOf } from "../core/place.ts";
 import { parseSiteInput } from "../core/sites.ts";
@@ -702,7 +701,7 @@ export function MapView(props: Props) {
   }, [openKey, zoomedOut]);
   const draggedIds = drag?.type === "cards" && drag.moved ? new Set(drag.origins.keys()) : new Set<string>();
   // A drag of cards says what its drop does (`dropHover`); a drag of a circle says what its move changes.
-  const labelLines = hover?.lines ?? (draft ? shareLines(draft.diffs, state.machines) : []);
+  const labelLines = hover?.lines ?? (draft ? shareLines(draft.diffs, state) : []);
   // K-537: the lens follows the stored map, so a drag only moves its lines.
   const lens = props.selection.cards.size === 1 && !zoomedOut ? [...props.selection.cards][0] : undefined;
   const lensLines = useMemo(() => (lens ? reachOf(state, lens, now) : []), [state, lens, now]);
@@ -993,9 +992,8 @@ export function CircleView(props: {
 }) {
   const { circle } = props;
   const shown = circle.members.slice(0, 4);
-  // K-718: rights count only in a circle of devices only.
-  // K-1730: an agent circle holds devices and machines only.
-  const agentCircle = isAgentCircle(circle);
+  // K-718, K-1778: rights count only in an agent circle: actors that are not people, and no rule.
+  const agentCircle = isAgentCircle(circle, props.state);
   const extra = circle.members.length - shown.length;
   const counts = new Map<CardKind, { readonly count: number; readonly info: KindInfo }>();
   if (props.zoomedOut) {
@@ -1064,31 +1062,23 @@ export function CircleView(props: {
         </div>
       ) : (
         <div class="members">
-          {shown.map((member, index) => (
-            <span class="chip" key={index} data-tip={MEMBER_HELP[member._tag]}>
-              {MEMBER_ICONS[member._tag]} {memberLabel(member)}
-              {member._tag === "device" && isAgentKey(props.state, member, Date.now()) ? (
-                <>
-                  <span class="sticker agent" data-tip={AGENT_TIP}>
-                    agent
-                  </span>
-                  <span
-                    class="sticker"
-                    data-tip="Exception: an agent key is for an agent on no joined machine; agents on machines ask as their machine (K-1732)."
-                  >
-                    exception
-                  </span>
-                  {agentCircle ? <RightStickers member={member} /> : null}
-                </>
-              ) : null}
-              {member._tag === "machine" && agentCircle ? <MachineRightStickers member={member} /> : null}
-            </span>
-          ))}
+          {shown.map((member, index) => {
+            const kind = memberKind(member, props.state);
+            return (
+              <span class="chip" key={index} data-tip={MEMBER_HELP[kind]}>
+                {MEMBER_ICONS[kind]} {memberLabel(member, props.state)}
+                {member._tag === "actor" && agentCircle ? <RightStickers member={member} /> : null}
+              </span>
+            );
+          })}
           {extra > 0 ? (
             <span
               class="chip"
               data-head={circle.id}
-              data-tip={`Also ${circle.members.slice(4).map(memberLabel).join(", ")}. A click opens the full list.`}
+              data-tip={`Also ${circle.members
+                .slice(4)
+                .map((member) => memberLabel(member, props.state))
+                .join(", ")}. A click opens the full list.`}
             >
               +{extra}
             </span>

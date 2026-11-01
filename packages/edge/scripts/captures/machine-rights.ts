@@ -1,5 +1,6 @@
 // Machine rights (K-1720, K-1776): the rights editor of a machine in an agent circle, with "default" (asks the Owner),
 // "off", and the rights "adds pages" and "restores". The scenario puts the demo machine vps in the Agents circle.
+import { machineActorId } from "../../src/core/model.ts";
 import { DESKTOP, type Scenario } from "../capture-views.ts";
 
 export default {
@@ -14,8 +15,8 @@ export default {
         };
         const agents = data.snapshot?.circles?.find((circle) => circle.id === "agents");
         agents?.members.push({
-          _tag: "machine",
-          machineId: "vps",
+          _tag: "actor",
+          actorId: machineActorId("vps"),
           rights: {
             deploys: { mode: "automatic" },
             addsPages: { mode: "automatic" },
