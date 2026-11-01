@@ -18,6 +18,7 @@ import {
   type Resource,
   type State,
   activeShares,
+  isPublicCircle,
   levelName,
   providerCardId,
   shareKey,
@@ -311,6 +312,9 @@ export function reachOf(state: State, machineId: string, provider: string, now: 
   return [...state.resources.values()].flatMap((card) => {
     if (card.machine === null || card.machine === machineId || card.provider?.name !== provider) return [];
     if (card.provider.droppedAt !== undefined) return [];
+    // A public card's Access application lets every visitor through (K-403), so the machine token would reach its
+    // origin; a link never goes there.
+    if (activeShares(state, card, now).some((share) => isPublicCircle(share.circle))) return [];
     const level = visitorLevel(state, card, visitor, now);
     return level === null
       ? []

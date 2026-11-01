@@ -320,6 +320,10 @@ describe("reach of a machine (K-1609)", () => {
     // A machine never reaches its own cards, and a pause closes every link (K-1504).
     expect(reachOf(value, "vps", "t3", 0)).toEqual([]);
     expect(reachOf({ ...value, paused: "keep-public" }, "mac", "t3", 0)).toEqual([]);
+    // A public card is never in the reach, so the machine token never reaches an origin without Access.
+    const everyone = circle("everyone", [{ _tag: "everyone" }], { level: "view" });
+    const open: State = { ...value, circles: new Map([...value.circles, [everyone.id, everyone]]) };
+    expect(reachOf(open, "mac", "t3", 0)).toEqual([]);
   });
 });
 
