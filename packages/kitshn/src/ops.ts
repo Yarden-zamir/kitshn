@@ -52,6 +52,24 @@ export function opCallBody(args: ReadonlyArray<string>): { target: string; body:
   return { target, body, ...(reason === undefined ? {} : { reason }) };
 }
 
+/**
+ * K-1777: the fields of `kitshn state <field...>`. A field that the snapshot does not have refuses with the valid names,
+ * and a hidden field with the reason that it is hidden, so a typo never prints null.
+ */
+export function stateFields(
+  result: { readonly snapshot: Record<string, unknown>; readonly hidden?: unknown },
+  fields: ReadonlyArray<string>,
+): Record<string, unknown> {
+  const { snapshot } = result;
+  const hidden = isRecord(result.hidden) ? result.hidden : {};
+  for (const field of fields) {
+    if (Object.hasOwn(snapshot, field)) continue;
+    if (Object.hasOwn(hidden, field)) throw new CliError(`state hides ${field}: ${String(hidden[field])}`);
+    throw new CliError(`the map has no field ${field}. Fields: ${Object.keys(snapshot).sort().join(", ")}.`);
+  }
+  return Object.fromEntries(fields.map((field) => [field, snapshot[field]]));
+}
+
 export async function runOpCommand(
   command: OpCommand,
   args: ReadonlyArray<string>,
@@ -73,14 +91,12 @@ export async function runOpCommand(
   if (command === "state") {
     const result = await opResult(await transport().call("/op/state", { method: "GET" }));
     const fields = words(args, ["--server"]);
-    if (fields.length === 0 || !isRecord(result) || !isRecord(result["snapshot"])) {
+    const snapshot = isRecord(result) ? result["snapshot"] : null;
+    if (fields.length === 0 || !isRecord(result) || !isRecord(snapshot)) {
       console.log(JSON.stringify(result, null, 2));
       return;
     }
-    const snapshot = result["snapshot"];
-    console.log(
-      JSON.stringify(Object.fromEntries(fields.map((field) => [field, snapshot[field] ?? null])), null, 2),
-    );
+    console.log(JSON.stringify(stateFields({ snapshot, hidden: result["hidden"] }, fields), null, 2));
     return;
   }
   const result = await opResult(
