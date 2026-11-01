@@ -289,8 +289,6 @@ import {
   shownHash,
   WINDOW_ACTIONS,
   answerRefusal,
-  type ProposalRight,
-  proposalRightName,
 } from "../core/asks.ts";
 import {
   type Decision,
@@ -3850,9 +3848,19 @@ export class Kitshn extends DurableObject<Env> {
     return caller.gated !== undefined || this.isOwner(caller.visitor);
   }
 
-  private hasAdmin(visitor: Visitor) {
+  /**
+   * K-104, K-1778: control on the admin card. Only a login proves a person; any other proof holds the admin only with
+   * "raises access" automatic, so a token in a circle of the admin acts as the owner only when the owner set that.
+   */
+  private hasAdmin(visitor: Visitor, attested: Attested | null = null) {
     const admin = this.state.resources.get(ADMIN_RESOURCE_ID);
-    return admin !== undefined && visitorLevel(this.state, admin, visitor, Date.now()) === "control";
+    const now = Date.now();
+    return (
+      admin !== undefined &&
+      visitorLevel(this.state, admin, visitor, now) === "control" &&
+      (visitor.email !== null ||
+        rightMode(this.state, visitor, "raisesAccess", now, attested)?.mode === "automatic")
+    );
   }
 
   private snapshot(caller: Caller, repos: ReadonlyArray<RepoView> = this.repoViews()): Snapshot {
@@ -6013,6 +6021,11 @@ export class Kitshn extends DurableObject<Env> {
       if (approval.right !== null && machineRightOff(this.state, asker.id, approval.right, now, null))
         return `${NO_LONGER_ALLOWED} the owner set the right "${RIGHT_NAMES[approval.right]}" to off.`;
     }
+    // K-1778: "raises access" let it past the scope, so the right must still be automatic. The approval keeps no labels.
+    if (approval.raises === true)
+      return rightMode(this.state, visitor, "raisesAccess", now, null)?.mode === "automatic"
+        ? null
+        : `${NO_LONGER_ALLOWED} the right "${RIGHT_NAMES.raisesAccess}" of the caller is no longer automatic.`;
     // K-718: only the gate let this job in, so a command that gives a shell needs the whole machine again now.
     if (
       !approval.person &&
@@ -10565,8 +10578,11 @@ export class Kitshn extends DurableObject<Env> {
       labels = verified;
     }
     const attested = machine ? { labels, prefixes: this.labelPrefixesOf(machine.id) } : null;
-    // K-1778: raising access needs a passkey, so only a passkey login of the admin runs past the gate.
-    const admin = adminPasskey(this.state, caller.visitor, now) && this.hasAdmin(caller.visitor);
+    // K-1778: the admin runs as the owner: a login with the passkey of the admin, or another proof of the admin with
+    // "raises access" automatic. A login without that passkey goes through the gate.
+    const admin =
+      this.hasAdmin(caller.visitor, attested) &&
+      (caller.visitor.email === null || adminPasskey(this.state, caller.visitor, now));
     const asker = this.askerOf(caller.visitor);
     if (!admin && asker === null)
       return refused(
@@ -10607,10 +10623,14 @@ export class Kitshn extends DurableObject<Env> {
         right !== null && open === null && rightOff(this.state, caller.visitor, right, now, attested);
       const missing = this.opMissing(op, target, built.body);
       if (missing !== null) return refused(404, missing);
+      const raises = rightMode(this.state, caller.visitor, "raisesAccess", now, attested);
+      const raisesOff =
+        raises === null && rightOff(this.state, caller.visitor, "raisesAccess", now, attested);
       const gate = {
         admin: false,
         paused: this.state.paused !== null,
         mode: off ? ({ mode: "off" } as const) : open,
+        raisesAccess: raisesOff ? ({ mode: "off" } as const) : raises,
         inAgentCircle: circlesOf(this.state, caller.visitor, now, attested).size > 0,
         scope: this.opScope(op, target, built.body, caller.visitor, now, attested),
       };
@@ -10629,8 +10649,8 @@ export class Kitshn extends DurableObject<Env> {
         };
         const hash = await shownHash(shownAsk("forward", opTarget, shownBody));
         const thread = labels["t3.thread.id"] ?? null;
-        // K-1777: a failed scope asks the Owner whatever the mode, so no mode of the right decides the approval.
-        const askRight: ProposalRight = gate.scope ? (right ?? "owner") : "owner";
+        // K-1778: a call out of scope waits by "raises access", whatever the mode of the row's right.
+        const askRight: Right = gate.scope ? (right ?? "raisesAccess") : "raisesAccess";
         used = this.forwardApproval(asker.credential, hash, decision.circleId, askRight, thread, now);
         if (used !== null) decision = decide(op, { ...gate, approved: true }, OWNER_CIRCLE_ID);
         else {
@@ -10664,11 +10684,16 @@ export class Kitshn extends DurableObject<Env> {
         event({ outcome: "refused", reason: decision.reason });
         return refused(403, decision.reason);
       }
+      const passed = {
+        right,
+        person: used?.person === true,
+        ...(!gate.scope && used === null ? { raises: true as const } : {}),
+      };
       gated = {
         op: id,
         approval: machine
-          ? { machineId: machine.id, key: keyMark(machine), right, person: used?.person === true }
-          : { credential: asker.credential, right, person: used?.person === true },
+          ? { machineId: machine.id, key: keyMark(machine), ...passed }
+          : { credential: asker.credential, ...passed },
       };
     } else {
       // K-1777: the admin runs as from the map; `decide` refuses only a person gate, whose path is not `/op`.
@@ -10678,6 +10703,7 @@ export class Kitshn extends DurableObject<Env> {
           admin: true,
           paused: this.state.paused !== null,
           mode: null,
+          raisesAccess: null,
           inAgentCircle: false,
           scope: true,
           approved: false,
@@ -10899,26 +10925,26 @@ export class Kitshn extends DurableObject<Env> {
 
   /**
    * K-1714, K-1776: the unused approval of exactly this forwarded call (its shown hash) of this machine and thread, from
-   * this circle, within the hour, and whether a person gave it; null when there is none. An ask of right "owner" takes
-   * only an approval of right "owner", because only that one passed the passkey check (K-1723).
+   * this circle, within the hour, and whether a person gave it; null when there is none. An ask of "raises access" takes
+   * only an approval of "raises access", because only that one passed the passkey check (K-1723).
    */
   private forwardApproval(
     credential: string,
     hash: string,
     circleId: string,
-    right: ProposalRight,
+    right: Right,
     thread: string | null,
     now: number,
   ): { readonly id: string; readonly person: boolean } | null {
     const [row] = this.sql<{ id: string; person: number }>(
       `SELECT id, json_extract(decided_by, '$.actor._tag') = 'person' AS person FROM proposals
-       WHERE credential = ? AND action = 'forward' AND shown_hash = ? AND circle_id = ? AND (? = 0 OR right_name = 'owner')
+       WHERE credential = ? AND action = 'forward' AND shown_hash = ? AND circle_id = ? AND (? = 0 OR right_name = 'raisesAccess')
        AND state = 'approved' AND used_at IS NULL AND decided_at > ? AND json_extract(labels, '$."t3.thread.id"') IS ?
        LIMIT 1`,
       credential,
       hash,
       circleId,
-      right === "owner" ? 1 : 0,
+      right === "raisesAccess" ? 1 : 0,
       now - APPROVED_WINDOW_MS,
       thread,
     );
@@ -10934,7 +10960,7 @@ export class Kitshn extends DurableObject<Env> {
     target: string,
     body: unknown,
     labels: Readonly<Record<string, string>>,
-    wait: { readonly right: ProposalRight; readonly circleId: string },
+    wait: { readonly right: Right; readonly circleId: string },
     hash: string,
     thread: string | null,
     now: number,
@@ -10973,7 +10999,7 @@ export class Kitshn extends DurableObject<Env> {
       proposalId: made.proposalId,
       circle,
       expiresAt,
-      line: `waiting: ${circle} must approve this call (right "${proposalRightName(wait.right)}", proposal ${made.proposalId}, expires in ${hours} h). After the approval, run the same command once more within 1 hour, from the same thread; a changed call asks again (K-1776).`,
+      line: `waiting: ${circle} must approve this call (right "${RIGHT_NAMES[wait.right]}", proposal ${made.proposalId}, expires in ${hours} h). After the approval, run the same command once more within 1 hour, from the same thread; a changed call asks again (K-1776).`,
     };
   }
 
@@ -12306,7 +12332,7 @@ export class Kitshn extends DurableObject<Env> {
     body: unknown,
     reason: string | null,
     labels: Readonly<Record<string, string>>,
-    right: ProposalRight,
+    right: Right,
     circleId: string,
     now: number,
   ): Promise<AskOutcome> {
@@ -12399,9 +12425,9 @@ export class Kitshn extends DurableObject<Env> {
         ok: false,
         error: `${circle.name} needs a passkey: approve through the passkey check (K-1723).`,
       };
-    // K-1723, K-1778: an ask that raises access (the Owner decides) needs a passkey proof, also where the circle lets a
-    // token or a machine approve.
-    if (decision === "approved" && proposal.right === "owner" && via !== "passkey")
+    // K-1723, K-1778: an ask of "raises access" needs a person's passkey, also where the circle lets a token or a machine
+    // approve. An actor whose "raises access" is automatic never asks.
+    if (decision === "approved" && proposal.right === "raisesAccess" && via !== "passkey")
       return {
         ok: false,
         error: "This ask raises access, so only a person approves it, through the passkey check (K-1723).",
@@ -12485,13 +12511,13 @@ export class Kitshn extends DurableObject<Env> {
           proposal.action,
           proposal.target,
           proposal.body,
-          proposal.right === "owner" ? [] : [proposal.right],
+          proposal.right === "raisesAccess" ? [] : [proposal.right],
           proposal.labels,
           this.attestedOf(machine.id, proposal.labels),
           proposal.circleId === OWNER_CIRCLE_ID &&
             by.machineId === null &&
             (proposal.action === "job" || proposal.action === "deploy") &&
-            proposal.right !== "owner"
+            proposal.right !== "raisesAccess"
             ? { machineId: machine.id, key: keyMark(machine), right: proposal.right, person: true }
             : null,
         )
@@ -12555,9 +12581,6 @@ export class Kitshn extends DurableObject<Env> {
         .length === 0
     )
       return "the caller of this run is gone.";
-    // K-1777: no right lets an agent run the call, so only the Owner circle answers it, and no mode can change.
-    if (proposal.right === "owner")
-      return proposal.circleId === OWNER_CIRCLE_ID ? null : "only the Owner answers this ask.";
     const attested = proposal.machineId === "" ? null : this.attestedOf(proposal.machineId, proposal.labels);
     // K-1778: a token or a login asked, so its rights come from the chips of its actor.
     const asker = this.proposalVisitor(proposal);
@@ -16353,7 +16376,7 @@ export class Kitshn extends DurableObject<Env> {
         recipients: { _tag: "approvers", circle: proposal.circleId },
         level: "warn",
         priority: "high",
-        title: clip(`${proposal.machineName} asks: ${proposalRightName(proposal.right)}`, TITLE_MAX),
+        title: clip(`${proposal.machineName} asks: ${RIGHT_NAMES[proposal.right]}`, TITLE_MAX),
         text: clip(`${proposal.shown}${proposal.reason ? ` · ${proposal.reason}` : ""}`, TEXT_MAX),
         actions: [
           {

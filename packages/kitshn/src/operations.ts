@@ -46,7 +46,7 @@ export const RIGHT_NAMES: Record<Right, string> = {
  * - `job`: a job that the caller queued, or a job on a machine card that the caller controls.
  * - `ports`: the body fields `machine` and `relay` name cards that the caller controls (K-2007).
  * - `self`: the machine of the caller.
- * - `never`: nothing passes, so every agent call asks the Owner.
+ * - `never`: nothing passes, so the right "raises access" decides: by default every call asks the Owner (K-1778).
  * A target that does not exist refuses. An edit that does not resolve does not pass the rule.
  */
 export type Scope = "any" | "card" | "own" | "machine" | "rule" | "job" | "ports" | "self" | "never";
@@ -861,7 +861,7 @@ export function opsText(): string {
     isPersonGate(gate)
       ? `person only: ${gate.person}`
       : gate.scope === "never"
-        ? "asks the Owner"
+        ? `right "${RIGHT_NAMES.raisesAccess}": the Owner decides`
         : `${gate.right === null ? "no right" : `right "${RIGHT_NAMES[gate.right]}"`}, scope ${gate.scope}`;
   const groups = [...new Set(OP_IDS.map((id) => OPERATIONS[id].group))];
   return groups

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
-import { proposalRightName } from "../core/asks.ts";
+import { RIGHT_NAMES } from "../core/model.ts";
 import type { AskEventView, LinkEventView, ProposalView } from "../core/protocol.ts";
 import { callApi } from "./store.ts";
 import { whenText } from "./time.ts";
@@ -216,7 +216,7 @@ export function AskRow(props: {
   return (
     <li>
       <span class="sticker wait" data-tip={`It waits for ${props.circleName(props.proposal.circleId)}.`}>
-        {proposalRightName(props.proposal.right)}
+        {RIGHT_NAMES[props.proposal.right]}
       </span>
       <span class="name">
         {props.proposal.machineName}: <code class="shown">{props.proposal.shown}</code>

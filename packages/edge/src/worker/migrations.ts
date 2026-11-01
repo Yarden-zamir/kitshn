@@ -324,11 +324,13 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
     "ALTER TABLE device_invites ADD COLUMN actor_id TEXT",
   ],
   // 45: a proposal belongs to the credential that asked (K-1778): `machine/<id>`, `token/<id>` or `login/<email>`. A
-  // token actor has no machine, so its `machine_id` is empty. The credential never approves its own ask.
+  // token actor has no machine, so its `machine_id` is empty. The credential never approves its own ask. A call that the
+  // Owner decides now asks for the right "raises access" (K-1778), not "owner".
   [
     "ALTER TABLE proposals ADD COLUMN credential TEXT NOT NULL DEFAULT ''",
     "UPDATE proposals SET credential = 'machine/' || machine_id",
     "CREATE INDEX proposals_credential ON proposals (credential, state)",
+    "UPDATE proposals SET right_name = 'raisesAccess' WHERE right_name = 'owner'",
   ],
 ];
 

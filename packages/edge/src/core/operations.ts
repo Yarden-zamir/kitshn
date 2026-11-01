@@ -36,6 +36,8 @@ export interface GateInput {
   readonly paused: boolean;
   /** The caller's mode of the row's right: null when no circle sets it. Unused when the row has no right. */
   readonly mode: RightMode | null;
+  /** K-1778: the caller's mode of "raises access", which decides each call that the Owner decides otherwise. */
+  readonly raisesAccess: RightMode | null;
   /** The caller is in at least one agent circle (K-1730). */
   readonly inAgentCircle: boolean;
   /** The scope of the row holds for this target. */
@@ -46,7 +48,9 @@ export interface GateInput {
 
 /**
  * K-1777: the one decision of every call. A call runs, waits for a circle, or refuses. It refuses only for a person gate,
- * the pause, and a right that is "off": the owner sees the same refusal in the first two, and set the third.
+ * the pause, and a right that is "off": the owner sees the same refusal in the first two, and set the third. A call
+ * that the Owner decides (scope "never", or a target out of scope, such as an access raise of K-715) follows the
+ * caller's "raises access" (K-1778): automatic runs, "ask <circle>" asks that circle, and default asks the Owner.
  */
 export function decide(op: Operation, input: GateInput, ownerCircleId: string): Decision {
   if (isPersonGate(op.gate))
@@ -62,12 +66,29 @@ export function decide(op: Operation, input: GateInput, ownerCircleId: string): 
       reason: `The right "${RIGHT_NAMES[right]}" is off for this machine (K-1720). Ask the owner to turn it on.`,
     };
   if (input.approved) return { outcome: "run" };
-  if (!input.scope || scope === "never") return { outcome: "ask", circleId: ownerCircleId };
+  if (!input.scope || scope === "never") return ownerDecides(input.raisesAccess, ownerCircleId);
   if (right === null) return { outcome: "run" };
   if (input.mode?.mode === "automatic") return { outcome: "run" };
   if (input.mode?.mode === "ask") return { outcome: "ask", circleId: input.mode.circleId };
   if (AUTOMATIC_BY_DEFAULT.has(right) && input.inAgentCircle) return { outcome: "run" };
   return { outcome: "ask", circleId: ownerCircleId };
+}
+
+/** K-1778: the decision of a call that the Owner decides, by the caller's mode of "raises access". */
+function ownerDecides(mode: RightMode | null, ownerCircleId: string): Decision {
+  switch (mode?.mode) {
+    case "automatic":
+      return { outcome: "run" };
+    case "ask":
+      return { outcome: "ask", circleId: mode.circleId };
+    case "off":
+      return {
+        outcome: "refuse",
+        reason: `The right "${RIGHT_NAMES.raisesAccess}" is off for this actor, so the Owner gets no ask for this call (K-1778).`,
+      };
+    case undefined:
+      return { outcome: "ask", circleId: ownerCircleId };
+  }
 }
 
 /**

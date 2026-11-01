@@ -43,12 +43,6 @@ export type AskAction = (typeof ASK_ACTIONS)[number];
 /** K-1776: a proposal is for an ask, or for one call that a daemon forwarded (K-1714). */
 export type ProposalAction = AskAction | "forward";
 
-/** K-1777: the right that a proposal asks for; "owner" when no right lets an agent run the call, so the Owner decides. */
-export type ProposalRight = Right | "owner";
-
-export const proposalRightName = (right: ProposalRight) =>
-  right === "owner" ? "none: the Owner decides" : RIGHT_NAMES[right];
-
 export const isAskAction = (value: unknown): value is AskAction =>
   typeof value === "string" && (ASK_ACTIONS as ReadonlyArray<string>).includes(value);
 
@@ -214,7 +208,8 @@ export interface Proposal {
   readonly body: unknown;
   readonly reason: string | null;
   readonly labels: Readonly<Record<string, string>>;
-  readonly right: ProposalRight;
+  /** K-1778: a call that the Owner decides asks for "raises access". */
+  readonly right: Right;
   readonly circleId: string;
   /** What the approver reads, and its SHA-256 hex (shownAsk). */
   readonly shown: string;

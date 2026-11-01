@@ -89,7 +89,15 @@ describe("operations (K-1777)", () => {
         for (const inAgentCircle of [true, false]) {
           const decision = decide(
             op,
-            { admin: false, paused: false, mode: null, inAgentCircle, scope, approved: false },
+            {
+              admin: false,
+              paused: false,
+              mode: null,
+              raisesAccess: null,
+              inAgentCircle,
+              scope,
+              approved: false,
+            },
             OWNER,
           );
           if (decision.outcome === "refuse") refusals.push(id);
@@ -106,7 +114,13 @@ describe("operations (K-1777)", () => {
 
   it("asks the Owner for a failed scope, whatever the mode, and runs an approved call", () => {
     const shell = OPERATIONS["machine-shell"];
-    const base = { admin: false, paused: false, inAgentCircle: true, approved: false } as const;
+    const base = {
+      admin: false,
+      paused: false,
+      inAgentCircle: true,
+      approved: false,
+      raisesAccess: null,
+    } as const;
     expect(decide(shell, { ...base, mode: { mode: "automatic" }, scope: false }, OWNER)).toEqual({
       outcome: "ask",
       circleId: OWNER,
@@ -131,9 +145,48 @@ describe("operations (K-1777)", () => {
     ).toBe("refuse");
   });
 
+  it("decides each call that the Owner decides by the caller's raises access (K-1778)", () => {
+    const base = {
+      admin: false,
+      paused: false,
+      inAgentCircle: true,
+      approved: false,
+      mode: null,
+    } as const;
+    // An `apply` edit that raises access fails its rule scope (K-715); a row of scope "never" is the same.
+    for (const [op, scope] of [
+      [OPERATIONS.apply, false],
+      [OPERATIONS["machine-labels"], true],
+    ] as const) {
+      expect(decide(op, { ...base, scope, raisesAccess: null }, OWNER)).toEqual({
+        outcome: "ask",
+        circleId: OWNER,
+      });
+      expect(decide(op, { ...base, scope, raisesAccess: { mode: "automatic" } }, OWNER)).toEqual({
+        outcome: "run",
+      });
+      expect(
+        decide(op, { ...base, scope, raisesAccess: { mode: "ask", circleId: "admins" } }, OWNER),
+      ).toEqual({ outcome: "ask", circleId: "admins" });
+      expect(decide(op, { ...base, scope, raisesAccess: { mode: "off" } }, OWNER).outcome).toBe("refuse");
+    }
+    // A person gate stays a person gate, also with the right automatic.
+    for (const id of ["resume", "restore-time", "notifications", "push"] as const)
+      expect(
+        decide(OPERATIONS[id], { ...base, scope: true, raisesAccess: { mode: "automatic" } }, OWNER).outcome,
+      ).toBe("refuse");
+  });
+
   it("runs machine care at once for a machine in an agent circle, and asks for one in the tray (Y2)", () => {
     const update = OPERATIONS["machine-update"];
-    const base = { admin: false, paused: false, mode: null, scope: true, approved: false } as const;
+    const base = {
+      admin: false,
+      paused: false,
+      mode: null,
+      raisesAccess: null,
+      scope: true,
+      approved: false,
+    } as const;
     expect(decide(update, { ...base, inAgentCircle: true }, OWNER)).toEqual({ outcome: "run" });
     expect(decide(update, { ...base, inAgentCircle: false }, OWNER)).toEqual({
       outcome: "ask",

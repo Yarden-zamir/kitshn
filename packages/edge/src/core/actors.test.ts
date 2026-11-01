@@ -381,7 +381,15 @@ describe("the migration of members into actors (K-1778, migration 44)", () => {
     expect(
       decide(
         restart,
-        { admin: false, paused: false, mode, inAgentCircle: true, scope: true, approved: false },
+        {
+          admin: false,
+          paused: false,
+          mode,
+          raisesAccess: null,
+          inAgentCircle: true,
+          scope: true,
+          approved: false,
+        },
         OWNER_CIRCLE_ID,
       ),
     ).toEqual({ outcome: "run" });

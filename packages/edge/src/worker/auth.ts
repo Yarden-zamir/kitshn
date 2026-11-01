@@ -21,6 +21,11 @@ export type JobApproval = (
    * that is not closed, and its job keeps the normal expiry (K-613).
    */
   readonly person: boolean;
+  /**
+   * K-1778: "raises access" automatic let the call run past its scope. Its delivery checks that the right stays
+   * automatic, and not K-718.
+   */
+  readonly raises?: true;
 };
 
 export interface Caller {

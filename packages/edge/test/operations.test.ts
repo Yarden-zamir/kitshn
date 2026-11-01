@@ -33,7 +33,7 @@ it("lets an agent do owner actions through /op: care runs, a circle edit waits f
   expect(care.status, await care.clone().text()).toBe(200);
   expect(await care.json()).toMatchObject({ outcome: "done", result: { id: "vps", autoUpdate: false } });
 
-  // A circle edit raises access, so it asks the Owner (K-715); the proposal names no right.
+  // A circle edit raises access, so it asks the Owner (K-715) for the right "raises access" (K-1778).
   const renamed: Circle = {
     id: "agents",
     name: "Builders",
@@ -58,7 +58,7 @@ it("lets an agent do owner actions through /op: care runs, a circle edit waits f
       .exec<{ right_name: string }>("SELECT right_name FROM proposals WHERE id = ?", waiting.proposalId)
       .one(),
   );
-  expect(right.right_name).toBe("owner");
+  expect(right.right_name).toBe("raisesAccess");
   // K-1723, K-1778: an ask that raises access needs a passkey proof, also where the Owner circle lets a token approve.
   const script = tokenActor("t-script", "script.access", "Script");
   const ownerBody = await runInDurableObject(stub, (_, state) => {
@@ -771,6 +771,70 @@ it("lets a token actor call /op: an unset right waits for the Owner, and another
   const second = await post(jwt, "/op/machine-order", order);
   expect(second.status, await second.clone().text()).toBe(200);
   expect(await second.json()).toMatchObject({ outcome: "done", result: { order: 5 } });
+});
+
+it("lets a token raise access only by its right: automatic runs, default waits, off refuses, and a person gate stays (K-1778)", async () => {
+  stubAccessCerts();
+  const jwt = await scriptToken();
+  const stub = env.KITSHN.getByName("kitshn");
+  // The circle holds the admin card of the seed at (0, 40), so the token has control on the admin (K-104).
+  const atAdmin = { x: 0, y: 40 };
+  const added = tokenActor("t-new", "new.access", "new phone");
+  const outcomes: Array<[string, number, unknown, boolean, boolean]> = [];
+  for (const mode of ["automatic", "default", "off"] as const) {
+    const script = tokenActor("t-script", "script.access", "nightly backup");
+    const chip =
+      mode === "default"
+        ? { ...script, rights: { maintains: { mode: "automatic" as const } } }
+        : { ...script, rights: { raisesAccess: { mode } } };
+    await setup({}, null, atAdmin, [chip]);
+    await runInDurableObject(stub, (_, state) => {
+      insertActors(state.storage.sql, [added]);
+      state.storage.sql.exec("DELETE FROM proposals");
+    });
+    await evictDurableObject(stub);
+    const agents = await runInDurableObject(stub, (_, state) =>
+      state.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = 'agents'").one(),
+    );
+    const before = JSON.parse(agents.body) as Circle;
+    // K-715: a new member raises access.
+    const edit = call("", {
+      edits: [{ _tag: "circle", id: "agents", after: { ...before, members: [...before.members, added] } }],
+    });
+    const answer = await post(jwt, "/op/apply", edit);
+    const after = await runInDurableObject(stub, (_, state) => ({
+      members: (
+        JSON.parse(
+          state.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = 'agents'").one().body,
+        ) as Circle
+      ).members.length,
+      asks: state.storage.sql
+        .exec<{ right_name: string; circle_id: string }>("SELECT right_name, circle_id FROM proposals")
+        .toArray(),
+    }));
+    const body = (await answer.json()) as { outcome: string; reason?: string };
+    // K-104, K-1778: the map path holds the admin for a token only with the right automatic.
+    const map = await send("/api/state", { headers: { "cf-access-jwt-assertion": jwt } });
+    const resume = await post(jwt, "/op/resume", call(""));
+    outcomes.push([
+      mode,
+      answer.status,
+      { outcome: body.outcome, members: after.members - before.members.length, asks: after.asks },
+      map.status === 200,
+      resume.status === 403,
+    ]);
+  }
+  expect(outcomes).toEqual([
+    ["automatic", 200, { outcome: "done", members: 1, asks: [] }, true, true],
+    [
+      "default",
+      409,
+      { outcome: "waiting", members: 0, asks: [{ right_name: "raisesAccess", circle_id: OWNER_CIRCLE_ID }] },
+      false,
+      true,
+    ],
+    ["off", 403, { outcome: "refused", members: 0, asks: [] }, false, true],
+  ]);
 });
 
 it("reads the map through the gate, and caps the open asks of each credential at 20 (K-1777, K-1778)", async () => {
