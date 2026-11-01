@@ -31,11 +31,19 @@ const owner = (members: LegacyCircle["members"]): LegacyCircle => ({
 const phone = { _tag: "device", tokenId: "t-phone", clientId: "phone.access", name: "Phone" } as const;
 
 /** Puts the install `name` back at migration 43 with this Owner circle, then runs the start migrations. */
-/** Migration 47 (K-823) comes after both, so the tests take it away too. */
-const dropMigration47 = (sql: SqlStorage) => {
+/** Migrations 47 (K-823) and 48 (K-1302) come after both, so the tests take them away too. */
+const dropLaterMigrations = (sql: SqlStorage) => {
   sql.exec("DROP TABLE deploy_instances");
   sql.exec("ALTER TABLE deploys DROP COLUMN compose");
   sql.exec("ALTER TABLE backups DROP COLUMN repository");
+  for (const index of [
+    "forward_nonces_at",
+    "notifications_state",
+    "library_previous",
+    "library_added",
+    "repos_first_seen",
+  ])
+    sql.exec(`DROP INDEX ${index}`);
 };
 
 const migrateFrom43 = (name: string, members: LegacyCircle["members"]) =>
@@ -52,7 +60,7 @@ const migrateFrom43 = (name: string, members: LegacyCircle["members"]) =>
     sql.exec("DELETE FROM meta WHERE key = 'actors-undo-floor'");
     sql.exec("DELETE FROM circles WHERE id != 'owner'");
     sql.exec("UPDATE circles SET body = ? WHERE id = 'owner'", body);
-    dropMigration47(sql);
+    dropLaterMigrations(sql);
     sql.exec("UPDATE meta SET value = ? WHERE key = 'schema_version'", String(ACTORS_MIGRATION - 1));
     let error: unknown = null;
     try {
@@ -153,7 +161,7 @@ const migrateFrom45 = (name: string, broken: boolean) =>
     job(3, "sent", { ...visitor, ownerApproved: approval });
     // A circle body that does not parse makes the code step throw.
     if (broken) sql.exec("INSERT OR REPLACE INTO circles (id, body) VALUES ('broken', 'not json')");
-    dropMigration47(sql);
+    dropLaterMigrations(sql);
     sql.exec("UPDATE meta SET value = ? WHERE key = 'schema_version'", String(EFFECTS_MIGRATION - 1));
     let error: unknown = null;
     try {
