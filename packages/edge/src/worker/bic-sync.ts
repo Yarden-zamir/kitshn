@@ -1,10 +1,10 @@
+import { TOKEN_PERMISSIONS, addPermission } from "../core/token.ts";
 import { type AccessRow, type Api, appliesBypass } from "./access-sync.ts";
 import { CloudflareError } from "./cloudflare.ts";
 import { type Zone, zoneFor } from "./zones.ts";
 
 /** K-412: kitshn owns the Configuration Rule with this ref in each zone, and no other rule there. */
 export const BIC_RULE_REF = "kitshn_private_cards_bic_off";
-export const BIC_PERMISSION = "Zone > Config Rules > Edit";
 /** K-406: the most Cloudflare calls of one run of the step: two zones of two calls each. */
 export const BIC_CALLS = 4;
 const PHASE = "http_config_settings";
@@ -106,7 +106,7 @@ export async function syncBic(
       if (error instanceof CloudflareError && error.status === 404) ruleset = null;
       else if (error instanceof CloudflareError && (error.status === 401 || error.status === 403))
         throw new Error(
-          `The API token cannot read the Configuration Rules of zone ${zoneId}. Add "${BIC_PERMISSION}" to the token at https://dash.cloudflare.com/profile/api-tokens, so private cards answer machines (K-412). ${error.message}`,
+          `The API token cannot read the Configuration Rules of zone ${zoneId}, so private cards refuse many machines (K-412). ${addPermission(TOKEN_PERMISSIONS.configRules)} ${error.message}`,
         );
       else throw error;
     }

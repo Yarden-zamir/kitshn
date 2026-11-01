@@ -439,7 +439,9 @@ async function logs(
   const found = answer.answer;
   if (found?.state === "error") fail(found.error);
   if (found?.state === "needs-permission")
-    fail('search in Worker logs needs the token permission "Workers Observability: Edit" (K-1806).');
+    fail(
+      'search in Worker logs needs the token permission "Account > Workers Observability > Edit" (K-1806).',
+    );
   // With --json, stdout holds only the answer; console.log goes to stderr in that mode.
   if (options.json) return void process.stdout.write(`${JSON.stringify(found ?? answer.runs)}\n`);
   if (options.deploys) {

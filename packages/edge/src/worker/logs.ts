@@ -33,7 +33,7 @@ export async function searchWorker(
       },
     });
   } catch (error) {
-    // The token answers 403 "Forbidden" without "Workers Observability: Edit".
+    // The token answers 403 "Forbidden" without "Account > Workers Observability > Edit".
     if (error instanceof CloudflareError && error.status === 403) return { state: "needs-permission" };
     throw error;
   }

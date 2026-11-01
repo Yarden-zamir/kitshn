@@ -89,7 +89,7 @@ export default {
     await dialog.getByText("Live").click();
     permission = true;
     await dialog.getByRole("button", { name: "Search", exact: true }).click();
-    await dialog.getByText("Workers Observability: Edit", { exact: false }).first().waitFor();
+    await dialog.getByText("Account > Workers Observability > Edit", { exact: false }).first().waitFor();
     await shot("worker-permission");
   },
 } satisfies Scenario;
