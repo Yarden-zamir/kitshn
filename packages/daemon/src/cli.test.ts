@@ -9,6 +9,7 @@ import {
   rightLines,
   serverTable,
   unexposeRefusal,
+  waitingJson,
 } from "./cli.ts";
 
 const request: Extract<Request, { type: "forward" }> = {
@@ -58,13 +59,15 @@ describe("a forwarded call that waits for an approval (K-1776)", () => {
     const answer = await forwardAndWait(
       ask,
       request,
-      (line) => lines.push(line),
+      (line, wait) => lines.push(line, waitingJson(wait)),
       () => 0,
     );
     expect(answer.status).toBe(200);
     expect(sent).toEqual([request, request]);
     expect(lines).toEqual([
       expect.stringMatching(/^waiting: Owner must approve proposal p-1 \(expires in 1 h\)/),
+      // K-1714: the line that `--json` prints on stdout; the fork decodes it.
+      JSON.stringify({ outcome: "waiting", proposalId: "p-1", circle: "Owner", expiresAt: 3_600_000 }),
     ]);
   });
 
