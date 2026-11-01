@@ -410,3 +410,44 @@ it("puts a wizard site in the circle of its request, and a failed job leaves no 
   });
   expect(gone.status).toBe(400);
 });
+
+it("never turns the site of a dropped instance into a card of its own (K-825)", async () => {
+  await setup();
+  const stub = env.KITSHN.getByName("kitshn");
+  await runInDurableObject(stub, async (instance, state) => {
+    const sql = state.storage.sql;
+    const site = (name: string) =>
+      sql.exec(
+        `INSERT INTO live_sites (id, machine_id, name, address, target, dev, up, last_up, state)
+         VALUES (?, 'vps', ?, ?, 'unix:/run/app.sock', 0, 1, 0, 'checking')`,
+        `live-vps-${name}`,
+        name,
+        `${name}.example.com`,
+      );
+    // One instance address left its card (K-1124); the stop of another one waits for the machine.
+    site("gone-vps");
+    sql.exec("INSERT INTO old_addresses (address, card_id) VALUES ('gone-vps.example.com', 'gone-card')");
+    site("stopping-vps");
+    sql.exec(
+      `INSERT INTO jobs (machine_id, labels, command, state, created_at, expires_at, actor, visitor, output)
+       VALUES ('vps', '[]', ?, 'queued', 0, ?, '{}', '{}', '')`,
+      JSON.stringify({ kind: "compose-down", project: "stop-card", name: "stopping-vps", removeData: false }),
+      Number.MAX_SAFE_INTEGER,
+    );
+    const kitshn = instance as unknown as {
+      load(): void;
+      checkSites(api: () => Promise<[]>, budget: number): Promise<number>;
+    };
+    kitshn.load();
+    await kitshn.checkSites(async () => [], 6);
+    const ids = ["live-vps-gone-vps", "live-vps-stopping-vps"];
+    expect(
+      sql.exec("SELECT id, state FROM live_sites WHERE id IN (?, ?) ORDER BY id", ...ids).toArray(),
+    ).toEqual(ids.map((id) => ({ id, state: "checking" })));
+    expect(sql.exec("SELECT id FROM resources WHERE id IN (?, ?)", ...ids).toArray()).toEqual([]);
+    sql.exec("DELETE FROM live_sites WHERE id IN (?, ?)", ...ids);
+    sql.exec("DELETE FROM old_addresses WHERE card_id = 'gone-card'");
+    sql.exec("DELETE FROM jobs WHERE json_extract(command, '$.project') = 'stop-card'");
+    kitshn.load();
+  });
+});

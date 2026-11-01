@@ -47,6 +47,16 @@ describe("removal downs (K-909)", () => {
     expect(state(sent)).toEqual({ state: "failed", output: REPLACED });
   });
 
+  it("a deploy on one machine keeps the stop of a dropped instance on another (K-825)", () => {
+    const { db, sql, add, state } = jobs();
+    const here = add(down, "queued");
+    const elsewhere = add(down, "queued");
+    db.prepare("UPDATE jobs SET machine_id = 'm2' WHERE id = ?").run(elsewhere);
+    failQueuedDowns(sql, "app", REPLACED, "m1");
+    expect(state(here)).toEqual({ state: "failed", output: REPLACED });
+    expect(state(elsewhere)).toMatchObject({ state: "queued" });
+  });
+
   it("a stop that the machine had goes out again after a reconnect, when nothing newer exists", () => {
     const { sql, add, state } = jobs();
     const sent = add(down, "sent");

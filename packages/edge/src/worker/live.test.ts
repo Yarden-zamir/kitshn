@@ -267,6 +267,7 @@ describe("several addresses of a Compose app (K-817)", () => {
     state: "ok",
   };
   const card = {
+    id: "app-climbing-1-prod",
     kind: "site.compose" as const,
     addresses: ["climbing.example.com", "onion-climbers.com", "www.onion-climbers.com"],
   };
@@ -280,6 +281,31 @@ describe("several addresses of a Compose app (K-817)", () => {
     expect(hostnames.sort()).toEqual([...card.addresses].sort());
   });
 
+  it("serves the addresses of the primary from each instance, and each own address from its instance (K-824, K-828)", () => {
+    const placed = {
+      ...card,
+      addresses: [...card.addresses, "climbing-mac.example.com", "climbing-vps.example.com"],
+      instances: [
+        { machine: "m1", address: "climbing-mac.example.com", status: "running" as const },
+        { machine: "m2", address: "climbing-vps.example.com", status: "running" as const },
+      ],
+    };
+    expect(servedSites(app, placed).map((item) => item.address)).toEqual([
+      ...card.addresses,
+      "climbing-mac.example.com",
+    ]);
+    const instance = {
+      ...app,
+      id: "live-m2-climbing-vps",
+      machineId: "m2",
+      address: "climbing-vps.example.com",
+    };
+    const served = servedSites(instance, placed);
+    expect(served.map((item) => item.address)).toEqual([...card.addresses, "climbing-vps.example.com"]);
+    // Each entry carries the card, whose Access applications guard the addresses.
+    expect(new Set(served.map((item) => item.id))).toEqual(new Set([card.id]));
+  });
+
   it("keeps a live site and a card of another kind to its own address", () => {
     expect(servedSites(app, undefined)).toEqual([app]);
     expect(servedSites(app, { ...card, kind: "site.live" })).toEqual([app]);
@@ -290,7 +316,7 @@ describe("several addresses of a Compose app (K-817)", () => {
     const pending = new Set(["onion-climbers.com"]);
     const sites = protectedLiveSites(
       [app, { ...app, id: "app-other", name: "other", address: "other.example.com", state: "checking" }],
-      (id) => (id === app.id ? card : undefined),
+      (site) => (site.id === app.id ? card : undefined),
       (item) => !pending.has(item.address),
     );
     expect(sites.map((item) => item.address)).toEqual(["climbing.example.com", "www.onion-climbers.com"]);

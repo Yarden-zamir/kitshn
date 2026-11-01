@@ -11,6 +11,7 @@ import {
   rawRisks,
   realpathOf,
   realpathOnDisk,
+  spreadData,
 } from "./guard.ts";
 
 const roots = ["/apps/a/src", "/apps/a/data", "/apps/a/logs", "/apps/a/sockets"] as const;
@@ -260,6 +261,34 @@ describe("settings that need no allowance (K-818)", () => {
   it("refuses labels in the namespace of Compose", () => {
     const config = { services: { web: { labels: { "com.docker.compose.project": "b" } } } };
     expect(risks(config)).toEqual(["labels"]);
+  });
+});
+
+describe("data of a spread app (K-826)", () => {
+  it("names each volume and each bind below the data folder, and passes binds of the source", () => {
+    const config = {
+      services: {
+        web: {
+          volumes: [
+            { type: "bind", source: "/apps/a/src/config.yml", target: "/config.yml" },
+            { type: "bind", source: "/apps/a/data/db", target: "/db" },
+            { type: "tmpfs", target: "/tmp" },
+          ],
+        },
+        cache: {
+          volumes: [
+            { type: "volume", source: "cache", target: "/cache" },
+            { type: "volume", target: "/x" },
+          ],
+        },
+      },
+    };
+    expect(spreadData(config, "/apps/a/data", same)).toEqual([
+      "cache: volume (anonymous)",
+      "cache: volume cache",
+      "web: bind /apps/a/data/db",
+    ]);
+    expect(spreadData({ services: { web: { image: "nginx" } } }, "/apps/a/data", same)).toEqual([]);
   });
 });
 

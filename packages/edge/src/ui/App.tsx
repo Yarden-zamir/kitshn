@@ -147,6 +147,7 @@ import {
 } from "./Pause.tsx";
 import { playResumeSound, pressSound, showPanic, unlockAudio } from "./panic.ts";
 import { GONE_STICKER, REPO_STICKERS, RepoList, setRepoState } from "./Repos.tsx";
+import { cardInstances } from "../core/instances.ts";
 import { AskEvents, LinkEvents, BotRuns, approveFromHash } from "./Asks.tsx";
 import { PassSettingsPanel } from "./Passes.tsx";
 import { LibraryView } from "./Library.tsx";
@@ -2030,6 +2031,7 @@ export function App() {
       {backupsCard ? (
         <BackupsDialog
           card={backupsCard}
+          machineName={(id) => state?.machines.get(id)?.name ?? id}
           ask={ask}
           onClose={() => setBackupsCard(null)}
           onDone={(text, error) => showToast({ text, error, undo: null })}
@@ -2930,6 +2932,60 @@ function Redirects(props: {
   );
 }
 
+const INSTANCE_STICKER: Record<Resource["status"], string> = {
+  running: "ok",
+  deploying: "wait",
+  stopped: "info",
+  offline: "info",
+  unknown: "info",
+  failed: "",
+};
+
+/** K-824, K-827, K-828: each instance of a Compose card: its machine, its status, its own address, and the primary. */
+function InstanceList(props: { resource: Resource; state: State }) {
+  const { resource, state } = props;
+  const rows = cardInstances(resource);
+  return (
+    <section aria-label="Instances">
+      <div
+        class="label"
+        data-tip="Instances: the copies of this app, one per machine (K-823). Each has its own address; the primary also serves the main address (K-828)."
+      >
+        Instances
+      </div>
+      <ul>
+        {rows.map((row) => (
+          <li key={row.machine} class="row">
+            <span>{state.machines.get(row.machine)?.name ?? row.machine}</span>
+            <span
+              class={`sticker ${INSTANCE_STICKER[row.status]}`}
+              data-tip={`${row.status}: the state of the instance on this machine (K-827).`}
+            >
+              {row.status}
+            </span>
+            {row.machine === resource.primary ? (
+              <span
+                class="sticker info"
+                data-tip={`Primary: ${resource.addresses[0] ?? "the main address"} goes to this instance now (K-828).`}
+              >
+                main
+              </span>
+            ) : null}
+            <a
+              href={`https://${row.address}`}
+              target="_blank"
+              rel="noreferrer"
+              data-tip="The own address of this instance (K-824)."
+            >
+              {row.address}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function CardPanel(props: {
   resource: Resource;
   /** K-1733: every repo that kitshn knows, for the matches of a repo group. */
@@ -3049,6 +3105,9 @@ function CardPanel(props: {
             Open
           </a>
         </div>
+      ) : null}
+      {resource.kind === "site.compose" && (resource.instances ?? []).length > 0 ? (
+        <InstanceList resource={resource} state={state} />
       ) : null}
       {props.peek && peekable(resource) ? (
         <PeekRow key={resource.id} resource={resource} state={state} zone={props.zone} />

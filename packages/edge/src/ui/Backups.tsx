@@ -43,6 +43,8 @@ export function BackupState(props: { run: BackupRun }) {
 /** K-1819, K-1820: the backup runs of a card, newest first, with Restore. */
 export function BackupsDialog(props: {
   card: Resource;
+  /** K-827: the name of a machine, so a card with several instances names the machine of each run. */
+  machineName: (id: string) => string;
   onClose: () => void;
   onDone: (text: string, error: boolean) => void;
   ask: (text: string) => Promise<boolean>;
@@ -89,6 +91,7 @@ export function BackupsDialog(props: {
           {(runs ?? []).map((run) => (
             <li key={run.run}>
               <div class="row">
+                {(card.instances ?? []).length > 0 ? <span>{props.machineName(run.machineId)}</span> : null}
                 <span>{backupLabel(run)}</span> <BackupState run={run} />
                 {run.state === "done" ? (
                   <button

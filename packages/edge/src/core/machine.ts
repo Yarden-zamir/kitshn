@@ -138,6 +138,8 @@ export type Command =
       readonly repo: string;
       /** The Compose file of the recipe; with null, the daemon takes the files that Compose finds on its own. */
       readonly file: string | null;
+      /** K-826: an instance of a spread app; the daemon refuses a config with volumes. */
+      readonly spread?: true;
     }
   /**
    * K-718: start the last build of a Compose app that came up, from the copy on the machine. It never takes
@@ -187,6 +189,8 @@ export type Command =
   | {
       readonly kind: "backup";
       readonly card: string;
+      /** K-827: the repository of an instance that is not the home one; without it, the card's own. */
+      readonly repository?: string;
       readonly run: string;
       readonly prune: boolean;
       /** K-1816: the hard limit of the paused pass, from the pause of the last run. */
@@ -210,6 +214,8 @@ export type Command =
   | {
       readonly kind: "backup-restore";
       readonly card: string;
+      /** K-827: as for `backup`. */
+      readonly repository?: string;
       readonly run: string;
       readonly before: string;
       /** The sources of the run; the daemon checks that each exists before the app stops. */

@@ -64,6 +64,41 @@ An app repo holds a recipe, `kitshn.config.ts`, and a workflow file. This file h
   - kitshn sends Compose jobs only to daemons with the capability `compose-guard`.
   - Known limits, to revisit when a second person deploys apps on a machine: apps share the BuildKit cache; a root container can leave setuid files in its folders; there are no default CPU or memory limits; network aliases and `<project>-<service>` names can collide between apps. Rootless Docker for the kitshn user is the next step. The VPS runs it, and its `kitshn` user is not in the `docker` group.
 
+## Placement
+
+- **K-823** `compose.placement` sets how many copies (instances) of a Compose app run, and where. An instance runs only on a machine that K-610 allows (`deploy` and every `runsOn` label, fact labels included, K-635), with a Compose-ready daemon (K-818), inside the limit of K-819, and online with a key (K-1708). Rules:
+  - `"one"`, the default: one instance on the first such machine in the owner's order.
+  - `"every"`: one instance on each such machine.
+  - `{ spread: n }`, n from 1 to 10: n instances on the least busy such machines. Busy is the higher of CPU and memory in the newest sample (K-605). A machine without a sample counts as the busiest, and ties go by order.
+  - kitshn refuses a deploy that wants more than 10 instances, because each new instance address costs Cloudflare calls in the plan request, as K-817 counts them.
+  - A preview has one instance (K-902), because each instance costs a build, and a preview is temporary.
+  - No load balance: only one instance answers the main address at a time (K-828). One hostname goes to one tunnel, and a balance needs Cloudflare Load Balancer, which costs money.
+- **K-824** Addresses of an `"every"` or spread app. A `"one"` app keeps the addresses of K-817. Rules:
+  - Each instance gets an address of its own, `<main name>-<machine name>.<zone>`, so a person or an agent reaches one copy directly. The machine name becomes one DNS label. A name that is too long, or that an address of the card or of this deploy already has, gets a hash of the machine id instead. An instance keeps its address when its machine gets a new name.
+  - The main address and the other addresses of the recipe belong to one instance, the primary (K-828).
+  - Each instance address joins the card, so it gets its own Access application with the shares of the card, its own DNS record and the check of K-1111.
+  - The home instance is the one on the card's machine, the first one that the deploy placed. It keeps the card status, the logs (K-827) and the backup repository of the card.
+- **K-825** Instances stay on their machines (K-611). A deploy keeps each instance while its machine still qualifies, and adds instances only to reach the placement. Rules:
+  - The home instance never moves by itself. When its machine loses a label, the deploy refuses, as for `"one"`. Known limit: to move it, the owner removes the card. Revisit when owners take a home machine out of an `"every"` app.
+  - An `"every"` app gets an instance on each machine that qualifies and has none, through a build of the push branch by the GitHub App (K-908). Without the App, the next push adds it. kitshn starts at most one such build per card in 10 minutes.
+  - A machine that no longer qualifies loses its instance: kitshn stops it with `compose-down` and keeps its volumes (K-909). The instance address leaves the card and sends its visitors on (K-1124). Until the stop runs, its live site becomes no card.
+  - An offline machine keeps its instance, because it has no fact labels while offline (K-635).
+  - A spread app replaces a lost instance with a build, as above. kitshn never moves a running instance because of load.
+- **K-826** A spread app has no volumes: no named volume and no bind under its data folder. A replaced instance starts on another machine, and kitshn cannot move data yet, so the data would be lost. The daemon checks this in the checked config (K-818) before the build. kitshn refuses a spread deploy when one of its machines has a daemon without the capability `compose-spread`. An `"every"` app may have volumes, because each instance keeps its own data on its machine.
+- **K-827** One deploy runs one Compose job for each instance. The deploy is done when every job is done. It failed when one job failed, and the output names the machine of each job. Rules:
+  - Each instance has its own status, from the live site of its machine (K-1104). The card status is the status of the home instance.
+  - An instance whose job failed or expired is stale: it can run an old build. A stale instance is never the primary (K-828). Its next job that comes up, or the next deploy, clears it.
+  - A redeploy (K-718), a rollback (K-821), Remove app and its Undo (K-909) run on each instance. A redeploy skips an instance whose daemon cannot redeploy or whose machine lost `deploy`. A rollback skips an instance that did not build that deploy or whose daemon cannot roll back. The answer of a rollback names how many it skipped.
+  - Each instance has its own backup (K-1811): the home instance keeps `backups/<card>/`, and another instance gets `backups/<card>@<machine id>/`. So retention and restore never mix two machines. Only a daemon with the capability `backup-instances` backs up an instance that is not the home one.
+  - Logs (K-1804) read the home instance. Known limit: the other instances have no logs in kitshn. Revisit when an `"every"` app needs the logs of each machine.
+- **K-828** The primary is the instance that the main address goes to. Rules:
+  - A spread app fails over, because it keeps no data (K-826). Its primary stays where the record points while it stays healthy. Else the first healthy instance in the owner's order takes over. Healthy means that its machine is online, its live site is up (the signal of the offline route, K-1108) and it is not stale (K-827).
+  - Any other app keeps the main address on the home instance. When the home instance is down, the offline route of K-1108 answers. Failover between instances with their own volumes makes data seem to disappear and come back. Known limit: an `"every"` app without volumes gets no failover, because kitshn does not read the volumes of an app. Revisit when the daemon reports whether an app keeps data.
+  - Each instance's tunnel lists every address of the primary in its ingress. So a failover changes only the DNS records: the alarm points them to the tunnel of the new primary.
+  - When no instance is healthy, the records stay where they are, and the offline route of K-1108 answers.
+  - Known limit: a machine that goes on and off moves the records each time. Revisit when these record writes come near the call budget of K-406.
+- **K-829** Planned: an app with no web port, such as a monitoring agent or a log shipper, gets no address. It needs a recipe field, because kitshn cannot see a web port before the app runs.
+
 ## The repo gate
 
 - **K-819** A repo that kitshn has never deployed waits. Its first deploy step records it by its GitHub `repository_id` and fails with "waits on the kitshn map". One Allow or Block covers every app of the repo. This bends K-002: a new repo needs one click before its first deploy, because with OIDC (K-811) any repo of a trusted owner, also one that an agent created, could otherwise deploy code onto a machine. Rules:

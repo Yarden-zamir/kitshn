@@ -49,7 +49,7 @@ The daemon carries the skill of its release (K-618). The line under the front ma
    ```
 
    - One app: `export default defineApp({ ... })`. Several: `defineApps`, up to 10, keys like `web` (K-804).
-   - Kinds, one per app: `static` (`build`, `output`, K-805), `compose` (`runsOn` machine labels, also the daemon facts `unix`, `os:linux` or `arch:arm64` of K-635, `file`, K-812, K-818) or `worker` (`main`, `compatibilityDate`, `kv`, `durableObjects`, `crons`, `vars`, `assets`, K-806).
+   - Kinds, one per app: `static` (`build`, `output`, K-805), `compose` (`runsOn` machine labels, also the daemon facts `unix`, `os:linux` or `arch:arm64` of K-635, `file`, K-812, K-818, and `placement`: `"one"` by default, `"every"` for one instance on each machine that qualifies, or `{ spread: n }` for n instances on the least busy ones, K-823. Each instance gets its own address `<name>-<machine>.<zone>`, and the main address goes to one instance, which fails over only for a spread app (K-824, K-828). At most 10 instances. A spread app has no volumes, K-826) or `worker` (`main`, `compatibilityDate`, `kv`, `durableObjects`, `crons`, `vars`, `assets`, K-806).
    - `deploy`: the first matching entry wins (K-807). `pr-{pr}` gives each pull request a preview (K-901).
    - `address`: the default is `<repo>[-<key>][-<env>].<zone>`. A push entry may list up to 5; the first must be under the kitshn zone (K-817).
    - `startsIn`: the circle of a new card. Without it, the card waits private in the tray. After the first deploy, the map decides (K-518).
@@ -90,7 +90,7 @@ You can do what the owner can. Each call runs, waits for a person, or says why n
 - `kitshn ops` lists every owner action with its effect and its gate. `kitshn state [field...]` shows the map as the owner sees it, without job output and History text. Off a joined machine, the npm `kitshn` takes the same commands with `KITSHN_TOKEN=<client id>:<secret>` of a token of an actor and `KITSHN_SERVER`.
 - `kitshn <operation> [target] --body '<json>' --reason <text>` does one action, for example `kitshn machine-update <machine>`, `kitshn machine-auto-update <machine> --body '{"autoUpdate":false}'` or `kitshn device-invite --body '{"name":"Phone"}'`. Circle and member edits go through `kitshn apply --body '{"edits":[...]}'` and follow your `shares`: by default they wait for the owner. The asker never approves its own ask; another member of the circle does, and an ask of `shares` or `secrets` needs a person with a passkey.
 - The result is JSON on stdout. Waiting lines go to stderr. A refusal prints one line and exits with code 1; a done call exits with 0.
-- `kitshn agent state`: the cards that you manage, each with its circles by name, its newest deploy, backup and uptime, and your effects with their mode (`automatic`, `ask` with its circle, or `off`), with the defaults filled in. On a machine, `health` lists the health cells from and to this machine (K-631). `--body '{"all":true}'` adds the servers and link events. `kitshn status` shows the map name, the server and the effects of this machine.
+- `kitshn agent state`: the cards that you manage, each with its circles by name, its newest deploy, backup and uptime (a Compose card lists `instances`: machine, address, status and newest backup of each, K-827), and your effects with their mode (`automatic`, `ask` with its circle, or `off`), with the defaults filled in. On a machine, `health` lists the health cells from and to this machine (K-631). `--body '{"all":true}'` adds the servers and link events. `kitshn status` shows the map name, the server and the effects of this machine.
 - `kitshn health [--now] [--json]`: what this machine's daemon found at its last check of its providers and links (K-630).
 - `kitshn agent deploy <card> --body '{"mode":"redeploy"}'`: redeploy a card (`"build"` runs its workflow again). `kitshn agent backup <card>` backs it up now.
 - `kitshn agent organize` puts the cards that you manage in a tidy grid, each in its own circles, as one Undo (K-532). No share changes. It follows your `changes`, so by default it waits for the owner.
@@ -125,7 +125,8 @@ Read the Actions log first: the deploy step prints the job output and the final 
 | A missing value name | A needed `KITSHN_<NAME>` is not set (K-808). |
 | A refused Compose setting | Remove it, or ask the owner to allow it for that machine (K-818). |
 | An address that "already has a record" | Another card or a manual DNS record owns it (K-817). |
-| No machine for the job | No online machine has the labels `deploy` and those of `runsOn` (K-610). |
+| No machine for the job | No online machine has the labels `deploy` and those of `runsOn` (K-610). For `{ spread: n }`, the daemon also needs the capability `compose-spread` (K-826). |
+| "a spread app keeps no data" | A spread app has a volume or a bind below its data folder (K-826). Remove it, or use `placement: "every"`. |
 | Preview refused near 90 scripts | Too many open previews (K-903). Close old pull requests. |
 | The address shows "The kitchen is closed." | Nothing answers on the socket: the Compose app does not listen on `$KITSHN_DEFAULT_SOCKET`, or its machine is off (K-1106, K-1107). |
 | The card shows "failed" with a reason | The card panel, under "Deploy", keeps the reason of each deploy (K-820). |

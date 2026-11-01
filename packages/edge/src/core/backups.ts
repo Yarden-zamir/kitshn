@@ -38,6 +38,24 @@ export function pauseLimit(lastPauseMs: number | null): number {
   return lastPauseMs === null ? most : Math.min(most, Math.max(30_000, 3 * lastPauseMs));
 }
 
+/**
+ * K-827: the repository of an instance: `<card>` for the home one, `<card>@<machine id>` for another, so the
+ * retention and a restore of one instance never touch another. Card and machine ids have no `@`.
+ */
+export const instanceRepository = (card: string, machineId: string | null) =>
+  machineId === null ? card : `${card}@${machineId}`;
+
+/** K-827: the card and the machine of an instance repository; the machine is null for the home one. */
+export function repositoryParts(repository: string): {
+  readonly card: string;
+  readonly machineId: string | null;
+} {
+  const at = repository.indexOf("@");
+  return at < 0
+    ? { card: repository, machineId: null }
+    : { card: repository.slice(0, at), machineId: repository.slice(at + 1) };
+}
+
 /** K-1817: the nightly backups start at 03:00 UTC, a quiet hour. */
 export function nextBackupAt(now: number): number {
   const day = 24 * 3_600_000;

@@ -60,10 +60,28 @@ const RepoPath = Schema.String.check(
   ),
 );
 
+/** K-823: the most instances of a spread app. */
+export const MAX_SPREAD = 10;
+
+/** K-823: how many instances of a Compose app run, and where. */
+export const Placement = Schema.Union([
+  Schema.Literals(["one", "every"]),
+  Schema.Struct({
+    spread: Schema.Int.check(
+      Schema.makeFilter((n) =>
+        n >= 1 && n <= MAX_SPREAD ? undefined : `spread must be a whole number from 1 to ${MAX_SPREAD}`,
+      ),
+    ),
+  }),
+]);
+export type Placement = typeof Placement.Type;
+
 export const ComposeApp = Schema.Struct({
   runsOn: Schema.optionalKey(Schema.Array(Schema.String).check(Schema.isMaxLength(10))),
   /** K-818: a path inside the repo; the daemon checks it again after symlinks. */
   file: Schema.optionalKey(RepoPath),
+  /** K-823: without it, `"one"`. */
+  placement: Schema.optionalKey(Placement),
 });
 
 /** K-806: a binding or class name, a JavaScript identifier. */
