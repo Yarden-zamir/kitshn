@@ -2236,6 +2236,52 @@ describe("placement (K-823, K-824, K-827, K-828)", () => {
     for (const socket of sockets) await disconnect(socket);
   });
 
+  it("a run rollback waits for the jobs of every instance before the sweep stops it (K-821, K-827)", async () => {
+    const result = await runInDurableObject(stub, (instance, durable) => {
+      const sql = durable.storage.sql;
+      const job = (machineId: string, state: string) =>
+        sql
+          .exec<{ id: number }>(
+            `INSERT INTO jobs (machine_id, labels, command, state, created_at, expires_at, actor, visitor, output)
+             VALUES (?, '[]', '{"kind":"compose-rollback","project":"rb-card"}', ?, 0, ?, '{}', '{}', '') RETURNING id`,
+            machineId,
+            state,
+            Date.now() + 60_000,
+          )
+          .one().id;
+      const home = job("m-75a", "done");
+      const other = job("m-75b", "sent");
+      sql.exec(
+        `INSERT INTO deploys (id, repo, environment, resource_id, address, script, kind, sha, state, expires_at, app, job_id)
+         VALUES ('rb-75', 'owner/rb', 'prod', 'rb-card', 'rb.example.com', '', 'deploy', '1', 'running', ?, 'compose', ?)`,
+        Date.now() + 60_000,
+        home,
+      );
+      sql.exec(
+        "INSERT INTO deploy_instances (deploy_id, machine_id, address, job_id) VALUES ('rb-75', 'm-75b', 'rb-b.example.com', ?)",
+        other,
+      );
+      sql.exec(
+        `INSERT INTO rollbacks (id, steps, next, state, actor, notes, job_id)
+         VALUES ('run-75', '[]', 0, 'running', '{"_tag":"kitshn","reason":"test"}', '[]', ?)`,
+        home,
+      );
+      const kitshn = instance as unknown as { settleRollbacks(): number };
+      const state = () =>
+        sql.exec<{ state: string }>("SELECT state FROM rollbacks WHERE id = 'run-75'").one().state;
+      const waiting = [kitshn.settleRollbacks(), state()];
+      sql.exec("UPDATE jobs SET state = 'done' WHERE id = ?", other);
+      const ended = [kitshn.settleRollbacks(), state()];
+      sql.exec("DELETE FROM jobs WHERE id IN (?, ?)", home, other);
+      sql.exec("DELETE FROM deploy_instances WHERE deploy_id = 'rb-75'");
+      sql.exec("DELETE FROM deploys WHERE id = 'rb-75'");
+      sql.exec("DELETE FROM rollbacks WHERE id = 'run-75'");
+      return { waiting, ended };
+    });
+    // While the other instance's job runs, the step waits; once every job ended without a result, the sweep stops it.
+    expect(result).toEqual({ waiting: [0, "running"], ended: [1, "failed"] });
+  });
+
   it("an agent redeploy keeps the stop of an instance on another machine (K-825)", async () => {
     const down = (machineId: string) =>
       runInDurableObject(

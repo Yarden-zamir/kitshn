@@ -3671,7 +3671,7 @@ export class Kitshn extends DurableObject<Env> {
        WHERE rollbacks.state = 'running' AND (jobs.id IS NULL OR (jobs.state NOT IN ('queued', 'sent')
          AND NOT (jobs.state = 'failed' AND jobs.output = '${OFFLINE_OUTPUT}' AND jobs.expires_at > ?)))`,
       Date.now(),
-    ).filter((row) => !this.advancing.has(row.id));
+    ).filter((row) => !this.advancing.has(row.id) && !this.rollbackStepWaits(row.job_id));
     for (const row of stuck)
       this.finishRollback(row.id, "failed", [
         ...(JSON.parse(row.notes) as Array<string>),
@@ -5470,15 +5470,27 @@ export class Kitshn extends DurableObject<Env> {
     }));
   }
 
-  /** K-827: whether a job of a deploy, of any instance, still waits or runs. */
+  /**
+   * K-827: whether a job of a deploy, of any instance, still waits or runs. A job that failed only because its
+   * connection dropped still counts until it would expire, because its real result can still come.
+   */
   private deployJobsLeft(deployId: string) {
     const [row] = this.sql<{ n: number }>(
-      `SELECT COUNT(*) AS n FROM jobs WHERE state IN ('queued', 'sent') AND id IN (
+      `SELECT COUNT(*) AS n FROM jobs WHERE (state IN ('queued', 'sent')
+         OR (state = 'failed' AND output = '${OFFLINE_OUTPUT}' AND expires_at > ?)) AND id IN (
          SELECT job_id FROM deploys WHERE id = ? UNION SELECT job_id FROM deploy_instances WHERE deploy_id = ?)`,
+      Date.now(),
       deployId,
       deployId,
     );
     return (row?.n ?? 0) > 0;
+  }
+
+  /** K-821, K-827: a run rollback step waits while a job of another instance of its deploy can still end. */
+  private rollbackStepWaits(jobId: number | null) {
+    if (jobId === null) return false;
+    const [deploy] = this.sql<{ id: string }>("SELECT id FROM deploys WHERE job_id = ?", jobId);
+    return deploy !== undefined && this.deployJobsLeft(deploy.id);
   }
 
   /**
