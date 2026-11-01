@@ -202,7 +202,7 @@ import {
 import { CliError } from "kitshn/cli-error";
 import { isOpCommand, runOpCommand } from "./ops.ts";
 import { checkSkill, installGlobalSkill, installRepoSkill, refreshGlobalSkill } from "./skill.ts";
-import { forwardDesired } from "./desired.ts";
+import { forwardDesired, providerReports } from "./desired.ts";
 import { appSocketFolder, removeOldSockets, socketPathProblem, upOnSocket } from "./sockets.ts";
 
 declare const KITSHN_VERSION: string;
@@ -3360,17 +3360,15 @@ const commandWaiters = new Map<
 >();
 const COMMAND_TIMEOUT_MS = 5 * 60_000;
 
-let providersTimer: ReturnType<typeof setTimeout> | null = null;
 /** K-704: the whole list goes to kitshn on connect and after a change, at most once a second. */
+const providerReport = providerReports(() => {
+  if (socket?.readyState === WebSocket.OPEN)
+    socket.send(
+      JSON.stringify({ type: "providers", providers: registry().reports() } satisfies DaemonMessage),
+    );
+}, 1000);
 function sendProviders() {
-  if (providersTimer) return;
-  providersTimer = setTimeout(() => {
-    providersTimer = null;
-    if (socket?.readyState === WebSocket.OPEN)
-      socket.send(
-        JSON.stringify({ type: "providers", providers: registry().reports() } satisfies DaemonMessage),
-      );
-  }, 1000);
+  providerReport.schedule();
 }
 
 function providerClosed(connection: number) {
@@ -3566,7 +3564,7 @@ async function answerLocal(
     const problem = desiredProblem(kinds, request.kind, request.value);
     if (problem) throw new Error(problem);
     // kitshn checks again when it writes; the provider gets that answer, not only the daemon's.
-    return forwardDesired(request, (change) => {
+    return forwardDesired(request, providerReport.flush, (change) => {
       const requestId = crypto.randomUUID();
       return new Promise((resolve) => {
         // Like an ask, a request waits at most 60 seconds for kitshn.
