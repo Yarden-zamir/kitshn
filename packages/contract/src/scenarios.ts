@@ -1,4 +1,4 @@
-// K-723: the contract scenarios C-1 to C-18 (contract-review-2026-10-30.md, section 10), against a real daemon and
+// K-723: the contract scenarios C-1 to C-18, against a real daemon and
 // the fake edge. The reference provider is the line client: each scenario sends the lines that a provider sends.
 import type { DaemonMessage } from "@kitshn/edge/machine";
 import type { Answer } from "@kitshn/local";

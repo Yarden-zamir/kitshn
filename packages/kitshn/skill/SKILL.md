@@ -8,7 +8,7 @@ license: MIT
 
 kitshn 2 deploys apps from GitHub to Cloudflare and to the owner's machines. A map decides who can open each app: a card inside a circle is shared with that circle. The admin and the map are at `kit.<zone>`, for Yarden `https://kit.yarden-zamir.com`.
 
-The source of truth is [SPEC.md](https://github.com/Yarden-zamir/kitshn/blob/main/SPEC.md). Its `K-` numbers name each rule. Read the requirement before you rely on a detail here. `kitshn --help` lists the commands of the CLI that you have.
+The source of truth is the [kitshn docs](https://github.com/Yarden-zamir/kitshn/blob/main/docs/README.md). Their `K-` numbers name each rule, and the index names the file of each number. Read the requirement before you rely on a detail here. `kitshn --help` lists the commands of the CLI that you have.
 
 A repo with `.kitshn.yaml` and `Caddyfile.j2` is a KitSHn 1 repo. Do not mix the two. To move one, see "Move from KitSHn 1" at the end.
 
