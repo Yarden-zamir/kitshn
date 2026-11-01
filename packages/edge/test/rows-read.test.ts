@@ -214,6 +214,26 @@ it("applies and undoes right after a wake, before History is read", async () => 
   expect(undo?.undoes).toBe(revision);
   expect(older.find((item) => item.id === revision)?.undoneBy).toBe(undo?.id);
   expect(new Set(state.revisions.map((item) => item.id)).size).toBe(state.revisions.length);
+  // History is in memory now. A writer that inserts and loads with no snapshot after it, then an apply on top.
+  const written = await runInDurableObject(stub, (instance, storage) => {
+    const [row] = storage.storage.sql
+      .exec<{ id: number }>(
+        "INSERT INTO revisions (at, actor, summary, changes) VALUES (?, ?, 'by a loading writer', '[]') RETURNING id",
+        Date.now(),
+        JSON.stringify({ _tag: "kitshn", reason: "test" }),
+      )
+      .toArray();
+    (instance as unknown as { load(): void }).load();
+    return row!.id;
+  });
+  const reapplied = await send("/api/apply", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ edits: [{ _tag: "circle", id: "stale", after: { ...circle, id: "stale" } }] }),
+  });
+  expect(reapplied.status).toBe(200);
+  const later = (await (await send("/api/state", { headers })).json()) as { revisions: ReadonlyArray<RevisionView> };
+  expect(later.revisions.map((item) => item.id)).toContain(written);
 });
 
 it("reads few rows in an alarm run that checks a static site that is up (K-1126)", async () => {

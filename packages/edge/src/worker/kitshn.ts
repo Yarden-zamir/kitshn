@@ -8948,6 +8948,8 @@ export class Kitshn extends DurableObject<Env> {
 
   /** Puts a new revision at the top of the in-memory History (K-519), marks what it undoes, and tells everyone. */
   private showRevision(revision: RevisionView) {
+    // A stale History reads its newer rows first, or the next read would start above them and skip them.
+    if (this.revisionsStale) void this.revisions;
     this.revisionCache &&= [
       revision,
       ...this.revisionCache
