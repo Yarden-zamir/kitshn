@@ -460,6 +460,7 @@ import {
 import { DEFAULT_APP } from "kitshn/names";
 import { AppKey, type Recipe, WorkerApp, decodeRecipe, deployOrder, plan, repoSlug } from "kitshn/recipe";
 import { removeStaleDomains, zoneFor, zoneOfAddressIn, zonesOf, zonesOrMain } from "./zones.ts";
+import { BIC_CALLS, type BicHosts, privateHosts, syncBic } from "./bic-sync.ts";
 import {
   type ComposeRun,
   wantedRecords,
@@ -7777,6 +7778,7 @@ export class Kitshn extends DurableObject<Env> {
         ) ||
           this.loginWork())) ||
         (!waits("launcher") && !waits("launcher after Access") && this.launcherWork()) ||
+        (!waits("browser check") && this.bicWork()) ||
         this.redirectWork())
     )
       next = now;
@@ -7937,6 +7939,8 @@ export class Kitshn extends DurableObject<Env> {
       this.sql("DELETE FROM meta WHERE key = 'launcher_failed'");
       this.sql("DELETE FROM meta WHERE key = 'login_failed'");
       this.sql("INSERT OR REPLACE INTO meta (key, value) VALUES ('login_check', 'due')");
+      // K-412: the Browser Integrity Check step reads each zone's rule again and repairs it.
+      this.sql("DELETE FROM meta WHERE key = 'bic_applied'");
       // A refused address may be free now, for example after the other machine let it go.
       this.sql("UPDATE live_sites SET state = 'checking' WHERE state = 'refused'");
       // K-1503 style clean-up: keep the newest 1,000 finished jobs.
@@ -15100,6 +15104,29 @@ export class Kitshn extends DurableObject<Env> {
     return want !== (this.meta("launcher_policy") ?? "") && this.meta("launcher_failed") !== `failed:${want}`;
   }
 
+  /** K-412: the private hosts of each zone that the kitshn rule should hold now. */
+  private bicWanted() {
+    return privateHosts(this.access, zonesOrMain(this.env));
+  }
+
+  /** K-412: what Cloudflare held after the last sync; the daily run (K-408) forgets it, so the step compares again. */
+  private bicApplied(): BicHosts {
+    return JSON.parse(this.meta("bic_applied") ?? "{}") as BicHosts;
+  }
+
+  /** K-412: some zone's rule differs from the private hosts. */
+  private bicWork() {
+    return JSON.stringify(this.bicWanted()) !== JSON.stringify(this.bicApplied());
+  }
+
+  /** K-412: returns the Cloudflare calls it made. A missing token permission throws, so the owner gets a notification. */
+  private async syncBic(api: Api) {
+    if (!this.bicWork()) return 0;
+    const result = await syncBic(api, this.bicWanted(), this.bicApplied(), BIC_CALLS);
+    this.setMeta("bic_applied", JSON.stringify(result.applied));
+    return result.calls;
+  }
+
   /** K-1004: returns the Cloudflare calls it made. The daily run (K-408) asks it to write everything again. */
   private async syncLogins(api: Api) {
     const desired = this.desired(Date.now());
@@ -15220,7 +15247,7 @@ export class Kitshn extends DurableObject<Env> {
   private api() {
     const token = this.env.CLOUDFLARE_API_TOKEN;
     if (!token) return null;
-    return <T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown) =>
+    return <T>(method: Parameters<Api>[0], path: string, body?: unknown) =>
       cloudflare<T>(token, method, path, body);
   }
 
@@ -16423,11 +16450,16 @@ export class Kitshn extends DurableObject<Env> {
       spent += await this.alarmStep("launcher", 3, () => this.syncLauncher(api, daily), 0);
       // K-406: at most 40 calls. `spent` counts the daily compare (12), the site checks (6), the redirect step (5),
       // the port card records (4), the launcher step (3) and the path read of taken addresses (1); the tunnels, DNS records and offline routes above made at most 6 + 5 + 5, and the launcher
-      // step after the sync needs 3. The login step and the sync share what is left. A policy that the sync
-      // makes goes on the login applications in the next alarm, which runs at once (loginWork).
-      await this.alarmStep("Access", 0, () => this.syncAccessLocked(api, CALLS_PER_RUN - spent - 16 - 3));
+      // step and the Browser Integrity Check step after the sync need 3 and 4. The login step and the sync share what
+      // is left. A policy that the sync makes goes on the login applications in the next alarm, which runs at once
+      // (loginWork).
+      await this.alarmStep("Access", 0, () =>
+        this.syncAccessLocked(api, CALLS_PER_RUN - spent - 16 - 3 - BIC_CALLS),
+      );
       // A policy that the sync just made goes on the App Launcher in the same run.
       await this.alarmStep("launcher after Access", 0, () => this.syncLauncher(api, false));
+      // K-412: after the sync, so an application that it just made gets its rule in the same run.
+      await this.alarmStep("browser check", 0, () => this.syncBic(api));
       // K-1623: an application that the sync made or made again changes the audiences of its provider.
       await this.alarmStep("grants", undefined, () => this.pushGrants());
 
@@ -16661,6 +16693,7 @@ const ALARM_STEPS = [
   "launcher",
   "Access",
   "launcher after Access",
+  "browser check",
   "grants",
 ] as const;
 type AlarmStep = (typeof ALARM_STEPS)[number];

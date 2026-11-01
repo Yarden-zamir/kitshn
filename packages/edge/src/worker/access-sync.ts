@@ -37,7 +37,11 @@ export interface AccessStore {
   remove(key: string): void;
 }
 
-export type Api = <T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown) => Promise<T>;
+export type Api = <T>(
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
+  path: string,
+  body?: unknown,
+) => Promise<T>;
 
 /** K-406: one alarm run makes at most this many Cloudflare API calls. */
 export const CALLS_PER_RUN = 40;

@@ -49,12 +49,16 @@ function fakeCloudflare(others: Record<string, number> = {}) {
     failUploads: number;
     refuseRollbacks: Array<string>;
     onDelete: (() => Promise<void>) | null;
+    /** K-412: the token lacks "Zone > Config Rules > Edit". */
+    refuseRules: boolean;
   } = {
     failDomains: 0,
     failUploads: 0,
     refuseRollbacks: [],
     onDelete: null,
+    refuseRules: false,
   };
+  const configRulesets = new Map<string, { id: string; rules: Array<Record<string, unknown>> }>();
   let next = 1;
   const collection = (path: string) => {
     const found = collections.get(path) ?? new Map<string, Record<string, unknown>>();
@@ -175,6 +179,42 @@ function fakeCloudflare(others: Record<string, number> = {}) {
     }
     if (path.startsWith("/accounts/acct/storage/kv/namespaces/") && method === "DELETE")
       await state.onDelete?.();
+    // K-412: the entry point ruleset of the Configuration Rules of each zone, as the Rulesets API serves it.
+    const zoneRules = /^\/zones\/([^/]+)\/rulesets(.*)$/.exec(path);
+    if (zoneRules) {
+      const [, zone = "", rest = ""] = zoneRules;
+      if (state.refuseRules)
+        return Response.json(
+          { success: false, errors: [{ message: "request is not authorized" }] },
+          { status: 403 },
+        );
+      const ruleset = configRulesets.get(zone);
+      const body =
+        method === "GET" || method === "DELETE" ? {} : ((await request.json()) as Record<string, unknown>);
+      const withId = (rule: Record<string, unknown>) => ({ ...rule, id: `rule${next++}` });
+      if (rest === "/phases/http_config_settings/entrypoint" && method === "GET")
+        return ruleset
+          ? ok(ruleset)
+          : Response.json(
+              { success: false, errors: [{ code: 10003, message: "not found" }] },
+              { status: 404 },
+            );
+      if (rest === "" && method === "POST") {
+        const made = {
+          id: `rs${next++}`,
+          rules: ((body["rules"] ?? []) as Array<Record<string, unknown>>).map(withId),
+        };
+        configRulesets.set(zone, made);
+        return ok(made);
+      }
+      const ruleId = rest.split("/rules/")[1];
+      if (!ruleset || !rest.startsWith(`/${ruleset.id}/rules`)) return refuse(`no ruleset at ${path}`);
+      if (method === "POST") ruleset.rules.push(withId(body));
+      if (method === "PATCH")
+        ruleset.rules = ruleset.rules.map((rule) => (rule["id"] === ruleId ? { ...body, id: ruleId } : rule));
+      if (method === "DELETE") ruleset.rules = ruleset.rules.filter((rule) => rule["id"] !== ruleId);
+      return ok(ruleset);
+    }
     // Every other call: a collection of objects with ids, such as Access applications, policies and KV namespaces.
     const parts = path.split("/");
     const last = parts.at(-1) ?? "";
@@ -203,7 +243,9 @@ function fakeCloudflare(others: Record<string, number> = {}) {
   const dropKv = (id: string) => collection("/accounts/acct/storage/kv/namespaces").delete(id);
   /** The Access applications in the account, by id. */
   const accessApps = collection("/accounts/acct/access/apps");
-  return { uploads, assets, state, scripts, served, dropKv, rollbacks, accessApps };
+  /** K-412: the Configuration Rules of a zone. */
+  const configRules = (zone: string) => configRulesets.get(zone)?.rules ?? [];
+  return { uploads, assets, state, scripts, served, dropKv, rollbacks, accessApps, configRules };
 }
 
 /** One repo of the test, so each test has its own cards. */
@@ -295,7 +337,12 @@ const ownerPart = async (deployId: string, files: Record<string, string>) => {
   return { status: response.status, body: (await response.json()) as Record<string, unknown> };
 };
 
-const recipe = (worker: Record<string, unknown> = {}, name = "prod", needs?: ReadonlyArray<string>) => ({
+const recipe = (
+  worker: Record<string, unknown> = {},
+  name = "prod",
+  needs?: ReadonlyArray<string>,
+  startsIn = "Everyone",
+) => ({
   ...(needs ? { needs: { apps: needs } } : {}),
   worker: {
     main: "worker.js",
@@ -303,7 +350,7 @@ const recipe = (worker: Record<string, unknown> = {}, name = "prod", needs?: Rea
     durableObjects: { ROOMS: "Room" },
     ...worker,
   },
-  deploy: [{ on: "push", branch: "main", name, startsIn: "Everyone" }],
+  deploy: [{ on: "push", branch: "main", name, startsIn }],
 });
 
 async function allow(app: ReturnType<typeof repo>) {
@@ -322,9 +369,10 @@ async function deploy(
   worker: Record<string, unknown> = {},
   key?: string,
   needs?: ReadonlyArray<string>,
+  startsIn?: string,
 ) {
   const plan = await step(app, "/deploy/plan", {
-    recipe: recipe(worker, "prod", needs),
+    recipe: recipe(worker, "prod", needs, startsIn),
     event: {},
     ...(key ? { key } : {}),
   });
@@ -1858,5 +1906,55 @@ describe("forwarded folder site (K-1714, K-1776)", () => {
         .one(),
     );
     expect(proposals.n).toBe(1);
+  });
+});
+
+describe("Browser Integrity Check on private cards (K-412)", () => {
+  /** The Durable Object outlives the fake of each test, so the step compares with the new fake again. */
+  const compareAgain = () =>
+    runInDurableObject(env.KITSHN.getByName("kitshn"), (instance, durable) => {
+      durable.storage.sql.exec("DELETE FROM meta WHERE key = 'bic_applied'");
+      (instance as unknown as { setAlarmStep(step: string, failure: null): void }).setAlarmStep(
+        "browser check",
+        null,
+      );
+    });
+  const alarm = () => runInDurableObject(env.KITSHN.getByName("kitshn"), (instance) => instance.alarm());
+
+  it("turns the check off on the hosts of private cards and keeps it on public ones", async () => {
+    const cloudflare = fakeCloudflare();
+    await compareAgain();
+    const open = repo("120", "open-bic");
+    const closed = repo("121", "closed-bic");
+    await allow(open);
+    await allow(closed);
+    expect((await deploy(open)).status).toBe(200);
+    expect((await deploy(closed, {}, undefined, undefined, "Owner")).status).toBe(200);
+    await alarm();
+    const [rule, ...others] = cloudflare.configRules("zone");
+    expect(others).toEqual([]);
+    expect(rule).toMatchObject({
+      ref: "kitshn_private_cards_bic_off",
+      action: "set_config",
+      action_parameters: { bic: false },
+    });
+    expect(rule?.["expression"]).toContain('"closed-bic.example.com"');
+    expect(rule?.["expression"]).toContain('"kit.example.com"');
+    expect(rule?.["expression"]).not.toContain("open-bic.example.com");
+  });
+
+  it("opens a notification that names the permission when the token lacks it (K-1910)", async () => {
+    const cloudflare = fakeCloudflare();
+    await compareAgain();
+    cloudflare.state.refuseRules = true;
+    await alarm();
+    const open = await runInDurableObject(env.KITSHN.getByName("kitshn"), (_instance, durable) =>
+      durable.storage.sql
+        .exec<{ text: string }>(
+          "SELECT text FROM notifications WHERE source = 'alarm' AND key = 'browser check' AND state = 'open'",
+        )
+        .toArray(),
+    );
+    expect(open).toEqual([{ text: expect.stringContaining('"Zone > Config Rules > Edit"') }]);
   });
 });
