@@ -10471,7 +10471,14 @@ export class Kitshn extends DurableObject<Env> {
         }
         // K-1776: an unset right asks the Owner; "ask <circle>" asks that circle.
         const circleId = mode?.circleId ?? OWNER_CIRCLE_ID;
-        const approval = this.forwardApproval(machineAsker(machine).credential, hash, circleId, thread, now);
+        const approval = this.forwardApproval(
+          machineAsker(machine).credential,
+          hash,
+          circleId,
+          need,
+          thread,
+          now,
+        );
         if (approval === null) wait ??= { right: need, circleId };
         else {
           approved.push(need);
@@ -10622,7 +10629,9 @@ export class Kitshn extends DurableObject<Env> {
         };
         const hash = await shownHash(shownAsk("forward", opTarget, shownBody));
         const thread = labels["t3.thread.id"] ?? null;
-        used = this.forwardApproval(asker.credential, hash, decision.circleId, thread, now);
+        // K-1777: a failed scope asks the Owner whatever the mode, so no mode of the right decides the approval.
+        const askRight: ProposalRight = gate.scope ? (right ?? "owner") : "owner";
+        used = this.forwardApproval(asker.credential, hash, decision.circleId, askRight, thread, now);
         if (used !== null) decision = decide(op, { ...gate, approved: true }, OWNER_CIRCLE_ID);
         else {
           const proposal = await this.forwardProposal(
@@ -10630,8 +10639,7 @@ export class Kitshn extends DurableObject<Env> {
             opTarget,
             shownBody,
             labels,
-            // K-1777: a failed scope asks the Owner whatever the mode, so no mode of the right decides the approval.
-            { right: gate.scope ? (right ?? "owner") : "owner", circleId: decision.circleId },
+            { right: askRight, circleId: decision.circleId },
             hash,
             thread,
             now,
@@ -10891,23 +10899,26 @@ export class Kitshn extends DurableObject<Env> {
 
   /**
    * K-1714, K-1776: the unused approval of exactly this forwarded call (its shown hash) of this machine and thread, from
-   * this circle, within the hour, and whether a person gave it; null when there is none.
+   * this circle, within the hour, and whether a person gave it; null when there is none. An ask of right "owner" takes
+   * only an approval of right "owner", because only that one passed the passkey check (K-1723).
    */
   private forwardApproval(
     credential: string,
     hash: string,
     circleId: string,
+    right: ProposalRight,
     thread: string | null,
     now: number,
   ): { readonly id: string; readonly person: boolean } | null {
     const [row] = this.sql<{ id: string; person: number }>(
       `SELECT id, json_extract(decided_by, '$.actor._tag') = 'person' AS person FROM proposals
-       WHERE credential = ? AND action = 'forward' AND shown_hash = ? AND circle_id = ?
+       WHERE credential = ? AND action = 'forward' AND shown_hash = ? AND circle_id = ? AND (? = 0 OR right_name = 'owner')
        AND state = 'approved' AND used_at IS NULL AND decided_at > ? AND json_extract(labels, '$."t3.thread.id"') IS ?
        LIMIT 1`,
       credential,
       hash,
       circleId,
+      right === "owner" ? 1 : 0,
       now - APPROVED_WINDOW_MS,
       thread,
     );

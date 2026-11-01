@@ -82,9 +82,16 @@ it("binds an approval of a forwarded call to the thread that asked (K-1714)", as
     const approval = (thread: string | null) =>
       (
         instance as unknown as {
-          forwardApproval(m: string, h: string, c: string, t: string | null, n: number): object | null;
+          forwardApproval(
+            m: string,
+            h: string,
+            c: string,
+            r: string,
+            t: string | null,
+            n: number,
+          ): object | null;
         }
-      ).forwardApproval("machine/vps", "h-thread", "owner", thread, now);
+      ).forwardApproval("machine/vps", "h-thread", "owner", "addsPages", thread, now);
     return { same: approval("a"), other: approval("b"), none: approval(null) };
   });
   // K-1777: the approval says that a person gave it, so its job keeps the 1-hour expiry of K-613.

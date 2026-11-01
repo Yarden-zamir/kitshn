@@ -576,6 +576,57 @@ it("checks K-718 again when a job that no person approved goes out, and gives it
   expect(await job(approvedId)).toMatchObject({ state: "sent", life: HOUR });
 });
 
+it("never runs an Owner ask on an approval of a right that came without a passkey (K-1723)", async () => {
+  stubAccessCerts();
+  const key = await newMachineKey();
+  await setup({ runsCommands: { mode: "ask", circleId: OWNER_CIRCLE_ID } }, key);
+  await placeMachineCards("agents");
+  const stub = env.KITSHN.getByName("kitshn");
+  // The Owner circle lets the token "script" approve without a passkey (K-1725 warns).
+  const script = tokenActor("t-script", "script.access", "Script");
+  await runInDurableObject(stub, (_, state) => {
+    const owner = JSON.parse(
+      state.storage.sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = ?", OWNER_CIRCLE_ID).one()
+        .body,
+    ) as Circle;
+    state.storage.sql.exec(
+      "UPDATE circles SET body = ? WHERE id = ?",
+      JSON.stringify({ ...owner, members: [...owner.members, script], approvesWithoutPasskey: true }),
+      OWNER_CIRCLE_ID,
+    );
+    insertActors(state.storage.sql, [script]);
+  });
+  await evictDurableObject(stub);
+  const shell = (nonce: string) =>
+    forwarded(
+      key,
+      "POST",
+      "/op/machine-shell",
+      `${nonce}-0123456789abcdef`,
+      call("vps", { command: { script: "true" } }),
+      {},
+      ADMIN,
+    );
+  const asked = await shell("passkey-asked");
+  expect(asked.status, await asked.clone().text()).toBe(409);
+  const { proposalId } = (await asked.json()) as { proposalId: string };
+  const byToken = await runInDurableObject(stub, (instance) =>
+    (
+      instance as unknown as { decide(id: string, decision: "approved", by: object): Promise<unknown> }
+    ).decide(proposalId, "approved", {
+      actor: { _tag: "device", clientId: "script.access", name: "Script" },
+      visitor: { email: null, clientId: "script.access", ip: null },
+      machineId: null,
+      reason: null,
+    }),
+  );
+  expect(byToken).toMatchObject({ ok: true });
+  // Out of scope, the same call is an Owner ask (right "owner"), which only a passkey approval runs.
+  await placeMachineCards("owner");
+  const again = await shell("passkey-again");
+  expect(again.status, await again.clone().text()).toBe(409);
+});
+
 it("asks the Owner when the scope fails or a secret goes out, and the Owner's approval runs the call (K-1777)", async () => {
   stubAccessCerts();
   const key = await newMachineKey();
