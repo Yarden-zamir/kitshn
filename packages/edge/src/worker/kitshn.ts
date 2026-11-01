@@ -300,6 +300,7 @@ import {
   opRequest,
 } from "../core/operations.ts";
 import { type MachineOs, machineOs } from "../core/icons.ts";
+import { deployLabels, hasLabels, machineFacts } from "../core/facts.ts";
 import {
   contentSecurityPolicy,
   type ContentVisitor,
@@ -495,6 +496,7 @@ import {
   machineIdFor,
   parseCommand,
   parseLabels,
+  parseOwnerLabels,
   legacyUpdateScript,
   type MachineCheck,
   answerCheck,
@@ -3932,6 +3934,16 @@ export class Kitshn extends DurableObject<Env> {
     };
   }
 
+  /**
+   * K-635: the fact labels of the live daemon report. An offline machine has none: no job goes to it, and kitshn keeps
+   * no row for them (K-1302). Keep them in `presence` if a person needs them to plan while the machine is offline.
+   */
+  private liveFacts(machineId: string) {
+    const socket = this.openSocket(machineId);
+    const attachment = socket ? attachmentOf(socket) : null;
+    return machineFacts(attachment?.kind === "machine" ? attachment.status : null);
+  }
+
   private machineView(machine: Machine): MachineView {
     const socket = this.openSocket(machine.id);
     const attachment = socket ? attachmentOf(socket) : null;
@@ -3941,6 +3953,7 @@ export class Kitshn extends DurableObject<Env> {
       online: socket !== null,
       lastSeen: this.presence.get(machine.id)?.lastSeen ?? null,
       status: live?.status ?? null,
+      facts: machineFacts(live?.status ?? null),
       sample: live?.sample ?? null,
       os: this.presence.get(machine.id)?.os ?? null,
       keyFailure: this.keyFailures.get(machine.id) ?? null,
@@ -5605,7 +5618,7 @@ export class Kitshn extends DurableObject<Env> {
     const name = typeof input["name"] === "string" ? input["name"].trim() : "";
     if (!name || name.length > 60)
       return Response.json({ error: "Give the machine a name of 1 to 60 characters." }, { status: 400 });
-    const labels = parseLabels(input["labels"] ?? []);
+    const labels = parseOwnerLabels(input["labels"] ?? []);
     if (typeof labels === "string") return Response.json({ error: labels }, { status: 400 });
     const id = machineIdFor(name);
     const account = `/accounts/${this.env.CLOUDFLARE_ACCOUNT_ID}`;
@@ -6628,7 +6641,12 @@ export class Kitshn extends DurableObject<Env> {
           ? allowed.has(job.machine_id)
             ? (this.state.machines.get(job.machine_id) ?? null)
             : null
-          : pickMachine(this.state.machines.values(), allowed, JSON.parse(job.labels) as Array<string>);
+          : pickMachine(
+              this.state.machines.values(),
+              allowed,
+              JSON.parse(job.labels) as Array<string>,
+              (each) => this.liveFacts(each.id),
+            );
       if (!machine) continue;
       if (job.when_idle === 1 && this.busy(machine.id)) continue;
       const socket = this.openSocket(machine.id);
@@ -6864,7 +6882,7 @@ export class Kitshn extends DurableObject<Env> {
     const machine = this.state.machines.get(id) ?? before;
     if (input["labels"] === undefined && input["order"] === undefined && input["allow"] === undefined)
       return Response.json(machine);
-    const labels = input["labels"] === undefined ? machine.labels : parseLabels(input["labels"]);
+    const labels = input["labels"] === undefined ? machine.labels : parseOwnerLabels(input["labels"]);
     if (typeof labels === "string") return Response.json({ error: labels }, { status: 400 });
     const order = input["order"] === undefined ? machine.order : Number(input["order"]);
     if (!Number.isInteger(order) || order < 0 || order > 10_000) {
@@ -9136,7 +9154,7 @@ export class Kitshn extends DurableObject<Env> {
         const ready = this.jobMachines();
         const pick = [...this.state.machines.values()]
           // Only a machine that the owner labels "deploy" runs the apps of repos (K-610).
-          .filter((machine) => ["deploy", ...labels].every((label) => machine.labels.includes(label)))
+          .filter((machine) => hasLabels(machine.labels, this.liveFacts(machine.id), deployLabels(labels)))
           // K-818: only a daemon that checks Compose settings runs the apps of repos.
           .filter((machine) => this.machineView(machine).status?.capabilities?.includes("compose-guard"))
           .filter((machine) => mayDeployOn(this.state, allowedBy?.clientId ?? null, machine.id, Date.now()))
@@ -9145,7 +9163,7 @@ export class Kitshn extends DurableObject<Env> {
         if (!pick) {
           return Response.json(
             {
-              error: `No online machine with a Compose-ready daemon has the labels ${["deploy", ...labels].join(", ")}. Label a machine "deploy", update its daemon, start it, or give it a key (K-1708).${agentLimit}`,
+              error: `No online machine with a Compose-ready daemon has the labels ${deployLabels(labels).join(", ")}. Label a machine "deploy", update its daemon, start it, or give it a key (K-1708).${agentLimit}`,
             },
             { status: 409 },
           );

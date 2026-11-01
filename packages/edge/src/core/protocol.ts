@@ -4,6 +4,7 @@ import type { Command, Machine, MachineStatus, ProjectVolume, Sample } from "./m
 import type { ServerReport } from "./sites.ts";
 import type { BackupRun, BucketSize } from "./backups.ts";
 import type { MachineOs } from "./icons.ts";
+import type { MachineFact } from "./facts.ts";
 import type { LogLine, TailAnswer } from "./logs.ts";
 import type {
   Circle,
@@ -235,6 +236,8 @@ export interface MachineView {
   readonly online: boolean;
   readonly lastSeen: number | null;
   readonly status: MachineStatus | null;
+  /** K-635: the labels that kitshn derives from the live status; none while offline. */
+  readonly facts: ReadonlyArray<MachineFact>;
   readonly sample: Sample | null;
   /** K-524: the system of the last status, also while offline; null before the first status or for another system. */
   readonly os: MachineOs | null;
