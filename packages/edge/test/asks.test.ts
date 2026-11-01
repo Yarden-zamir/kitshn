@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { AskOutcome, Machine, ServerToDaemon } from "../src/core/machine.ts";
 import { type Circle, OWNER_CIRCLE_ID, type RightMode } from "../src/core/model.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
-import { insertActors, machine as machineChip, tokenActor } from "./actors.ts";
+import { insertActors, machine as machineChip, person, tokenActor } from "./actors.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -101,14 +101,32 @@ type Instance = {
   expireProposals(now: number): void;
 };
 
-async function ask(stub: DurableObjectStub, action: string, target = "", extra: object = {}) {
+/** One ask of vps. `vouched` are labels that a T3 provider of the machine vouched for (K-1752). */
+async function ask(
+  stub: DurableObjectStub,
+  action: string,
+  target = "",
+  extra: object = {},
+  vouched: Readonly<Record<string, string>> | null = null,
+) {
   const sent: Array<ServerToDaemon> = [];
-  await runInDurableObject(stub, (instance) =>
-    (instance as unknown as Instance).webSocketMessage(
-      daemonSocket(sent),
-      JSON.stringify({ type: "ask", requestId: "r1", ask: { action, target, ...extra } }),
-    ),
-  );
+  await runInDurableObject(stub, async (instance) => {
+    const kitshn = instance as unknown as Instance & { labelPrefixesOf(id: string): Array<string> };
+    const reported = kitshn.labelPrefixesOf.bind(kitshn);
+    if (vouched) kitshn.labelPrefixesOf = () => ["t3."];
+    try {
+      await kitshn.webSocketMessage(
+        daemonSocket(sent),
+        JSON.stringify({
+          type: "ask",
+          requestId: "r1",
+          ask: { action, target, ...extra, ...(vouched ? { attested: vouched } : {}) },
+        }),
+      );
+    } finally {
+      kitshn.labelPrefixesOf = reported;
+    }
+  });
   const answer = sent.find((message) => message.type === "askAnswer");
   if (!answer) throw new Error("kitshn sent no askAnswer.");
   const {
@@ -650,7 +668,8 @@ it("issues a pass only while passes are on and for a listed audience, and serves
 
 it("opens a high-priority notification for each ask and closes it when the ask is answered (K-1722)", async () => {
   const stub = await setup({ changes: { mode: "ask", circleId: "owner" } });
-  const waiting = await ask(stub, "deploy", "card");
+  const thread = { "t3.thread.id": "t1" };
+  const waiting = await ask(stub, "deploy", "card", {}, thread);
   const id = waiting.outcome === "waiting" ? waiting.proposalId : "";
   const state = () =>
     runInDurableObject(stub, (_, durable) =>
@@ -661,6 +680,41 @@ it("opens a high-priority notification for each ask and closes it when the ask i
         )
         .toArray(),
     );
+  // The same call again from the same thread, as after the CLI stopped waiting, waits on the same proposal.
+  expect(await ask(stub, "deploy", "card", {}, thread)).toEqual({ outcome: "waiting", proposalId: id });
+  // Another call asks again: another thread of the machine (another agent), no thread, or another body.
+  for (const [extra, vouched] of [
+    [{}, { "t3.thread.id": "t2" }],
+    [{}, null],
+    [{ body: { mode: "build" } }, thread],
+  ] as const) {
+    const other = await ask(stub, "deploy", "card", extra, vouched);
+    expect(other).toMatchObject({ outcome: "waiting", proposalId: expect.not.stringMatching(id) });
+  }
+  // With no thread, two equal asks never join, because two agents of one machine key could send them.
+  const bare = await Promise.all([ask(stub, "deploy", "card"), ask(stub, "deploy", "card")]);
+  expect(new Set(bare.map((each) => (each.outcome === "waiting" ? each.proposalId : ""))).size).toBe(2);
+  // An exec carries its own execId in the stored body, so a second run of the same command never joins the first.
+  const execs = await runInDurableObject(stub, async (instance) => {
+    const kitshn = instance as unknown as {
+      propose(...args: ReadonlyArray<unknown>): Promise<AskOutcome>;
+    };
+    const asker = { credential: "machine/vps", machineId: "vps", name: "vps" };
+    const run = (execId: string) =>
+      kitshn.propose(
+        asker,
+        "exec",
+        "mac",
+        { command: "ls", execId },
+        null,
+        thread,
+        "runs",
+        "owner",
+        Date.now(),
+      );
+    return [await run("e1"), await run("e2")];
+  });
+  expect(execs[0]).not.toEqual(execs[1]);
   const [open] = await state();
   expect(open).toMatchObject({ state: "open", priority: "high" });
   // Only the approver circle gets it; an owner outside that circle reads asks in History.
@@ -670,7 +724,8 @@ it("opens a high-priority notification for each ask and closes it when the ask i
     "deny",
   ]);
   await runInDurableObject(stub, (instance) => (instance as unknown as Instance).decide(id, "denied", owner));
-  expect((await state())[0]?.state).toBe("closed");
+  // It closes with the answer, so the list and the push of every device say "denied".
+  expect((await state())[0]?.state).toBe("denied");
   // A Deny from the notification that decide refuses answers with its error, not ok.
   const late = await runInDurableObject(stub, async (instance) => {
     const kitshn = instance as unknown as {
@@ -679,6 +734,127 @@ it("opens a high-priority notification for each ask and closes it when the ask i
     return kitshn.actionHandlers.get("kitshn.ask")?.({ key: id }, "deny", owner);
   });
   expect(late).toMatch(/already decided/);
+});
+
+it("answers an ask from its push: the text by the admin login, Approve only by the approve login of its kind (K-1722, K-1723)", async () => {
+  stubAccessCerts();
+  const stub = await setup({ changes: { mode: "automatic" }, runs: { mode: "ask", circleId: "helpers" } });
+  await runInDurableObject(stub, (_, state) => {
+    const sql = state.storage.sql;
+    const helpers = person("owner@example.com");
+    insertActors(sql, [helpers]);
+    sql.exec(
+      "INSERT OR REPLACE INTO circles (id, body) VALUES ('helpers', ?)",
+      JSON.stringify({
+        id: "helpers",
+        name: "Helpers",
+        color: "#00ccff",
+        level: "view",
+        members: [helpers],
+        match: "any",
+        needsPasskey: false,
+        endsAt: null,
+        x: -6000,
+        y: -6000,
+        r: 100,
+      }),
+    );
+    for (const via of ["login", "passkey"])
+      sql.exec(
+        "INSERT OR REPLACE INTO access_objects (key, cf_id, aud, body, tried) VALUES (?, ?, ?, '{}', '')",
+        `app:approve:${via}`,
+        `cf-${via}`,
+        `approve-${via}-aud`,
+      );
+    sql.exec(
+      "INSERT OR REPLACE INTO repos (repo_id, name, state, first_seen) VALUES ('123', 'Yarden-zamir/x', 'waiting', 0)",
+    );
+  });
+  await evictDurableObject(stub);
+  const as = (audience: string, issuedAt?: number) =>
+    accessToken(audience, { email: "owner@example.com" }, issuedAt === undefined ? {} : { issuedAt });
+  const call = async (path: string, token: string, body?: object) =>
+    send(path, {
+      method: body ? "POST" : "GET",
+      headers: { "cf-access-jwt-assertion": token, "content-type": "application/json" },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  // The push names only the notification; the service worker reads the ask with the browser's admin login.
+  const details = async (proposalId: string) => {
+    const { id } = await runInDurableObject(stub, (_, state) =>
+      state.storage.sql
+        .exec<{ id: number }>(
+          "SELECT id FROM notifications WHERE source = 'kitshn.ask' AND key = ?",
+          proposalId,
+        )
+        .one(),
+    );
+    const response = await call(`/api/notifications/${id}`, await as("admin-aud"));
+    return {
+      status: response.status,
+      ask: (
+        (await response.json()) as {
+          ask?: { shownHash: string; via: string; text: string; approveOnPush: boolean };
+        }
+      ).ask,
+    };
+  };
+  const allow = await ask(stub, "allow", "123");
+  const allowId = allow.outcome === "waiting" ? allow.proposalId : "";
+  const read = await details(allowId);
+  // "allow the repo 123" fits a phone in full, so the push offers Approve; the text has no request headers.
+  expect(read.ask).toMatchObject({ via: "login", text: "allow the repo 123", approveOnPush: true });
+  const hash = read.ask?.shownHash ?? "";
+  const approve = async (via: string, token: string, seen = hash, id = allowId) =>
+    call(`/api/approve/${via}/${encodeURIComponent(id)}`, token, { hash: seen });
+  // The admin login is not an approve login, and a text that the notification did not show never runs.
+  expect((await approve("login", await as("admin-aud"))).status).toBe(401);
+  expect(await (await approve("login", await as("approve-login-aud"), "0".repeat(64))).json()).toEqual({
+    error: expect.stringContaining("changed"),
+  });
+  expect((await approve("login", await as("approve-login-aud"))).status).toBe(200);
+  // An answer closes the notification for every approver, with its outcome, and the push reads no ask any more.
+  expect(await details(allowId)).toEqual({ status: 404, ask: undefined });
+  const closed = await runInDurableObject(stub, (_, state) =>
+    state.storage.sql
+      .exec<{ state: string }>(
+        "SELECT state FROM notifications WHERE source = 'kitshn.ask' AND key = ?",
+        allowId,
+      )
+      .one(),
+  );
+  expect(closed.state).toBe("approved");
+
+  // An Owner ask needs a passkey: the login path refuses it, and a passkey check older than 10 minutes asks again.
+  await setup({ changes: { mode: "ask", circleId: "owner" } });
+  const deploy = await ask(stub, "deploy", "card");
+  const deployId = deploy.outcome === "waiting" ? deploy.proposalId : "";
+  const owner = await details(deployId);
+  expect(owner.ask?.via).toBe("passkey");
+  const ownerHash = owner.ask?.shownHash ?? "";
+  expect(await (await approve("login", await as("approve-login-aud"), ownerHash, deployId)).json()).toEqual({
+    error: expect.stringContaining("needs a passkey"),
+  });
+  const stale = Math.floor(Date.now() / 1000) - 11 * 60;
+  expect((await approve("passkey", await as("approve-passkey-aud", stale), ownerHash, deployId)).status).toBe(
+    401,
+  );
+  // Deny needs no fresh proof (K-1723): the push runs it with the admin login.
+  const { id: notificationId } = await runInDurableObject(stub, (_, state) =>
+    state.storage.sql
+      .exec<{ id: number }>("SELECT id FROM notifications WHERE source = 'kitshn.ask' AND key = ?", deployId)
+      .one(),
+  );
+  expect(
+    (await call(`/api/notifications/${notificationId}/actions/deny`, await as("admin-aud"), {})).status,
+  ).toBe(200);
+  expect(await details(deployId)).toEqual({ status: 404, ask: undefined });
+  await runInDurableObject(stub, (_, state) => {
+    state.storage.sql.exec("DELETE FROM circles WHERE id = 'helpers'");
+    state.storage.sql.exec("DELETE FROM access_objects WHERE key LIKE 'app:approve:%'");
+    state.storage.sql.exec("DELETE FROM repos WHERE repo_id = '123'");
+  });
+  await evictDurableObject(stub);
 });
 
 it("runs an approved Owner ask of an unset right, and refuses it once the owner sets the right to off (K-1776)", async () => {

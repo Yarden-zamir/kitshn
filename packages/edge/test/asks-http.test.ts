@@ -13,7 +13,7 @@ it("takes a call that the daemon forwarded and signed, with the right of its pat
   // K-1777: an address change has the effect "changes", as the row card-address.
   await setup({ creates: { mode: "automatic" }, changes: { mode: "ask", circleId: "owner" } }, key);
   const address = "/agent/cards/no-such-card/address";
-  // K-1776: an effect that asks the Owner waits, and the same call again gets the same proposal, not a second one.
+  // K-1776: an effect that asks the Owner waits.
   const unset = await forwarded(key, "POST", address, "nonce-off-0123456789");
   expect(unset.status).toBe(409);
   const waiting = (await unset.json()) as {
@@ -27,6 +27,8 @@ it("takes a call that the daemon forwarded and signed, with the right of its pat
     circle: "Owner",
     error: expect.stringMatching(/^waiting: /),
   });
+  // K-1722: the same call again joins the open proposal on the key of its approval, also with no thread, so a copy
+  // makes no second proposal and no second push.
   const again = await forwarded(key, "POST", address, "nonce-off-1123456789");
   expect(((await again.json()) as { proposalId: string }).proposalId).toBe(waiting.proposalId);
   // A changed call is another call, so the approval of the first does not run it.
@@ -57,6 +59,10 @@ it("takes a call that the daemon forwarded and signed, with the right of its pat
   expect((await approved.json()) as { error?: string }).toEqual({
     error: expect.not.stringMatching(/K-1714|K-1776|adds pages|waiting/),
   });
+  // The approval ran the call once: the next copy waits for a new approval.
+  const later = await forwarded(key, "POST", address, "nonce-off-3223456789");
+  expect(later.status).toBe(409);
+  expect(((await later.json()) as { proposalId: string }).proposalId).not.toBe(waiting.proposalId);
   await runInDurableObject(stub, (_, state) => state.storage.sql.exec("DELETE FROM ask_events"));
   // "off" still refuses at once, with the right for the CLI's offer.
   await setup({ creates: { mode: "automatic" }, changes: { mode: "off" } }, key);

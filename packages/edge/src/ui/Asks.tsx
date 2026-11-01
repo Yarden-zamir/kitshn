@@ -1,4 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
+import { EFFECT_HELP, WARNED_EFFECTS } from "../core/asks.ts";
 import type { AskEventView, LinkEventView, ProposalView } from "../core/protocol.ts";
 import { callApi } from "./store.ts";
 import { whenText } from "./time.ts";
@@ -10,8 +11,8 @@ import { whenText } from "./time.ts";
 export function AskList(props: {
   readonly proposals: ReadonlyArray<ProposalView>;
   readonly circleName: (id: string) => string;
-  /** K-1723: an approver circle that needs a passkey approves through the passkey path. */
-  readonly needsPasskey: (id: string) => boolean;
+  /** K-1723: the approve path of an ask, from its circle and its effect (`approveVia`). */
+  readonly via: (proposal: ProposalView) => "passkey" | "login";
   readonly onToast: (text: string, error: boolean) => void;
 }) {
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
@@ -22,9 +23,20 @@ export function AskList(props: {
     return () => clearInterval(timer);
   }, []);
   if (props.proposals.length === 0) return null;
-  const deny = async (proposal: ProposalView) => {
+  const answer = async (proposal: ProposalView, run: () => Promise<void>) => {
     setBusy((ids) => new Set(ids).add(proposal.id));
     try {
+      await run();
+    } finally {
+      setBusy((ids) => {
+        const next = new Set(ids);
+        next.delete(proposal.id);
+        return next;
+      });
+    }
+  };
+  const deny = (proposal: ProposalView) =>
+    answer(proposal, async () => {
       const result = await callApi<{ result: unknown }>(
         "POST",
         `/api/proposals/${encodeURIComponent(proposal.id)}/deny`,
@@ -34,14 +46,22 @@ export function AskList(props: {
         "error" in result ? result.error : `Denied the ask of ${proposal.machineName}.`,
         "error" in result,
       );
-    } finally {
-      setBusy((ids) => {
-        const next = new Set(ids);
-        next.delete(proposal.id);
-        return next;
-      });
-    }
-  };
+    });
+  // K-1722: the row shows the full text, and the button carries its hash. With a live approve login of this kind,
+  // such as a passkey check of the last 10 minutes, it approves at once; else Access checks first and comes back.
+  const approve = (proposal: ProposalView) =>
+    answer(proposal, async () => {
+      const via = props.via(proposal);
+      const result = await approveNow(via, proposal.id, proposal.shownHash);
+      if (result === "login")
+        return location.assign(
+          `/api/approve/${via}/start?approve=${encodeURIComponent(proposal.id)}&hash=${proposal.shownHash}`,
+        );
+      props.onToast(
+        result === "approved" ? `Approved the ask of ${proposal.machineName}.` : result.error,
+        result !== "approved",
+      );
+    });
   return (
     <>
       <div
@@ -56,18 +76,37 @@ export function AskList(props: {
             key={proposal.id}
             proposal={proposal}
             circleName={props.circleName}
+            via={props.via(proposal)}
             busy={busy.has(proposal.id)}
-            onApprove={() =>
-              location.assign(
-                `/api/approve/${props.needsPasskey(proposal.circleId) ? "passkey" : "login"}/start?approve=${encodeURIComponent(proposal.id)}&hash=${proposal.shownHash}`,
-              )
-            }
+            onApprove={() => void approve(proposal)}
             onDeny={() => void deny(proposal)}
           />
         ))}
       </ul>
     </>
   );
+}
+
+/**
+ * K-1723: one approve on the path of its kind. "login" when Access wants a login first: it answers the call of a
+ * page with a redirect to the team domain, which `redirect: "manual"` keeps from being followed.
+ */
+async function approveNow(
+  via: "passkey" | "login",
+  id: string,
+  hash: string,
+): Promise<"approved" | "login" | { readonly error: string }> {
+  const response = await fetch(`/api/approve/${via}/${encodeURIComponent(id)}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ hash }),
+    redirect: "manual",
+  }).catch(() => null);
+  if (response === null) return { error: "kitshn is not reachable." };
+  if (response.type === "opaqueredirect" || response.status === 401) return "login";
+  if (response.ok) return "approved";
+  const data = (await response.json().catch(() => null)) as { error?: string } | null;
+  return { error: data?.error ?? `kitshn answered ${response.status}.` };
 }
 
 /**
@@ -203,60 +242,82 @@ export function BotRuns(props: {
   );
 }
 
-/** K-1722: one ask in the Inbox: the right it asks for, the machine and command, its labels, Approve and Deny. */
+/**
+ * K-1722: one ask in the Inbox, in the order an approver decides: who asks for what, the exact text that runs, why,
+ * then Approve and Deny.
+ */
 export function AskRow(props: {
   readonly proposal: ProposalView;
   readonly circleName: (id: string) => string;
+  /** K-1723: Approve takes a passkey check on "passkey", unless one of the last 10 minutes holds. */
+  readonly via: "passkey" | "login";
   /** An answer runs now, so both buttons wait. */
   readonly busy: boolean;
   readonly onApprove: () => void;
   readonly onDeny: () => void;
 }) {
+  const { proposal } = props;
+  const risky = WARNED_EFFECTS.has(proposal.right);
   return (
-    <li>
-      <span class="sticker wait" data-tip={`It waits for ${props.circleName(props.proposal.circleId)}.`}>
-        {props.proposal.right}
-      </span>
-      <span class="name">
-        {props.proposal.machineName}: <code class="shown">{props.proposal.shown}</code>
-        {props.proposal.reason ? <span class="muted"> · {props.proposal.reason}</span> : null}
-        <span class="muted">
-          {" "}
-          · asked {whenText(props.proposal.createdAt)} · expires {whenText(props.proposal.expiresAt)}
+    <li class="ask">
+      <div class="ask-head">
+        <span
+          class={risky ? "sticker right warn" : "sticker wait"}
+          data-tip={`${EFFECT_HELP[proposal.right]}${risky ? " High risk: read the text before you approve." : ""}`}
+        >
+          {proposal.right}
         </span>
-        {Object.entries(props.proposal.labels).map(([key, value]) => (
+        <strong>{proposal.machineName}</strong>
+        <span class="muted">asks {props.circleName(proposal.circleId)}</span>
+      </div>
+      <div>
+        <code class="shown">{proposal.shown}</code>
+      </div>
+      {proposal.reason ? (
+        <p data-tip="The agent wrote this reason; kitshn did not check it (K-1725).">
+          Why: {proposal.reason}
+        </p>
+      ) : null}
+      <p class="muted">
+        Asked {whenText(proposal.createdAt)} · expires {whenText(proposal.expiresAt)}
+        {Object.entries(proposal.labels).map(([key, value]) => (
           <span
             key={key}
-            class="muted"
             data-tip={
-              props.proposal.verified.includes(key)
+              proposal.verified.includes(key)
                 ? "Verified: a provider of the machine vouched for this label (K-1752)."
                 : "Claimed: the agent wrote this label; no provider checked it (K-1750)."
             }
           >
             {" "}
-            · {key}={value} ({props.proposal.verified.includes(key) ? "verified" : "claimed"})
+            · {key}={value} ({proposal.verified.includes(key) ? "verified" : "claimed"})
           </span>
         ))}
-      </span>
-      <button
-        type="button"
-        class="btn primary"
-        disabled={props.busy}
-        data-tip="Approve: the login of the approver circle (a fresh passkey when it needs one), then you read the ask once more, then kitshn runs it."
-        onClick={props.onApprove}
-      >
-        Approve
-      </button>
-      <button
-        type="button"
-        class="btn"
-        disabled={props.busy}
-        data-tip="Deny: the agent hears that you denied it."
-        onClick={props.onDeny}
-      >
-        Deny
-      </button>
+      </p>
+      <div class="row">
+        <button
+          type="button"
+          class="btn primary"
+          disabled={props.busy}
+          data-tip={
+            props.via === "passkey"
+              ? "Approve: kitshn runs exactly this text. It asks for your passkey when your last passkey check is older than 10 minutes."
+              : "Approve: kitshn runs exactly this text. It asks you to log in when this browser has no approve login."
+          }
+          onClick={props.onApprove}
+        >
+          {props.via === "passkey" ? "Approve with passkey" : "Approve"}
+        </button>
+        <button
+          type="button"
+          class="btn"
+          disabled={props.busy}
+          data-tip="Deny: nothing runs, and the agent hears that you denied it."
+          onClick={props.onDeny}
+        >
+          Deny
+        </button>
+      </div>
     </li>
   );
 }

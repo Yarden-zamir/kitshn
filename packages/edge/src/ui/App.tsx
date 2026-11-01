@@ -148,6 +148,7 @@ import {
 import { playResumeSound, pressSound, showPanic, unlockAudio } from "./panic.ts";
 import { GONE_STICKER, REPO_STICKERS, RepoList, setRepoState } from "./Repos.tsx";
 import { cardInstances } from "../core/instances.ts";
+import { approveVia } from "../core/asks.ts";
 import { AskEvents, LinkEvents, BotRuns, approveFromHash } from "./Asks.tsx";
 import { PassSettingsPanel } from "./Passes.tsx";
 import { LibraryView } from "./Library.tsx";
@@ -808,7 +809,7 @@ export function App() {
         error: true,
         undo: null,
       });
-    const kind = state?.circles.get(proposal.circleId)?.needsPasskey ? "passkey" : "login";
+    const kind = approveVia(state?.circles.get(proposal.circleId), proposal.right);
     if (
       !(await ask(
         `Approve this ask of ${proposal.machineName}? kitshn runs it at once:\n\n${proposal.shown}`,

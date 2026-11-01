@@ -4,6 +4,7 @@ import { type Mute, type Notification, muted } from "../core/notifications.ts";
 import { Menu, MenuItem } from "./controls.tsx";
 import type { Rect } from "./popover.ts";
 import type { ProposalView } from "../core/protocol.ts";
+import { approveVia } from "../core/asks.ts";
 import { AskList } from "./Asks.tsx";
 import { PushSection } from "./Push.tsx";
 import { callApi } from "./store.ts";
@@ -45,12 +46,14 @@ export function NotificationsView(props: {
   );
 
   useEffect(() => {
+    const readAt = Date.now();
     void callApi<{ notifications: Array<Notification>; mutes: Array<Mute> }>(
       "GET",
       "/api/notifications",
     ).then((result) => {
-      if ("error" in result) props.onToast(result.error, true);
-      else setList(result);
+      if ("error" in result) return props.onToast(result.error, true);
+      setList(result);
+      void closeStalePushes(result.notifications, readAt);
     });
   }, [props.bell, version]);
 
@@ -104,7 +107,7 @@ export function NotificationsView(props: {
       <AskList
         proposals={asks}
         circleName={(id) => props.state.circles.get(id)?.name ?? id}
-        needsPasskey={(id) => props.state.circles.get(id)?.needsPasskey === true}
+        via={(proposal) => approveVia(props.state.circles.get(proposal.circleId), proposal.right)}
         onToast={props.onToast}
       />
       <PushSection onToast={props.onToast} />
@@ -155,6 +158,28 @@ export function NotificationsView(props: {
       ) : null}
     </div>
   );
+}
+
+/**
+ * K-1905: most closes send no push, so this browser can still show a push of a notification that closed. A push closes
+ * here only when the list has its notification closed, with no open one of the same source and key, and the push
+ * showed before the list was read. So a notification that opened after the read keeps its push.
+ */
+async function closeStalePushes(notifications: ReadonlyArray<Notification>, readAt: number) {
+  const registration = await navigator.serviceWorker?.getRegistration().catch(() => undefined);
+  if (!registration) return;
+  const tag = (each: Notification) => `${each.source}:${each.key}`;
+  const open = new Set(notifications.filter((each) => each.state === "open").map(tag));
+  const closed = new Set(notifications.filter((each) => each.state !== "open").map(tag));
+  for (const shown of await registration.getNotifications()) {
+    const data: unknown = shown.data;
+    // The service worker stamps `shownAt`; a push without it is from an older worker, so from before this read.
+    const at =
+      typeof data === "object" && data !== null && "shownAt" in data && typeof data.shownAt === "number"
+        ? data.shownAt
+        : 0;
+    if (closed.has(shown.tag) && !open.has(shown.tag) && at < readAt) shown.close();
+  }
 }
 
 /** K-1905: one notification with its state, its source and card, and its actions. */
