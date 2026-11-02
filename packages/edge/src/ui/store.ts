@@ -15,6 +15,8 @@ interface StoreState {
   readonly reason: string | null;
   /** Edits shown before the server holds them (see held.ts). */
   readonly held: ReadonlyArray<Held>;
+  /** K-605: the map stopped its watch for lack of input, so kitshn sends it no snapshots until the next input. */
+  readonly idle: boolean;
 }
 
 type Result =
@@ -26,7 +28,7 @@ type Result =
     }
   | { readonly ok: false; readonly error: string; readonly lost?: true };
 
-let current: StoreState = { snapshot: null, connection: "connecting", reason: null, held: [] };
+let current: StoreState = { snapshot: null, connection: "connecting", reason: null, held: [], idle: false };
 const listeners = new Set<() => void>();
 const waiting = new Map<string, (result: Result) => void>();
 let socket: WebSocket | null = null;
@@ -47,11 +49,21 @@ export const IDLE_MS = 10 * 60_000;
 const INPUT_EVENTS = ["pointerdown", "pointermove", "keydown", "touchstart", "wheel", "scroll"] as const;
 let lastInput = Date.now();
 
-/** K-1610: History with one new link event on top; an event that the snapshot already holds changes nothing. */
-export function withLinkEvent(snapshot: Snapshot, event: LinkEventView): Snapshot {
-  const newest = snapshot.linkEvents[0];
-  if (newest && event.id <= newest.id) return snapshot;
-  return { ...snapshot, linkEvents: [event, ...snapshot.linkEvents].slice(0, RECENT_EVENTS) };
+/** K-605: a map keeps its watch while an action runs (K-538) or an ask waits for this person, also with no input. */
+const busy = (snapshot: Snapshot | null) =>
+  snapshot !== null &&
+  (snapshot.proposals.length > 0 ||
+    Object.values(snapshot.progress).some((progress) => progress.outcome.state === "running"));
+
+/** K-1610: the map applies new link events at most this often, so a burst does not render the whole app each time. */
+const LINK_EVENTS_MS = 1000;
+
+/** K-1610: History with new link events on top, oldest first in `events`; events that it already holds change nothing. */
+export function withLinkEvents(snapshot: Snapshot, events: ReadonlyArray<LinkEventView>): Snapshot {
+  const newest = snapshot.linkEvents[0]?.id ?? Number.NEGATIVE_INFINITY;
+  const added = events.filter((event) => event.id > newest).toReversed();
+  if (added.length === 0) return snapshot;
+  return { ...snapshot, linkEvents: [...added, ...snapshot.linkEvents].slice(0, RECENT_EVENTS) };
 }
 
 const set = (next: Partial<StoreState>) => {
@@ -101,9 +113,13 @@ export function connect() {
   // missing answer ends it, and the map connects again instead of showing old state as live.
   let answerTimer: ReturnType<typeof setTimeout> | null = null;
   let ended = false;
+  let linkEvents: Array<LinkEventView> = [];
+  let linkTimer: ReturnType<typeof setTimeout> | null = null;
   const watching = () => {
     if (ws.readyState !== WebSocket.OPEN) return;
-    if (document.visibilityState !== "visible" || Date.now() - lastInput >= IDLE_MS) {
+    const idle = Date.now() - lastInput >= IDLE_MS && !busy(current.snapshot);
+    if (current.idle !== idle) set({ idle });
+    if (document.visibilityState !== "visible" || idle) {
       if (watchingAt === null) return;
       watchingAt = null;
       ws.send(JSON.stringify({ type: "watching", visible: false } satisfies WatchingMessage));
@@ -120,22 +136,22 @@ export function connect() {
     }, WATCH_ANSWER_MS);
   };
   const renew = setInterval(watching, WATCH_RENEW_MS);
-  // A window that stays visible through a sleep fires no `visibilitychange`, so these renew the watch too.
-  const wakeEvents = ["pageshow", "online"] as const;
-  // The first input after an idle stop watches again at once; a switch to the tab or the window counts as input.
-  const input = () => {
-    const idle = Date.now() - lastInput >= IDLE_MS;
-    lastInput = Date.now();
-    if (idle) watching();
-  };
+  // A switch to the tab or the window counts as input, and so does a wake: a window that stays visible through a sleep
+  // fires no `visibilitychange`, and the answer to its `watching` shows whether the socket still lives.
+  const wakeEvents = ["focus", "pageshow", "online"] as const;
   const back = () => {
     lastInput = Date.now();
     watching();
   };
+  // The first input after an idle stop watches again at once.
+  const input = () => {
+    const idle = current.idle;
+    lastInput = Date.now();
+    if (idle) watching();
+  };
   const listening = { capture: true, passive: true } as const;
   document.addEventListener("visibilitychange", back);
-  window.addEventListener("focus", back);
-  for (const name of wakeEvents) window.addEventListener(name, watching);
+  for (const name of wakeEvents) window.addEventListener(name, back);
   for (const name of INPUT_EVENTS) window.addEventListener(name, input, listening);
   ws.onopen = () => {
     set({ connection: "live", reason: null });
@@ -153,7 +169,12 @@ export function connect() {
       first = false;
       set({ snapshot: message.snapshot, held: settle(current.held, message.snapshot.revision) });
     } else if (message.type === "linkEvent") {
-      if (current.snapshot) set({ snapshot: withLinkEvent(current.snapshot, message.event) });
+      linkEvents.push(message.event);
+      linkTimer ??= setTimeout(() => {
+        linkTimer = null;
+        if (current.snapshot) set({ snapshot: withLinkEvents(current.snapshot, linkEvents) });
+        linkEvents = [];
+      }, LINK_EVENTS_MS);
     } else if (message.type === "machine") {
       const snapshot = current.snapshot;
       if (snapshot) {
@@ -184,10 +205,10 @@ export function connect() {
     ended = true;
     ws.onmessage = null;
     if (answerTimer !== null) clearTimeout(answerTimer);
+    if (linkTimer !== null) clearTimeout(linkTimer);
     clearInterval(renew);
     document.removeEventListener("visibilitychange", back);
-    window.removeEventListener("focus", back);
-    for (const name of wakeEvents) window.removeEventListener(name, watching);
+    for (const name of wakeEvents) window.removeEventListener(name, back);
     for (const name of INPUT_EVENTS) window.removeEventListener(name, input, listening);
     for (const resolve of waiting.values()) {
       resolve({
