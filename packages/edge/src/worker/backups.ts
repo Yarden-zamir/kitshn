@@ -2,10 +2,17 @@
 import type { BucketSize } from "../core/backups.ts";
 
 /**
- * K-1831: tables that the export leaves out because a rebuild does not need them: one-time codes, the jobs, and the
- * nonces of forwarded calls (K-1714).
+ * K-1831: tables that the export leaves out because a rebuild does not need them: one-time codes, the jobs, the
+ * nonces of forwarded calls (K-1714), and `deploy_cards`, which the triggers of `deploys` fill again on import.
  */
-const LEFT_OUT = new Set(["join_codes", "rekey_codes", "device_invites", "jobs", "forward_nonces"]);
+const LEFT_OUT = new Set([
+  "join_codes",
+  "rekey_codes",
+  "device_invites",
+  "jobs",
+  "forward_nonces",
+  "deploy_cards",
+]);
 
 /**
  * K-1831: every secret that the Durable Object keeps, which no export and no R2 copy may hold. A whole table, or the

@@ -230,10 +230,14 @@ const platform = ((): Platform => {
 })();
 const paths = pathsFor(platform, process.env);
 
-/** K-605: status at most every 5 seconds, a sample once a minute. K-604: a ping every 10 seconds. */
+/**
+ * K-605: status at most every 5 seconds. A sample once a minute for the history on disk; kitshn gets every fifth one,
+ * and each one while a map is open (`watch`). K-604: a ping every 10 seconds.
+ */
 const PING_MS = 10_000;
 const PONG_TIMEOUT_MS = 30_000;
 const SAMPLE_MS = 60_000;
+const SAMPLES_PER_SEND = 5;
 const HISTORY_DAYS = 30;
 const JOB_TIMEOUT_MS = 10 * 60_000;
 const OUTPUT_LIMIT = 64 * 1024;
@@ -2660,6 +2664,8 @@ function connect(config: JoinSecrets) {
       headers: { "CF-Access-Client-Id": config.clientId, "CF-Access-Client-Secret": config.clientSecret },
     } as unknown as string);
     current = ws;
+    // K-605: a new connection samples every 5 minutes until kitshn says that a map is open.
+    mapOpen = false;
     let lastPong = Date.now();
     let ping: ReturnType<typeof setInterval> | null = null;
     /** True when kitshn expects a key that this machine does not have, so the next try fails the same way. */
@@ -2694,7 +2700,7 @@ function connect(config: JoinSecrets) {
       void checkSites().catch((error: unknown) => log(`site check failed: ${String(error)}`));
       void sendServers().catch((error: unknown) => log(`server scan failed: ${String(error)}`));
       void reportVolumes().catch((error: unknown) => log(`volume report failed: ${String(error)}`));
-      ws.send(JSON.stringify({ type: "sample", sample: sample() } satisfies DaemonMessage));
+      sendSample(sample());
       // K-630: kitshn keeps a report per connection; an old one waits for the reach that kitshn pushes now.
       if (lastHealth !== null && Date.now() - lastHealth.at < HEALTH_INTERVAL_MS) sendHealth(lastHealth);
       else setTimeout(() => void checkHealth(), HEALTH_FIRST_MS);
@@ -2737,6 +2743,9 @@ function connect(config: JoinSecrets) {
         void rotateKey(ws);
       } else if (message.type === "checkHealth") {
         void checkHealth();
+      } else if (message.type === "watch") {
+        mapOpen = message.on;
+        if (mapOpen) sendSample(sample());
       } else if (
         message.type === "grants" ||
         message.type === "desired" ||
@@ -3010,6 +3019,16 @@ function unexposeCommand(name: string | undefined) {
   console.log(`Stopped exposing ${name}.`);
 }
 
+/** K-605: whether a map is open, as kitshn last said on this connection (`watch`). */
+let mapOpen = false;
+let samplesKept = 0;
+
+function sendSample(value: ReturnType<typeof sample>) {
+  if (socket?.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({ type: "sample", sample: value } satisfies DaemonMessage));
+  samplesKept = 0;
+}
+
 let lastSites = "";
 
 /** K-1107: tries each site every 10 seconds and reports the list only when it changes. */
@@ -3210,8 +3229,8 @@ async function runCommand() {
   setInterval(() => {
     const value = sample();
     keepSample(value);
-    if (socket?.readyState === WebSocket.OPEN)
-      socket.send(JSON.stringify({ type: "sample", sample: value } satisfies DaemonMessage));
+    samplesKept += 1;
+    if (mapOpen || samplesKept >= SAMPLES_PER_SEND) sendSample(value);
   }, SAMPLE_MS);
   setInterval(pruneSamples, 24 * 60 * 60_000);
   setInterval(() => void checkHealth(), HEALTH_INTERVAL_MS);

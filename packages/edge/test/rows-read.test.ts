@@ -303,11 +303,121 @@ it("reads the Access rows once for the life of the object, not in each alarm run
       };
       return cursor;
     }) as typeof sql.exec;
-    // Two alarm runs with a load between them, as a run that writes does: the rows come from memory each time.
+    // Two alarm runs with a load between them, as a run that writes does: the first reads the rows, the second
+    // takes them from memory.
     await instance.alarm();
     (instance as unknown as { load(): void }).load();
     await instance.alarm();
     return accessRowsRead;
   });
-  expect(read).toBe(0);
+  expect(read).toBe(300);
+});
+
+/**
+ * K-1302, K-004: a whole wake on tables of the size of the state of 2026-11-02, with months more of deploys. About
+ * 4,500 wakes a day each run the constructor, mostly for one daemon message, so its rows count 4,500 times. On main
+ * before this bound, the constructor read 2,285 rows and an alarm wake 2,337, as both scanned all of `deploys`.
+ */
+it("reads a fixed number of rows in a whole wake, however many deploys kitshn keeps", async () => {
+  stubAccessCerts();
+  const stub = env.KITSHN.getByName("kitshn");
+  let cursors: Array<SqlStorageCursor<Record<string, SqlStorageValue>>> = [];
+  const rows = () => cursors.reduce((sum, cursor) => sum + cursor.rowsRead, 0);
+  const restore = await runInDurableObject(stub, (_instance, state) => {
+    const sql = state.storage.sql;
+    // The tests above share this object, so this one starts from empty tables of its own.
+    for (const table of [
+      "resources",
+      "places",
+      "deploys",
+      "deploy_cards",
+      "access_objects",
+      "applied_state",
+      "dns_objects",
+      "revisions",
+      "icons",
+      "notifications",
+      "library",
+      "link_events",
+    ])
+      sql.exec(`DELETE FROM ${table}`);
+    const now = Date.now();
+    const cards = 86;
+    for (let i = 0; i < cards; i++) {
+      const card = {
+        id: `card-${i}`,
+        kind: "site.static",
+        name: `card-${i}`,
+        addresses: [`card-${i}.example.com`],
+        status: "running",
+        group: null,
+        machine: null,
+      };
+      sql.exec("INSERT INTO resources (id, body) VALUES (?, ?)", card.id, JSON.stringify(card));
+      if (i < 40) sql.exec("INSERT INTO places (id, x, y) VALUES (?, 1, 1)", card.id);
+    }
+    for (let i = 0; i < 2000; i++)
+      sql.exec(
+        `INSERT INTO deploys (id, repo, repo_id, environment, resource_id, address, script, kind, sha, state, expires_at)
+         VALUES (?, 'owner/repo', '1', 'prod', ?, 'card.example.com', 'kitshn-card', 'deploy', 'abc', 'done', ?)`,
+        `wake-${i}`,
+        `card-${i % cards}`,
+        now - (2000 - i) * 60_000,
+      );
+    for (let i = 0; i < 50; i++) {
+      sql.exec(
+        "INSERT INTO access_objects (key, cf_id, body, tried) VALUES (?, 'cf', '{}', '{}')",
+        `wake-${i}`,
+      );
+      sql.exec("INSERT INTO applied_state (machine_id, key, hash) VALUES ('vps', ?, 'h')", `wake-${i}`);
+    }
+    for (let i = 0; i < 25; i++)
+      sql.exec(
+        "INSERT INTO dns_objects (address, record_id, content, retry_at) VALUES (?, 'r', 'c', 0)",
+        `card-${i}.example.com`,
+      );
+    for (let i = 0; i < 2000; i++)
+      sql.exec(
+        "INSERT INTO revisions (at, actor, summary, changes) VALUES (?, ?, 'test', '[]')",
+        now,
+        JSON.stringify({ _tag: "kitshn", reason: "test" }),
+      );
+    // Counts the rows of every cursor of every instance from here on, so the constructor of the next one too.
+    const prototype = Object.getPrototypeOf(sql) as { exec: typeof sql.exec };
+    const exec = prototype.exec;
+    prototype.exec = function (this: SqlStorage, query: string, ...bindings: Array<SqlStorageValue>) {
+      const cursor = exec.call(this, query, ...bindings);
+      cursors.push(cursor);
+      return cursor;
+    } as typeof sql.exec;
+    return () => {
+      prototype.exec = exec;
+    };
+  });
+  try {
+    // The first start plans the alarm, as a new release does; the wakes after it find the alarm pending.
+    await evictDurableObject(stub);
+    await runInDurableObject(stub, () => undefined);
+    await evictDurableObject(stub);
+    cursors = [];
+    await runInDurableObject(stub, () => undefined);
+    const constructor = rows();
+    cursors = [];
+    const headers = {
+      "cf-access-jwt-assertion": await accessToken("admin-aud", { email: "owner@example.com" }),
+    };
+    await send("/api/state", { headers });
+    const firstSnapshot = rows();
+    // A wake for the alarm, every 10 minutes while a daemon is connected; every site is up.
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("ok", { status: 200 }));
+    await evictDurableObject(stub);
+    cursors = [];
+    await runInDurableObject(stub, (instance) => instance.alarm());
+    const alarm = rows();
+    expect(constructor).toBeLessThan(150);
+    expect(constructor + firstSnapshot).toBeLessThan(600);
+    expect(alarm).toBeLessThan(300);
+  } finally {
+    restore();
+  }
 });

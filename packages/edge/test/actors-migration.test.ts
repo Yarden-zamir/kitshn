@@ -31,8 +31,10 @@ const owner = (members: LegacyCircle["members"]): LegacyCircle => ({
 const phone = { _tag: "device", tokenId: "t-phone", clientId: "phone.access", name: "Phone" } as const;
 
 /** Puts the install `name` back at migration 43 with this Owner circle, then runs the start migrations. */
-/** Migrations 47 (K-823) and 48 (K-1302) come after both, so the tests take them away too. */
+/** Migrations 47 (K-823), 48 and 49 (K-1302) come after both, so the tests take them away too. */
 const dropLaterMigrations = (sql: SqlStorage) => {
+  for (const trigger of ["deploy_cards_insert", "deploy_cards_update"]) sql.exec(`DROP TRIGGER ${trigger}`);
+  sql.exec("DROP TABLE deploy_cards");
   sql.exec("DROP TABLE deploy_instances");
   sql.exec("ALTER TABLE deploys DROP COLUMN compose");
   sql.exec("ALTER TABLE backups DROP COLUMN repository");
@@ -42,6 +44,10 @@ const dropLaterMigrations = (sql: SqlStorage) => {
     "library_previous",
     "library_added",
     "repos_first_seen",
+    "deploys_compose_live",
+    "tunnel_objects_retry",
+    "dns_objects_retry",
+    "route_objects_retry",
   ])
     sql.exec(`DROP INDEX ${index}`);
 };

@@ -360,6 +360,53 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
     "CREATE INDEX library_added ON library (kind) WHERE added_by IS NOT NULL",
     "CREATE INDEX repos_first_seen ON repos (first_seen)",
   ],
+  // 49: rows read (K-1302, K-004). `deploy_cards` holds what a snapshot needs of the deploys, one row per card, so no
+  // read scans `deploys`, which grows with each deploy. Two triggers keep it; the rows of before fill it once. A row
+  // counts as deployed with a repo id or once done, and both stay so. `preview` is the pull request environment. The
+  // rowid keeps the order of the first deploy of each card.
+  [
+    `CREATE TABLE deploy_cards (resource_id TEXT PRIMARY KEY, newest_id TEXT NOT NULL, newest_state TEXT NOT NULL,
+      newest_reason TEXT, deployed INTEGER NOT NULL, preview TEXT, repo_ids TEXT NOT NULL)`,
+    `CREATE TRIGGER deploy_cards_insert AFTER INSERT ON deploys WHEN NEW.kind = 'deploy' BEGIN
+      INSERT INTO deploy_cards (resource_id, newest_id, newest_state, newest_reason, deployed, preview, repo_ids)
+      VALUES (NEW.resource_id, NEW.id, NEW.state, NEW.reason, NEW.repo_id IS NOT NULL OR NEW.state = 'done',
+        CASE WHEN (NEW.repo_id IS NOT NULL OR NEW.state = 'done') AND NEW.environment GLOB 'pr-[0-9]*'
+          THEN NEW.environment END,
+        CASE WHEN NEW.repo_id IS NULL THEN '[]' ELSE json_array(NEW.repo_id) END)
+      ON CONFLICT (resource_id) DO UPDATE SET newest_id = NEW.id, newest_state = NEW.state, newest_reason = NEW.reason,
+        deployed = deployed OR excluded.deployed, preview = COALESCE(excluded.preview, preview),
+        repo_ids = CASE WHEN NEW.repo_id IS NULL OR NEW.repo_id IN (SELECT value FROM json_each(repo_ids))
+          THEN repo_ids ELSE json_insert(repo_ids, '$[#]', NEW.repo_id) END;
+    END`,
+    `CREATE TRIGGER deploy_cards_update AFTER UPDATE OF state, reason, repo_id ON deploys WHEN NEW.kind = 'deploy' BEGIN
+      UPDATE deploy_cards SET
+        newest_state = CASE WHEN newest_id = NEW.id THEN NEW.state ELSE newest_state END,
+        newest_reason = CASE WHEN newest_id = NEW.id THEN NEW.reason ELSE newest_reason END,
+        deployed = deployed OR NEW.repo_id IS NOT NULL OR NEW.state = 'done',
+        preview = CASE WHEN (NEW.repo_id IS NOT NULL OR NEW.state = 'done') AND NEW.environment GLOB 'pr-[0-9]*'
+          THEN NEW.environment ELSE preview END,
+        repo_ids = CASE WHEN NEW.repo_id IS NULL OR NEW.repo_id IN (SELECT value FROM json_each(repo_ids))
+          THEN repo_ids ELSE json_insert(repo_ids, '$[#]', NEW.repo_id) END
+      WHERE resource_id = NEW.resource_id;
+    END`,
+    `INSERT INTO deploy_cards (resource_id, newest_id, newest_state, newest_reason, deployed, preview, repo_ids)
+     SELECT newest.resource_id, newest.id, newest.state, newest.reason,
+       EXISTS (SELECT 1 FROM deploys d WHERE d.resource_id = newest.resource_id AND d.kind = 'deploy'
+         AND (d.repo_id IS NOT NULL OR d.state = 'done')),
+       (SELECT d.environment FROM deploys d WHERE d.resource_id = newest.resource_id AND d.kind = 'deploy'
+         AND (d.repo_id IS NOT NULL OR d.state = 'done') AND d.environment GLOB 'pr-[0-9]*' ORDER BY d.rowid DESC LIMIT 1),
+       (SELECT json_group_array(repo_id) FROM (SELECT d.repo_id FROM deploys d WHERE d.resource_id = newest.resource_id
+         AND d.kind = 'deploy' AND d.repo_id IS NOT NULL GROUP BY d.repo_id ORDER BY MIN(d.rowid)))
+     FROM deploys newest WHERE newest.kind = 'deploy' AND newest.rowid =
+       (SELECT MAX(d.rowid) FROM deploys d WHERE d.resource_id = newest.resource_id AND d.kind = 'deploy')
+     ORDER BY (SELECT MIN(d.rowid) FROM deploys d WHERE d.resource_id = newest.resource_id AND d.kind = 'deploy')`,
+    // K-817: the Compose deploys that still hold a DNS record are the ones of the last hour (DEPLOY_MS).
+    "CREATE INDEX deploys_compose_live ON deploys (expires_at) WHERE kind = 'deploy' AND app = 'compose'",
+    // K-410: the next retry of a failed tunnel, DNS or route write reads only the failed rows.
+    "CREATE INDEX tunnel_objects_retry ON tunnel_objects (retry_at) WHERE error IS NOT NULL",
+    "CREATE INDEX dns_objects_retry ON dns_objects (retry_at) WHERE error IS NOT NULL",
+    "CREATE INDEX route_objects_retry ON route_objects (retry_at) WHERE error IS NOT NULL",
+  ],
 ];
 
 /** K-819: the migration after which the Durable Object derives the repo ids of older deploy rows. */

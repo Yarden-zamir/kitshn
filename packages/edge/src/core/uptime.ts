@@ -29,7 +29,7 @@ export const DOWN_AFTER_MS = 5 * 60_000;
 export const UPTIME_FETCHES_PER_RUN = 8;
 /** K-1126: the length of one turn; an alarm in the same turn fetches nothing. */
 export const UPTIME_RUN_MS = 2 * 60_000;
-/** K-1126: while no daemon keeps the 2-minute alarm going, uptime wakes the Durable Object at most this often. */
+/** K-1126: uptime runs at least this often; each turn of UPTIME_RUN_MS while a card fails but is not down yet. */
 export const UPTIME_IDLE_MS = 10 * 60_000;
 /** K-1126: changes stay this long. */
 export const UPTIME_KEEP_MS = 30 * 24 * 60 * 60_000;

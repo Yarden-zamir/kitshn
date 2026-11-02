@@ -419,6 +419,8 @@ export type ServerToDaemon =
   | { readonly type: "rotateKey" }
   /** K-631: "Check now" in the Machines view; the daemon checks at once and sends `health`. */
   | { readonly type: "checkHealth" }
+  /** K-605: whether a map is open, after each connection and each map that opens or closes; `on` asks for a sample now. */
+  | { readonly type: "watch"; readonly on: boolean }
   /** K-704: the name of the machine on the map, on each signed connection and after a rename. */
   | { readonly type: "name"; readonly name: string }
   /** K-704: the owner forgot this provider on the map; the daemon drops it unless a connection holds it. */

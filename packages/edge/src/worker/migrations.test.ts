@@ -37,6 +37,59 @@ describe("Durable Object migrations", () => {
     ]);
   });
 
+  it("keeps one row of deploy facts per card, from the rows of before and from each later write (K-1302)", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+    migrate((query) => db.exec(query), 0, 48);
+    const insert = db.prepare(
+      `INSERT INTO deploys (id, repo, repo_id, environment, resource_id, address, script, kind, sha, state, expires_at,
+         reason) VALUES (?, 'o/r', ?, ?, ?, 'a.example.com', 's', ?, 'abc', ?, 0, ?)`,
+    );
+    insert.run("a1", null, "prod", "a", "deploy", "failed", "no build");
+    insert.run("a2", "r1", "prod", "a", "deploy", "done", null);
+    // K-1623: a handover moves the card to another repo, which then deploys it too.
+    insert.run("h1", "r1", "prod", "h", "deploy", "done", null);
+    insert.run("h2", "r2", "prod", "h", "deploy", "running", null);
+    insert.run("t1", "r1", "prod", "t", "teardown", "done", null);
+    migrate((query) => db.exec(query), 48);
+    insert.run("p1", null, "pr-12", "p", "deploy", "planned", null);
+    const before = db.prepare("SELECT deployed, preview FROM deploy_cards WHERE resource_id = 'p'").get();
+    db.exec("UPDATE deploys SET state = 'done' WHERE id = 'p1'");
+    insert.run("a3", "r1", "prod", "a", "deploy", "failed", "the build failed");
+    db.exec("UPDATE deploys SET state = 'done' WHERE id = 'h2'");
+    db.exec("UPDATE deploys SET state = 'skipped' WHERE id = 'a2'");
+    expect(before).toEqual({ deployed: 0, preview: null });
+    expect(db.prepare("SELECT * FROM deploy_cards ORDER BY rowid").all()).toEqual([
+      {
+        resource_id: "a",
+        newest_id: "a3",
+        newest_state: "failed",
+        newest_reason: "the build failed",
+        deployed: 1,
+        preview: null,
+        repo_ids: '["r1"]',
+      },
+      {
+        resource_id: "h",
+        newest_id: "h2",
+        newest_state: "done",
+        newest_reason: null,
+        deployed: 1,
+        preview: null,
+        repo_ids: '["r1","r2"]',
+      },
+      {
+        resource_id: "p",
+        newest_id: "p1",
+        newest_state: "done",
+        newest_reason: null,
+        deployed: 1,
+        preview: "pr-12",
+        repo_ids: "[]",
+      },
+    ]);
+  });
+
   it("runs nothing when the database is current, and refuses a newer one", () => {
     const run: Array<string> = [];
     expect(migrate((query) => run.push(query), MIGRATIONS.length)).toBe(MIGRATIONS.length);

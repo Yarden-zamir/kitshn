@@ -725,12 +725,11 @@ describe("several apps per repo (K-804, K-820)", () => {
 
 describe("DNS records at plan time (K-817, K-901)", () => {
   type Run = { card: string; addresses: Array<string>; machineId: string | null; expiresAt: number };
-  // The alarm may sync DNS between the steps of this test, so it reads the deploys memo, which the alarm never writes;
+  // The alarm may sync DNS between the steps of this test, so it reads the Compose runs, which the alarm never writes;
   // live.test.ts checks which records those runs want.
   const runs = () =>
-    runInDurableObject(
-      env.KITSHN.getByName("kitshn"),
-      (instance) => (instance as unknown as { deploys(): { composeRuns: Array<Run> } }).deploys().composeRuns,
+    runInDurableObject(env.KITSHN.getByName("kitshn"), (instance) =>
+      (instance as unknown as { composeRuns(now: number): Array<Run> }).composeRuns(Date.now()),
     );
 
   it("counts a planned Compose deploy for the DNS of its address, and no failed one", async () => {
@@ -2053,14 +2052,12 @@ describe("placement (K-823, K-824, K-827, K-828)", () => {
       { machine_id: "m-71b", address: instanceAddress, deferred: 0 },
     ]);
     // K-824: the record of the instance address goes to the tunnel of its own machine.
-    const runs = await runInDurableObject(
-      stub,
-      (instance) =>
-        (
-          instance as unknown as {
-            deploys(): { composeRuns: Array<{ addresses: Array<string>; machineId: string }> };
-          }
-        ).deploys().composeRuns,
+    const runs = await runInDurableObject(stub, (instance) =>
+      (
+        instance as unknown as {
+          composeRuns(now: number): Array<{ addresses: Array<string>; machineId: string }>;
+        }
+      ).composeRuns(Date.now()),
     );
     expect(runs).toContainEqual(expect.objectContaining({ addresses: [app.address], machineId: "m-71a" }));
     expect(runs).toContainEqual(expect.objectContaining({ addresses: [homeAddress], machineId: "m-71a" }));
