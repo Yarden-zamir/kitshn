@@ -29,8 +29,11 @@ export const DOWN_AFTER_MS = 5 * 60_000;
 export const UPTIME_FETCHES_PER_RUN = 8;
 /** K-1126: the length of one turn; an alarm in the same turn fetches nothing. */
 export const UPTIME_RUN_MS = 2 * 60_000;
-/** K-1126: uptime runs at least this often; each turn of UPTIME_RUN_MS while a card fails but is not down yet. */
-export const UPTIME_IDLE_MS = 10 * 60_000;
+/**
+ * K-1126: uptime runs at least this often, and each UPTIME_RUN_MS while a card fails but is not down yet. A run fetches
+ * 8 addresses, so a card waits groups × 5 minutes: at most 25 minutes up to 40 addresses.
+ */
+export const UPTIME_TURN_MS = 5 * 60_000;
 /** K-1126: changes stay this long. */
 export const UPTIME_KEEP_MS = 30 * 24 * 60 * 60_000;
 
@@ -53,14 +56,13 @@ export function nextUptime(before: Uptime, probe: boolean, now: number): Uptime 
 }
 
 /**
- * K-1126: the cards whose addresses this run fetches. The cards go into groups of at most `perRun` addresses, in
- * order, and run `slot` takes the next group, so each card gets a turn with no stored state and all its addresses
- * in the same run (K-817 allows at most 5, which fit in one group). Known limit: a run that comes late can skip a
- * group for one cycle. Revisit when checks must be exact.
+ * K-1126: the cards whose addresses run number `run` fetches. The cards go into groups of at most `perRun` addresses,
+ * in order, and each run takes the next group, so each card gets a turn with all its addresses in the same run (K-817
+ * allows at most 5, which fit in one group).
  */
 export function cardsOfRun<T extends { readonly addresses: ReadonlyArray<string> }>(
   cards: ReadonlyArray<T>,
-  slot: number,
+  run: number,
   perRun: number,
 ): Array<T> {
   const groups: Array<Array<T>> = [];
@@ -77,5 +79,5 @@ export function cardsOfRun<T extends { readonly addresses: ReadonlyArray<string>
     groups.at(-1)?.push(card);
     size += card.addresses.length;
   }
-  return groups.length === 0 ? [] : (groups[slot % groups.length] ?? []);
+  return groups.length === 0 ? [] : (groups[run % groups.length] ?? []);
 }

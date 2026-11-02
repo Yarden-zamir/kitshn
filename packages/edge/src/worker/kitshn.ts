@@ -109,6 +109,7 @@ import {
   type ProjectVolume,
   type Sample,
   type ServerToDaemon,
+  WATCH_LEASE_MS,
   type AskOutcome,
   type AskResult,
   type AppAccess,
@@ -269,7 +270,7 @@ import { readUsage } from "./usage.ts";
 import {
   UPTIME_FETCHES_PER_RUN,
   UPTIME_KEEP_MS,
-  UPTIME_IDLE_MS,
+  UPTIME_TURN_MS,
   UPTIME_RUN_MS,
   UP,
   type Uptime,
@@ -573,6 +574,8 @@ type Attachment =
       readonly caller: Caller;
       /** K-1805, K-1807: the tails of this map; kept on the socket, so they survive hibernation. */
       readonly tails?: ReadonlyArray<MapTail>;
+      /** K-605: until when this map counts as watched, from its last `watching` message. */
+      readonly watchingUntil?: number;
     }
   | {
       readonly kind: "machine";
@@ -1492,15 +1495,20 @@ export class Kitshn extends DurableObject<Env> {
       // instead of relying on a new connection or status message to begin the configured rollout (K-627).
       this.resumeAutoUpdatesAfterWake();
       // K-1302: only this object changes its state, and each change plans the alarm, so a pending alarm already holds
-      // the next due item. A wake plans again only when a start step wrote, no alarm waits, or the code is new.
-      const version = this.env.KITSHN_VERSION;
+      // the next due item. A wake plans again only when a start step wrote, no alarm waits, or the deploy is new: a
+      // new version, or a binding or secret that came or went (a token that the owner adds later turns on Access work).
+      const deployed = `${this.env.KITSHN_VERSION} ${Object.entries(this.env)
+        .filter(([, value]) => value !== undefined && value !== "")
+        .map(([name]) => name)
+        .sort()
+        .join(",")}`;
       if (
         this.rowsWritten !== written ||
-        this.meta("alarm_planned_version") !== version ||
+        this.meta("alarm_planned_for") !== deployed ||
         (await ctx.storage.getAlarm()) === null
       ) {
         await this.scheduleAlarm();
-        this.setMeta("alarm_planned_version", version);
+        this.setMeta("alarm_planned_for", deployed);
       }
     });
   }
@@ -4359,7 +4367,30 @@ export class Kitshn extends DurableObject<Env> {
       .some((socket) => socket !== closing && socket.readyState === WebSocket.OPEN);
   }
 
-  /** K-605: tells daemon sockets whether a map is open, so their samples come each minute or every 5 minutes. */
+  /** K-605: whether a map sent `watching` within WATCH_LEASE_MS; `closing` is a socket that is going. */
+  private mapsWatching(closing: WebSocket | null = null) {
+    const now = Date.now();
+    return this.ctx.getWebSockets("map").some((socket) => {
+      const attachment = attachmentOf(socket);
+      return (
+        socket !== closing &&
+        socket.readyState === WebSocket.OPEN &&
+        attachment?.kind === "map" &&
+        (attachment.watchingUntil ?? 0) > now
+      );
+    });
+  }
+
+  /** K-605: a visible map renews its watch, and each daemon samples each minute for WATCH_LEASE_MS. */
+  private mapWatching(socket: WebSocket, attachment: Extract<Attachment, { kind: "map" }>) {
+    socket.serializeAttachment({
+      ...attachment,
+      watchingUntil: Date.now() + WATCH_LEASE_MS,
+    } satisfies Attachment);
+    this.sendWatch(true);
+  }
+
+  /** K-605: tells daemon sockets whether a map is watched, so their samples come each minute or every 5 minutes. */
   private sendWatch(on: boolean, sockets = this.watchingSockets()) {
     for (const socket of sockets) send(socket, { type: "watch", on } satisfies ServerToDaemon);
   }
@@ -4985,7 +5016,6 @@ export class Kitshn extends DurableObject<Env> {
       this.ctx.acceptWebSocket(server, ["map"]);
       server.serializeAttachment({ kind: "map", caller } satisfies Attachment);
       send(server, { type: "snapshot", snapshot: this.snapshot(caller) });
-      this.sendWatch(true);
       return new Response(null, { status: 101, webSocket: client });
     }
     if (path === "/api/state" && request.method === "GET") return Response.json(this.snapshot(caller));
@@ -5405,6 +5435,7 @@ export class Kitshn extends DurableObject<Env> {
       const parsed: unknown = JSON.parse(typeof data === "string" ? data : new TextDecoder().decode(data));
       if (isRecord(parsed) && (parsed.type === "tail" || parsed.type === "tailStop"))
         return await this.tailMessage(socket, decodeTailMessage(parsed));
+      if (isRecord(parsed) && parsed.type === "watching") return this.mapWatching(socket, attachment);
       message = decodeClientMessage(parsed);
     } catch (error) {
       socket.close(4000, `kitshn cannot read the message: ${String(error).slice(0, 100)}`);
@@ -5436,7 +5467,7 @@ export class Kitshn extends DurableObject<Env> {
     const attachment = attachmentOf(socket);
     if (attachment?.kind === "map") {
       for (const tail of attachment.tails ?? []) void this.stopTail(tail);
-      if (!this.mapsOpen(socket)) this.sendWatch(false);
+      if (!this.mapsWatching(socket)) this.sendWatch(false);
       return;
     }
     if (attachment?.kind !== "machine") return;
@@ -5458,21 +5489,25 @@ export class Kitshn extends DurableObject<Env> {
       attachment.machineId,
     );
     this.jobsEnded(failed.map((row) => row.id));
-    this.setPresence(attachment.machineId, false);
+    // K-1107, K-1910: the last contact is the last ping, so a socket that kitshn finds dead late counts from it.
+    const lastPing = this.ctx.getWebSocketAutoResponseTimestamp(socket)?.getTime() ?? attachment.since;
+    this.setPresence(attachment.machineId, false, Math.min(Date.now(), Math.max(attachment.since, lastPing)));
   }
 
-  /** K-605: presence rows change only when a machine goes online or offline (K-1302). */
-  private setPresence(machineId: string, online: boolean) {
-    const now = Date.now();
+  /**
+   * K-605: presence rows change only when a machine goes online or offline (K-1302). `at` is the last contact, which
+   * "seen <time> ago" and the 15 minutes of K-1910 count from.
+   */
+  private setPresence(machineId: string, online: boolean, at = Date.now()) {
     const before = this.presence.get(machineId);
     if (before?.online === online) return;
     const os = before?.os ?? null;
-    this.presence.set(machineId, { online, lastSeen: now, os });
+    this.presence.set(machineId, { online, lastSeen: at, os });
     this.sql(
       "INSERT OR REPLACE INTO presence (id, online, last_seen, os) VALUES (?, ?, ?, ?)",
       machineId,
       online ? 1 : 0,
-      now,
+      at,
       os,
     );
     this.broadcast();
@@ -5782,7 +5817,7 @@ export class Kitshn extends DurableObject<Env> {
       this.pushGrants();
       this.sendForgotten(machine.id);
     }
-    this.sendWatch(this.mapsOpen(), [socket]);
+    this.sendWatch(this.mapsWatching(), [socket]);
     // K-909: after a fast reconnect the old socket's close finds this one and requeues nothing, and a removal
     // down never expires, so its result that may never come must not keep it sent.
     requeueDowns(this.query, machine.id);
@@ -8675,10 +8710,26 @@ export class Kitshn extends DurableObject<Env> {
     // K-1124: the redirect step that waits tries again at its time; a finished step stores 0.
     const redirectRetry = Number(this.meta("redirects_retry_at") ?? 0);
     if (this.env.CLOUDFLARE_API_TOKEN && redirectRetry > now) next = Math.min(next, redirectRetry);
-    // K-631: a "Check now" that gets no report fails at its time.
-    for (const row of this.progressRows().values())
-      if (row.source._tag === "health" && row.progress.outcome.state === "running")
-        next = Math.min(next, Math.max(now, row.source.until));
+    // K-631: a "Check now" that gets no report fails at its time. K-538: a deploy that does not finish fails when it
+    // expires.
+    for (const row of this.progressRows().values()) {
+      if (row.progress.outcome.state !== "running") continue;
+      if (row.source._tag === "health") next = Math.min(next, Math.max(now, row.source.until));
+      if (row.source._tag === "deploy") {
+        const [deploy] = this.sql<{ expires_at: number }>(
+          "SELECT expires_at FROM deploys WHERE id = ?",
+          row.source.deployId,
+        );
+        if (deploy) next = Math.min(next, Math.max(now, deploy.expires_at));
+      }
+    }
+    // K-704: a provider that stays without a connection opens its notification at its time.
+    for (const socket of this.watchingSockets()) {
+      const attachment = attachmentOf(socket);
+      const offline = attachment?.kind === "machine" ? (attachment.status?.offlineProviders ?? []) : [];
+      for (const entry of offline)
+        if (entry.at + PROVIDER_OFFLINE_MS > now) next = Math.min(next, entry.at + PROVIDER_OFFLINE_MS);
+    }
     // K-406: a step of the alarm that threw tries again at its time.
     for (const failure of this.alarmSteps().values())
       if (failure.retryAt > now) next = Math.min(next, failure.retryAt);
@@ -8696,10 +8747,10 @@ export class Kitshn extends DurableObject<Env> {
       (this.expiredShares(now).length > 0 || this.expiredCards(now).length > 0)
     )
       next = now;
-    // K-1126: uptime runs at least every 10 minutes, and each 2-minute turn while a card fails but is not down yet.
+    // K-1126: uptime runs at least every 5 minutes, and each 2-minute turn while a card fails but is not down yet.
     if (this.uptimeTargets().length > 0) {
       const failing = [...this.uptime.values()].some((uptime) => uptime.failingSince !== null);
-      next = Math.min(next, now + (failing ? UPTIME_RUN_MS : UPTIME_IDLE_MS));
+      next = Math.min(next, now + (failing ? UPTIME_RUN_MS : UPTIME_TURN_MS));
     }
     // K-1907: pushes that wait go out in the next second.
     if (this.pushQueue.length > 0) next = Math.min(next, now + 1000);
@@ -16746,8 +16797,9 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-1125, K-1126: one uptime run, once per turn of 2 minutes. `fetchBudget` is the share of the 40 calls of this
-   * run (K-406). Writes a row only when a card changes, and keeps rows only for cards that are down or failing.
+   * K-1125, K-1126: one uptime run, at most once per turn of 2 minutes. `fetchBudget` is the share of the 40 calls of
+   * this run (K-406). Writes a row only when a card changes, and keeps rows only for cards that are down or failing.
+   * The group to fetch comes from a run counter in `meta`, because runs come at any spacing and a wake forgets memory.
    */
   private async checkUptime(
     now: number,
@@ -16763,14 +16815,18 @@ export class Kitshn extends DurableObject<Env> {
       const site = this.liveSites.get(card.id);
       if (site) probes.set(card.id, site.up && online.has(site.machineId));
     }
+    const run = Number(this.meta("uptime_run") ?? 0);
+    if (!Number.isSafeInteger(run) || run < 0)
+      throw new Error(`The uptime run counter is ${run}, not a count.`);
     const fetched =
       fetchBudget === 0
         ? []
         : cardsOfRun(
             targets.filter((card) => !this.liveSites.has(card.id)),
-            slot,
+            run,
             Math.min(fetchBudget, UPTIME_FETCHES_PER_RUN),
           );
+    if (fetched.length > 0) this.setMeta("uptime_run", String(run + 1));
     const answers = await Promise.all(
       fetched.map(async (card) => {
         const ups = await Promise.all(
@@ -17904,7 +17960,7 @@ export class Kitshn extends DurableObject<Env> {
       console.error(`kitshn could not finish a restore to a time: ${String(error)}`),
     );
     await this.alarmStep("liveness", undefined, () => this.checkLiveness(now));
-    // The alarm runs at least every 10 minutes while a daemon is connected, so it tells the maps only about changes.
+    // The alarm runs every few minutes, so it tells the maps only about real changes.
     let changed = (await this.alarmStep("jobs", 0, () => this.expireJobs(now))) > 0;
     // K-627: a busy machine whose wait reached the cap gets its update now.
     if (Object.values(this.rollout().busySince ?? {}).some((since) => since + BUSY_CAP_MS <= now))

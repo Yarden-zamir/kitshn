@@ -108,3 +108,35 @@ it("keeps a live site of an offline machine up for 5 minutes, so a daemon that r
   await runDurableObjectAlarm(stub);
   expect(await uptimeOf(stub, "lab")).toMatchObject({ row: { up: 0, failing: 0 }, notified: 1 });
 });
+
+it("fetches each group of addresses in turn, however far apart the runs come (K-1126)", async () => {
+  const fetched: Array<string> = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    fetched.push(input instanceof Request ? input.url : String(input));
+    return new Response("ok", { status: 200 });
+  });
+  // 40 addresses make 5 groups of 8. Runs 5 minutes apart moved a 2-minute turn by 2 or 3, so groups came twice.
+  await runInDurableObject(env.KITSHN.getByName("uptime-rotation"), async (instance, state) => {
+    for (let i = 0; i < 40; i++) {
+      const card: Resource = {
+        id: `static-${i}`,
+        kind: "site.static",
+        name: `static-${i}`,
+        addresses: [`static-${i}.example.com`],
+        status: "running",
+        group: null,
+        machine: null,
+      };
+      state.storage.sql.exec("INSERT INTO resources (id, body) VALUES (?, ?)", card.id, JSON.stringify(card));
+    }
+    const kitshn = instance as unknown as {
+      load(): void;
+      checkUptime(now: number, budget: number): Promise<unknown>;
+    };
+    kitshn.load();
+    const start = Date.now();
+    for (let run = 0; run < 5; run++) await kitshn.checkUptime(start + run * 5 * 60_000, 8);
+  });
+  expect(fetched).toHaveLength(40);
+  expect(new Set(fetched).size).toBe(40);
+});

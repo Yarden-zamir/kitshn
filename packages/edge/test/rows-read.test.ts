@@ -408,7 +408,7 @@ it("reads a fixed number of rows in a whole wake, however many deploys kitshn ke
     };
     await send("/api/state", { headers });
     const firstSnapshot = rows();
-    // A wake for the alarm, every 10 minutes while a daemon is connected; every site is up.
+    // A wake for the alarm, every 5 minutes for uptime (K-1126); every site is up.
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("ok", { status: 200 }));
     await evictDurableObject(stub);
     cursors = [];

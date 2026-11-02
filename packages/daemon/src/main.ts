@@ -18,6 +18,7 @@ import {
   type ServerToDaemon,
   type AskOutcome,
   type AppAccess,
+  WATCH_LEASE_MS,
 } from "@kitshn/edge/machine";
 import type { DoorPlan } from "@kitshn/edge/port";
 import type { BackupReport } from "@kitshn/edge/backups";
@@ -232,7 +233,7 @@ const paths = pathsFor(platform, process.env);
 
 /**
  * K-605: status at most every 5 seconds. A sample once a minute for the history on disk; kitshn gets every fifth one,
- * and each one while a map is open (`watch`). K-604: a ping every 10 seconds.
+ * and each one while someone watches a map (`watch`). K-604: a ping every 10 seconds.
  */
 const PING_MS = 10_000;
 const PONG_TIMEOUT_MS = 30_000;
@@ -2664,8 +2665,8 @@ function connect(config: JoinSecrets) {
       headers: { "CF-Access-Client-Id": config.clientId, "CF-Access-Client-Secret": config.clientSecret },
     } as unknown as string);
     current = ws;
-    // K-605: a new connection samples every 5 minutes until kitshn says that a map is open.
-    mapOpen = false;
+    // K-605: a new connection samples every 5 minutes until kitshn says that someone watches a map.
+    watchedUntil = 0;
     let lastPong = Date.now();
     let ping: ReturnType<typeof setInterval> | null = null;
     /** True when kitshn expects a key that this machine does not have, so the next try fails the same way. */
@@ -2744,8 +2745,9 @@ function connect(config: JoinSecrets) {
       } else if (message.type === "checkHealth") {
         void checkHealth();
       } else if (message.type === "watch") {
-        mapOpen = message.on;
-        if (mapOpen) sendSample(sample());
+        const watched = Date.now() < watchedUntil;
+        watchedUntil = message.on ? Date.now() + WATCH_LEASE_MS : 0;
+        if (message.on && !watched) sendSample(sample());
       } else if (
         message.type === "grants" ||
         message.type === "desired" ||
@@ -3019,8 +3021,8 @@ function unexposeCommand(name: string | undefined) {
   console.log(`Stopped exposing ${name}.`);
 }
 
-/** K-605: whether a map is open, as kitshn last said on this connection (`watch`). */
-let mapOpen = false;
+/** K-605: until when someone watches a map, from the last `watch` of this connection. */
+let watchedUntil = 0;
 let samplesKept = 0;
 
 function sendSample(value: ReturnType<typeof sample>) {
@@ -3230,7 +3232,7 @@ async function runCommand() {
     const value = sample();
     keepSample(value);
     samplesKept += 1;
-    if (mapOpen || samplesKept >= SAMPLES_PER_SEND) sendSample(value);
+    if (Date.now() < watchedUntil || samplesKept >= SAMPLES_PER_SEND) sendSample(value);
   }, SAMPLE_MS);
   setInterval(pruneSamples, 24 * 60 * 60_000);
   setInterval(() => void checkHealth(), HEALTH_INTERVAL_MS);
