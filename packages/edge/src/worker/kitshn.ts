@@ -6947,6 +6947,8 @@ export class Kitshn extends DurableObject<Env> {
                 card: card.id,
                 kind: card.kind,
                 level: levelName(card, level),
+                // K-1617: from the open socket, no row read, so a desktop skips an offline machine.
+                online: this.openSocket(machine.id) !== null,
               },
             ];
       }),

@@ -678,6 +678,8 @@ it("lists for a device the provider cards with an address that its token opens, 
         card: appId,
         kind: "t3.app",
         level: "use",
+        // No daemon socket is open in this test.
+        online: false,
       },
     ],
   });
