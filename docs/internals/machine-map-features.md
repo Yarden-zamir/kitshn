@@ -11,7 +11,7 @@ kitshn replaces the machine map portal of the T3 Code fork (`apps/machine-map/SP
   - Only the owner makes or cancels an invite. An undo never adds, changes or removes a device token.
   - kitshn makes the device token when the owner makes the invite, and drops its secret. So the circle holds the device before the app arrives, and the app pairs on the first try. A token made at the exchange would make the owner wait to place the device. A secret sealed with the code would make kitshn store it.
   - An invite takes only a `kitshn device ` token, never a machine token, so an invite never takes over a machine.
-  - `GET /device/machines` takes a service token only and lists each provider card with an address that the token opens. kitshn knows no T3 kind (K-005), so it lists every such card.
+  - `GET /device/machines` takes a service token only and lists each provider card with an address that the token opens, with `online` from the machine's open socket. kitshn knows no T3 kind (K-005), so it lists every such card.
   - Planned: "Add phone" in the Add menu (K-1621).
 - **K-1602** The Clients view lists the Access sessions of kitshn's applications and the sessions that providers report as lists (K-1625). "Sign out" on a row sends the provider command "revoke client". "Sign out everywhere" (K-110) also ends those sessions.
 - **K-1603** Dropped: browser keys, their approval flow and `clientAccess`, because a passkey circle and device tokens replace them (K-108). Kept: a machine joins or leaves kitshn only from its local desktop app, `kitshn join` or the installer. `kitshn_join` and remote T3 clients refuse it, because leaving turns off the grants that the provider enforces.
