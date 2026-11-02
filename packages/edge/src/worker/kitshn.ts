@@ -4359,6 +4359,16 @@ export class Kitshn extends DurableObject<Env> {
     return open.at(-1) ?? null;
   }
 
+  /**
+   * K-706: the socket that gets the pushes: the newest open one, when it is signed. An older socket that a reconnect
+   * closed stays listed until its peer answers, and a push to it is lost.
+   */
+  private signedSocket(machineId: string): WebSocket | null {
+    const socket = this.openSocket(machineId);
+    const attachment = socket ? attachmentOf(socket) : null;
+    return attachment?.kind === "machine" && attachment.check === "signed" ? socket : null;
+  }
+
   /** K-1704: the sockets of a machine that kitshn reads and sends jobs to. */
   private checkedSockets(machineId: string) {
     return this.ctx.getWebSockets(machineId).filter((socket) => {
@@ -4445,10 +4455,7 @@ export class Kitshn extends DurableObject<Env> {
     for (const machineId of this.providerRegs.keys()) {
       const pushes = this.pushesOf(machineId, now);
       this.pushHashes.set(machineId, new Map(pushes.map(({ key, hash }) => [key, hash])));
-      const socket = this.ctx.getWebSockets(machineId).find((item) => {
-        const attachment = attachmentOf(item);
-        return attachment?.kind === "machine" && attachment.check === "signed";
-      });
+      const socket = this.signedSocket(machineId);
       // K-724: a daemon of another protocol major gets no push; its update sends them all again.
       if (!socket || this.protocolRefusal(machineId) !== null) continue;
       for (const { key, hash, push } of pushes) {
@@ -7018,10 +7025,7 @@ export class Kitshn extends DurableObject<Env> {
 
   /** K-704: tells a signed connection of the machine about each provider that the owner forgot. */
   private sendForgotten(machineId: string) {
-    const socket = this.ctx.getWebSockets(machineId).find((item) => {
-      const attachment = attachmentOf(item);
-      return attachment?.kind === "machine" && attachment.check === "signed";
-    });
+    const socket = this.signedSocket(machineId);
     // K-724: a daemon of another protocol major gets no push, and this is one.
     if (!socket || this.protocolRefusal(machineId) !== null) return;
     for (const { name } of this.sql<{ name: string }>(

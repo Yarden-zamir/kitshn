@@ -1377,3 +1377,70 @@ it("initializes only absent desired parts and preserves owner-set empty or disab
     }
   }
 });
+
+it("pushes a set desired state with its rev to the newest socket, also when only the rev changes (K-706, K-709)", async () => {
+  const { stub, sql } = await setup();
+  await sql("DELETE FROM desired_state");
+  await sql("DELETE FROM desired_revs");
+  const value = { server: { threadAddressing: true }, client: {} };
+  await runInDurableObject(stub, async (instance, state) => {
+    const kitshn = instance as unknown as {
+      webSocketMessage(socket: WebSocket, message: string): Promise<void>;
+    };
+    const signedSocket = () => {
+      const pair = new WebSocketPair();
+      state.acceptWebSocket(pair[1], ["vps", "machines"]);
+      pair[1].serializeAttachment({
+        kind: "machine",
+        machineId: "vps",
+        since: Date.now(),
+        challenge: "",
+        check: "signed",
+        answered: true,
+        rotateBy: null,
+        protocol: "2.2.0",
+        status: null,
+        sample: null,
+      });
+      return pair;
+    };
+    // A reconnect: kitshn closed the older socket, and its peer never answers the close, so it stays listed.
+    const old = signedSocket();
+    old[1].close(4001, "A newer connection of this machine replaced it.");
+    const pair = signedSocket();
+    pair[0].accept();
+    const received: Array<{ type: string; kind?: string; state?: unknown; rev?: string | null }> = [];
+    pair[0].addEventListener("message", (event) => void received.push(JSON.parse(String(event.data))));
+    const daemon = (message: object) => kitshn.webSocketMessage(pair[1], JSON.stringify(message));
+    const stateKind = { id: "t3.settings", name: "settings", levels: {}, state: {} };
+    await daemon({
+      type: "providers",
+      providers: [{ ...report([app]), kinds: [...report([]).kinds, stateKind] }],
+    });
+    const set = (requestId: string, rev: string) =>
+      daemon({
+        type: "desiredSet",
+        requestId,
+        provider: "t3",
+        kind: "t3.settings",
+        part: "machine",
+        value,
+        rev,
+      });
+    await set("s1", "rev-1");
+    await set("s2", "rev-2");
+    const parts = { shared: null, machine: value };
+    await vi.waitFor(() =>
+      expect(
+        received
+          .filter((item) => item.type === "desired" && item.kind === "t3.settings")
+          .map(({ state, rev }) => ({ state, rev })),
+      ).toEqual([
+        { state: { shared: null, machine: null }, rev: null },
+        { state: parts, rev: "rev-1" },
+        { state: parts, rev: "rev-2" },
+      ]),
+    );
+    pair[1].close(1000, "test over");
+  });
+});
