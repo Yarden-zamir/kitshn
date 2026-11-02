@@ -232,7 +232,9 @@ export type ServerMessage =
       readonly lines: ReadonlyArray<LogLine>;
       readonly skipped: number;
     }
-  | { readonly type: "tailEnd"; readonly tail: string; readonly reason: string };
+  | { readonly type: "tailEnd"; readonly tail: string; readonly reason: string }
+  /** K-605: the answer to a visible `watching` when the map holds the current state. */
+  | { readonly type: "watched" };
 
 export interface MachineView {
   readonly machine: Machine;

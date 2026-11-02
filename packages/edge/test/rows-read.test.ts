@@ -316,7 +316,7 @@ it("reads the Access rows once for the life of the object, not in each alarm run
 
 /**
  * K-1302, K-004: a whole wake on tables of the size of the state of 2026-11-02, with months more of deploys. About
- * 4,500 wakes a day each run the constructor, mostly for one daemon message, so its rows count 4,500 times. On main
+ * 2,000 wakes a day each run the constructor, mostly for one daemon message, so its rows count 2,000 times. On main
  * before this bound, the constructor read 2,285 rows and an alarm wake 2,337, as both scanned all of `deploys`.
  */
 it("reads a fixed number of rows in a whole wake, however many deploys kitshn keeps", async () => {
@@ -521,6 +521,58 @@ async function openSocket(stub: DurableObjectStub, path: string, caller: object)
   return socket;
 }
 
+/** A machine with a key, so its daemon socket can be signed (K-1704). */
+const keyedMachine = {
+  id: "vps",
+  name: "vps",
+  labels: [],
+  order: 0,
+  serviceTokenId: "token-vps",
+  clientId: "vps.access",
+  tunnelId: "tunnel-vps",
+  key: { kind: "public", publicKey: "x", fingerprint: "f", since: 0 },
+};
+
+const t3Report: ProviderReport = {
+  name: "t3",
+  online: true,
+  kinds: [{ id: "t3.app", name: "T3 app", levels: { view: "view", use: "use", control: "control" } }],
+  commands: [],
+  resources: [{ id: "app", kind: "t3.app", name: "T3 on vps", status: "running" }],
+};
+
+/** What a signed daemon socket of vps holds after its challenge (K-1704). */
+const signedDaemon = {
+  kind: "machine",
+  machineId: "vps",
+  since: Date.now(),
+  challenge: "",
+  check: "signed",
+  answered: true,
+  rotateBy: null,
+  status: {
+    version: "dev",
+    os: "linux",
+    arch: "x64",
+    hostname: "vps",
+    tunnel: "running",
+    capabilities: ["applied", "access", "protocol-2"],
+  },
+  sample: null,
+};
+
+/** The daemon socket of vps, as if it passed its challenge. */
+async function openDaemon(stub: DurableObjectStub) {
+  const socket = await openSocket(stub, "/connect", {
+    visitor: { email: null, clientId: "vps.access", ip: null },
+    actor: { _tag: "kitshn", reason: "test" },
+  });
+  await runInDurableObject(stub, (_instance, state) =>
+    state.getWebSockets("vps")[0]!.serializeAttachment(signedDaemon),
+  );
+  return socket;
+}
+
 /**
  * K-1302, K-605, K-004: on 2026-11-02, the first broadcast after a wake read History again for a snapshot, about 470
  * rows, and each link call broadcast while any map socket was open, mostly a sleeping phone. Now only a watching map
@@ -528,8 +580,15 @@ async function openSocket(stub: DurableObjectStub, path: string, caller: object)
  */
 it("reads no History in the first broadcast after a wake while no map watches, and a map that watches gets it at once", async () => {
   const stub = env.KITSHN.getByName("map-rows");
-  const counter = await runInDurableObject(stub, (_instance, state) => {
+  const counter = await runInDurableObject(stub, (instance, state) => {
     const sql = state.storage.sql;
+    // A machine with a provider, so the first broadcast after a wake reads its `applied_state` rows (K-1608).
+    sql.exec("INSERT INTO machines (id, body) VALUES ('vps', ?)", JSON.stringify(keyedMachine));
+    sql.exec(
+      "INSERT INTO providers (machine_id, name, body) VALUES ('vps', 't3', ?)",
+      JSON.stringify({ name: "t3", kinds: t3Report.kinds, commands: [] }),
+    );
+    (instance as unknown as { load(): void }).load();
     // The History tables as on 2026-11-02.
     const now = Date.now();
     for (let i = 0; i < 300; i++)
@@ -568,6 +627,7 @@ it("reads no History in the first broadcast after a wake while no map watches, a
     visitor: { email: "owner@example.com", clientId: null, ip: null },
     actor: { _tag: "person", email: "owner@example.com" },
   });
+  const daemon = await openDaemon(stub);
   const sent = sentTo("map");
   type Internals = {
     broadcast(): void;
@@ -612,18 +672,31 @@ it("reads no History in the first broadcast after a wake while no map watches, a
     await run(broadcast);
     const watchedBroadcast = counter.take();
     expect(types()).toEqual(["snapshot"]);
-    // A renewal while it watches sends nothing more.
+    // A renewal while it watches gets only the answer that shows that the socket lives.
     sent.clear();
     await watching();
-    expect(types()).toEqual([]);
+    expect(types()).toEqual(["watched"]);
     // Hidden again: no snapshot, and the next `watching` brings one.
+    sent.clear();
     await watching(false);
     await run(broadcast);
     expect(types()).toEqual([]);
     await watching();
     expect(types()).toEqual(["snapshot"]);
+    // A request of a map that missed a broadcast brings the current state before its answer.
+    sent.clear();
+    await watching(false);
+    await run(broadcast);
+    await run((instance, state) =>
+      instance.webSocketMessage(
+        state.getWebSockets("map")[0]!,
+        JSON.stringify({ type: "undo", requestId: "r", revision: 1_000_000 }),
+      ),
+    );
+    expect(types()).toEqual(["snapshot", "result"]);
 
-    // On main before this fix: 433 and 438 rows, because both sent the hidden map a snapshot that read History.
+    // On main before this fix: about 480 rows each, because both sent the hidden map a snapshot that read History.
+    // Now the first broadcast reads the `applied_state` rows of the provider machine, and no History.
     expect(hiddenBroadcast).toBeLessThan(100);
     expect(hiddenLinkEvent).toBeLessThan(100);
     // Known limit: a watching map still reads History in the first snapshot after a wake, about 430 rows here.
@@ -631,33 +704,17 @@ it("reads no History in the first broadcast after a wake while no map watches, a
   } finally {
     counter.restore();
     map.close();
+    daemon.close();
   }
 });
 
 /**
  * K-706, K-1608: `sentGrants` lives in memory, so on 2026-11-02 each wake sent every push again, about 40, and each
- * daemon answered each one with `applied`. Now a push that the daemon applied goes out again only on a new connection.
+ * daemon answered each one with `applied`. Now a push that the daemon applied goes out again only on a new connection,
+ * or when the daemon applied an older push than the current one.
  */
 it("sends no push again after a wake when the daemon applied it, and every push on a new connection", async () => {
   const stub = env.KITSHN.getByName("grants-wake");
-  const attachment = {
-    kind: "machine",
-    machineId: "vps",
-    since: Date.now(),
-    challenge: "",
-    check: "signed",
-    answered: true,
-    rotateBy: null,
-    status: {
-      version: "dev",
-      os: "linux",
-      arch: "x64",
-      hostname: "vps",
-      tunnel: "running",
-      capabilities: ["applied", "access", "protocol-2"],
-    },
-    sample: null,
-  };
   type Internals = {
     load(): void;
     broadcast(): void;
@@ -672,51 +729,58 @@ it("sends no push again after a wake when the daemon applied it, and every push 
     });
   const sent = sentTo("machine");
   const pushes = () => sent.messages().filter((message) => message.hash !== undefined);
-  await runInDurableObject(stub, async (instance, state) => {
-    const machine = {
-      id: "vps",
-      name: "vps",
-      labels: [],
-      order: 0,
-      serviceTokenId: "token-vps",
-      clientId: "vps.access",
-      tunnelId: "tunnel-vps",
-      key: { kind: "public", publicKey: "x", fingerprint: "f", since: 0 },
-    };
-    state.storage.sql.exec("INSERT INTO machines (id, body) VALUES ('vps', ?)", JSON.stringify(machine));
+  await runInDurableObject(stub, (instance, state) => {
+    state.storage.sql.exec("INSERT INTO machines (id, body) VALUES ('vps', ?)", JSON.stringify(keyedMachine));
     (instance as unknown as Internals).load();
   });
-  const daemon = await openSocket(stub, "/connect", {
-    visitor: { email: null, clientId: "vps.access", ip: null },
-    actor: { _tag: "kitshn", reason: "test" },
-  });
-  // The daemon passed its challenge (K-1704).
-  await run((_instance, socket) => socket.serializeAttachment(attachment));
-  try {
-    const report: ProviderReport = {
-      name: "t3",
-      online: true,
-      kinds: [{ id: "t3.app", name: "T3 app", levels: { view: "view", use: "use", control: "control" } }],
-      commands: [],
-      resources: [{ id: "app", kind: "t3.app", name: "T3 on vps", status: "running" }],
-    };
-    await run((instance, socket) =>
-      instance.webSocketMessage(socket, JSON.stringify({ type: "providers", providers: [report] })),
+  const daemon = await openDaemon(stub);
+  const report = (resources: ProviderReport["resources"]) =>
+    run((instance, socket) =>
+      instance.webSocketMessage(
+        socket,
+        JSON.stringify({ type: "providers", providers: [{ ...t3Report, resources }] }),
+      ),
     );
-    const all = pushes().length;
-    expect(all).toBeGreaterThan(2);
-    // The daemon saves each push and answers `applied`.
-    await run(async (instance, socket) => {
-      for (const [key, hash] of instance.hashesOf("vps"))
+  const hashes = () => run((instance) => new Map(instance.hashesOf("vps")));
+  /** The daemon saves each push and answers `applied`. */
+  const answer = (applied: ReadonlyMap<string, string>) =>
+    run(async (instance, socket) => {
+      for (const [key, hash] of applied)
         await instance.webSocketMessage(socket, JSON.stringify({ type: "applied", key, hash }));
     });
+  try {
+    await report(t3Report.resources);
+    const all = pushes().length;
+    expect(all).toBeGreaterThan(2);
+    const first = await hashes();
+    await answer(first);
     await evictDurableObject(stub);
     sent.clear();
     await run((instance) => instance.broadcast());
     expect(pushes()).toEqual([]);
     // K-706: a new connection of the daemon gets every push again.
-    await run((instance, socket) => instance.acceptMachine(socket, attachment));
+    await run((instance, socket) => instance.acceptMachine(socket, signedDaemon));
     expect(pushes()).toHaveLength(all);
+
+    // A change and its Undo before the daemon answers the change, also with a wake between them: the late `applied`
+    // of the change brings the push of the state after the Undo again, or the daemon keeps the undone grants.
+    for (const wake of [false, true]) {
+      await report([
+        ...t3Report.resources,
+        { id: "app2", kind: "t3.app", name: "T3 two", status: "running" },
+      ]);
+      const changed = new Map([...(await hashes())].filter(([key, hash]) => first.get(key) !== hash));
+      expect(changed.size).toBeGreaterThan(0);
+      if (wake) await evictDurableObject(stub);
+      await report(t3Report.resources);
+      expect(await hashes()).toEqual(first);
+      sent.clear();
+      await answer(changed);
+      expect(pushes().map((message) => message.hash)).toEqual(
+        [...changed.keys()].map((key) => first.get(key)),
+      );
+      await answer(first);
+    }
   } finally {
     daemon.close();
   }

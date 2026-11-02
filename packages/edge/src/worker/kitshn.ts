@@ -4398,8 +4398,9 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-605: a visible map renews its watch, and each daemon samples each minute for WATCH_LEASE_MS. A map that
-   * missed a broadcast gets the current state at once (K-1302). A hidden map ends its watch.
+   * K-605: a visible map renews its watch, and each daemon samples each minute for WATCH_LEASE_MS. The map gets the
+   * current state if it missed a broadcast (K-1302), else `watched`; with no answer, it connects again. A hidden map
+   * ends its watch.
    */
   private mapWatching(socket: WebSocket, attachment: MapAttachment, visible: boolean) {
     const { missed, ...rest } = attachment;
@@ -4409,7 +4410,10 @@ export class Kitshn extends DurableObject<Env> {
       return;
     }
     socket.serializeAttachment({ ...rest, watchingUntil: Date.now() + WATCH_LEASE_MS } satisfies Attachment);
-    if (missed) send(socket, { type: "snapshot", snapshot: this.snapshot(attachment.caller) });
+    send(
+      socket,
+      missed ? { type: "snapshot", snapshot: this.snapshot(attachment.caller) } : { type: "watched" },
+    );
     this.sendWatch(true);
   }
 
@@ -5466,10 +5470,12 @@ export class Kitshn extends DurableObject<Env> {
     let message: ClientMessage;
     try {
       const parsed: unknown = JSON.parse(typeof data === "string" ? data : new TextDecoder().decode(data));
-      if (isRecord(parsed) && (parsed.type === "tail" || parsed.type === "tailStop"))
-        return await this.tailMessage(socket, decodeTailMessage(parsed));
       if (isRecord(parsed) && parsed.type === "watching")
         return this.mapWatching(socket, attachment, parsed.visible !== false);
+      // K-605: a map that sends a request is in use, so it watches, and the broadcast of its change reaches it.
+      this.mapWatching(socket, attachment, true);
+      if (isRecord(parsed) && (parsed.type === "tail" || parsed.type === "tailStop"))
+        return await this.tailMessage(socket, decodeTailMessage(parsed));
       message = decodeClientMessage(parsed);
     } catch (error) {
       socket.close(4000, `kitshn cannot read the message: ${String(error).slice(0, 100)}`);
@@ -6187,6 +6193,13 @@ export class Kitshn extends DurableObject<Env> {
         this.sendMachine(machine);
         // K-411: a taken address waits for this push, so its next step runs now, not at the next cycle.
         if (this.sitesOf(machine.id).some((site) => site.state === "handover")) await this.scheduleAlarm();
+      }
+      // K-1608: the daemon applied a push that is no longer current, for example one that an Undo replaced while it
+      // was on the way. `pushGrants` skips a hash that `applied` holds, so the current push goes again here.
+      const current = this.hashesOf(machine.id).get(message.key);
+      if (current !== undefined && current !== message.hash) {
+        this.sentGrants.delete(id);
+        this.pushGrants();
       }
     } else if (message.type === "icon") {
       await this.liveIcon(machine, message.site, message.icon);

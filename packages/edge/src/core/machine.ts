@@ -407,6 +407,8 @@ export type DaemonMessage =
  */
 export const WATCH_RENEW_MS = 2 * 60_000;
 export const WATCH_LEASE_MS = 5 * 60_000;
+/** K-605: a map that gets no answer to `watching` this long holds a dead socket, such as after a sleep, and reconnects. */
+export const WATCH_ANSWER_MS = 10_000;
 
 /**
  * K-605: what a visible map sends over its WebSocket, every WATCH_RENEW_MS. When it turns hidden, it sends
