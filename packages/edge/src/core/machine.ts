@@ -407,10 +407,16 @@ export type DaemonMessage =
  */
 export const WATCH_RENEW_MS = 2 * 60_000;
 export const WATCH_LEASE_MS = 5 * 60_000;
+/** K-605: a map that gets no answer to `watching` this long holds a dead socket, such as after a sleep, and reconnects. */
+export const WATCH_ANSWER_MS = 10_000;
 
-/** K-605: what a visible map sends over its WebSocket, every WATCH_RENEW_MS. */
+/**
+ * K-605: what a visible map sends over its WebSocket, every WATCH_RENEW_MS. When it turns hidden, it sends
+ * `visible: false` once, and kitshn stops its snapshots until the next `watching` (K-1302).
+ */
 export interface WatchingMessage {
   readonly type: "watching";
+  readonly visible?: false;
 }
 
 export type ServerToDaemon =
@@ -433,7 +439,8 @@ export type ServerToDaemon =
   | { readonly type: "checkHealth" }
   /**
    * K-605: a map that someone looks at. `on` lasts WATCH_LEASE_MS unless kitshn sends it again, and the first `on`
-   * asks for a sample now. `off` comes when the last watching map closes, and on each connection without one.
+   * asks for a sample now. `off` comes when the last watching map closes or turns hidden, and on each connection
+   * without one.
    */
   | { readonly type: "watch"; readonly on: boolean }
   /** K-704: the name of the machine on the map, on each signed connection and after a rename. */

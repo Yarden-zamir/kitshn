@@ -2,7 +2,8 @@ import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, expect, it, vi } from "vitest";
 import type { Circle } from "../src/core/model.ts";
-import type { RevisionView } from "../src/core/protocol.ts";
+import type { ProviderReport } from "@kitshn/local";
+import type { RevisionView, Snapshot } from "../src/core/protocol.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -315,7 +316,7 @@ it("reads the Access rows once for the life of the object, not in each alarm run
 
 /**
  * K-1302, K-004: a whole wake on tables of the size of the state of 2026-11-02, with months more of deploys. About
- * 4,500 wakes a day each run the constructor, mostly for one daemon message, so its rows count 4,500 times. On main
+ * 2,000 wakes a day each run the constructor, mostly for one daemon message, so its rows count 2,000 times. On main
  * before this bound, the constructor read 2,285 rows and an alarm wake 2,337, as both scanned all of `deploys`.
  */
 it("reads a fixed number of rows in a whole wake, however many deploys kitshn keeps", async () => {
@@ -461,4 +462,346 @@ it("never plans the alarm for now for the expired deploy sticker of a removed ca
   );
   expect(result.planned).toBeGreaterThan(result.now);
   expect(result.sticker).toBe(0);
+});
+
+/** Counts the rows of every cursor of every instance, so the constructor after an eviction too. */
+function countRows(sql: SqlStorage) {
+  let cursors: Array<SqlStorageCursor<Record<string, SqlStorageValue>>> = [];
+  const prototype = Object.getPrototypeOf(sql) as { exec: typeof sql.exec };
+  const exec = prototype.exec;
+  prototype.exec = function (this: SqlStorage, query: string, ...bindings: Array<SqlStorageValue>) {
+    const cursor = exec.call(this, query, ...bindings);
+    cursors.push(cursor);
+    return cursor;
+  } as typeof sql.exec;
+  return {
+    /** The rows read since the last call. */
+    take: () => {
+      const rows = cursors.reduce((sum, cursor) => sum + cursor.rowsRead, 0);
+      cursors = [];
+      return rows;
+    },
+    restore: () => {
+      prototype.exec = exec;
+    },
+  };
+}
+
+type Sent = { readonly type: string; readonly hash?: string; readonly snapshot?: Snapshot };
+
+type SocketKind = "map" | "machine";
+
+/** What the object sends from now on to its map and machine sockets; `clear` starts again. */
+function sentToSockets() {
+  let sent: Array<{ readonly kind: SocketKind; readonly message: Sent }> = [];
+  const send = WebSocket.prototype.send;
+  // The kind is read at the send, inside the object; the test harness sends on sockets of its own too.
+  vi.spyOn(WebSocket.prototype, "send").mockImplementation(function (this: WebSocket, data) {
+    const attachment = this.deserializeAttachment() as { kind?: string } | null;
+    if (attachment?.kind === "map" || attachment?.kind === "machine")
+      sent.push({ kind: attachment.kind, message: JSON.parse(String(data)) as Sent });
+    send.call(this, data);
+  });
+  return {
+    messages: (kind: SocketKind) => sent.filter((item) => item.kind === kind).map((item) => item.message),
+    clear: () => {
+      sent = [];
+    },
+  };
+}
+
+/**
+ * A socket that the object accepts on `path` for `caller`, as the Worker sends it. Its test end lives outside the
+ * object, so the socket outlives an eviction, as a socket outlives a wake.
+ */
+async function openSocket(stub: DurableObjectStub, path: string, caller: object) {
+  const response = await stub.fetch(`https://kit.example.com${path}`, {
+    headers: { upgrade: "websocket", "x-kitshn-caller": JSON.stringify(caller) },
+  });
+  const socket = response.webSocket;
+  if (!socket) throw new Error(`kitshn opened no socket on ${path}: ${response.status}`);
+  socket.accept();
+  return socket;
+}
+
+/** A machine with a key, so its daemon socket can be signed (K-1704). */
+const keyedMachine = {
+  id: "vps",
+  name: "vps",
+  labels: [],
+  order: 0,
+  serviceTokenId: "token-vps",
+  clientId: "vps.access",
+  tunnelId: "tunnel-vps",
+  key: { kind: "public", publicKey: "x", fingerprint: "f", since: 0 },
+};
+
+const t3Report: ProviderReport = {
+  name: "t3",
+  online: true,
+  kinds: [{ id: "t3.app", name: "T3 app", levels: { view: "view", use: "use", control: "control" } }],
+  commands: [],
+  resources: [{ id: "app", kind: "t3.app", name: "T3 on vps", status: "running" }],
+};
+
+/** What a signed daemon socket of vps holds after its challenge (K-1704). */
+const signedDaemon = {
+  kind: "machine",
+  machineId: "vps",
+  since: Date.now(),
+  challenge: "",
+  check: "signed",
+  answered: true,
+  rotateBy: null,
+  status: {
+    version: "dev",
+    os: "linux",
+    arch: "x64",
+    hostname: "vps",
+    tunnel: "running",
+    capabilities: ["applied", "access", "protocol-2"],
+  },
+  sample: null,
+};
+
+/** The daemon socket of vps, as if it passed its challenge. */
+async function openDaemon(stub: DurableObjectStub) {
+  const socket = await openSocket(stub, "/connect", {
+    visitor: { email: null, clientId: "vps.access", ip: null },
+    actor: { _tag: "kitshn", reason: "test" },
+  });
+  await runInDurableObject(stub, (_instance, state) =>
+    state.getWebSockets("vps")[0]!.serializeAttachment(signedDaemon),
+  );
+  return socket;
+}
+
+/**
+ * K-1302, K-605, K-004: on 2026-11-02, the first broadcast after a wake read History again for a snapshot, about 470
+ * rows, and each link call broadcast while any map socket was open, mostly a sleeping phone. Now only a watching map
+ * gets snapshots and link broadcasts, and a map that missed one gets the current state as soon as it watches again.
+ */
+it("reads no History in the first broadcast after a wake while no map watches, and a map that watches gets it at once", async () => {
+  const stub = env.KITSHN.getByName("map-rows");
+  const counter = await runInDurableObject(stub, (instance, state) => {
+    const sql = state.storage.sql;
+    // A machine with a provider, so the first broadcast after a wake reads its `applied_state` rows (K-1608).
+    sql.exec("INSERT INTO machines (id, body) VALUES ('vps', ?)", JSON.stringify(keyedMachine));
+    sql.exec(
+      "INSERT INTO providers (machine_id, name, body) VALUES ('vps', 't3', ?)",
+      JSON.stringify({ name: "t3", kinds: t3Report.kinds, commands: [] }),
+    );
+    (instance as unknown as { load(): void }).load();
+    // The History tables as on 2026-11-02.
+    const now = Date.now();
+    for (let i = 0; i < 300; i++)
+      sql.exec(
+        "INSERT INTO revisions (at, actor, summary, changes) VALUES (?, ?, 'test', '[]')",
+        now,
+        JSON.stringify({ _tag: "kitshn", reason: "test" }),
+      );
+    for (let i = 0; i < 60; i++) {
+      sql.exec(
+        `INSERT INTO ask_events (at, machine_id, action, target, labels, outcome, detail)
+         VALUES (?, 'vps', 'deploy', 'card', '{}', 'allowed', '{}')`,
+        now,
+      );
+      sql.exec(
+        `INSERT INTO link_events (at, source, target, kind, name, outcome)
+         VALUES (?, 'mac', 'vps', 'tool', 'proxy-probe', 'succeeded')`,
+        now,
+      );
+    }
+    for (let i = 0; i < 47; i++)
+      sql.exec("INSERT INTO applied_state (machine_id, key, hash) VALUES ('vps', ?, 'h')", `key-${i}`);
+    for (let i = 0; i < 36; i++)
+      sql.exec(
+        "INSERT INTO backups (run, card, machine_id, at, state) VALUES (?, ?, 'vps', ?, 'done')",
+        `run-${i}`,
+        `card-${i % 12}`,
+        now - i,
+      );
+    for (let i = 0; i < 15; i++)
+      sql.exec("INSERT INTO icons (id, type, hash, bytes) VALUES (?, 'image/png', 'h', x'00')", `icon-${i}`);
+    return countRows(sql);
+  });
+  // A map that never sends `watching`: a hidden tab or a sleeping phone.
+  const map = await openSocket(stub, "/api/ws", {
+    visitor: { email: "owner@example.com", clientId: null, ip: null },
+    actor: { _tag: "person", email: "owner@example.com" },
+  });
+  const daemon = await openDaemon(stub);
+  const sent = sentToSockets();
+  type Internals = {
+    broadcast(): void;
+    recordExec(row: object, exit: object): void;
+    webSocketMessage(socket: WebSocket, data: string): Promise<void>;
+  };
+  const run = <T>(fn: (instance: Internals, state: DurableObjectState) => T) =>
+    runInDurableObject(stub, async (instance, state) => await fn(instance as unknown as Internals, state));
+  const broadcast = (instance: Internals) => instance.broadcast();
+  const watching = (visible?: boolean) =>
+    run((instance, state) =>
+      instance.webSocketMessage(
+        state.getWebSockets("map")[0]!,
+        JSON.stringify(visible === undefined ? { type: "watching" } : { type: "watching", visible }),
+      ),
+    );
+  const types = () => sent.messages("map").map((message) => message.type);
+  const watchSent = () => sent.messages("machine").filter((message) => message.type === "watch").length;
+  try {
+    await evictDurableObject(stub);
+    counter.take();
+    // A link event before any broadcast still marks the map, so it catches up when it watches again.
+    await run((instance) =>
+      instance.recordExec(
+        { source: "mac", target: "vps", thread: null, command: "after-wake", cwd: null },
+        { exitCode: 0, reason: null },
+      ),
+    );
+    const hiddenLinkEvent = counter.take();
+    expect(
+      await run(
+        (_, state) => (state.getWebSockets("map")[0]!.deserializeAttachment() as { missed?: true }).missed,
+      ),
+    ).toBe(true);
+    await evictDurableObject(stub);
+    await run(broadcast);
+    const hiddenBroadcast = counter.take();
+    expect(types()).toEqual([]);
+
+    // The map becomes visible: it gets the current state at once, with the event that it missed.
+    await watching();
+    const [fresh] = sent.messages("map");
+    expect(types()).toEqual(["snapshot"]);
+    expect(fresh?.snapshot?.linkEvents.some((event) => event.name === "after-wake")).toBe(true);
+    // A watching map gets each broadcast, also the first one after a wake.
+    await evictDurableObject(stub);
+    sent.clear();
+    counter.take();
+    await run(broadcast);
+    const watchedBroadcast = counter.take();
+    expect(types()).toEqual(["snapshot"]);
+    // A renewal soon after the last one gets only the answer that shows that the socket lives, and no `watch` goes to
+    // the daemons.
+    sent.clear();
+    await watching();
+    expect(types()).toEqual(["watched"]);
+    expect(watchSent()).toBe(0);
+    // Hidden again: no snapshot, and the next `watching` brings one and a new `watch`.
+    sent.clear();
+    await watching(false);
+    await run(broadcast);
+    expect(types()).toEqual([]);
+    sent.clear();
+    await watching();
+    expect(types()).toEqual(["snapshot"]);
+    expect(watchSent()).toBe(1);
+    // A request of a map that missed a broadcast brings the current state before its answer. Requests renew the
+    // watch, but only the first one tells the daemons.
+    await watching(false);
+    await run(broadcast);
+    sent.clear();
+    const undo = () =>
+      run((instance, state) =>
+        instance.webSocketMessage(
+          state.getWebSockets("map")[0]!,
+          JSON.stringify({ type: "undo", requestId: "r", revision: 1_000_000 }),
+        ),
+      );
+    await undo();
+    expect(types()).toEqual(["snapshot", "result"]);
+    await undo();
+    expect(types()).toEqual(["snapshot", "result", "watched", "result"]);
+    expect(watchSent()).toBe(1);
+
+    // On main before this fix: about 480 rows each, because both sent the hidden map a snapshot that read History.
+    // Now the first broadcast reads the `applied_state` rows of the provider machine, and no History.
+    expect(hiddenBroadcast).toBeLessThan(100);
+    expect(hiddenLinkEvent).toBeLessThan(100);
+    // Known limit: a watching map still reads History in the first snapshot after a wake, about 480 rows here.
+    expect(watchedBroadcast).toBeLessThan(600);
+  } finally {
+    counter.restore();
+    map.close();
+    daemon.close();
+  }
+});
+
+/**
+ * K-706, K-1608: `sentGrants` lives in memory, so on 2026-11-02 each wake sent every push again, about 40, and each
+ * daemon answered each one with `applied`. Now a push that the daemon applied goes out again only on a new connection,
+ * or when the daemon applied an older push than the current one.
+ */
+it("sends no push again after a wake when the daemon applied it, and every push on a new connection", async () => {
+  const stub = env.KITSHN.getByName("grants-wake");
+  type Internals = {
+    load(): void;
+    broadcast(): void;
+    hashesOf(machineId: string): ReadonlyMap<string, string>;
+    acceptMachine(socket: WebSocket, attachment: object): void;
+    webSocketMessage(socket: WebSocket, data: string): Promise<void>;
+  };
+  const run = <T>(fn: (instance: Internals, socket: WebSocket) => T) =>
+    runInDurableObject(stub, async (instance, state) => {
+      const [socket] = state.getWebSockets("vps");
+      return await fn(instance as unknown as Internals, socket!);
+    });
+  const sent = sentToSockets();
+  const pushes = () => sent.messages("machine").filter((message) => message.hash !== undefined);
+  await runInDurableObject(stub, (instance, state) => {
+    state.storage.sql.exec("INSERT INTO machines (id, body) VALUES ('vps', ?)", JSON.stringify(keyedMachine));
+    (instance as unknown as Internals).load();
+  });
+  const daemon = await openDaemon(stub);
+  const report = (resources: ProviderReport["resources"]) =>
+    run((instance, socket) =>
+      instance.webSocketMessage(
+        socket,
+        JSON.stringify({ type: "providers", providers: [{ ...t3Report, resources }] }),
+      ),
+    );
+  const hashes = () => run((instance) => new Map(instance.hashesOf("vps")));
+  /** The daemon saves each push and answers `applied`. */
+  const answer = (applied: ReadonlyMap<string, string>) =>
+    run(async (instance, socket) => {
+      for (const [key, hash] of applied)
+        await instance.webSocketMessage(socket, JSON.stringify({ type: "applied", key, hash }));
+    });
+  try {
+    await report(t3Report.resources);
+    const all = pushes().length;
+    expect(all).toBeGreaterThan(2);
+    const first = await hashes();
+    await answer(first);
+    await evictDurableObject(stub);
+    sent.clear();
+    await run((instance) => instance.broadcast());
+    expect(pushes()).toEqual([]);
+    // K-706: a new connection of the daemon gets every push again.
+    await run((instance, socket) => instance.acceptMachine(socket, signedDaemon));
+    expect(pushes()).toHaveLength(all);
+
+    // A change and its Undo before the daemon answers the change, also with a wake between them: the late `applied`
+    // of the change brings the push of the state after the Undo again, or the daemon keeps the undone grants.
+    for (const wake of [false, true]) {
+      await report([
+        ...t3Report.resources,
+        { id: "app2", kind: "t3.app", name: "T3 two", status: "running" },
+      ]);
+      const changed = new Map([...(await hashes())].filter(([key, hash]) => first.get(key) !== hash));
+      expect(changed.size).toBeGreaterThan(0);
+      if (wake) await evictDurableObject(stub);
+      await report(t3Report.resources);
+      expect(await hashes()).toEqual(first);
+      sent.clear();
+      await answer(changed);
+      expect(pushes().map((message) => message.hash)).toEqual(
+        [...changed.keys()].map((key) => first.get(key)),
+      );
+      await answer(first);
+    }
+  } finally {
+    daemon.close();
+  }
 });

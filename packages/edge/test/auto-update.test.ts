@@ -252,12 +252,14 @@ it("tells an already-open map when a release wake starts an update (K-628)", asy
     map[0].addEventListener("message", (event) => {
       received.push(JSON.parse(String(event.data)));
     });
+    // A map that someone watches, so it gets each broadcast (K-1302).
     map[1].serializeAttachment({
       kind: "map",
       caller: {
         visitor: { email: "owner@example.com", clientId: null, ip: null },
         actor: { _tag: "person", email: "owner@example.com" },
       },
+      watchingUntil: Date.now() + 60_000,
     });
     state.storage.sql.exec(
       "INSERT OR REPLACE INTO meta (key, value) VALUES ('daemon_rollout_seen_version', ?)",

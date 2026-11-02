@@ -4,7 +4,7 @@ import type { CardKind, State, UndoSource } from "../core/model.ts";
 import type { DrawnWire } from "../core/organize.ts";
 import type { LogLine, TailAnswer } from "../core/logs.ts";
 import type { ServerMessage, Snapshot } from "../core/protocol.ts";
-import { WATCH_RENEW_MS, type WatchingMessage } from "../core/machine.ts";
+import { WATCH_ANSWER_MS, WATCH_RENEW_MS, type WatchingMessage } from "../core/machine.ts";
 import { type Held, isNewer, settle } from "./held.ts";
 
 export type Connection = "connecting" | "live" | "offline" | "refused";
@@ -79,23 +79,47 @@ export function connect() {
   // A new socket starts with the newest state, also when the server state was reset to a lower revision.
   let first = true;
   set({ connection: "connecting" });
-  // K-605: while the map is visible, the daemons send a sample each minute; a hidden tab lets that end.
-  let watchingAt = 0;
+  // K-605: while the map is visible, the daemons send a sample each minute and kitshn sends snapshots (K-1302).
+  // A hidden map says so once; null while kitshn holds it as hidden.
+  let watchingAt: number | null = null;
+  // K-605: kitshn answers each visible `watching`. A socket that went half-open in a sleep still looks open, so a
+  // missing answer ends it, and the map connects again instead of showing old state as live.
+  let answerTimer: ReturnType<typeof setTimeout> | null = null;
+  let ended = false;
   const watching = () => {
-    if (document.visibilityState !== "visible" || ws.readyState !== WebSocket.OPEN) return;
-    if (Date.now() - watchingAt < WATCH_RENEW_MS / 2) return;
+    if (ws.readyState !== WebSocket.OPEN) return;
+    if (document.visibilityState !== "visible") {
+      if (watchingAt === null) return;
+      watchingAt = null;
+      ws.send(JSON.stringify({ type: "watching", visible: false } satisfies WatchingMessage));
+      return;
+    }
+    if (watchingAt !== null && Date.now() - watchingAt < WATCH_RENEW_MS / 2) return;
     watchingAt = Date.now();
     ws.send(JSON.stringify({ type: "watching" } satisfies WatchingMessage));
+    // The snapshot of the accept shows that a new socket lives, and on a slow link it can take longer than the timer.
+    if (first) return;
+    answerTimer ??= setTimeout(() => {
+      ws.close();
+      lost(1006, "");
+    }, WATCH_ANSWER_MS);
   };
   const renew = setInterval(watching, WATCH_RENEW_MS);
+  // A window that stays visible through a sleep fires no `visibilitychange`, so these renew the watch too.
+  const wakeEvents = ["focus", "pageshow", "online"] as const;
   document.addEventListener("visibilitychange", watching);
+  for (const name of wakeEvents) window.addEventListener(name, watching);
   ws.onopen = () => {
-    retryDelay = 1000;
     set({ connection: "live", reason: null });
     watching();
   };
   ws.onmessage = (event) => {
+    if (answerTimer !== null) clearTimeout(answerTimer);
+    answerTimer = null;
+    // The backoff resets only once kitshn answered, so a socket that opens and then dies does not reconnect in a loop.
+    retryDelay = 1000;
     const message = JSON.parse(String(event.data)) as ServerMessage;
+    if (message.type === "watched") return;
     if (message.type === "snapshot") {
       if (!first && !isNewer(message.snapshot.revision, current.snapshot?.revision ?? null)) return;
       first = false;
@@ -125,9 +149,14 @@ export function connect() {
       waiting.delete(message.requestId);
     }
   };
-  ws.onclose = (event) => {
+  function lost(code: number, reason: string) {
+    if (ended) return;
+    ended = true;
+    ws.onmessage = null;
+    if (answerTimer !== null) clearTimeout(answerTimer);
     clearInterval(renew);
     document.removeEventListener("visibilitychange", watching);
+    for (const name of wakeEvents) window.removeEventListener(name, watching);
     for (const resolve of waiting.values()) {
       resolve({
         ok: false,
@@ -137,19 +166,20 @@ export function connect() {
       });
     }
     waiting.clear();
-    const lost = "The connection to kitshn closed. Turn Live on again when it is back.";
-    for (const resolve of tailStarts.values()) resolve({ kind: "error", error: lost });
+    const closed = "The connection to kitshn closed. Turn Live on again when it is back.";
+    for (const resolve of tailStarts.values()) resolve({ kind: "error", error: closed });
     tailStarts.clear();
-    for (const listener of tailListeners.values()) listener({ type: "end", reason: lost });
+    for (const listener of tailListeners.values()) listener({ type: "end", reason: closed });
     tailListeners.clear();
-    if (event.code === 4003 || event.code === 1008) {
-      set({ connection: "refused", reason: event.reason || "kitshn refused the connection." });
+    if (code === 4003 || code === 1008) {
+      set({ connection: "refused", reason: reason || "kitshn refused the connection." });
       return;
     }
     set({ connection: "offline" });
     setTimeout(connect, retryDelay);
     retryDelay = Math.min(retryDelay * 2, 30_000);
-  };
+  }
+  ws.onclose = (event) => lost(event.code, event.reason);
 }
 
 /** Reports why the map cannot open, from the HTTP API, when the WebSocket closes at once. */

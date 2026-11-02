@@ -110,6 +110,7 @@ import {
   type Sample,
   type ServerToDaemon,
   WATCH_LEASE_MS,
+  WATCH_RENEW_MS,
   type AskOutcome,
   type AskResult,
   type AppAccess,
@@ -577,6 +578,8 @@ type Attachment =
       readonly tails?: ReadonlyArray<MapTail>;
       /** K-605: until when this map counts as watched, from its last `watching` message. */
       readonly watchingUntil?: number;
+      /** K-1302: a broadcast skipped this map while nobody watched it, so its next `watching` brings a snapshot. */
+      readonly missed?: true;
     }
   | {
       readonly kind: "machine";
@@ -609,6 +612,15 @@ type MapTail =
 
 /** The attachment of a socket; null for one that never got one, which every reader skips. */
 const attachmentOf = (socket: WebSocket) => socket.deserializeAttachment() as Attachment | null;
+
+type MapAttachment = Extract<Attachment, { kind: "map" }>;
+
+/**
+ * K-605: a map that sent `watching` within WATCH_LEASE_MS and not `visible: false` since. The lease also ends a map
+ * socket that died without a close, such as a sleeping phone, with no timer that keeps the object awake.
+ */
+const watches = (socket: WebSocket, attachment: MapAttachment, now: number) =>
+  socket.readyState === WebSocket.OPEN && (attachment.watchingUntil ?? 0) > now;
 
 /** K-619, K-909: every write of a machine socket's attachment, trimmed to the attachment budget. */
 const saveMachine = (socket: WebSocket, attachment: Extract<Attachment, { kind: "machine" }>) =>
@@ -4377,34 +4389,36 @@ export class Kitshn extends DurableObject<Env> {
     });
   }
 
-  /** K-1302: a link event changes only History, so it sends a snapshot only to an open map. */
-  private mapsOpen(closing: WebSocket | null = null) {
-    return this.ctx
-      .getWebSockets("map")
-      .some((socket) => socket !== closing && socket.readyState === WebSocket.OPEN);
-  }
-
-  /** K-605: whether a map sent `watching` within WATCH_LEASE_MS; `closing` is a socket that is going. */
+  /** K-605: whether a map watches now (`watches`); `closing` is a socket that is going. */
   private mapsWatching(closing: WebSocket | null = null) {
     const now = Date.now();
     return this.ctx.getWebSockets("map").some((socket) => {
       const attachment = attachmentOf(socket);
-      return (
-        socket !== closing &&
-        socket.readyState === WebSocket.OPEN &&
-        attachment?.kind === "map" &&
-        (attachment.watchingUntil ?? 0) > now
-      );
+      return socket !== closing && attachment?.kind === "map" && watches(socket, attachment, now);
     });
   }
 
-  /** K-605: a visible map renews its watch, and each daemon samples each minute for WATCH_LEASE_MS. */
-  private mapWatching(socket: WebSocket, attachment: Extract<Attachment, { kind: "map" }>) {
-    socket.serializeAttachment({
-      ...attachment,
-      watchingUntil: Date.now() + WATCH_LEASE_MS,
-    } satisfies Attachment);
-    this.sendWatch(true);
+  /**
+   * K-605: a visible map renews its watch, and each daemon samples each minute for WATCH_LEASE_MS. The map gets the
+   * current state if it missed a broadcast (K-1302), else `watched`; with no answer, it connects again. A hidden map
+   * ends its watch.
+   */
+  private mapWatching(socket: WebSocket, attachment: MapAttachment, visible: boolean) {
+    const { missed, ...rest } = attachment;
+    if (!visible) {
+      socket.serializeAttachment({ ...attachment, watchingUntil: 0 } satisfies Attachment);
+      if (!this.mapsWatching()) this.sendWatch(false);
+      return;
+    }
+    const now = Date.now();
+    socket.serializeAttachment({ ...rest, watchingUntil: now + WATCH_LEASE_MS } satisfies Attachment);
+    send(
+      socket,
+      missed ? { type: "snapshot", snapshot: this.snapshot(attachment.caller) } : { type: "watched" },
+    );
+    // Each map request renews too, so the daemons hear only a new watch or a renewal as often as `watching` comes.
+    const renewedAt = (attachment.watchingUntil ?? 0) - WATCH_LEASE_MS;
+    if (!watches(socket, attachment, now) || now - renewedAt >= WATCH_RENEW_MS / 2) this.sendWatch(true);
   }
 
   /** K-605: tells daemon sockets whether a map is watched, so their samples come each minute or every 5 minutes. */
@@ -4437,6 +4451,7 @@ export class Kitshn extends DurableObject<Env> {
     this.revokeTokens(null, true);
     // K-1608: the pushes go out, and their hashes count the queue, before the maps read the counts.
     this.pushGrants();
+    const now = Date.now();
     for (const socket of this.ctx.getWebSockets("map")) {
       const attachment = attachmentOf(socket);
       if (attachment?.kind !== "map") continue;
@@ -4445,12 +4460,31 @@ export class Kitshn extends DurableObject<Env> {
         socket.close(4003, "You lost access to the kitshn admin.");
         continue;
       }
+      // K-1302: a snapshot reads History, so only a map that someone watches gets one; the others get it on `watching`.
+      if (!watches(socket, attachment, now)) {
+        if (!attachment.missed)
+          socket.serializeAttachment({ ...attachment, missed: true } satisfies Attachment);
+        continue;
+      }
       send(socket, { type: "snapshot", snapshot: this.snapshot(caller, repos) });
     }
   }
 
-  /** K-706: sends each provider of each signed connection its grant tables when they changed since the last send. */
-  private pushGrants(now = Date.now()) {
+  /** K-1302: a change that sends no broadcast because no map watches; each map gets the current state on `watching`. */
+  private markMapsMissed() {
+    for (const socket of this.ctx.getWebSockets("map")) {
+      const attachment = attachmentOf(socket);
+      if (attachment?.kind === "map" && !attachment.missed)
+        socket.serializeAttachment({ ...attachment, missed: true } satisfies Attachment);
+    }
+  }
+
+  /**
+   * K-706: sends each provider of each signed connection its grant tables when they changed since the last send.
+   * K-1608: what the daemon applied counts as sent, so a wake sends nothing again; only the new connection of
+   * `connected` gets every push.
+   */
+  private pushGrants(now = Date.now(), connected: string | null = null) {
     this.pushHashes.clear();
     for (const machineId of this.providerRegs.keys()) {
       const pushes = this.pushesOf(machineId, now);
@@ -4459,8 +4493,10 @@ export class Kitshn extends DurableObject<Env> {
       // K-724: a daemon of another protocol major gets no push; its update sends them all again.
       if (!socket || this.protocolRefusal(machineId) !== null) continue;
       for (const { key, hash, push } of pushes) {
-        if (this.sentGrants.get(`${machineId}/${key}`) === hash) continue;
-        this.sentGrants.set(`${machineId}/${key}`, hash);
+        const id = `${machineId}/${key}`;
+        if (this.sentGrants.get(id) === hash) continue;
+        this.sentGrants.set(id, hash);
+        if (machineId !== connected && this.applied.get(id) === hash) continue;
         const { key: _key, ...message } = push;
         send(socket, { ...message, hash } as ServerToDaemon);
       }
@@ -5447,9 +5483,12 @@ export class Kitshn extends DurableObject<Env> {
     let message: ClientMessage;
     try {
       const parsed: unknown = JSON.parse(typeof data === "string" ? data : new TextDecoder().decode(data));
+      if (isRecord(parsed) && parsed.type === "watching")
+        return this.mapWatching(socket, attachment, parsed.visible !== false);
+      // K-605: a map that sends a request is in use, so it watches, and the broadcast of its change reaches it.
+      this.mapWatching(socket, attachment, true);
       if (isRecord(parsed) && (parsed.type === "tail" || parsed.type === "tailStop"))
         return await this.tailMessage(socket, decodeTailMessage(parsed));
-      if (isRecord(parsed) && parsed.type === "watching") return this.mapWatching(socket, attachment);
       message = decodeClientMessage(parsed);
     } catch (error) {
       socket.close(4000, `kitshn cannot read the message: ${String(error).slice(0, 100)}`);
@@ -5828,7 +5867,7 @@ export class Kitshn extends DurableObject<Env> {
       // K-706: a new connection gets every grant table again, from the registrations that kitshn keeps.
       for (const key of this.sentGrants.keys())
         if (key.startsWith(`${machine.id}/`)) this.sentGrants.delete(key);
-      this.pushGrants();
+      this.pushGrants(Date.now(), machine.id);
       this.sendForgotten(machine.id);
     }
     this.sendWatch(this.mapsWatching(), [socket]);
@@ -6167,6 +6206,13 @@ export class Kitshn extends DurableObject<Env> {
         this.sendMachine(machine);
         // K-411: a taken address waits for this push, so its next step runs now, not at the next cycle.
         if (this.sitesOf(machine.id).some((site) => site.state === "handover")) await this.scheduleAlarm();
+      }
+      // K-1608: the daemon applied a push that is no longer current, for example one that an Undo replaced while it
+      // was on the way. `pushGrants` skips a hash that `applied` holds, so the current push goes again here.
+      const current = this.hashesOf(machine.id).get(message.key);
+      if (current !== undefined && current !== message.hash) {
+        this.sentGrants.delete(id);
+        this.pushGrants();
       }
     } else if (message.type === "icon") {
       await this.liveIcon(machine, message.site, message.icon);
@@ -14152,10 +14198,10 @@ export class Kitshn extends DurableObject<Env> {
       name,
       status >= 200 && status < 400 ? "succeeded" : status === 401 || status === 403 ? "refused" : "failed",
     );
-    if (this.mapsOpen() && now - this.linkBroadcastAt >= LINK_BROADCAST_MS) {
+    if (this.mapsWatching() && now - this.linkBroadcastAt >= LINK_BROADCAST_MS) {
       this.linkBroadcastAt = now;
       this.broadcast();
-    }
+    } else if (!this.mapsWatching()) this.markMapsMissed();
   }
 
   /**
@@ -14179,10 +14225,10 @@ export class Kitshn extends DurableObject<Env> {
       exit.exitCode,
     );
     // Known limit: the last events of a burst show with the next change of the map; revisit if History must be live.
-    if (this.mapsOpen() && Date.now() - this.linkBroadcastAt >= LINK_BROADCAST_MS) {
+    if (this.mapsWatching() && Date.now() - this.linkBroadcastAt >= LINK_BROADCAST_MS) {
       this.linkBroadcastAt = Date.now();
       this.broadcast();
-    }
+    } else if (!this.mapsWatching()) this.markMapsMissed();
   }
 
   /** K-1610: one link event, and the trim; the newest events in memory take it too (K-1302). */
