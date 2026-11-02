@@ -110,6 +110,7 @@ import {
   type Sample,
   type ServerToDaemon,
   WATCH_LEASE_MS,
+  WATCH_RENEW_MS,
   type AskOutcome,
   type AskResult,
   type AppAccess,
@@ -4409,12 +4410,15 @@ export class Kitshn extends DurableObject<Env> {
       if (!this.mapsWatching()) this.sendWatch(false);
       return;
     }
-    socket.serializeAttachment({ ...rest, watchingUntil: Date.now() + WATCH_LEASE_MS } satisfies Attachment);
+    const now = Date.now();
+    socket.serializeAttachment({ ...rest, watchingUntil: now + WATCH_LEASE_MS } satisfies Attachment);
     send(
       socket,
       missed ? { type: "snapshot", snapshot: this.snapshot(attachment.caller) } : { type: "watched" },
     );
-    this.sendWatch(true);
+    // Each map request renews too, so the daemons hear only a new watch or a renewal as often as `watching` comes.
+    const renewedAt = (attachment.watchingUntil ?? 0) - WATCH_LEASE_MS;
+    if (!watches(socket, attachment, now) || now - renewedAt >= WATCH_RENEW_MS / 2) this.sendWatch(true);
   }
 
   /** K-605: tells daemon sockets whether a map is watched, so their samples come each minute or every 5 minutes. */

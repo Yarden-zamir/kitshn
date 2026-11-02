@@ -97,6 +97,8 @@ export function connect() {
     if (watchingAt !== null && Date.now() - watchingAt < WATCH_RENEW_MS / 2) return;
     watchingAt = Date.now();
     ws.send(JSON.stringify({ type: "watching" } satisfies WatchingMessage));
+    // The snapshot of the accept shows that a new socket lives, and on a slow link it can take longer than the timer.
+    if (first) return;
     answerTimer ??= setTimeout(() => {
       ws.close();
       lost(1006, "");
@@ -108,13 +110,14 @@ export function connect() {
   document.addEventListener("visibilitychange", watching);
   for (const name of wakeEvents) window.addEventListener(name, watching);
   ws.onopen = () => {
-    retryDelay = 1000;
     set({ connection: "live", reason: null });
     watching();
   };
   ws.onmessage = (event) => {
     if (answerTimer !== null) clearTimeout(answerTimer);
     answerTimer = null;
+    // The backoff resets only once kitshn answered, so a socket that opens and then dies does not reconnect in a loop.
+    retryDelay = 1000;
     const message = JSON.parse(String(event.data)) as ServerMessage;
     if (message.type === "watched") return;
     if (message.type === "snapshot") {

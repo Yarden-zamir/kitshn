@@ -489,18 +489,21 @@ function countRows(sql: SqlStorage) {
 
 type Sent = { readonly type: string; readonly hash?: string; readonly snapshot?: Snapshot };
 
-/** What the object sends from now on to its sockets of one kind ("map" or "machine"); `clear` starts again. */
-function sentTo(kind: "map" | "machine") {
-  let sent: Array<Sent> = [];
+type SocketKind = "map" | "machine";
+
+/** What the object sends from now on to its map and machine sockets; `clear` starts again. */
+function sentToSockets() {
+  let sent: Array<{ readonly kind: SocketKind; readonly message: Sent }> = [];
   const send = WebSocket.prototype.send;
   // The kind is read at the send, inside the object; the test harness sends on sockets of its own too.
   vi.spyOn(WebSocket.prototype, "send").mockImplementation(function (this: WebSocket, data) {
     const attachment = this.deserializeAttachment() as { kind?: string } | null;
-    if (attachment?.kind === kind) sent.push(JSON.parse(String(data)) as Sent);
+    if (attachment?.kind === "map" || attachment?.kind === "machine")
+      sent.push({ kind: attachment.kind, message: JSON.parse(String(data)) as Sent });
     send.call(this, data);
   });
   return {
-    messages: () => sent,
+    messages: (kind: SocketKind) => sent.filter((item) => item.kind === kind).map((item) => item.message),
     clear: () => {
       sent = [];
     },
@@ -628,7 +631,7 @@ it("reads no History in the first broadcast after a wake while no map watches, a
     actor: { _tag: "person", email: "owner@example.com" },
   });
   const daemon = await openDaemon(stub);
-  const sent = sentTo("map");
+  const sent = sentToSockets();
   type Internals = {
     broadcast(): void;
     recordExec(row: object, exit: object): void;
@@ -644,7 +647,8 @@ it("reads no History in the first broadcast after a wake while no map watches, a
         JSON.stringify(visible === undefined ? { type: "watching" } : { type: "watching", visible }),
       ),
     );
-  const types = () => sent.messages().map((message) => message.type);
+  const types = () => sent.messages("map").map((message) => message.type);
+  const watchSent = () => sent.messages("machine").filter((message) => message.type === "watch").length;
   try {
     await evictDurableObject(stub);
     counter.take();
@@ -662,7 +666,7 @@ it("reads no History in the first broadcast after a wake while no map watches, a
 
     // The map becomes visible: it gets the current state at once, with the event that it missed.
     await watching();
-    const [fresh] = sent.messages();
+    const [fresh] = sent.messages("map");
     expect(types()).toEqual(["snapshot"]);
     expect(fresh?.snapshot?.linkEvents.some((event) => event.name === "after-wake")).toBe(true);
     // A watching map gets each broadcast, also the first one after a wake.
@@ -672,34 +676,44 @@ it("reads no History in the first broadcast after a wake while no map watches, a
     await run(broadcast);
     const watchedBroadcast = counter.take();
     expect(types()).toEqual(["snapshot"]);
-    // A renewal while it watches gets only the answer that shows that the socket lives.
+    // A renewal soon after the last one gets only the answer that shows that the socket lives, and no `watch` goes to
+    // the daemons.
     sent.clear();
     await watching();
     expect(types()).toEqual(["watched"]);
-    // Hidden again: no snapshot, and the next `watching` brings one.
+    expect(watchSent()).toBe(0);
+    // Hidden again: no snapshot, and the next `watching` brings one and a new `watch`.
     sent.clear();
     await watching(false);
     await run(broadcast);
     expect(types()).toEqual([]);
+    sent.clear();
     await watching();
     expect(types()).toEqual(["snapshot"]);
-    // A request of a map that missed a broadcast brings the current state before its answer.
-    sent.clear();
+    expect(watchSent()).toBe(1);
+    // A request of a map that missed a broadcast brings the current state before its answer. Requests renew the
+    // watch, but only the first one tells the daemons.
     await watching(false);
     await run(broadcast);
-    await run((instance, state) =>
-      instance.webSocketMessage(
-        state.getWebSockets("map")[0]!,
-        JSON.stringify({ type: "undo", requestId: "r", revision: 1_000_000 }),
-      ),
-    );
+    sent.clear();
+    const undo = () =>
+      run((instance, state) =>
+        instance.webSocketMessage(
+          state.getWebSockets("map")[0]!,
+          JSON.stringify({ type: "undo", requestId: "r", revision: 1_000_000 }),
+        ),
+      );
+    await undo();
     expect(types()).toEqual(["snapshot", "result"]);
+    await undo();
+    expect(types()).toEqual(["snapshot", "result", "watched", "result"]);
+    expect(watchSent()).toBe(1);
 
     // On main before this fix: about 480 rows each, because both sent the hidden map a snapshot that read History.
     // Now the first broadcast reads the `applied_state` rows of the provider machine, and no History.
     expect(hiddenBroadcast).toBeLessThan(100);
     expect(hiddenLinkEvent).toBeLessThan(100);
-    // Known limit: a watching map still reads History in the first snapshot after a wake, about 430 rows here.
+    // Known limit: a watching map still reads History in the first snapshot after a wake, about 480 rows here.
     expect(watchedBroadcast).toBeLessThan(600);
   } finally {
     counter.restore();
@@ -727,8 +741,8 @@ it("sends no push again after a wake when the daemon applied it, and every push 
       const [socket] = state.getWebSockets("vps");
       return await fn(instance as unknown as Internals, socket!);
     });
-  const sent = sentTo("machine");
-  const pushes = () => sent.messages().filter((message) => message.hash !== undefined);
+  const sent = sentToSockets();
+  const pushes = () => sent.messages("machine").filter((message) => message.hash !== undefined);
   await runInDurableObject(stub, (instance, state) => {
     state.storage.sql.exec("INSERT INTO machines (id, body) VALUES ('vps', ?)", JSON.stringify(keyedMachine));
     (instance as unknown as Internals).load();
