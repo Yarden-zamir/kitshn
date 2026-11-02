@@ -3,7 +3,7 @@ import type { Edit } from "../core/changes.ts";
 import type { CardKind, State, UndoSource } from "../core/model.ts";
 import type { DrawnWire } from "../core/organize.ts";
 import type { LogLine, TailAnswer } from "../core/logs.ts";
-import type { ServerMessage, Snapshot } from "../core/protocol.ts";
+import { type LinkEventView, RECENT_EVENTS, type ServerMessage, type Snapshot } from "../core/protocol.ts";
 import { WATCH_ANSWER_MS, WATCH_RENEW_MS, type WatchingMessage } from "../core/machine.ts";
 import { type Held, isNewer, settle } from "./held.ts";
 
@@ -15,6 +15,8 @@ interface StoreState {
   readonly reason: string | null;
   /** Edits shown before the server holds them (see held.ts). */
   readonly held: ReadonlyArray<Held>;
+  /** K-605: the map stopped its watch for lack of input, so kitshn sends it no snapshots until the next input. */
+  readonly idle: boolean;
 }
 
 type Result =
@@ -26,7 +28,7 @@ type Result =
     }
   | { readonly ok: false; readonly error: string; readonly lost?: true };
 
-let current: StoreState = { snapshot: null, connection: "connecting", reason: null, held: [] };
+let current: StoreState = { snapshot: null, connection: "connecting", reason: null, held: [], idle: false };
 const listeners = new Set<() => void>();
 const waiting = new Map<string, (result: Result) => void>();
 let socket: WebSocket | null = null;
@@ -38,6 +40,31 @@ export type TailEvent =
 const tailStarts = new Map<string, (answer: TailAnswer) => void>();
 const tailListeners = new Map<string, (event: TailEvent) => void>();
 let retryDelay = 1000;
+
+/**
+ * K-605: a map with no input for this long stops its watch, so a window that stays open on a screen costs no samples
+ * and no snapshots. Known limit: the 2-minute renewal checks it, so the watch ends 10 to 12 minutes after the last input.
+ */
+export const IDLE_MS = 10 * 60_000;
+const INPUT_EVENTS = ["pointerdown", "pointermove", "keydown", "touchstart", "wheel", "scroll"] as const;
+let lastInput = Date.now();
+
+/** K-605: a map keeps its watch while an action runs (K-538) or an ask waits for this person, also with no input. */
+const busy = (snapshot: Snapshot | null) =>
+  snapshot !== null &&
+  (snapshot.proposals.length > 0 ||
+    Object.values(snapshot.progress).some((progress) => progress.outcome.state === "running"));
+
+/** K-1610: the map applies new link events at most this often, so a burst does not render the whole app each time. */
+const LINK_EVENTS_MS = 1000;
+
+/** K-1610: History with new link events on top, oldest first in `events`; events that it already holds change nothing. */
+export function withLinkEvents(snapshot: Snapshot, events: ReadonlyArray<LinkEventView>): Snapshot {
+  const newest = snapshot.linkEvents[0]?.id ?? Number.NEGATIVE_INFINITY;
+  const added = events.filter((event) => event.id > newest).toReversed();
+  if (added.length === 0) return snapshot;
+  return { ...snapshot, linkEvents: [...added, ...snapshot.linkEvents].slice(0, RECENT_EVENTS) };
+}
 
 const set = (next: Partial<StoreState>) => {
   current = { ...current, ...next };
@@ -79,16 +106,20 @@ export function connect() {
   // A new socket starts with the newest state, also when the server state was reset to a lower revision.
   let first = true;
   set({ connection: "connecting" });
-  // K-605: while the map is visible, the daemons send a sample each minute and kitshn sends snapshots (K-1302).
-  // A hidden map says so once; null while kitshn holds it as hidden.
+  // K-605: while the map is visible and in use, the daemons send a sample each minute and kitshn sends snapshots
+  // (K-1302). A hidden or idle map says so once; null while kitshn holds it as hidden.
   let watchingAt: number | null = null;
   // K-605: kitshn answers each visible `watching`. A socket that went half-open in a sleep still looks open, so a
   // missing answer ends it, and the map connects again instead of showing old state as live.
   let answerTimer: ReturnType<typeof setTimeout> | null = null;
   let ended = false;
+  let linkEvents: Array<LinkEventView> = [];
+  let linkTimer: ReturnType<typeof setTimeout> | null = null;
   const watching = () => {
     if (ws.readyState !== WebSocket.OPEN) return;
-    if (document.visibilityState !== "visible") {
+    const idle = Date.now() - lastInput >= IDLE_MS && !busy(current.snapshot);
+    if (current.idle !== idle) set({ idle });
+    if (document.visibilityState !== "visible" || idle) {
       if (watchingAt === null) return;
       watchingAt = null;
       ws.send(JSON.stringify({ type: "watching", visible: false } satisfies WatchingMessage));
@@ -105,10 +136,23 @@ export function connect() {
     }, WATCH_ANSWER_MS);
   };
   const renew = setInterval(watching, WATCH_RENEW_MS);
-  // A window that stays visible through a sleep fires no `visibilitychange`, so these renew the watch too.
+  // A switch to the tab or the window counts as input, and so does a wake: a window that stays visible through a sleep
+  // fires no `visibilitychange`, and the answer to its `watching` shows whether the socket still lives.
   const wakeEvents = ["focus", "pageshow", "online"] as const;
-  document.addEventListener("visibilitychange", watching);
-  for (const name of wakeEvents) window.addEventListener(name, watching);
+  const back = () => {
+    lastInput = Date.now();
+    watching();
+  };
+  // The first input after an idle stop watches again at once.
+  const input = () => {
+    const idle = current.idle;
+    lastInput = Date.now();
+    if (idle) watching();
+  };
+  const listening = { capture: true, passive: true } as const;
+  document.addEventListener("visibilitychange", back);
+  for (const name of wakeEvents) window.addEventListener(name, back);
+  for (const name of INPUT_EVENTS) window.addEventListener(name, input, listening);
   ws.onopen = () => {
     set({ connection: "live", reason: null });
     watching();
@@ -124,6 +168,13 @@ export function connect() {
       if (!first && !isNewer(message.snapshot.revision, current.snapshot?.revision ?? null)) return;
       first = false;
       set({ snapshot: message.snapshot, held: settle(current.held, message.snapshot.revision) });
+    } else if (message.type === "linkEvent") {
+      linkEvents.push(message.event);
+      linkTimer ??= setTimeout(() => {
+        linkTimer = null;
+        if (current.snapshot) set({ snapshot: withLinkEvents(current.snapshot, linkEvents) });
+        linkEvents = [];
+      }, LINK_EVENTS_MS);
     } else if (message.type === "machine") {
       const snapshot = current.snapshot;
       if (snapshot) {
@@ -154,9 +205,11 @@ export function connect() {
     ended = true;
     ws.onmessage = null;
     if (answerTimer !== null) clearTimeout(answerTimer);
+    if (linkTimer !== null) clearTimeout(linkTimer);
     clearInterval(renew);
-    document.removeEventListener("visibilitychange", watching);
-    for (const name of wakeEvents) window.removeEventListener(name, watching);
+    document.removeEventListener("visibilitychange", back);
+    for (const name of wakeEvents) window.removeEventListener(name, back);
+    for (const name of INPUT_EVENTS) window.removeEventListener(name, input, listening);
     for (const resolve of waiting.values()) {
       resolve({
         ok: false,

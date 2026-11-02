@@ -252,6 +252,8 @@ const CONNECTION_TIPS: Record<Connection, string> = {
   offline: "Offline: kitshn is not reachable. The map tries again.",
   refused: "Refused: kitshn did not take the connection. The panel says why.",
 };
+const PAUSED_TIP =
+  "Paused: no input for 10 minutes, so kitshn sends this map no changes. The map refreshes on the next input (K-605).";
 
 const TABS = {
   map: "Map: circles say who, and a card inside a circle is shared with it. The panel shows what you select; after Close, this opens it again.",
@@ -313,6 +315,7 @@ const routeFromHash = (): {
 
 export function App() {
   const store = useStore();
+  const paused = store.connection === "live" && store.idle;
   const [selection, setSelection] = useState<Selection>({ cards: new Set(), circle: null });
   const [hidden, setHidden] = useState<ReadonlySet<CardKind>>(new Set());
   const [savedView] = useState(loadView);
@@ -2325,13 +2328,13 @@ export function App() {
           {wide ? "⌘K" : "Find"}
         </button>
         {/* A phone shows the connection only when it is not live, so the toolbar fits one row. */}
-        {wide || store.connection !== "live" ? (
+        {wide || store.connection !== "live" || paused ? (
           <span
-            class={`sticker ${store.connection === "live" ? "ok" : "wait"}`}
+            class={`sticker ${store.connection === "live" && !paused ? "ok" : "wait"}`}
             style={{ "--tilt": "3deg" }}
-            data-tip={CONNECTION_TIPS[store.connection]}
+            data-tip={paused ? PAUSED_TIP : CONNECTION_TIPS[store.connection]}
           >
-            {store.connection}
+            {paused ? "paused" : store.connection}
           </span>
         ) : null}
       </header>

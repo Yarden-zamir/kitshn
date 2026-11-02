@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers";
 import { afterEach, expect, it, vi } from "vitest";
 import type { Circle } from "../src/core/model.ts";
 import type { ProviderReport } from "@kitshn/local";
-import type { RevisionView, Snapshot } from "../src/core/protocol.ts";
+import type { LinkEventView, RevisionView, Snapshot } from "../src/core/protocol.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -487,7 +487,12 @@ function countRows(sql: SqlStorage) {
   };
 }
 
-type Sent = { readonly type: string; readonly hash?: string; readonly snapshot?: Snapshot };
+type Sent = {
+  readonly type: string;
+  readonly hash?: string;
+  readonly snapshot?: Snapshot;
+  readonly event?: LinkEventView;
+};
 
 type SocketKind = "map" | "machine";
 
@@ -579,7 +584,8 @@ async function openDaemon(stub: DurableObjectStub) {
 /**
  * K-1302, K-605, K-004: on 2026-11-02, the first broadcast after a wake read History again for a snapshot, about 470
  * rows, and each link call broadcast while any map socket was open, mostly a sleeping phone. Now only a watching map
- * gets snapshots and link broadcasts, and a map that missed one gets the current state as soon as it watches again.
+ * gets snapshots, a link event sends it only the new event, and a map that missed one gets the current state as soon
+ * as it watches again.
  */
 it("reads no History in the first broadcast after a wake while no map watches, and a map that watches gets it at once", async () => {
   const stub = env.KITSHN.getByName("map-rows");
@@ -682,6 +688,30 @@ it("reads no History in the first broadcast after a wake while no map watches, a
     await run(broadcast);
     const watchedBroadcast = counter.take();
     expect(types()).toEqual(["snapshot"]);
+    // K-1610: a link event after a wake, such as each claude-proxy probe, reaches the watching map as the one new
+    // event, with no broadcast; a link call (`recordLinkCall`) sends it the same way.
+    const linkEvent = async (command: string) => {
+      sent.clear();
+      counter.take();
+      await run((instance) =>
+        instance.recordExec(
+          { source: "mac", target: "vps", thread: null, command, cwd: null },
+          { exitCode: 0, reason: null },
+        ),
+      );
+      return counter.take();
+    };
+    await evictDurableObject(stub);
+    const watchedLinkEvent = await linkEvent("watched");
+    expect(sent.messages("map")).toEqual([
+      {
+        type: "linkEvent",
+        event: expect.objectContaining({ source: "mac", target: "vps", kind: "exec", name: "watched" }),
+      },
+    ]);
+    // A burst is not held back: each event goes out at once.
+    const warmLinkEvent = await linkEvent("warm");
+    expect(types()).toEqual(["linkEvent"]);
     // A renewal soon after the last one gets only the answer that shows that the socket lives, and no `watch` goes to
     // the daemons.
     sent.clear();
@@ -721,6 +751,9 @@ it("reads no History in the first broadcast after a wake while no map watches, a
     expect(hiddenLinkEvent).toBeLessThan(100);
     // Known limit: a watching map still reads History in the first snapshot after a wake, about 480 rows here.
     expect(watchedBroadcast).toBeLessThan(600);
+    // On main before this fix: about 480 rows, because the link event broadcast a snapshot to the watching map.
+    expect(watchedLinkEvent).toBeLessThan(100);
+    expect(warmLinkEvent).toBeLessThan(10);
   } finally {
     counter.restore();
     map.close();

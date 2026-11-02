@@ -218,6 +218,7 @@ import type {
   ServerMessage,
   Snapshot,
 } from "../core/protocol.ts";
+import { RECENT_EVENTS } from "../core/protocol.ts";
 import {
   type AllowingAgent,
   type RepoGate,
@@ -633,14 +634,10 @@ const AGENTS_MIGRATED = "agents-migrated";
 /** K-1778: the last revision before the actor model; an Undo never reaches it, because it holds members of before. */
 const ACTORS_UNDO_FLOOR = "actors-undo-floor";
 const decodeExecRun = Schema.decodeUnknownSync(ExecRunSchema);
-/** K-1610: how often the maps hear of new link events. */
-const LINK_BROADCAST_MS = 10_000;
 /** K-1610: the forwarded calls of one machine that kitshn records in a minute; the rest are counted and dropped. */
 const LINK_CALLS_PER_MINUTE = 120;
 /** K-1610: the link events that stay; each insert trims by id, so a trim reads only the rows it deletes (K-1302). */
 const LINK_EVENTS_KEPT = 2000;
-/** K-1302: the newest events of each table that a snapshot shows, kept in memory. */
-const RECENT_EVENTS = 50;
 
 /** K-722: one run that kitshn relays; a row of `exec_runs`, so an evicted Durable Object finds it again. */
 type ExecRow = {
@@ -1034,8 +1031,6 @@ export class Kitshn extends DurableObject<Env> {
   }
   /** K-1104: live sites of the machines. */
   private liveSites = new Map<string, LiveSite>();
-  /** K-1610: when an audit last told the maps of new link events. */
-  private linkBroadcastAt = 0;
   /** K-1610: the recorded link calls of each machine in the current minute. */
   private linkRates = new Map<string, { minute: number; count: number; dropped: number }>();
   /** K-704: the kinds and commands of each machine's providers, by machine id. */
@@ -4467,15 +4462,6 @@ export class Kitshn extends DurableObject<Env> {
         continue;
       }
       send(socket, { type: "snapshot", snapshot: this.snapshot(caller, repos) });
-    }
-  }
-
-  /** K-1302: a change that sends no broadcast because no map watches; each map gets the current state on `watching`. */
-  private markMapsMissed() {
-    for (const socket of this.ctx.getWebSockets("map")) {
-      const attachment = attachmentOf(socket);
-      if (attachment?.kind === "map" && !attachment.missed)
-        socket.serializeAttachment({ ...attachment, missed: true } satisfies Attachment);
     }
   }
 
@@ -14198,10 +14184,6 @@ export class Kitshn extends DurableObject<Env> {
       name,
       status >= 200 && status < 400 ? "succeeded" : status === 401 || status === 403 ? "refused" : "failed",
     );
-    if (this.mapsWatching() && now - this.linkBroadcastAt >= LINK_BROADCAST_MS) {
-      this.linkBroadcastAt = now;
-      this.broadcast();
-    } else if (!this.mapsWatching()) this.markMapsMissed();
   }
 
   /**
@@ -14224,25 +14206,36 @@ export class Kitshn extends DurableObject<Env> {
       execOutcome(exit),
       exit.exitCode,
     );
-    // Known limit: the last events of a burst show with the next change of the map; revisit if History must be live.
-    if (this.mapsWatching() && Date.now() - this.linkBroadcastAt >= LINK_BROADCAST_MS) {
-      this.linkBroadcastAt = Date.now();
-      this.broadcast();
-    } else if (!this.mapsWatching()) this.markMapsMissed();
   }
 
-  /** K-1610: one link event, and the trim; the newest events in memory take it too (K-1302). */
+  /**
+   * K-1610: one link event, and the trim; the newest events in memory take it too (K-1302). A link event changes only
+   * History, so a watching map gets the one event and no snapshot; the others get the current state on `watching`.
+   */
   private addLinkEvent(insert: string, ...bindings: Array<SqlStorageValue>) {
     const recent = this.recentLinkRows;
     const [event] = this.sql<LinkEventRow>(`${insert} RETURNING *`, ...bindings);
     if (!event) throw new Error("The link event insert returned no row.");
     this.sql("DELETE FROM link_events WHERE id <= ?", event.id - LINK_EVENTS_KEPT);
     this.recentLinkRows = recent && [event, ...recent].slice(0, RECENT_EVENTS);
+    const message: ServerMessage = { type: "linkEvent", event: this.linkEventView(event) };
+    const now = Date.now();
+    for (const socket of this.ctx.getWebSockets("map")) {
+      const attachment = attachmentOf(socket);
+      if (attachment?.kind !== "map" || !this.authorized(attachment.caller)) continue;
+      if (watches(socket, attachment, now)) send(socket, message);
+      else if (!attachment.missed)
+        socket.serializeAttachment({ ...attachment, missed: true } satisfies Attachment);
+    }
+  }
+
+  private linkEventView({ exit_code, ...row }: LinkEventRow): LinkEventView {
+    const name = (id: string) => this.state.machines.get(id)?.name ?? id;
+    return { ...row, source: name(row.source), target: name(row.target), exitCode: exit_code };
   }
 
   /** K-1610: the newest 50 link events, of one machine or of all, with machine names. */
   private recentLinkEvents(machineId: string | null = null): Array<LinkEventView> {
-    const name = (id: string) => this.state.machines.get(id)?.name ?? id;
     const rows =
       machineId === null
         ? (this.recentLinkRows ??= this.sql<LinkEventRow>(
@@ -14254,12 +14247,7 @@ export class Kitshn extends DurableObject<Env> {
             machineId,
             machineId,
           );
-    return rows.map(({ exit_code, ...row }) => ({
-      ...row,
-      source: name(row.source),
-      target: name(row.target),
-      exitCode: exit_code,
-    }));
+    return rows.map((row) => this.linkEventView(row));
   }
 
   /** K-1717: the newest 50 ask events, for History; a snapshot reads at most 50 rows for them. */
