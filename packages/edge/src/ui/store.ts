@@ -3,7 +3,7 @@ import type { Edit } from "../core/changes.ts";
 import type { CardKind, State, UndoSource } from "../core/model.ts";
 import type { DrawnWire } from "../core/organize.ts";
 import type { LogLine, TailAnswer } from "../core/logs.ts";
-import type { ServerMessage, Snapshot } from "../core/protocol.ts";
+import { type LinkEventView, RECENT_EVENTS, type ServerMessage, type Snapshot } from "../core/protocol.ts";
 import { WATCH_ANSWER_MS, WATCH_RENEW_MS, type WatchingMessage } from "../core/machine.ts";
 import { type Held, isNewer, settle } from "./held.ts";
 
@@ -38,6 +38,21 @@ export type TailEvent =
 const tailStarts = new Map<string, (answer: TailAnswer) => void>();
 const tailListeners = new Map<string, (event: TailEvent) => void>();
 let retryDelay = 1000;
+
+/**
+ * K-605: a map with no input for this long stops its watch, so a window that stays open on a screen costs no samples
+ * and no snapshots. Known limit: the 2-minute renewal checks it, so the watch ends 10 to 12 minutes after the last input.
+ */
+export const IDLE_MS = 10 * 60_000;
+const INPUT_EVENTS = ["pointerdown", "pointermove", "keydown", "touchstart", "wheel", "scroll"] as const;
+let lastInput = Date.now();
+
+/** K-1610: History with one new link event on top; an event that the snapshot already holds changes nothing. */
+export function withLinkEvent(snapshot: Snapshot, event: LinkEventView): Snapshot {
+  const newest = snapshot.linkEvents[0];
+  if (newest && event.id <= newest.id) return snapshot;
+  return { ...snapshot, linkEvents: [event, ...snapshot.linkEvents].slice(0, RECENT_EVENTS) };
+}
 
 const set = (next: Partial<StoreState>) => {
   current = { ...current, ...next };
@@ -79,8 +94,8 @@ export function connect() {
   // A new socket starts with the newest state, also when the server state was reset to a lower revision.
   let first = true;
   set({ connection: "connecting" });
-  // K-605: while the map is visible, the daemons send a sample each minute and kitshn sends snapshots (K-1302).
-  // A hidden map says so once; null while kitshn holds it as hidden.
+  // K-605: while the map is visible and in use, the daemons send a sample each minute and kitshn sends snapshots
+  // (K-1302). A hidden or idle map says so once; null while kitshn holds it as hidden.
   let watchingAt: number | null = null;
   // K-605: kitshn answers each visible `watching`. A socket that went half-open in a sleep still looks open, so a
   // missing answer ends it, and the map connects again instead of showing old state as live.
@@ -88,7 +103,7 @@ export function connect() {
   let ended = false;
   const watching = () => {
     if (ws.readyState !== WebSocket.OPEN) return;
-    if (document.visibilityState !== "visible") {
+    if (document.visibilityState !== "visible" || Date.now() - lastInput >= IDLE_MS) {
       if (watchingAt === null) return;
       watchingAt = null;
       ws.send(JSON.stringify({ type: "watching", visible: false } satisfies WatchingMessage));
@@ -106,9 +121,22 @@ export function connect() {
   };
   const renew = setInterval(watching, WATCH_RENEW_MS);
   // A window that stays visible through a sleep fires no `visibilitychange`, so these renew the watch too.
-  const wakeEvents = ["focus", "pageshow", "online"] as const;
-  document.addEventListener("visibilitychange", watching);
+  const wakeEvents = ["pageshow", "online"] as const;
+  // The first input after an idle stop watches again at once; a switch to the tab or the window counts as input.
+  const input = () => {
+    const idle = Date.now() - lastInput >= IDLE_MS;
+    lastInput = Date.now();
+    if (idle) watching();
+  };
+  const back = () => {
+    lastInput = Date.now();
+    watching();
+  };
+  const listening = { capture: true, passive: true } as const;
+  document.addEventListener("visibilitychange", back);
+  window.addEventListener("focus", back);
   for (const name of wakeEvents) window.addEventListener(name, watching);
+  for (const name of INPUT_EVENTS) window.addEventListener(name, input, listening);
   ws.onopen = () => {
     set({ connection: "live", reason: null });
     watching();
@@ -124,6 +152,8 @@ export function connect() {
       if (!first && !isNewer(message.snapshot.revision, current.snapshot?.revision ?? null)) return;
       first = false;
       set({ snapshot: message.snapshot, held: settle(current.held, message.snapshot.revision) });
+    } else if (message.type === "linkEvent") {
+      if (current.snapshot) set({ snapshot: withLinkEvent(current.snapshot, message.event) });
     } else if (message.type === "machine") {
       const snapshot = current.snapshot;
       if (snapshot) {
@@ -155,8 +185,10 @@ export function connect() {
     ws.onmessage = null;
     if (answerTimer !== null) clearTimeout(answerTimer);
     clearInterval(renew);
-    document.removeEventListener("visibilitychange", watching);
+    document.removeEventListener("visibilitychange", back);
+    window.removeEventListener("focus", back);
     for (const name of wakeEvents) window.removeEventListener(name, watching);
+    for (const name of INPUT_EVENTS) window.removeEventListener(name, input, listening);
     for (const resolve of waiting.values()) {
       resolve({
         ok: false,

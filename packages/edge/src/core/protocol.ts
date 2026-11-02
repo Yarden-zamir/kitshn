@@ -41,6 +41,9 @@ export interface AskEventView {
   readonly verified: ReadonlyArray<string>;
 }
 
+/** K-1302: the newest ask and link events that a snapshot holds, and that a map keeps. */
+export const RECENT_EVENTS = 50;
+
 /** K-1610: one call of a source machine on a target machine, as History shows it: an event, with no Undo. */
 export interface LinkEventView {
   readonly id: number;
@@ -212,6 +215,8 @@ export type ServerMessage =
   | { readonly type: "snapshot"; readonly snapshot: Snapshot }
   /** One machine changed (status or sample); cheaper than a whole snapshot. */
   | { readonly type: "machine"; readonly view: MachineView }
+  /** K-1610: a new link event for History, to a watching map, instead of a snapshot (K-1302). */
+  | { readonly type: "linkEvent"; readonly event: LinkEventView }
   | {
       readonly type: "result";
       readonly requestId: string;
