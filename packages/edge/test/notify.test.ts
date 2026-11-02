@@ -113,3 +113,47 @@ it("opens a limits notification at 80% and a machine notification after 15 minut
     { source: "machine", state: "closed" },
   ]);
 });
+
+it("counts the 15 minutes offline from the last ping of a socket that kitshn finds dead late (K-1910, K-1107)", async () => {
+  const since = Date.now() - 16 * 60_000;
+  const states = await runInDurableObject(env.KITSHN.getByName("dead-socket"), (instance, durable) => {
+    const kitshn = instance as unknown as Kitshn & { checkLiveness(now: number): void };
+    kitshn.sql(
+      "INSERT INTO machines (id, body) VALUES ('box', ?)",
+      JSON.stringify({
+        id: "box",
+        name: "Box",
+        labels: [],
+        order: 0,
+        clientId: "c",
+        tokenId: "t",
+        tunnelId: "u",
+      }),
+    );
+    kitshn.load();
+    // A daemon that stopped answering 16 minutes ago, on a socket that never closed.
+    const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
+    durable.acceptWebSocket(server, ["box", "machines"]);
+    client.accept();
+    server.serializeAttachment({
+      kind: "machine",
+      machineId: "box",
+      since,
+      challenge: "",
+      check: "signed",
+      answered: true,
+      rotateBy: null,
+      status: null,
+      sample: null,
+    });
+    kitshn.presence.set("box", { online: true, lastSeen: since, os: null });
+    kitshn.checkLiveness(Date.now());
+    kitshn.broadcast();
+    return {
+      presence: kitshn.presence.get("box"),
+      machine: kitshn.sql("SELECT state FROM notifications WHERE source = 'machine'"),
+    };
+  });
+  expect(states.presence).toMatchObject({ online: false, lastSeen: since });
+  expect(states.machine).toEqual([{ state: "open" }]);
+});

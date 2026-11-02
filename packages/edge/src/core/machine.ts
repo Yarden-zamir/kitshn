@@ -401,6 +401,18 @@ export type DaemonMessage =
   | { readonly type: "health"; readonly report: HealthReport };
 
 /** Messages from kitshn to a daemon. */
+/**
+ * K-605: while a map is visible, it sends `watching` this often; kitshn passes it on as `watch`. A daemon samples each
+ * minute until WATCH_LEASE_MS after the last one, so a map tab left open in the background ends the fast samples.
+ */
+export const WATCH_RENEW_MS = 2 * 60_000;
+export const WATCH_LEASE_MS = 5 * 60_000;
+
+/** K-605: what a visible map sends over its WebSocket, every WATCH_RENEW_MS. */
+export interface WatchingMessage {
+  readonly type: "watching";
+}
+
 export type ServerToDaemon =
   /**
    * K-1704: the first message of each connection. `fingerprint` names the key that kitshn expects, so a daemon
@@ -419,6 +431,11 @@ export type ServerToDaemon =
   | { readonly type: "rotateKey" }
   /** K-631: "Check now" in the Machines view; the daemon checks at once and sends `health`. */
   | { readonly type: "checkHealth" }
+  /**
+   * K-605: a map that someone looks at. `on` lasts WATCH_LEASE_MS unless kitshn sends it again, and the first `on`
+   * asks for a sample now. `off` comes when the last watching map closes, and on each connection without one.
+   */
+  | { readonly type: "watch"; readonly on: boolean }
   /** K-704: the name of the machine on the map, on each signed connection and after a rename. */
   | { readonly type: "name"; readonly name: string }
   /** K-704: the owner forgot this provider on the map; the daemon drops it unless a connection holds it. */

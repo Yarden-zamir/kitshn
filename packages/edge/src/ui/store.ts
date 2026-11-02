@@ -4,6 +4,7 @@ import type { CardKind, State, UndoSource } from "../core/model.ts";
 import type { DrawnWire } from "../core/organize.ts";
 import type { LogLine, TailAnswer } from "../core/logs.ts";
 import type { ServerMessage, Snapshot } from "../core/protocol.ts";
+import { WATCH_RENEW_MS, type WatchingMessage } from "../core/machine.ts";
 import { type Held, isNewer, settle } from "./held.ts";
 
 export type Connection = "connecting" | "live" | "offline" | "refused";
@@ -78,9 +79,20 @@ export function connect() {
   // A new socket starts with the newest state, also when the server state was reset to a lower revision.
   let first = true;
   set({ connection: "connecting" });
+  // K-605: while the map is visible, the daemons send a sample each minute; a hidden tab lets that end.
+  let watchingAt = 0;
+  const watching = () => {
+    if (document.visibilityState !== "visible" || ws.readyState !== WebSocket.OPEN) return;
+    if (Date.now() - watchingAt < WATCH_RENEW_MS / 2) return;
+    watchingAt = Date.now();
+    ws.send(JSON.stringify({ type: "watching" } satisfies WatchingMessage));
+  };
+  const renew = setInterval(watching, WATCH_RENEW_MS);
+  document.addEventListener("visibilitychange", watching);
   ws.onopen = () => {
     retryDelay = 1000;
     set({ connection: "live", reason: null });
+    watching();
   };
   ws.onmessage = (event) => {
     const message = JSON.parse(String(event.data)) as ServerMessage;
@@ -114,6 +126,8 @@ export function connect() {
     }
   };
   ws.onclose = (event) => {
+    clearInterval(renew);
+    document.removeEventListener("visibilitychange", watching);
     for (const resolve of waiting.values()) {
       resolve({
         ok: false,

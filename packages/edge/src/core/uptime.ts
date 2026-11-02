@@ -29,8 +29,11 @@ export const DOWN_AFTER_MS = 5 * 60_000;
 export const UPTIME_FETCHES_PER_RUN = 8;
 /** K-1126: the length of one turn; an alarm in the same turn fetches nothing. */
 export const UPTIME_RUN_MS = 2 * 60_000;
-/** K-1126: while no daemon keeps the 2-minute alarm going, uptime wakes the Durable Object at most this often. */
-export const UPTIME_IDLE_MS = 10 * 60_000;
+/**
+ * K-1126: uptime runs at least this often, and each UPTIME_RUN_MS while a card fails but is not down yet. A run fetches
+ * one group of at most 8 addresses, so a card waits groups × 5 minutes (40 one-address cards: 5 groups, 25 minutes).
+ */
+export const UPTIME_TURN_MS = 5 * 60_000;
 /** K-1126: changes stay this long. */
 export const UPTIME_KEEP_MS = 30 * 24 * 60 * 60_000;
 
@@ -53,14 +56,13 @@ export function nextUptime(before: Uptime, probe: boolean, now: number): Uptime 
 }
 
 /**
- * K-1126: the cards whose addresses this run fetches. The cards go into groups of at most `perRun` addresses, in
- * order, and run `slot` takes the next group, so each card gets a turn with no stored state and all its addresses
- * in the same run (K-817 allows at most 5, which fit in one group). Known limit: a run that comes late can skip a
- * group for one cycle. Revisit when checks must be exact.
+ * K-1126: the cards whose addresses run number `run` fetches. The cards go into groups of at most `perRun` addresses,
+ * in order, and each run takes the next group, so each card gets a turn with all its addresses in the same run (K-817
+ * allows at most 5, which fit in one group).
  */
 export function cardsOfRun<T extends { readonly addresses: ReadonlyArray<string> }>(
   cards: ReadonlyArray<T>,
-  slot: number,
+  run: number,
   perRun: number,
 ): Array<T> {
   const groups: Array<Array<T>> = [];
@@ -77,5 +79,30 @@ export function cardsOfRun<T extends { readonly addresses: ReadonlyArray<string>
     groups.at(-1)?.push(card);
     size += card.addresses.length;
   }
-  return groups.length === 0 ? [] : (groups[slot % groups.length] ?? []);
+  return groups.length === 0 ? [] : (groups[run % groups.length] ?? []);
+}
+
+/**
+ * K-1126: what one run fetches: the failing cards first, so K-1125 decides about 5 minutes after a first failure for
+ * any number of groups, then the cards of the run's group that still fit in `perRun` addresses. `whole` is false
+ * when a card of the group did not fit; the run counter then stays, so that group comes again. Known limit: failing
+ * cards beyond `perRun` addresses wait for their own group. Revisit if many cards fail at once often.
+ */
+export function cardsToFetch<T extends { readonly id: string; readonly addresses: ReadonlyArray<string> }>(
+  failing: ReadonlyArray<T>,
+  group: ReadonlyArray<T>,
+  perRun: number,
+): { readonly cards: Array<T>; readonly whole: boolean } {
+  const cards: Array<T> = [];
+  let size = 0;
+  const take = (card: T) => {
+    if (cards.some((each) => each.id === card.id)) return true;
+    if (size + card.addresses.length > perRun) return false;
+    cards.push(card);
+    size += card.addresses.length;
+    return true;
+  };
+  for (const card of failing) take(card);
+  const whole = group.map(take).every(Boolean);
+  return { cards, whole };
 }

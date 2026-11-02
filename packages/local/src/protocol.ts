@@ -5,7 +5,7 @@
  * field). Minor: an additive change (a new optional field, request, event or capability). Patch: no wire change.
  * `protocol.test.ts` compares the wire schema with `protocol.lock.json`, so a change without the right bump fails.
  */
-export const KITSHN_PROTOCOL = "2.1.0";
+export const KITSHN_PROTOCOL = "2.2.0";
 
 export interface ProtocolVersion {
   readonly major: number;

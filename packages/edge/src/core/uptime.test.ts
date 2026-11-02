@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DOWN_AFTER_MS, UP, cardsOfRun, nextUptime, probeUp, stored } from "./uptime.ts";
+import { DOWN_AFTER_MS, UP, cardsOfRun, cardsToFetch, nextUptime, probeUp, stored } from "./uptime.ts";
 
 describe("uptime (K-1125, K-1126)", () => {
   it("counts a server error or no answer as a failure, and an Access login as up", () => {
@@ -41,5 +41,20 @@ describe("uptime (K-1125, K-1126)", () => {
       expect(
         run.reduce((total, id) => total + (cards.find((each) => each.id === id)?.addresses.length ?? 0), 0),
       ).toBeLessThanOrEqual(8);
+  });
+
+  it("fetches the failing cards first, then what fits of the group, and keeps the group when part of it did not fit", () => {
+    const card = (id: string, count: number) => ({
+      id,
+      addresses: Array.from({ length: count }, (_, i) => `${id}${i}`),
+    });
+    const [a, b, c, f] = [card("a", 3), card("b", 2), card("c", 3), card("f", 4)];
+    const ids = (result: { cards: ReadonlyArray<{ id: string }>; whole: boolean }) => ({
+      ids: result.cards.map((each) => each.id),
+      whole: result.whole,
+    });
+    expect(ids(cardsToFetch([], [a, b, c], 8))).toEqual({ ids: ["a", "b", "c"], whole: true });
+    expect(ids(cardsToFetch([f], [a, b, c], 8))).toEqual({ ids: ["f", "a"], whole: false });
+    expect(ids(cardsToFetch([a], [a, b], 8))).toEqual({ ids: ["a", "b"], whole: true });
   });
 });
