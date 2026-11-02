@@ -79,11 +79,18 @@ export function connect() {
   // A new socket starts with the newest state, also when the server state was reset to a lower revision.
   let first = true;
   set({ connection: "connecting" });
-  // K-605: while the map is visible, the daemons send a sample each minute; a hidden tab lets that end.
-  let watchingAt = 0;
+  // K-605: while the map is visible, the daemons send a sample each minute and kitshn sends snapshots (K-1302).
+  // A hidden map says so once; null while kitshn holds it as hidden.
+  let watchingAt: number | null = null;
   const watching = () => {
-    if (document.visibilityState !== "visible" || ws.readyState !== WebSocket.OPEN) return;
-    if (Date.now() - watchingAt < WATCH_RENEW_MS / 2) return;
+    if (ws.readyState !== WebSocket.OPEN) return;
+    if (document.visibilityState !== "visible") {
+      if (watchingAt === null) return;
+      watchingAt = null;
+      ws.send(JSON.stringify({ type: "watching", visible: false } satisfies WatchingMessage));
+      return;
+    }
+    if (watchingAt !== null && Date.now() - watchingAt < WATCH_RENEW_MS / 2) return;
     watchingAt = Date.now();
     ws.send(JSON.stringify({ type: "watching" } satisfies WatchingMessage));
   };

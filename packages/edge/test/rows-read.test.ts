@@ -2,7 +2,8 @@ import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, expect, it, vi } from "vitest";
 import type { Circle } from "../src/core/model.ts";
-import type { RevisionView } from "../src/core/protocol.ts";
+import type { ProviderReport } from "@kitshn/local";
+import type { RevisionView, Snapshot } from "../src/core/protocol.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -461,4 +462,262 @@ it("never plans the alarm for now for the expired deploy sticker of a removed ca
   );
   expect(result.planned).toBeGreaterThan(result.now);
   expect(result.sticker).toBe(0);
+});
+
+/** Counts the rows of every cursor of every instance, so the constructor after an eviction too. */
+function countRows(sql: SqlStorage) {
+  let cursors: Array<SqlStorageCursor<Record<string, SqlStorageValue>>> = [];
+  const prototype = Object.getPrototypeOf(sql) as { exec: typeof sql.exec };
+  const exec = prototype.exec;
+  prototype.exec = function (this: SqlStorage, query: string, ...bindings: Array<SqlStorageValue>) {
+    const cursor = exec.call(this, query, ...bindings);
+    cursors.push(cursor);
+    return cursor;
+  } as typeof sql.exec;
+  return {
+    /** The rows read since the last call. */
+    take: () => {
+      const rows = cursors.reduce((sum, cursor) => sum + cursor.rowsRead, 0);
+      cursors = [];
+      return rows;
+    },
+    restore: () => {
+      prototype.exec = exec;
+    },
+  };
+}
+
+type Sent = { readonly type: string; readonly hash?: string; readonly snapshot?: Snapshot };
+
+/** What the object sends from now on to its sockets of one kind ("map" or "machine"); `clear` starts again. */
+function sentTo(kind: "map" | "machine") {
+  let sent: Array<Sent> = [];
+  const send = WebSocket.prototype.send;
+  // The kind is read at the send, inside the object; the test harness sends on sockets of its own too.
+  vi.spyOn(WebSocket.prototype, "send").mockImplementation(function (this: WebSocket, data) {
+    const attachment = this.deserializeAttachment() as { kind?: string } | null;
+    if (attachment?.kind === kind) sent.push(JSON.parse(String(data)) as Sent);
+    send.call(this, data);
+  });
+  return {
+    messages: () => sent,
+    clear: () => {
+      sent = [];
+    },
+  };
+}
+
+/**
+ * A socket that the object accepts on `path` for `caller`, as the Worker sends it. Its test end lives outside the
+ * object, so the socket outlives an eviction, as a socket outlives a wake.
+ */
+async function openSocket(stub: DurableObjectStub, path: string, caller: object) {
+  const response = await stub.fetch(`https://kit.example.com${path}`, {
+    headers: { upgrade: "websocket", "x-kitshn-caller": JSON.stringify(caller) },
+  });
+  const socket = response.webSocket;
+  if (!socket) throw new Error(`kitshn opened no socket on ${path}: ${response.status}`);
+  socket.accept();
+  return socket;
+}
+
+/**
+ * K-1302, K-605, K-004: on 2026-11-02, the first broadcast after a wake read History again for a snapshot, about 470
+ * rows, and each link call broadcast while any map socket was open, mostly a sleeping phone. Now only a watching map
+ * gets snapshots and link broadcasts, and a map that missed one gets the current state as soon as it watches again.
+ */
+it("reads no History in the first broadcast after a wake while no map watches, and a map that watches gets it at once", async () => {
+  const stub = env.KITSHN.getByName("map-rows");
+  const counter = await runInDurableObject(stub, (_instance, state) => {
+    const sql = state.storage.sql;
+    // The History tables as on 2026-11-02.
+    const now = Date.now();
+    for (let i = 0; i < 300; i++)
+      sql.exec(
+        "INSERT INTO revisions (at, actor, summary, changes) VALUES (?, ?, 'test', '[]')",
+        now,
+        JSON.stringify({ _tag: "kitshn", reason: "test" }),
+      );
+    for (let i = 0; i < 60; i++) {
+      sql.exec(
+        `INSERT INTO ask_events (at, machine_id, action, target, labels, outcome, detail)
+         VALUES (?, 'vps', 'deploy', 'card', '{}', 'allowed', '{}')`,
+        now,
+      );
+      sql.exec(
+        `INSERT INTO link_events (at, source, target, kind, name, outcome)
+         VALUES (?, 'mac', 'vps', 'tool', 'proxy-probe', 'succeeded')`,
+        now,
+      );
+    }
+    for (let i = 0; i < 47; i++)
+      sql.exec("INSERT INTO applied_state (machine_id, key, hash) VALUES ('vps', ?, 'h')", `key-${i}`);
+    for (let i = 0; i < 36; i++)
+      sql.exec(
+        "INSERT INTO backups (run, card, machine_id, at, state) VALUES (?, ?, 'vps', ?, 'done')",
+        `run-${i}`,
+        `card-${i % 12}`,
+        now - i,
+      );
+    for (let i = 0; i < 15; i++)
+      sql.exec("INSERT INTO icons (id, type, hash, bytes) VALUES (?, 'image/png', 'h', x'00')", `icon-${i}`);
+    return countRows(sql);
+  });
+  // A map that never sends `watching`: a hidden tab or a sleeping phone.
+  const map = await openSocket(stub, "/api/ws", {
+    visitor: { email: "owner@example.com", clientId: null, ip: null },
+    actor: { _tag: "person", email: "owner@example.com" },
+  });
+  const sent = sentTo("map");
+  type Internals = {
+    broadcast(): void;
+    recordExec(row: object, exit: object): void;
+    webSocketMessage(socket: WebSocket, data: string): Promise<void>;
+  };
+  const run = <T>(fn: (instance: Internals, state: DurableObjectState) => T) =>
+    runInDurableObject(stub, async (instance, state) => await fn(instance as unknown as Internals, state));
+  const broadcast = (instance: Internals) => instance.broadcast();
+  const watching = (visible?: boolean) =>
+    run((instance, state) =>
+      instance.webSocketMessage(
+        state.getWebSockets("map")[0]!,
+        JSON.stringify(visible === undefined ? { type: "watching" } : { type: "watching", visible }),
+      ),
+    );
+  const types = () => sent.messages().map((message) => message.type);
+  try {
+    await evictDurableObject(stub);
+    counter.take();
+    await run(broadcast);
+    const hiddenBroadcast = counter.take();
+    await evictDurableObject(stub);
+    await run((instance) =>
+      instance.recordExec(
+        { source: "mac", target: "vps", thread: null, command: "after-wake", cwd: null },
+        { exitCode: 0, reason: null },
+      ),
+    );
+    const hiddenLinkEvent = counter.take();
+    expect(types()).toEqual([]);
+
+    // The map becomes visible: it gets the current state at once, with the event that it missed.
+    await watching();
+    const [fresh] = sent.messages();
+    expect(types()).toEqual(["snapshot"]);
+    expect(fresh?.snapshot?.linkEvents.some((event) => event.name === "after-wake")).toBe(true);
+    // A watching map gets each broadcast, also the first one after a wake.
+    await evictDurableObject(stub);
+    sent.clear();
+    counter.take();
+    await run(broadcast);
+    const watchedBroadcast = counter.take();
+    expect(types()).toEqual(["snapshot"]);
+    // A renewal while it watches sends nothing more.
+    sent.clear();
+    await watching();
+    expect(types()).toEqual([]);
+    // Hidden again: no snapshot, and the next `watching` brings one.
+    await watching(false);
+    await run(broadcast);
+    expect(types()).toEqual([]);
+    await watching();
+    expect(types()).toEqual(["snapshot"]);
+
+    // On main before this fix: 433 and 438 rows, because both sent the hidden map a snapshot that read History.
+    expect(hiddenBroadcast).toBeLessThan(100);
+    expect(hiddenLinkEvent).toBeLessThan(100);
+    // Known limit: a watching map still reads History in the first snapshot after a wake, about 430 rows here.
+    expect(watchedBroadcast).toBeLessThan(600);
+  } finally {
+    counter.restore();
+    map.close();
+  }
+});
+
+/**
+ * K-706, K-1608: `sentGrants` lives in memory, so on 2026-11-02 each wake sent every push again, about 40, and each
+ * daemon answered each one with `applied`. Now a push that the daemon applied goes out again only on a new connection.
+ */
+it("sends no push again after a wake when the daemon applied it, and every push on a new connection", async () => {
+  const stub = env.KITSHN.getByName("grants-wake");
+  const attachment = {
+    kind: "machine",
+    machineId: "vps",
+    since: Date.now(),
+    challenge: "",
+    check: "signed",
+    answered: true,
+    rotateBy: null,
+    status: {
+      version: "dev",
+      os: "linux",
+      arch: "x64",
+      hostname: "vps",
+      tunnel: "running",
+      capabilities: ["applied", "access", "protocol-2"],
+    },
+    sample: null,
+  };
+  type Internals = {
+    load(): void;
+    broadcast(): void;
+    hashesOf(machineId: string): ReadonlyMap<string, string>;
+    acceptMachine(socket: WebSocket, attachment: object): void;
+    webSocketMessage(socket: WebSocket, data: string): Promise<void>;
+  };
+  const run = <T>(fn: (instance: Internals, socket: WebSocket) => T) =>
+    runInDurableObject(stub, async (instance, state) => {
+      const [socket] = state.getWebSockets("vps");
+      return await fn(instance as unknown as Internals, socket!);
+    });
+  const sent = sentTo("machine");
+  const pushes = () => sent.messages().filter((message) => message.hash !== undefined);
+  await runInDurableObject(stub, async (instance, state) => {
+    const machine = {
+      id: "vps",
+      name: "vps",
+      labels: [],
+      order: 0,
+      serviceTokenId: "token-vps",
+      clientId: "vps.access",
+      tunnelId: "tunnel-vps",
+      key: { kind: "public", publicKey: "x", fingerprint: "f", since: 0 },
+    };
+    state.storage.sql.exec("INSERT INTO machines (id, body) VALUES ('vps', ?)", JSON.stringify(machine));
+    (instance as unknown as Internals).load();
+  });
+  const daemon = await openSocket(stub, "/connect", {
+    visitor: { email: null, clientId: "vps.access", ip: null },
+    actor: { _tag: "kitshn", reason: "test" },
+  });
+  // The daemon passed its challenge (K-1704).
+  await run((_instance, socket) => socket.serializeAttachment(attachment));
+  try {
+    const report: ProviderReport = {
+      name: "t3",
+      online: true,
+      kinds: [{ id: "t3.app", name: "T3 app", levels: { view: "view", use: "use", control: "control" } }],
+      commands: [],
+      resources: [{ id: "app", kind: "t3.app", name: "T3 on vps", status: "running" }],
+    };
+    await run((instance, socket) =>
+      instance.webSocketMessage(socket, JSON.stringify({ type: "providers", providers: [report] })),
+    );
+    const all = pushes().length;
+    expect(all).toBeGreaterThan(2);
+    // The daemon saves each push and answers `applied`.
+    await run(async (instance, socket) => {
+      for (const [key, hash] of instance.hashesOf("vps"))
+        await instance.webSocketMessage(socket, JSON.stringify({ type: "applied", key, hash }));
+    });
+    await evictDurableObject(stub);
+    sent.clear();
+    await run((instance) => instance.broadcast());
+    expect(pushes()).toEqual([]);
+    // K-706: a new connection of the daemon gets every push again.
+    await run((instance, socket) => instance.acceptMachine(socket, attachment));
+    expect(pushes()).toHaveLength(all);
+  } finally {
+    daemon.close();
+  }
 });
