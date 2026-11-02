@@ -276,6 +276,7 @@ import {
   type Uptime,
   type UptimeChange,
   cardsOfRun,
+  cardsToFetch,
   nextUptime,
   probeUp,
   stored,
@@ -1218,8 +1219,10 @@ export class Kitshn extends DurableObject<Env> {
     let changed = false;
     for (const [cardId, row] of this.progressRows()) {
       if (row.progress.outcome.state !== "running") continue;
-      // No client shows the action of a card that is gone, so it reads nothing until an Undo brings the card back.
-      if (!this.state.resources.has(cardId)) continue;
+      // No client shows the action of a card that is gone, so only a settle (an alarm run or a wake) reads it. An
+      // action that ended there goes, so a removed card keeps no sticker forever; an Undo brings the card back bare.
+      const gone = !this.state.resources.has(cardId);
+      if (gone && !settle) continue;
       // A job, a handover, a deploy and a run rollback resume from their stored state. A give-back and a restore to
       // a time run only in their request and its finish, so a running one at wake lost them.
       const source = row.source;
@@ -1245,6 +1248,10 @@ export class Kitshn extends DurableObject<Env> {
                     : wake
                       ? failProgress(row.progress, INTERRUPTED, now)
                       : row.progress;
+      if (gone) {
+        if (progress.outcome.state !== "running" && this.setProgress(cardId, null)) changed = true;
+        continue;
+      }
       if (this.setProgress(cardId, { ...row, progress })) changed = true;
     }
     // The open jobs only after a new job came, so most map updates read no job rows.
@@ -6014,6 +6021,14 @@ export class Kitshn extends DurableObject<Env> {
         console.warn(protocol.outcome === "refuse" ? protocol.reason : protocol.warning);
       if (status.refusedProviders) this.notifyRefusals(machine, status.refusedProviders);
       if (status.offlineProviders) this.notifyOfflineProviders(machine, status.offlineProviders, Date.now());
+      // K-704: a provider that went offline now opens its notification on time, so the alarm plans it.
+      const offlineBefore = new Set(
+        (attachment.status?.offlineProviders ?? []).map((entry) => `${entry.provider} ${entry.at}`),
+      );
+      if (
+        (status.offlineProviders ?? []).some((entry) => !offlineBefore.has(`${entry.provider} ${entry.at}`))
+      )
+        void this.scheduleAlarm();
       // K-627: a daemon that connects, or that runs another release now, can start or end an update.
       if (attachment.status === null || attachment.status.version !== status.version) this.autoUpdate();
       this.updatePortAddresses(machine.id, status.publicAddresses);
@@ -8711,16 +8726,17 @@ export class Kitshn extends DurableObject<Env> {
     const redirectRetry = Number(this.meta("redirects_retry_at") ?? 0);
     if (this.env.CLOUDFLARE_API_TOKEN && redirectRetry > now) next = Math.min(next, redirectRetry);
     // K-631: a "Check now" that gets no report fails at its time. K-538: a deploy that does not finish fails when it
-    // expires.
-    for (const row of this.progressRows().values()) {
-      if (row.progress.outcome.state !== "running") continue;
-      if (row.source._tag === "health") next = Math.min(next, Math.max(now, row.source.until));
+    // expires. Only a future time counts: a time that passed must never plan the alarm for now again, and the sticker
+    // of a removed card is not reconciled until the next periodic run (reconcileProgress).
+    for (const [cardId, row] of this.progressRows()) {
+      if (row.progress.outcome.state !== "running" || !this.state.resources.has(cardId)) continue;
+      if (row.source._tag === "health" && row.source.until > now) next = Math.min(next, row.source.until);
       if (row.source._tag === "deploy") {
         const [deploy] = this.sql<{ expires_at: number }>(
           "SELECT expires_at FROM deploys WHERE id = ?",
           row.source.deployId,
         );
-        if (deploy) next = Math.min(next, Math.max(now, deploy.expires_at));
+        if (deploy && deploy.expires_at > now) next = Math.min(next, deploy.expires_at);
       }
     }
     // K-704: a provider that stays without a connection opens its notification at its time.
@@ -16818,15 +16834,17 @@ export class Kitshn extends DurableObject<Env> {
     const run = Number(this.meta("uptime_run") ?? 0);
     if (!Number.isSafeInteger(run) || run < 0)
       throw new Error(`The uptime run counter is ${run}, not a count.`);
-    const fetched =
-      fetchBudget === 0
-        ? []
-        : cardsOfRun(
-            targets.filter((card) => !this.liveSites.has(card.id)),
-            run,
-            Math.min(fetchBudget, UPTIME_FETCHES_PER_RUN),
+    const fetchable = targets.filter((card) => !this.liveSites.has(card.id));
+    const perRun = Math.min(fetchBudget, UPTIME_FETCHES_PER_RUN);
+    const { cards: fetched, whole } =
+      perRun === 0
+        ? { cards: [], whole: false }
+        : cardsToFetch(
+            fetchable.filter((card) => (this.uptime.get(card.id)?.failingSince ?? null) !== null),
+            cardsOfRun(fetchable, run, perRun),
+            perRun,
           );
-    if (fetched.length > 0) this.setMeta("uptime_run", String(run + 1));
+    if (whole && fetched.length > 0) this.setMeta("uptime_run", String(run + 1));
     const answers = await Promise.all(
       fetched.map(async (card) => {
         const ups = await Promise.all(

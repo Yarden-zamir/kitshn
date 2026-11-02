@@ -31,7 +31,7 @@ export const UPTIME_FETCHES_PER_RUN = 8;
 export const UPTIME_RUN_MS = 2 * 60_000;
 /**
  * K-1126: uptime runs at least this often, and each UPTIME_RUN_MS while a card fails but is not down yet. A run fetches
- * 8 addresses, so a card waits groups × 5 minutes: at most 25 minutes up to 40 addresses.
+ * one group of at most 8 addresses, so a card waits groups × 5 minutes (40 one-address cards: 5 groups, 25 minutes).
  */
 export const UPTIME_TURN_MS = 5 * 60_000;
 /** K-1126: changes stay this long. */
@@ -80,4 +80,29 @@ export function cardsOfRun<T extends { readonly addresses: ReadonlyArray<string>
     size += card.addresses.length;
   }
   return groups.length === 0 ? [] : (groups[run % groups.length] ?? []);
+}
+
+/**
+ * K-1126: what one run fetches: the failing cards first, so K-1125 decides about 5 minutes after a first failure for
+ * any number of groups, then the cards of the run's group that still fit in `perRun` addresses. `whole` is false
+ * when a card of the group did not fit; the run counter then stays, so that group comes again. Known limit: failing
+ * cards beyond `perRun` addresses wait for their own group. Revisit if many cards fail at once often.
+ */
+export function cardsToFetch<T extends { readonly id: string; readonly addresses: ReadonlyArray<string> }>(
+  failing: ReadonlyArray<T>,
+  group: ReadonlyArray<T>,
+  perRun: number,
+): { readonly cards: Array<T>; readonly whole: boolean } {
+  const cards: Array<T> = [];
+  let size = 0;
+  const take = (card: T) => {
+    if (cards.some((each) => each.id === card.id)) return true;
+    if (size + card.addresses.length > perRun) return false;
+    cards.push(card);
+    size += card.addresses.length;
+    return true;
+  };
+  for (const card of failing) take(card);
+  const whole = group.map(take).every(Boolean);
+  return { cards, whole };
 }

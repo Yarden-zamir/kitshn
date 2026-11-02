@@ -421,3 +421,44 @@ it("reads a fixed number of rows in a whole wake, however many deploys kitshn ke
     restore();
   }
 });
+
+it("never plans the alarm for now for the expired deploy sticker of a removed card, and drops that sticker (K-538)", async () => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("ok", { status: 200 }));
+  // Review repro: a CI deploy runs, the owner removes the app, the run stops. On c07fb837 each alarm planned the next
+  // one for now, about 240 runs a second, which spends the free requests and rows read in minutes.
+  const result = await runInDurableObject(
+    env.KITSHN.getByName("expired-sticker"),
+    async (instance, state) => {
+      const kitshn = instance as unknown as {
+        load(): void;
+        progressCache: unknown;
+        scheduleAlarm(): Promise<void>;
+        alarm(): Promise<void>;
+      };
+      state.storage.sql.exec(
+        `INSERT INTO deploys (id, repo, environment, resource_id, address, script, kind, sha, state, expires_at)
+       VALUES ('d1', 'owner/repo', 'prod', 'gone', 'gone.example.com', 'kitshn-gone', 'deploy', 'abc', 'running', ?)`,
+        Date.now() - 60_000,
+      );
+      state.storage.sql.exec(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('progress:gone', ?)",
+        JSON.stringify({
+          source: { _tag: "deploy", deployId: "d1" },
+          progress: { action: "Deploy", steps: [], outcome: { state: "running" }, retry: null },
+        }),
+      );
+      kitshn.load();
+      kitshn.progressCache = null;
+      await kitshn.scheduleAlarm();
+      const planned = await state.storage.getAlarm();
+      await kitshn.alarm();
+      return {
+        planned,
+        now: Date.now(),
+        sticker: state.storage.sql.exec("SELECT 1 FROM meta WHERE key = 'progress:gone'").toArray().length,
+      };
+    },
+  );
+  expect(result.planned).toBeGreaterThan(result.now);
+  expect(result.sticker).toBe(0);
+});
