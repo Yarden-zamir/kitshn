@@ -4470,6 +4470,15 @@ export class Kitshn extends DurableObject<Env> {
     }
   }
 
+  /** K-1302: a change that sends no broadcast because no map watches; each map gets the current state on `watching`. */
+  private markMapsMissed() {
+    for (const socket of this.ctx.getWebSockets("map")) {
+      const attachment = attachmentOf(socket);
+      if (attachment?.kind === "map" && !attachment.missed)
+        socket.serializeAttachment({ ...attachment, missed: true } satisfies Attachment);
+    }
+  }
+
   /**
    * K-706: sends each provider of each signed connection its grant tables when they changed since the last send.
    * K-1608: what the daemon applied counts as sent, so a wake sends nothing again; only the new connection of
@@ -14192,7 +14201,7 @@ export class Kitshn extends DurableObject<Env> {
     if (this.mapsWatching() && now - this.linkBroadcastAt >= LINK_BROADCAST_MS) {
       this.linkBroadcastAt = now;
       this.broadcast();
-    }
+    } else if (!this.mapsWatching()) this.markMapsMissed();
   }
 
   /**
@@ -14219,7 +14228,7 @@ export class Kitshn extends DurableObject<Env> {
     if (this.mapsWatching() && Date.now() - this.linkBroadcastAt >= LINK_BROADCAST_MS) {
       this.linkBroadcastAt = Date.now();
       this.broadcast();
-    }
+    } else if (!this.mapsWatching()) this.markMapsMissed();
   }
 
   /** K-1610: one link event, and the trim; the newest events in memory take it too (K-1302). */

@@ -652,9 +652,7 @@ it("reads no History in the first broadcast after a wake while no map watches, a
   try {
     await evictDurableObject(stub);
     counter.take();
-    await run(broadcast);
-    const hiddenBroadcast = counter.take();
-    await evictDurableObject(stub);
+    // A link event before any broadcast still marks the map, so it catches up when it watches again.
     await run((instance) =>
       instance.recordExec(
         { source: "mac", target: "vps", thread: null, command: "after-wake", cwd: null },
@@ -662,6 +660,14 @@ it("reads no History in the first broadcast after a wake while no map watches, a
       ),
     );
     const hiddenLinkEvent = counter.take();
+    expect(
+      await run(
+        (_, state) => (state.getWebSockets("map")[0]!.deserializeAttachment() as { missed?: true }).missed,
+      ),
+    ).toBe(true);
+    await evictDurableObject(stub);
+    await run(broadcast);
+    const hiddenBroadcast = counter.take();
     expect(types()).toEqual([]);
 
     // The map becomes visible: it gets the current state at once, with the event that it missed.
