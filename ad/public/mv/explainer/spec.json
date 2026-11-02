@@ -1,0 +1,107 @@
+{
+  "fps": 30,
+  "music": {
+    "prompt": "Instrumental background music for a one-minute product explainer of a playful developer tool. Bright, minimal and bouncy: muted marimba and plucked synth over a light shuffled beat with soft claps and a round sub bass, about 104 BPM. Friendly and confident, uncluttered so a voice-over sits on top. A small lift around 22 seconds and another around 42 seconds. In the last 6 seconds it gathers into a clean, happy final hit and a short ringing tail.",
+    "length_s": 60,
+    "instrumental": true,
+    "gain_db": -4
+  },
+  "voices": [
+    {
+      "id": "hook",
+      "voice_id": "XrExE9yKIg1WjnnlVkGX",
+      "at": 0.6,
+      "text": "[curious] You built something. A site, a bot, a little app.\n[playfully] Now: who gets to open it?",
+      "next_text": "This is kitchen."
+    },
+    {
+      "id": "intro",
+      "voice_id": "XrExE9yKIg1WjnnlVkGX",
+      "at": "word:hook:it+0.7",
+      "text": "[warmly] This is kitchen. Push a repo, and share it with a circle.",
+      "previous_text": "Now: who gets to open it?",
+      "next_text": "Kitchen deploys your GitHub repos."
+    },
+    {
+      "id": "deploy",
+      "voice_id": "XrExE9yKIg1WjnnlVkGX",
+      "at": "word:intro:circle+1.34",
+      "text": "Kitchen deploys your GitHub repos to Cloudflare, and to your own machines.\nPush to main, and it's live. Every pull request gets its own preview.",
+      "previous_text": "Push a repo, and share it with a circle.",
+      "next_text": "Then, the map."
+    },
+    {
+      "id": "map",
+      "voice_id": "XrExE9yKIg1WjnnlVkGX",
+      "at": "word:deploy:preview+0.94",
+      "text": "Then, the map. Every app is a card. Every circle is a group: an email, a domain, or everyone.\nDrag a card into a circle, and see the change before you drop. [pleased] Undo is right there.",
+      "previous_text": "Every pull request gets its own preview.",
+      "next_text": "Kitchen turns the map into Cloudflare Access."
+    },
+    {
+      "id": "access",
+      "voice_id": "XrExE9yKIg1WjnnlVkGX",
+      "at": "word:map:there+1.18",
+      "text": "Kitchen turns the map into Cloudflare Access, so only those circles get in.",
+      "previous_text": "Undo is right there.",
+      "next_text": "Containers run on your own machines."
+    },
+    {
+      "id": "machines",
+      "voice_id": "XrExE9yKIg1WjnnlVkGX",
+      "at": "word:access:in+1.18",
+      "text": "Containers run on your own machines, through a tunnel, with no open ports.\n[playfully] Machine off? Visitors get a friendly page, not an error.",
+      "previous_text": "so only those circles get in.",
+      "next_text": "Kitchen. Push a repo. Share it with a circle."
+    },
+    {
+      "id": "end",
+      "voice_id": "XrExE9yKIg1WjnnlVkGX",
+      "at": "word:machines:error+1.26",
+      "text": "[warmly] Kitchen. Push a repo. Share it with a circle.",
+      "previous_text": "Machine off? Visitors get a friendly page, not an error."
+    }
+  ],
+  "sfx": [
+    {
+      "id": "click",
+      "at": 0,
+      "mix": false,
+      "duration": 0.5,
+      "text": "single soft clean mouse click, close mic, no reverb"
+    },
+    {
+      "id": "pop",
+      "at": 0,
+      "mix": false,
+      "duration": 0.6,
+      "text": "tiny soft rubbery user interface pop, playful and warm, for a card landing"
+    },
+    {
+      "id": "whoosh",
+      "at": 0,
+      "mix": false,
+      "duration": 1,
+      "text": "very soft airy whoosh, camera move transition, subtle"
+    },
+    {
+      "id": "keys",
+      "at": 0,
+      "mix": false,
+      "duration": 2,
+      "text": "quick burst of quiet mechanical keyboard typing then one enter key, close mic"
+    },
+    {
+      "id": "logo",
+      "at": 0,
+      "mix": false,
+      "duration": 2.5,
+      "text": "bright playful logo sting, a soft pot lid clink and a warm marimba chord with a short shimmer"
+    }
+  ],
+  "mix": {
+    "duck_db": 10,
+    "fade_out": 0.8
+  },
+  "duration": 60.5
+}
