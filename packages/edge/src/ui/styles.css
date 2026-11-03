@@ -899,7 +899,6 @@ button.count {
   display: none;
 }
 .tray-toggle {
-  min-height: 1.75rem;
   font: inherit;
   text-align: left;
   background: none;
@@ -907,6 +906,11 @@ button.count {
   padding: 0;
   color: inherit;
   cursor: pointer;
+}
+@media (pointer: coarse) {
+  .tray-toggle {
+    min-height: 1.75rem;
+  }
 }
 
 .tray .card {

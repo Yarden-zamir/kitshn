@@ -1655,6 +1655,8 @@ export function App() {
       select(selected);
       location.hash = "map";
       // "Show details" and a tap on a phone bring the item clear of the panel.
+      // Known limit: a card of an open stack pans to its place, not to where the stack draws it, because only the
+      // map knows the card heights; a low card can stay under a phone's sheet. Revisit if tall stacks get common.
       const boxes = [
         ...[...selected.cards].flatMap((id) => {
           const place = state.places.get(id);
@@ -1803,7 +1805,7 @@ export function App() {
           progress={store.snapshot.progress}
           selection={selection}
           onSelect={select}
-          onTapSelect={handlers.select}
+          onTapSelect={(selected) => (wideScreen() ? select(selected) : handlers.select(selected))}
           hidden={hidden}
           view={view}
           onView={(next) => {
