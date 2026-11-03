@@ -173,6 +173,8 @@ interface Props {
   readonly machines: ReadonlyMap<string, MachineView>;
   readonly selection: Selection;
   readonly onSelect: (selection: Selection) => void;
+  /** A tap selects a card on a phone, where the sheet that opens covers the lower half of the map. */
+  readonly onTapSelect: (selection: Selection) => void;
   readonly hidden: ReadonlySet<CardKind>;
   readonly view: View;
   /** Live previews of site and page cards (when the zoom allows). */
@@ -234,7 +236,7 @@ export function MapView(props: Props) {
   };
   /** A touch on a card that selects it on release, unless it moved, held or became a pinch. */
   const tap = useRef<{
-    readonly choose: () => void;
+    readonly choose: (tapped?: boolean) => void;
     readonly stack: string | null;
     readonly world: Point;
     /** A tap on a tray card never zooms the map. */
@@ -446,9 +448,12 @@ export function MapView(props: Props) {
         props.openStacks.has(stack[0]) &&
         props.selection.cards.size > 1 &&
         [...props.selection.cards].every((card) => stack[1].includes(card));
-      const choose = () => {
+      const choose = (tapped = false) => {
         if (!props.selection.cards.has(id) || wholeOpenStack)
-          props.onSelect({ cards: whole ? new Set(ids) : new Set([id]), circle: null });
+          (tapped ? props.onTapSelect : props.onSelect)({
+            cards: whole ? new Set(ids) : new Set([id]),
+            circle: null,
+          });
       };
       const origins = new Map<string, Point>();
       let fresh = 0;
@@ -595,7 +600,7 @@ export function MapView(props: Props) {
     if (pending && press?.press.phase === "waiting") {
       if (view.s < ZOOMED_OUT && !pending.inTray)
         props.onView({ x: event.clientX - pending.world.x, y: event.clientY - pending.world.y, s: 1 });
-      else pending.choose();
+      else pending.choose(true);
       if (pending.stack) props.onToggleStack(pending.stack);
     }
     // No `contextmenu` came during the press, so it follows the release; a press that opened the menu is done.
