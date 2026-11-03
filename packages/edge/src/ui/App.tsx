@@ -1654,7 +1654,7 @@ export function App() {
     select: (selected) => {
       select(selected);
       location.hash = "map";
-      // "Show details" brings the item clear of the panel.
+      // "Show details" and a tap on a phone bring the item clear of the panel.
       const boxes = [
         ...[...selected.cards].flatMap((id) => {
           const place = state.places.get(id);
@@ -1803,6 +1803,7 @@ export function App() {
           progress={store.snapshot.progress}
           selection={selection}
           onSelect={select}
+          onTapSelect={handlers.select}
           hidden={hidden}
           view={view}
           onView={(next) => {

@@ -785,6 +785,21 @@ button.count {
 .card .foot .more {
   margin-left: auto;
 }
+/* A finger gets the skill's 1.75rem target; the target grows around the button, so its look stays. */
+@media (pointer: coarse) {
+  .more {
+    position: relative;
+  }
+  .more::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, 1.75rem);
+    height: max(100%, 1.75rem);
+    transform: translate(-50%, -50%);
+  }
+}
 /* A status sticker sits on the top edge, above the title line, so it never covers the name. */
 .card .states {
   position: absolute;
@@ -884,6 +899,7 @@ button.count {
   display: none;
 }
 .tray-toggle {
+  min-height: 1.75rem;
   font: inherit;
   text-align: left;
   background: none;
@@ -1291,6 +1307,8 @@ pre.output.log-lines {
   --cap: 2.05rem;
   --skirt: 6px;
   position: relative;
+  /* The lid and the note stack inside the frame only, so a panel's sticky head stays above them. */
+  isolation: isolate;
   padding: 3px;
   background: var(--hazard-stripes);
   border: var(--bw) solid #000000;
@@ -2011,6 +2029,11 @@ pre.output {
 .overlay-head h2 {
   flex: 1;
   margin: 0;
+}
+.overlay-head .btn {
+  justify-content: center;
+  min-width: 1.75rem;
+  min-height: 1.75rem;
 }
 /* The full view: below the toolbar (`--bar-bottom`, measured in App.tsx). */
 .overlay-panel.large {
