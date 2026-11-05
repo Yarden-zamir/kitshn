@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join, win32 } from "node:path";
+import { RELEASE_WAIT_MS } from "kitshn/operations";
 
 export type Platform = "linux" | "darwin" | "win32";
 
@@ -506,6 +507,78 @@ export function cloudflaredUrl(platform: Platform, arch: string): { url: string;
 
 /** K-617: where kitshn releases live. Each release edge-<version> holds the daemons and SHA256SUMS. */
 export const RELEASES = "https://github.com/Yarden-zamir/kitshn/releases/download";
+
+/** K-617: a release file that is missing gets a try every 30 seconds, for RELEASE_WAIT_MS. */
+const RELEASE_RETRY_MS = 30_000;
+const RELEASE_TRIES = RELEASE_WAIT_MS / RELEASE_RETRY_MS + 1;
+/** K-617: a try that gets no answer in this time counts as failed, so one hung connection never stalls the wait. */
+const RELEASE_ANSWER_MS = 20_000;
+
+interface ReleaseIo {
+  readonly fetch: (url: string) => Promise<Response>;
+  readonly sleep: (ms: number) => Promise<void>;
+}
+
+const realIo: ReleaseIo = {
+  // Only the answer has the time limit: the body of a daemon can take longer on a slow link.
+  fetch: async (url) => {
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(new Error(`no answer in ${RELEASE_ANSWER_MS / 1000} seconds`)),
+      RELEASE_ANSWER_MS,
+    );
+    try {
+      return await fetch(url, { signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+};
+
+/**
+ * K-617: the files of edge-<version>, in the order of `names`. A Worker can go live before the release workflow
+ * uploads them, and GitHub can fail for a moment, so a missing file is not ready yet: the download waits and tries
+ * again. It gives up only after all tries.
+ */
+export async function releaseFiles(
+  version: string,
+  names: ReadonlyArray<string>,
+  log: (line: string) => void,
+  io: ReleaseIo = realIo,
+): Promise<
+  | { readonly ok: true; readonly responses: ReadonlyArray<Response> }
+  | { readonly ok: false; readonly reason: string }
+> {
+  let missing = "";
+  for (let attempt = 1; attempt <= RELEASE_TRIES; attempt++) {
+    const answers = await Promise.all(
+      names.map((name) =>
+        io.fetch(`${RELEASES}/edge-${version}/${name}`).catch((error: unknown) => String(error)),
+      ),
+    );
+    const responses = answers.filter((answer) => answer instanceof Response);
+    if (responses.length === names.length && responses.every((response) => response.ok))
+      return { ok: true, responses };
+    for (const response of responses) await response.body?.cancel();
+    missing = names
+      .flatMap((name, index) => {
+        const answer = answers[index];
+        if (answer instanceof Response) return answer.ok ? [] : [`${name} (HTTP ${answer.status})`];
+        return [`${name} (${answer})`];
+      })
+      .join(", ");
+    if (attempt === RELEASE_TRIES) break;
+    log(
+      `update: try ${attempt}/${RELEASE_TRIES} of edge-${version} found no ${missing}; next try in 30 seconds`,
+    );
+    await io.sleep(RELEASE_RETRY_MS);
+  }
+  return {
+    ok: false,
+    reason: `The release edge-${version} has no ${missing} after ${RELEASE_WAIT_MS / 60_000} minutes.`,
+  };
+}
 
 /** The daemon file of a platform in a release. */
 export function releaseAsset(platform: Platform, arch: string): string {

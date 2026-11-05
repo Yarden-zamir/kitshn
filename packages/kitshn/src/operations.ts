@@ -1,6 +1,9 @@
 // K-1777: every owner action is one operation. The map, the CLI and an agent call the same id, and one gate decides.
 // The table lives here, so the npm CLI, the daemon and the Worker read the same rows; the gate is in the Worker.
 
+/** K-617: how long a daemon waits for the files of its release before the update fails; `kitshn rollout` follows longer. */
+export const RELEASE_WAIT_MS = 10 * 60_000;
+
 /**
  * K-1730: the effects. Each operation has exactly one effect, the same for every actor (person, token, machine, agent).
  * Circles decide where an actor acts; the mode of an effect on its chip decides what kind of action it takes.

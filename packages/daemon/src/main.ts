@@ -144,7 +144,6 @@ import { ownSid } from "./winpipe.ts";
 import {
   type PathFacts,
   type Platform,
-  RELEASES,
   WINDOWS_CLOUDFLARED,
   WINDOWS_TASKS,
   ownUid,
@@ -158,6 +157,7 @@ import {
   versionJson,
   pathsFor,
   releaseAsset,
+  releaseFiles,
   restartTunnel,
   serviceCommands,
   serviceFile,
@@ -1075,11 +1075,11 @@ async function installRelease(
   if (VERSION === "dev") return failed("This daemon runs from source; update it from the repo.");
   if (version === VERSION) return { ok: true, exitCode: 0, output: `Already at ${version}.` };
   const name = `${releaseAsset(platform, arch())}.gz`;
-  const base = `${RELEASES}/edge-${version}`;
   try {
-    const sums = await fetch(`${base}/SHA256SUMS`);
-    const binary = await fetch(`${base}/${name}`);
-    if (!sums.ok || !binary.ok) return failed(`The release edge-${version} has no ${name}.`);
+    const files = await releaseFiles(version, ["SHA256SUMS", name], log);
+    if (!files.ok) return failed(files.reason);
+    const [sums, binary] = files.responses;
+    if (!sums || !binary) throw new Error("releaseFiles answered fewer files than it was asked for.");
     const expected = expectedHash(await sums.text(), name);
     const packed = new Uint8Array(await binary.arrayBuffer());
     const actual = createHash("sha256").update(packed).digest("hex");
