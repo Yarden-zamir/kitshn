@@ -359,9 +359,13 @@ export type DaemonMessage =
   | { readonly type: "ask"; readonly requestId: string; readonly ask: AskWire }
   /** K-704: every provider of the machine with its kinds, commands and resources, on connect and on each change. */
   | { readonly type: "providers"; readonly providers: ReadonlyArray<ProviderReport> }
-  /** K-709: a provider set a part of a desired state; kitshn stores it and pushes it to every machine. */
+  /**
+   * K-709: a provider set a part of a desired state; kitshn stores it and pushes it to every machine. K-726: a circle
+   * part comes only as `desiredSetCircle` or `desiredInitCircle`, which an older Worker drops instead of filing it as
+   * the machine part.
+   */
   | {
-      readonly type: "desiredSet" | "desiredInit";
+      readonly type: "desiredSet" | "desiredInit" | "desiredSetCircle" | "desiredInitCircle";
       /** kitshn answers with `requestAnswer` and this id. */
       readonly requestId: string;
       readonly provider: string;

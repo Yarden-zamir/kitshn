@@ -623,6 +623,11 @@ type MapTail =
 const attachmentOf = (socket: WebSocket) => socket.deserializeAttachment() as Attachment | null;
 
 type MapAttachment = Extract<Attachment, { kind: "map" }>;
+/** K-709, K-726: a provider's write of one part of a desired state, as the daemon forwards it. */
+type DesiredMessage = Extract<
+  DaemonMessage,
+  { type: "desiredSet" | "desiredInit" | "desiredSetCircle" | "desiredInitCircle" }
+>;
 
 /**
  * K-605: a map that sent `watching` within WATCH_LEASE_MS and not `visible: false` since. The lease also ends a map
@@ -4706,8 +4711,14 @@ export class Kitshn extends DurableObject<Env> {
    */
   private desiredPartKey(
     machine: Machine,
-    message: Extract<DaemonMessage, { type: "desiredSet" | "desiredInit" }>,
+    message: DesiredMessage,
   ): { readonly key: string } | { readonly error: string } {
+    const circleType = message.type === "desiredSetCircle" || message.type === "desiredInitCircle";
+    if (circleType !== (message.part === "circle"))
+      return {
+        error:
+          "a circle part comes as desiredSetCircle or desiredInitCircle, and only a circle part (K-726).",
+      };
     if (message.part === "shared") return { key: "" };
     if (message.part === "machine") return { key: machine.id };
     if (message.part !== "circle")
@@ -4723,10 +4734,7 @@ export class Kitshn extends DurableObject<Env> {
    * K-709, K-726: a provider of the machine sets its part of a desired state, a circle part or the shared part. kitshn
    * stores it and pushes it to every machine of the provider; History records it without Undo.
    */
-  private setDesiredFromMachine(
-    machine: Machine,
-    message: Extract<DaemonMessage, { type: "desiredSet" | "desiredInit" }>,
-  ): string | null {
+  private setDesiredFromMachine(machine: Machine, message: DesiredMessage): string | null {
     const kinds =
       this.providerRegs.get(machine.id)?.find((item) => item.name === message.provider)?.kinds ?? [];
     const part = this.desiredPartKey(machine, message);
@@ -6200,7 +6208,10 @@ export class Kitshn extends DurableObject<Env> {
     } else if (message.type === "execFrame" && attachment.check === "signed") {
       this.execRelay(socket, machine, message);
     } else if (
-      (message.type === "desiredSet" || message.type === "desiredInit") &&
+      (message.type === "desiredSet" ||
+        message.type === "desiredInit" ||
+        message.type === "desiredSetCircle" ||
+        message.type === "desiredInitCircle") &&
       typeof message.kind === "string"
     ) {
       // K-709: the provider gets kitshn's own answer, also a refusal.
@@ -6208,7 +6219,7 @@ export class Kitshn extends DurableObject<Env> {
       let error: string | null;
       let initialized: boolean | undefined;
       try {
-        if (message.type === "desiredInit") {
+        if (message.type === "desiredInit" || message.type === "desiredInitCircle") {
           // K-709: a single storage step arbitrates with owner edits. Empty
           // objects and disabled values are present too; never replace them.
           const result = this.ctx.storage.transactionSync(() => {
@@ -11898,6 +11909,9 @@ export class Kitshn extends DurableObject<Env> {
    */
   private opMissing(op: Operation, target: string, body: unknown): string | null {
     if (isPersonGate(op.gate)) return null;
+    // K-726: a target that names a circle refuses an unknown one, also in the scope "owner".
+    if (op.targetField === "circleId" && !this.state.circles.has(target))
+      return `There is no such circle: "${target}".`;
     const card = (id: string) =>
       this.state.resources.has(id) || this.sql("SELECT 1 FROM library WHERE id = ?", id).length > 0;
     switch (op.gate.scope) {

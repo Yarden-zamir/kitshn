@@ -254,9 +254,9 @@ it("stores desired state from a provider, and runs a provider command that an ag
   for (const circle of [ring("partner", place.x), ring("far", place.x + 5000)])
     await sql("INSERT OR REPLACE INTO circles (id, body) VALUES (?, ?)", circle.id, JSON.stringify(circle));
   sent.length = 0;
-  const setCircle = (requestId: string, circle: string) =>
+  const setCircle = (requestId: string, circle: string, type = "desiredSetCircle") =>
     raw({
-      type: "desiredSet",
+      type,
       requestId,
       provider: "t3",
       kind: "t3.settings",
@@ -267,10 +267,13 @@ it("stores desired state from a provider, and runs a provider command that an ag
   await setCircle("c1", "partner");
   await setCircle("c2", "far");
   await setCircle("c3", "gone");
+  // The type that an older Worker files as the machine part never carries a circle part.
+  await setCircle("c4", "partner", "desiredSet");
   expect(sent.filter((item) => (item as { type: string }).type === "requestAnswer")).toEqual([
     { type: "requestAnswer", requestId: "c1", error: null },
     { type: "requestAnswer", requestId: "c2", error: expect.stringMatching(/far holds no card of t3/) },
     { type: "requestAnswer", requestId: "c3", error: expect.stringMatching(/circle that exists/) },
+    { type: "requestAnswer", requestId: "c4", error: expect.stringMatching(/desiredSetCircle/) },
   ]);
   expect(await lastSummary()).toBe("Set the part of the circle partner of t3.settings (K-709)");
   await sql("DELETE FROM circles WHERE id IN ('partner', 'far')");
@@ -644,6 +647,40 @@ it("queues only a command that the card's provider has (K-707)", async () => {
   });
   // A part of null clears it, so the next tests of this Durable Object start without it.
   await post("/api/desired/t3.settings", "PUT", { circleId: OWNER_CIRCLE_ID, value: null });
+  // A deleted circle keeps its part for Undo, but the read and the snapshot leave it out (the push: core tests).
+  const brief: Circle = {
+    id: "brief",
+    name: "Brief",
+    color: "#ffcc00",
+    level: "use",
+    members: [],
+    match: "any",
+    needsPasskey: false,
+    endsAt: null,
+    x: 60_000,
+    y: 60_000,
+    r: 40,
+  };
+  await sql("INSERT OR REPLACE INTO circles (id, body) VALUES (?, ?)", brief.id, JSON.stringify(brief));
+  expect(
+    (await post("/api/desired/t3.settings", "PUT", { circleId: brief.id, value: { a: 1 } })).status,
+  ).toBe(200);
+  const circlesSeen = async () => {
+    const parts = (await (
+      await send("/api/desired/t3.settings", { headers: { "cf-access-jwt-assertion": token } })
+    ).json()) as { circles: Record<string, unknown> };
+    const snapshot = (await (
+      await send("/api/state", { headers: { "cf-access-jwt-assertion": token } })
+    ).json()) as { stateKinds: Array<{ kind: string; circles: Array<string> }> };
+    return { read: Object.keys(parts.circles), snapshot: snapshot.stateKinds };
+  };
+  expect(await circlesSeen()).toEqual({
+    read: [brief.id],
+    snapshot: [{ kind: "t3.settings", circles: [brief.id] }],
+  });
+  await sql("DELETE FROM circles WHERE id = ?", brief.id);
+  expect(await circlesSeen()).toEqual({ read: [], snapshot: [{ kind: "t3.settings", circles: [] }] });
+  await sql("DELETE FROM desired_state WHERE machine_id = ?", `circle:${brief.id}`);
   expect((await post("/api/desired/t3.nope", "PUT", { machineId: null, value: 1 })).status).toBe(404);
 
   // K-707: a registration without the command takes it off the card.

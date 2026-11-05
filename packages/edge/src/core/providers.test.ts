@@ -326,6 +326,15 @@ describe("pushes to a machine (K-709, K-717, K-1608)", () => {
       state: { shared: null, machine: null, circles: { partner: { tabs: ["review"] } } },
     });
     expect(circlePushes[0]).toMatchObject({ tables: { app: [{ circle: { id: "partner", r: 50 } }] } });
+    // A card that leaves the circle, or a deleted circle, takes the circle's part out of the next push.
+    const desiredAfter = (after: State) =>
+      providerPushes(after, "vps", [{ name: "t3", kinds }], withCircleParts, new Map(), 0, access(null))[4];
+    const moved: State = {
+      ...inCircles,
+      places: new Map([...inCircles.places.keys()].map((id) => [id, { x: 2000, y: 2000 }])),
+    };
+    const deleted: State = { ...inCircles, circles: new Map([["far", inCircles.circles.get("far")!]]) };
+    for (const after of [moved, deleted]) expect(desiredAfter(after)).not.toHaveProperty("state.circles");
     // A give-back takes the address off the card at once, but the application answers until the sync deletes it.
     const givenBack: State = { ...value, resources: new Map([[app.id, { ...app, addresses: [] }]]) };
     expect(siteAudiences(givenBack, "vps", "t3", access("aud-app").audiencesOf)).toEqual(["aud-app"]);

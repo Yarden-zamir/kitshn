@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { desiredProblem, readRequest } from "@kitshn/local";
+import { KITSHN_PROTOCOL, desiredProblem, readRequest } from "@kitshn/local";
 import { forwardDesired, providerReports } from "./desired.ts";
 
 it("forwards conditional initialization with its own type and the authoritative answer (K-709)", async () => {
@@ -29,6 +29,7 @@ it("forwards conditional initialization with its own type and the authoritative 
         });
         return { error: null, initialized };
       },
+      KITSHN_PROTOCOL,
     );
     expect(answer).toEqual({ id: "d", type: "desired-init", initialized });
   }
@@ -48,6 +49,7 @@ it("never treats a missing or refused initialization answer as success (K-709)",
       request,
       () => {},
       async () => ({ error: null }),
+      KITSHN_PROTOCOL,
     ),
   ).rejects.toThrow(/did not confirm/);
   await expect(
@@ -55,6 +57,7 @@ it("never treats a missing or refused initialization answer as success (K-709)",
       request,
       () => {},
       async () => ({ error: "old Worker did not answer" }),
+      KITSHN_PROTOCOL,
     ),
   ).rejects.toThrow(/old Worker/);
 });
@@ -76,7 +79,45 @@ it("sends a waiting provider report before a desired request, so kitshn knows a 
         error: desiredProblem(known, message.kind, message.value),
         ...(message.type === "desiredInit" ? { initialized: true } : {}),
       }),
+      KITSHN_PROTOCOL,
     );
     expect(answer).toMatchObject({ id: "d", type });
   }
+});
+
+it("forwards a circle part with its own types, and refuses it at once before kitshn 2.3.0 (K-726)", async () => {
+  const sent: Array<string> = [];
+  for (const type of ["desired-set", "desired-init"] as const) {
+    const request = {
+      id: "d",
+      type,
+      provider: "test",
+      kind: "test.settings",
+      part: "circle",
+      circle: "c1",
+      value: {},
+    } as const;
+    await forwardDesired(
+      request,
+      () => {},
+      async (message) => {
+        sent.push(message.type);
+        return { error: null, initialized: true };
+      },
+      KITSHN_PROTOCOL,
+    );
+    // An older Worker files a part that is not shared as the machine part, so it never gets one.
+    await expect(
+      forwardDesired(
+        request,
+        () => {},
+        async (message) => {
+          sent.push(`old ${message.type}`);
+          return { error: null, initialized: true };
+        },
+        "2.2.0",
+      ),
+    ).rejects.toThrow(/stores no circle parts/);
+  }
+  expect(sent).toEqual(["desiredSetCircle", "desiredInitCircle"]);
 });

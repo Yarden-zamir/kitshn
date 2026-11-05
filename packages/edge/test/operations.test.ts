@@ -239,6 +239,7 @@ const TARGETS: Partial<Record<OpId, string>> = {
   "proposal-deny": "proposal-x",
   desired: "t3.settings",
   "desired-set-shared": "t3.settings",
+  "desired-set-circle": OWNER_CIRCLE_ID,
 };
 const BODIES: Partial<Record<OpId, unknown>> = {
   "card-time": { endsAt: null },
@@ -912,8 +913,13 @@ it("asks the Owner when the scope fails or a secret goes out, and the Owner's ap
   for (const [id, target, kind] of [
     ["job-cancel", "424242", "job"],
     ["card-time", "no-card", "card"],
+    ["desired-set-circle", "no-circle", "circle"],
   ] as const) {
-    const missing = await op(id, `missing-${id}`, call(target, { endsAt: null }));
+    const missing = await op(
+      id,
+      `missing-${id}`,
+      call(target, { endsAt: null, kind: "t3.settings", value: {} }),
+    );
     expect(missing.status).toBe(404);
     expect(await missing.json()).toMatchObject({
       outcome: "refused",

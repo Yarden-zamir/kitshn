@@ -736,20 +736,23 @@ function CircleSettings(props: { circle: Circle; stateKinds: Snapshot["stateKind
                     void save(kind, value);
                   }}
                 >
-                  <textarea
-                    class="field mono"
-                    rows={8}
-                    aria-label={`${kind} of ${circle.name}`}
-                    aria-invalid={error !== null}
-                    aria-describedby={error !== null ? errorId : undefined}
-                    data-tip={`The ${kind} of ${circle.name}, as JSON. The provider checks each value that it applies.`}
-                    disabled={text === null}
-                    value={text ?? "Loading…"}
-                    onInput={(event) => {
-                      setText(event.currentTarget.value);
-                      setError(null);
-                    }}
-                  />
+                  {/* A failed read leaves no text: show only its error, so the editor never waits for nothing. */}
+                  {text === null && error !== null ? null : (
+                    <textarea
+                      class="field mono"
+                      rows={8}
+                      aria-label={`${kind} of ${circle.name}`}
+                      aria-invalid={error !== null}
+                      aria-describedby={error !== null ? errorId : undefined}
+                      data-tip={`The ${kind} of ${circle.name}, as JSON. The provider checks each value that it applies.`}
+                      disabled={text === null}
+                      value={text ?? "Loading…"}
+                      onInput={(event) => {
+                        setText(event.currentTarget.value);
+                        setError(null);
+                      }}
+                    />
+                  )}
                   {error !== null ? (
                     <p class="error" id={errorId}>
                       {error}
