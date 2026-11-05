@@ -8,6 +8,7 @@ import {
   type Platform,
   pathsFor,
   releaseAsset,
+  releaseFiles,
   restartTunnel,
   serviceCommands,
   serviceFile,
@@ -170,6 +171,33 @@ describe("daemon service (K-601)", () => {
     expect(expectedHash(sums, "kitshn-linux-arm64")).toBe("a".repeat(64));
     expect(expectedHash(sums, "kitshn.mjs")).toBe("b".repeat(64));
     expect(expectedHash(sums, "kitshn-linux-x64")).toBeNull();
+  });
+
+  it("waits for release files that are not uploaded yet, and gives up after its tries (K-617)", async () => {
+    const waits: Array<number> = [];
+    const sleep = async (ms: number) => {
+      waits.push(ms);
+    };
+    // The workflow uploads the daemon after the Worker goes live: two 404 answers, then the file.
+    let misses = 2;
+    const late = async (url: string) =>
+      url.endsWith("/kitshn-linux-arm64.gz") && misses-- > 0
+        ? new Response("Not Found", { status: 404 })
+        : new Response(url);
+    const files = await releaseFiles("a".repeat(12), ["SHA256SUMS", "kitshn-linux-arm64.gz"], {
+      fetch: late,
+      sleep,
+    });
+    if (!files.ok) throw new Error(files.reason);
+    expect(await files.responses[1]?.text()).toMatch(/edge-a{12}\/kitshn-linux-arm64\.gz$/);
+    expect(waits).toHaveLength(2);
+
+    const never = async () => new Response("Not Found", { status: 404 });
+    const missing = await releaseFiles("a".repeat(12), ["kitshn-linux-arm64.gz"], { fetch: never, sleep });
+    expect(missing).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("kitshn-linux-arm64.gz (HTTP 404)"),
+    });
   });
 
   it("names the shared socket and the daemon user that a client expects there (K-701)", () => {

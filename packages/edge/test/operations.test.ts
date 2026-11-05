@@ -185,6 +185,68 @@ it("refuses a machine token on an owner route, also when the machine holds the a
   expect(await answer.json()).toMatchObject({ error: expect.stringContaining("/op") });
 });
 
+it("asks the Owner when a machine with the admin ends a stopped rollout, and ends it after a person approves (K-636)", async () => {
+  stubAccessCerts();
+  const key = await newMachineKey();
+  // The circle holds the admin card of the seed at (0, 40), and "shares" and "secrets" are automatic (K-1778).
+  const automatic = { mode: "automatic" } as const;
+  await setup({ shares: automatic, secrets: automatic, maintains: automatic }, key, { x: 0, y: 40 });
+  const stub = env.KITSHN.getByName("kitshn");
+  const stopped = {
+    version: "local",
+    step: null,
+    failed: { machineId: "vps", reason: "no file" },
+    updated: [],
+  };
+  const failed = () =>
+    runInDurableObject(stub, (_, state) => {
+      const { value } = state.storage.sql
+        .exec<{ value: string }>("SELECT value FROM meta WHERE key = 'daemon_rollout'")
+        .one();
+      return (JSON.parse(value) as typeof stopped).failed;
+    });
+  await runInDurableObject(stub, (_, state) =>
+    state.storage.sql.exec(
+      "INSERT OR REPLACE INTO meta (key, value) VALUES ('daemon_rollout', ?)",
+      JSON.stringify(stopped),
+    ),
+  );
+  await evictDurableObject(stub);
+  const retry = (nonce: string) =>
+    forwarded(key, "POST", "/op/rollout", `${nonce}-0123456789abcdef`, call(""), {}, ADMIN);
+
+  const first = await retry("retry-1");
+  expect(first.status, await first.clone().text()).toBe(409);
+  const waiting = (await first.json()) as { outcome: string; proposalId: string };
+  expect(waiting.outcome).toBe("waiting");
+  expect(await failed()).toEqual(stopped.failed);
+
+  await runInDurableObject(stub, (instance) =>
+    (
+      instance as unknown as {
+        decide(id: string, decision: "approved", by: object, hash: null, via: "passkey"): Promise<unknown>;
+      }
+    ).decide(
+      waiting.proposalId,
+      "approved",
+      {
+        actor: { _tag: "person", email: "owner@example.com" },
+        visitor: { email: "owner@example.com", clientId: null, ip: null },
+        machineId: null,
+        reason: null,
+      },
+      null,
+      "passkey",
+    ),
+  );
+  const second = await retry("retry-2");
+  expect(second.status, await second.clone().text()).toBe(200);
+  expect(await failed()).toBeNull();
+  await runInDurableObject(stub, (_, state) =>
+    state.storage.sql.exec("DELETE FROM meta WHERE key = 'daemon_rollout'"),
+  );
+});
+
 it("refuses an unsigned call of a machine token on /op (K-1714)", async () => {
   stubAccessCerts();
   await setup({});

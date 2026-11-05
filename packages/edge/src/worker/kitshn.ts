@@ -11722,9 +11722,11 @@ export class Kitshn extends DurableObject<Env> {
     const attested = machine ? { labels, prefixes: this.labelPrefixesOf(machine.id) } : null;
     // K-1778: the admin runs as the owner: a login with the passkey of the admin, or another proof of the admin with
     // "shares" and "secrets" automatic. A login without that passkey goes through the gate.
+    // K-636: only a person ends a stopped rollout, so an admin proof of an agent goes through the gate, which asks the Owner.
     const admin =
       this.hasAdmin(caller.visitor, attested) &&
-      (caller.visitor.email === null || adminPasskey(this.state, caller.visitor, now));
+      (caller.visitor.email === null || adminPasskey(this.state, caller.visitor, now)) &&
+      !(id === "rollout" && this.rolloutStopped() && this.isAgentSender(caller.visitor));
     const asker = this.askerOf(caller.visitor);
     if (!admin && asker === null)
       return refused(
@@ -13855,9 +13857,13 @@ export class Kitshn extends DurableObject<Env> {
       : rightOff(this.state, asker, proposal.right, now, attested);
     if (off) return `the owner set the effect "${proposal.right}" to off.`;
     // K-718: a job or a deploy outside the limit of the machine waits for the Owner, whatever the mode of its effect.
+    // K-1778: a call beyond its scope waits for the Owner by "shares", also when "shares" is automatic.
     const ownerAsk =
       proposal.circleId === OWNER_CIRCLE_ID &&
-      (mode === null || proposal.action === "job" || proposal.action === "deploy");
+      (mode === null ||
+        proposal.action === "job" ||
+        proposal.action === "deploy" ||
+        proposal.right === "shares");
     if (!ownerAsk && (mode?.mode !== "ask" || mode.circleId !== proposal.circleId))
       return `the effect "${proposal.right}" no longer asks this circle.`;
     const circle = this.state.circles.get(proposal.circleId);
