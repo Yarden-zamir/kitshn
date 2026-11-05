@@ -184,16 +184,23 @@ describe("daemon service (K-601)", () => {
       url.endsWith("/kitshn-linux-arm64.gz") && misses-- > 0
         ? new Response("Not Found", { status: 404 })
         : new Response(url);
-    const files = await releaseFiles("a".repeat(12), ["SHA256SUMS", "kitshn-linux-arm64.gz"], {
+    const logged: Array<string> = [];
+    const log = (line: string) => logged.push(line);
+    const files = await releaseFiles("a".repeat(12), ["SHA256SUMS", "kitshn-linux-arm64.gz"], log, {
       fetch: late,
       sleep,
     });
     if (!files.ok) throw new Error(files.reason);
     expect(await files.responses[1]?.text()).toMatch(/edge-a{12}\/kitshn-linux-arm64\.gz$/);
     expect(waits).toHaveLength(2);
+    // Each wait says what it waits for, so a stuck-looking update has a reason in the daemon log.
+    expect(logged[0]).toContain("kitshn-linux-arm64.gz (HTTP 404)");
 
     const never = async () => new Response("Not Found", { status: 404 });
-    const missing = await releaseFiles("a".repeat(12), ["kitshn-linux-arm64.gz"], { fetch: never, sleep });
+    const missing = await releaseFiles("a".repeat(12), ["kitshn-linux-arm64.gz"], log, {
+      fetch: never,
+      sleep,
+    });
     expect(missing).toMatchObject({
       ok: false,
       reason: expect.stringContaining("kitshn-linux-arm64.gz (HTTP 404)"),

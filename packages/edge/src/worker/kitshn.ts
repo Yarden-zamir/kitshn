@@ -7364,6 +7364,19 @@ export class Kitshn extends DurableObject<Env> {
     if (machineId === null && labels.length === 0) {
       return Response.json({ error: "A job needs a machine or labels." }, { status: 400 });
     }
+    // K-627: an update that runs can wait minutes for its release files (K-617). A second one would take its place as
+    // the rollout step and fail at the daemon, which stops the rollout, so it is refused instead.
+    if (command.kind === "update" && machineId !== null) {
+      const [running] = this.sql<{ id: number }>(
+        "SELECT id FROM jobs WHERE machine_id = ? AND state = 'sent' AND json_extract(command, '$.kind') = 'update'",
+        machineId,
+      );
+      if (running)
+        return Response.json(
+          { error: `An update of this daemon runs now (job ${running.id}); kitshn waits for its result.` },
+          { status: 409 },
+        );
+    }
     const now = Date.now();
     const [row] = this.ctx.storage.transactionSync(() => {
       const inserted = this.sql<{ id: number }>(

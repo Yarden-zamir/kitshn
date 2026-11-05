@@ -1,7 +1,7 @@
 // K-1777: `kitshn ops`, `kitshn state` and `kitshn <operation>`: one call shape for every owner action.
 import type { AgentTransport } from "./agent.ts";
 import { CliError } from "./cli-error.ts";
-import { OPERATIONS, type OpId, isOpId, opsText } from "./operations.ts";
+import { OPERATIONS, type OpId, RELEASE_WAIT_MS, isOpId, opsText } from "./operations.ts";
 
 export const OP_COMMANDS = ["ops", "state"] as const;
 export type OpCommand = (typeof OP_COMMANDS)[number] | OpId;
@@ -163,8 +163,11 @@ async function followRollout(args: ReadonlyArray<string>, transport: () => Agent
 /** K-636: how often `kitshn rollout` reads the rollout. One step takes minutes (K-629), and each read is a forwarded call. */
 const ROLLOUT_POLL_MS = 30_000;
 
-/** K-636: longer than one step (download, restart and 3 minutes up), so a stall is not a slow machine. */
-const ROLLOUT_STALL_MS = 10 * 60_000;
+/**
+ * K-636: longer than one step (the wait for the release files, the download, the restart and 3 minutes up), so a stall
+ * is not a slow machine.
+ */
+const ROLLOUT_STALL_MS = 2 * RELEASE_WAIT_MS;
 
 export async function runOpCommand(
   command: OpCommand,

@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join, win32 } from "node:path";
+import { RELEASE_WAIT_MS } from "kitshn/operations";
 
 export type Platform = "linux" | "darwin" | "win32";
 
@@ -507,9 +508,11 @@ export function cloudflaredUrl(platform: Platform, arch: string): { url: string;
 /** K-617: where kitshn releases live. Each release edge-<version> holds the daemons and SHA256SUMS. */
 export const RELEASES = "https://github.com/Yarden-zamir/kitshn/releases/download";
 
-/** K-617: a release file that is missing gets this many tries, this far apart: 10 minutes, longer than the release job. */
-const RELEASE_TRIES = 20;
+/** K-617: a release file that is missing gets a try every 30 seconds, for RELEASE_WAIT_MS. */
 const RELEASE_RETRY_MS = 30_000;
+const RELEASE_TRIES = RELEASE_WAIT_MS / RELEASE_RETRY_MS + 1;
+/** K-617: a try that gets no answer in this time counts as failed, so one hung connection never stalls the wait. */
+const RELEASE_ANSWER_MS = 20_000;
 
 interface ReleaseIo {
   readonly fetch: (url: string) => Promise<Response>;
@@ -517,7 +520,19 @@ interface ReleaseIo {
 }
 
 const realIo: ReleaseIo = {
-  fetch: (url) => fetch(url),
+  // Only the answer has the time limit: the body of a daemon can take longer on a slow link.
+  fetch: async (url) => {
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(new Error(`no answer in ${RELEASE_ANSWER_MS / 1000} seconds`)),
+      RELEASE_ANSWER_MS,
+    );
+    try {
+      return await fetch(url, { signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  },
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 };
 
@@ -529,6 +544,7 @@ const realIo: ReleaseIo = {
 export async function releaseFiles(
   version: string,
   names: ReadonlyArray<string>,
+  log: (line: string) => void,
   io: ReleaseIo = realIo,
 ): Promise<
   | { readonly ok: true; readonly responses: ReadonlyArray<Response> }
@@ -552,12 +568,15 @@ export async function releaseFiles(
         return [`${name} (${answer})`];
       })
       .join(", ");
-    if (attempt < RELEASE_TRIES) await io.sleep(RELEASE_RETRY_MS);
+    if (attempt === RELEASE_TRIES) break;
+    log(
+      `update: try ${attempt}/${RELEASE_TRIES} of edge-${version} found no ${missing}; next try in 30 seconds`,
+    );
+    await io.sleep(RELEASE_RETRY_MS);
   }
-  const minutes = ((RELEASE_TRIES - 1) * RELEASE_RETRY_MS) / 60_000;
   return {
     ok: false,
-    reason: `The release edge-${version} has no ${missing} after ${Math.round(minutes)} minutes.`,
+    reason: `The release edge-${version} has no ${missing} after ${RELEASE_WAIT_MS / 60_000} minutes.`,
   };
 }
 

@@ -1076,7 +1076,7 @@ async function installRelease(
   if (version === VERSION) return { ok: true, exitCode: 0, output: `Already at ${version}.` };
   const name = `${releaseAsset(platform, arch())}.gz`;
   try {
-    const files = await releaseFiles(version, ["SHA256SUMS", name]);
+    const files = await releaseFiles(version, ["SHA256SUMS", name], log);
     if (!files.ok) return failed(files.reason);
     const [sums, binary] = files.responses;
     if (!sums || !binary) throw new Error("releaseFiles answered fewer files than it was asked for.");

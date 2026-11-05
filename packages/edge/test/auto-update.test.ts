@@ -88,7 +88,10 @@ async function withDaemon(
   scenario: (tools: {
     readonly daemon: (message: object) => Promise<void>;
     readonly jobs: () => Array<{ state: string; command: string; when_idle: number; output: string }>;
-    readonly kitshn: { commit(actor: object, changes: Array<object>, undo: null): number | null };
+    readonly kitshn: {
+      commit(actor: object, changes: Array<object>, undo: null): number | null;
+      addJob(caller: object, body: unknown): Response;
+    };
     /** K-627: the stored rollout. */
     readonly rollout: () => unknown;
     /** What kitshn sent the daemon. */
@@ -101,6 +104,7 @@ async function withDaemon(
       env: { KITSHN_VERSION: string };
       setPresence(machineId: string, online: boolean): void;
       commit(actor: object, changes: Array<object>, undo: null): number | null;
+      addJob(caller: object, body: unknown): Response;
     };
     // The Worker of a release, so there is a release to update to (K-617).
     kitshn.env = { ...kitshn.env, KITSHN_VERSION: NEW };
@@ -306,6 +310,23 @@ it("lets a BEHIND daemon wait while a provider is busy, with no job that holds t
       { state: "sent", command: JSON.stringify({ kind: "update", version: NEW }), when_idle: 1 },
     ]);
     expect(rollout()).toMatchObject({ step: { machineId: machine.id }, busySince: {} });
+  });
+});
+
+it("refuses a second Update daemon while an update runs on the daemon, so the rollout step stays (K-627)", async () => {
+  await withDaemon(async ({ daemon, jobs, kitshn, rollout }) => {
+    await daemon(behindStatus);
+    expect(jobs().map((job) => job.state)).toEqual(["sent"]);
+    const step = (rollout() as { step: { jobId: number } }).step;
+    const owner = {
+      visitor: { email: "owner@example.com", clientId: null, ip: null },
+      actor: { _tag: "person", email: "owner@example.com" },
+    };
+    const again = kitshn.addJob(owner, { machineId: machine.id, command: { kind: "update" } });
+    expect(again.status).toBe(409);
+    expect(((await again.json()) as { error: string }).error).toContain("runs now");
+    expect(jobs()).toHaveLength(1);
+    expect(rollout()).toMatchObject({ step });
   });
 });
 

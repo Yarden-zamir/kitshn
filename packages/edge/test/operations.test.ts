@@ -192,6 +192,16 @@ it("asks the Owner when a machine with the admin ends a stopped rollout, and end
   const automatic = { mode: "automatic" } as const;
   await setup({ shares: automatic, secrets: automatic, maintains: automatic }, key, { x: 0, y: 40 });
   const stub = env.KITSHN.getByName("kitshn");
+  const retry = (nonce: string) =>
+    forwarded(key, "POST", "/op/rollout", `${nonce}-0123456789abcdef`, call(""), {}, ADMIN);
+  // Nothing is stopped, so the admin runs the rollout past the gate, with no ask.
+  await runInDurableObject(stub, (_, state) =>
+    state.storage.sql.exec("DELETE FROM meta WHERE key = 'daemon_rollout'"),
+  );
+  const running = await retry("run-1");
+  expect(running.status, await running.clone().text()).toBe(200);
+  expect(await running.json()).toMatchObject({ outcome: "done" });
+
   const stopped = {
     version: "local",
     step: null,
@@ -212,8 +222,6 @@ it("asks the Owner when a machine with the admin ends a stopped rollout, and end
     ),
   );
   await evictDurableObject(stub);
-  const retry = (nonce: string) =>
-    forwarded(key, "POST", "/op/rollout", `${nonce}-0123456789abcdef`, call(""), {}, ADMIN);
 
   const first = await retry("retry-1");
   expect(first.status, await first.clone().text()).toBe(409);
