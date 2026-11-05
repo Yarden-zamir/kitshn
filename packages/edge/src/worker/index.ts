@@ -44,20 +44,11 @@ export { Kitshn } from "./kitshn.ts";
 const HOLD_TRIES = 30;
 const HOLD_STEP_MS = 2_000;
 /**
- * K-1109: a held request goes to the origin again, so the Worker keeps its body in memory. Known limit: a body over
- * 1 MiB, or one with no Content-Length (a chunked upload), goes once and is not held. Revisit when an app needs that.
+ * K-1109: only a request that is safe to send twice waits; a WebSocket upgrade is a GET. Known limit: a POST or other
+ * write during the switch gets the page, because the app can save it and still answer 502. Revisit when an app marks
+ * its writes safe to repeat.
  */
-const HOLD_BODY_MAX = 1_048_576;
-
-/** K-1109: a way to send the request again, or null for a body that the Worker does not keep. */
-async function resendable(request: Request): Promise<(() => Request) | null> {
-  // No body: the same request goes again, also a WebSocket upgrade, whose 101 answer passes through as it is.
-  if (request.body === null) return () => request;
-  const length = Number(request.headers.get("content-length") ?? Number.NaN);
-  if (!Number.isInteger(length) || length < 0 || length > HOLD_BODY_MAX) return null;
-  const body = await request.arrayBuffer();
-  return () => new Request(request, { method: request.method, body });
-}
+const HOLD_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /**
  * K-1106 to K-1110: the Worker runs on a live site only while kitshn has an offline route on it. It asks
@@ -66,8 +57,7 @@ async function resendable(request: Request): Promise<(() => Request) | null> {
  */
 async function offline(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
-  const resend = await resendable(request);
-  const origin = await fetch(resend?.() ?? request).catch(() => null);
+  const origin = await fetch(request).catch(() => null);
   if (origin && !originDown(origin.status)) return origin;
   const cache = caches.default;
   const key = new Request(`https://kitshn-offline.internal/${url.hostname}`);
@@ -84,11 +74,11 @@ async function offline(request: Request, env: Env, ctx: ExecutionContext): Promi
       cache.put(key, new Response(JSON.stringify(info), { headers: { "cache-control": "max-age=60" } })),
     );
   }
-  if (info.hold && resend) {
+  if (info.hold && HOLD_METHODS.has(request.method)) {
     await origin?.body?.cancel();
     for (let tries = 0; tries < HOLD_TRIES; tries++) {
       await scheduler.wait(HOLD_STEP_MS);
-      const again = await fetch(resend()).catch(() => null);
+      const again = await fetch(request).catch(() => null);
       if (again && !originDown(again.status)) return again;
       await again?.body?.cancel();
     }

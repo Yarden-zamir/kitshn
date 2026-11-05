@@ -520,26 +520,32 @@ it("keeps the offline route and holds requests while a Compose job switches the 
   expect(await jobState("sent")).toEqual([{ address: "hold.example.com", add: true }]);
   expect(await hold()).toBe(true);
 
-  // The origin answers 502 twice while the containers switch; the held POST reaches it the third time.
+  // The origin answers 502 twice while the containers switch; the held GET reaches it the third time.
   vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
-  const bodies: Array<string> = [];
+  const methods: Array<string> = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-    bodies.push(await (input as Request).text());
-    return new Response("ok", { status: bodies.length < 3 ? 502 : 200 });
+    methods.push((input as Request).method);
+    return new Response("ok", { status: methods.length < 3 ? 502 : 200 });
   });
-  const ctx = createExecutionContext();
-  const response = await worker.fetch(
-    new Request("https://hold.example.com/api/save", {
-      method: "POST",
-      body: "payload",
-      headers: { "content-length": "7" },
-    }) as Request<unknown, IncomingRequestCfProperties>,
-    env,
-    ctx,
-  );
-  await waitOnExecutionContext(ctx);
-  expect(response.status).toBe(200);
-  expect(bodies).toEqual(["payload", "payload", "payload"]);
+  const send = async (method: string) => {
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://hold.example.com/api/game", { method }) as Request<
+        unknown,
+        IncomingRequestCfProperties
+      >,
+      { ...env, ASSETS: { fetch: async () => new Response("{{site}}") } as unknown as Fetcher },
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    return response.status;
+  };
+  expect(await send("GET")).toBe(200);
+  expect(methods).toEqual(["GET", "GET", "GET"]);
+  // A write goes once: the app can save it and still answer 502, so a second try could save it twice.
+  methods.length = 0;
+  expect(await send("POST")).toBe(503);
+  expect(methods).toEqual(["POST"]);
 
   // A job that ended, failed or hung past its expiry holds nothing and keeps no route on an up site.
   expect(await jobState("done")).toEqual([]);
