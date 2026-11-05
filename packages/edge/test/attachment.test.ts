@@ -21,9 +21,10 @@ it("fits volumes, servers with non-Latin titles and a full status written last i
     tunnel: "running",
     capabilities: ["compose", "logs", "backup", "doors", "providers"],
     keptBytes: 123456789,
-    attesters: Array.from({ length: 10 }, (_, i) => ({
-      prefix: `attester-${i}.`,
-      address: `https://attester-${i}.example.com/verify/with/a/long/path`,
+    providerProblems: Array.from({ length: 10 }, (_, i) => ({
+      provider: `provider-${i}`,
+      reason: `resources[${i}].lists[0].rows[7]: the row id is longer than 200 characters; row dropped`,
+      at: 0,
     })),
   };
   const base = {

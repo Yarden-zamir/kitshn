@@ -18,13 +18,13 @@ export const strangerKeys = await generateKeyPair("RS256");
 export const accessToken = (
   audience: string,
   claims: { email: string } | { common_name: string },
-  changes: { key?: CryptoKey; issuer?: string; expiresAt?: number } = {},
+  changes: { key?: CryptoKey; issuer?: string; expiresAt?: number; issuedAt?: number } = {},
 ) =>
   new SignJWT(claims)
     .setProtectedHeader({ alg: "RS256", kid: "test" })
     .setIssuer(changes.issuer ?? TEAM)
     .setAudience(audience)
-    .setIssuedAt()
+    .setIssuedAt(changes.issuedAt)
     .setExpirationTime(changes.expiresAt ?? "5m")
     .sign(changes.key ?? keys.privateKey);
 

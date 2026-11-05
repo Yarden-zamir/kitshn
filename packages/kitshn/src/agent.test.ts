@@ -10,7 +10,7 @@ import {
 } from "./agent.ts";
 
 const state: AgentState = {
-  rights: [{ id: "addsPages", name: "adds pages", mode: "ask", circle: { id: "owner", name: "Owner" } }],
+  rights: [{ id: "creates", name: "creates", mode: "ask", circle: { id: "owner", name: "Owner" } }],
   circles: [{ id: "agents", name: "Agents", level: "control" }],
   cards: [
     {
@@ -128,7 +128,7 @@ describe("agent commands (UX audit C5, C6, C8)", () => {
     expect(exit).toBe(2);
     expect(lines.join("\n")).toContain("kitshn time <card> <30m|1h|4h|1d|stop|now>");
     expect((await run("unpublish", [], transport)).exit).toBe(2);
-    expect((await run("game", ["dance"], transport)).exit).toBe(2);
+    expect((await run("port", ["dance"], transport)).exit).toBe(2);
     expect(transport).not.toHaveBeenCalled();
   });
 });

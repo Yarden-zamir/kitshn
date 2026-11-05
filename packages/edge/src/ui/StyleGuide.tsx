@@ -1,6 +1,6 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import type { Circle, Point, Resource, State } from "../core/model.ts";
+import { type Circle, type Point, type Resource, type State, actorIdOf } from "../core/model.ts";
 import type { Notification } from "../core/notifications.ts";
 import type { AccessState, ProposalView } from "../core/protocol.ts";
 import { AccessRow } from "./App.tsx";
@@ -466,7 +466,7 @@ function MapParts(props: { state: State }) {
     name: "Friends",
     color: "#FF5277",
     level: "view",
-    members: [{ _tag: "email", email: "friend@example.com" }],
+    members: [{ _tag: "actor", actorId: actorIdOf({ _tag: "login", email: "her@example.com" }) }],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -772,6 +772,7 @@ function Lists(props: { state: State }) {
   const proposal: ProposalView = {
     id: "p-1",
     machineId: "vps",
+    credential: "machine/vps",
     machineName: "VPS",
     action: "publish",
     target: "tick3d",
@@ -779,7 +780,7 @@ function Lists(props: { state: State }) {
     reason: "Release 2.4",
     labels: { agent: "claude", repo: "tick3d" },
     verified: ["repo"],
-    right: "publishes",
+    right: "shares",
     circleId: "owner",
     shown: "publish tick3d",
     shownHash: "0",
@@ -827,6 +828,7 @@ function Lists(props: { state: State }) {
           <AskRow
             proposal={proposal}
             circleName={(id) => props.state.circles.get(id)?.name ?? id}
+            via="login"
             busy={false}
             onApprove={noop}
             onDeny={noop}

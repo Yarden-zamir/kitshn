@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   connectText,
+  daemonProtocolMatch,
+  namedProtocol,
   fingerprintOf,
   forwardPathProblem,
   forwardUrl,
@@ -117,5 +119,14 @@ describe("forwarded paths (K-1714)", () => {
       expect(forwardUrl(server, path), path).toEqual(expect.any(String));
     expect(forwardPathProblem("/agent/library")).toBeNull();
     expect(forwardPathProblem("/connect")).toEqual(expect.any(String));
+  });
+});
+
+describe("the protocol that a daemon names (K-724)", () => {
+  it("reads a missing value as 2.0.0, and refuses a value of another type", () => {
+    expect(namedProtocol(undefined)).toBe("2.0.0");
+    expect(daemonProtocolMatch(namedProtocol(undefined), "vps").outcome).not.toBe("refuse");
+    for (const bad of [3, null, { major: 2 }, ["2.1.0"]])
+      expect(daemonProtocolMatch(namedProtocol(bad), "vps").outcome).toBe("refuse");
   });
 });

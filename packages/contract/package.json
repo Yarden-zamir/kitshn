@@ -1,0 +1,31 @@
+{
+  "name": "@kitshn/contract-tests",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The provider contract tests (K-723): a fake kitshn edge, a real daemon and the scenarios C-1 to C-18.",
+  "license": "MIT",
+  "bin": {
+    "kitshn-contract": "./dist/cli.js"
+  },
+  "files": [
+    "dist/*.js"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "bun src/cli.ts --daemon \"bun ../daemon/src/main.ts\" && bun src/cli.ts --daemon \"bun ../daemon/src/main.ts\" --provider \"bun src/reference-provider.ts\"",
+    "build": "rm -rf dist && bun build src/cli.ts src/reference-provider.ts --target=node --outdir dist --external ws"
+  },
+  "dependencies": {
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@kitshn/daemon": "workspace:*",
+    "@kitshn/edge": "workspace:*",
+    "@kitshn/local": "workspace:*",
+    "@types/node": "24.19.2",
+    "@types/ws": "8.18.2",
+    "jose": "6.2.14",
+    "typescript": "7.0.2"
+  }
+}

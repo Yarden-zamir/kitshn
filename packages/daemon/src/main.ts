@@ -1,4 +1,4 @@
-// The kitshn daemon (SPEC section 6). One program: `kitshn join`, `kitshn run`, `kitshn service`.
+// The kitshn daemon (K-6xx, docs/internals/machines.md). One program: `kitshn join`, `kitshn run`, `kitshn service`.
 import {
   connectText,
   fingerprintOf,
@@ -18,40 +18,45 @@ import {
   type ServerToDaemon,
   type AskOutcome,
   type AppAccess,
+  WATCH_LEASE_MS,
 } from "@kitshn/edge/machine";
-import type { DoorPlan } from "@kitshn/edge/game";
+import type { DoorPlan } from "@kitshn/edge/port";
 import type { BackupReport } from "@kitshn/edge/backups";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import {
-  ASK_ACTIONS,
   type Answer,
   type AskAction,
   HEALTH_INTERVAL_MS,
   type HealthReport,
+  type IdRequest,
+  KITSHN_PROTOCOL,
   MAX_FORWARD_BYTES,
+  PROVIDER_PROTOCOL,
+  ROLLOUT_FIX,
+  legacyProtocol,
+  matchProtocol,
   type Request,
   WINDOW_ACTIONS,
 } from "@kitshn/local";
 import { linkPairs, nextReport, probeLink, providerChecks } from "./health.ts";
-import { composeFiles, composeRisks, envFileRisks, rawRisks, realpathOnDisk, sourceRisks } from "./guard.ts";
+import {
+  composeFiles,
+  composeRisks,
+  envFileRisks,
+  rawRisks,
+  realpathOnDisk,
+  sourceRisks,
+  spreadData,
+} from "./guard.ts";
 import { type Notify, accessEnv, withAppEnv } from "./appEnv.ts";
 import { HELPER_IMAGE, backup, finishRestores, restore, unpauseMarked } from "./backup.ts";
 import { keyPlan } from "./keys.ts";
-import {
-  AttestationError,
-  T3_TOKEN_ENV,
-  unregisteredT3,
-  attest,
-  attestationRefusal,
-  attesterPrefixes,
-  attestersOf,
-  dropAttested,
-  withAttester,
-  withAttesterUid,
-  attesterPrefixProblem,
-} from "./attest.ts";
+import { dropAttested, labelPrefixes } from "./attest.ts";
+import { IDENTITY_HEADERS } from "./check.ts";
+import { execCommand, execSudoReady } from "./execSudo.ts";
+import { GRACE_MS, PING_MS as PROVIDER_PING_MS, ProviderHub, kitshnStateOf } from "./hub.ts";
 import {
   PUSH_MARK_KEY,
   answersMarkedPush,
@@ -67,6 +72,7 @@ import {
   type LocalOutcome,
   askLocal,
   bridgeLocal,
+  dropConnection,
   listenLocal,
   sharedFolderProblem,
 } from "./local.ts";
@@ -113,7 +119,27 @@ import {
   restorePrevious,
   runStep,
   writeMarker,
+  providersBack,
 } from "./update.ts";
+import {
+  MEASURE_EVERY_MS,
+  type ReadyWatch,
+  READY_CHECK_MS,
+  afterMeasure,
+  afterReadyCheck,
+  bindMetricsPort,
+  chooseMetricsPort,
+  clearTunnelRemoved,
+  markTunnelRemoved,
+  readyFrom,
+  unlessTunnelRemoved,
+  locationsText,
+  measureRegions,
+  pinArgs,
+  readPin,
+  serverLocations,
+  writePin,
+} from "./pin.ts";
 import { ownSid } from "./winpipe.ts";
 import {
   type PathFacts,
@@ -132,6 +158,7 @@ import {
   versionJson,
   pathsFor,
   releaseAsset,
+  restartTunnel,
   serviceCommands,
   serviceFile,
   tunnelCommands,
@@ -146,19 +173,21 @@ import { keepBuild, keptId, keptTag, rollbackOverride, serviceImages, staleTags 
 import { TokenCache } from "./tokens.ts";
 import { Providers, parseSaved } from "./providers.ts";
 import { desiredProblem } from "@kitshn/local";
-import { linkPeerAdmitted, linkSocketProblem, serveLinks } from "./link.ts";
+import { linkPeerAdmitted, serveLinks } from "./link.ts";
 import { lastHour, lastSamples } from "./samples.ts";
 import { pushKey } from "@kitshn/local";
-import { listenerUid, portOf } from "./listener.ts";
 import { MAX_FORWARDS, forwardTarget, passedHeaders, readBounded } from "./forward.ts";
 import {
+  INPUT_RULES_PATH,
   Relays,
   applyDoors,
   doorsCommand,
   doorsProblem,
+  hostFirewallStatus,
   keptPlan,
   listening,
   publicAddresses,
+  refreshSeenV4,
   systemTool,
 } from "./doors.ts";
 import {
@@ -183,9 +212,13 @@ import {
   rightLines,
   serverTable,
   unexposeRefusal,
+  waitingJson,
 } from "./cli.ts";
 import { CliError } from "kitshn/cli-error";
+import { isOpCommand, runOpCommand } from "kitshn/ops";
+import { deployWorker } from "./rollout.ts";
 import { checkSkill, installGlobalSkill, installRepoSkill, refreshGlobalSkill } from "./skill.ts";
+import { forwardDesired, providerReports } from "./desired.ts";
 import { appSocketFolder, removeOldSockets, socketPathProblem, upOnSocket } from "./sockets.ts";
 
 declare const KITSHN_VERSION: string;
@@ -198,10 +231,14 @@ const platform = ((): Platform => {
 })();
 const paths = pathsFor(platform, process.env);
 
-/** K-605: status at most every 5 seconds, a sample once a minute. K-604: a ping every 10 seconds. */
+/**
+ * K-605: status at most every 5 seconds. A sample once a minute for the history on disk; kitshn gets every fifth one,
+ * and each one while someone watches a map (`watch`). K-604: a ping every 10 seconds.
+ */
 const PING_MS = 10_000;
 const PONG_TIMEOUT_MS = 30_000;
 const SAMPLE_MS = 60_000;
+const SAMPLES_PER_SEND = 5;
 const HISTORY_DAYS = 30;
 const JOB_TIMEOUT_MS = 10 * 60_000;
 const OUTPUT_LIMIT = 64 * 1024;
@@ -303,6 +340,7 @@ async function joinCommand(code: string | undefined, server: string | undefined)
   if (existsSync(paths.config)) chmodSync(paths.config, 0o600);
   writeFileSync(paths.config, `${JSON.stringify(secrets, null, 2)}\n`, { mode: 0o600 });
   renameSync(codeKeyFile, keyFile);
+  clearTunnelRemoved(paths.data);
   console.log(`Joined as machine ${secrets.machineId} with the key ${await fingerprintOf(key.x)}.`);
 }
 
@@ -483,21 +521,8 @@ async function providerCommand(argv: ReadonlyArray<string>) {
   fail(notRunning());
 }
 
-/**
- * K-1609, K-621: `kitshn link-check <socket>` exits 0 when this account's daemon serves the link socket, so a provider
- * that cannot read a pipe's server account itself checks it before its first call.
- */
-function linkCheckCommand(path: string | undefined) {
-  if (!path) fail("usage: kitshn link-check <socket or pipe>");
-  // K-701: the daemon user as the commands find it for the main socket, also when a local user asks.
-  if (typeof daemonUid === "string") fail(daemonUid);
-  const problem = linkSocketProblem(platform, path!, daemonUid as number);
-  if (problem) fail(problem);
-  console.log(`${path} is served by the kitshn daemon.`);
-}
-
 /** K-702: one request to the running daemon; null when it does not run. An error answer ends the command. */
-async function ask(request: Request): Promise<Exclude<Answer, { type: "error" }> | null> {
+async function ask(request: IdRequest): Promise<Exclude<Answer, { type: "error" }> | null> {
   // A rotation waits for kitshn to store the new key (K-1705).
   if (typeof daemonUid === "string") fail(daemonUid);
   const peer = { platform, daemonUid: daemonUid as number };
@@ -509,27 +534,8 @@ async function ask(request: Request): Promise<Exclude<Answer, { type: "error" }>
   return outcome.answer;
 }
 
-/**
- * K-1752: the values of the token variables that this machine's attesters read, from the environment of this
- * command; the daemon names the variables, so a command never needs to read `machine.json`.
- */
-async function attestationsFromEnv(): Promise<Record<string, string>> {
-  if (typeof daemonUid === "string") return {};
-  const outcome = await askLocal(socketPath, { id: "1", type: "status" }, 5_000, {
-    platform,
-    daemonUid: daemonUid as number,
-  }).catch(() => null);
-  const names =
-    outcome?.kind === "answer" && outcome.answer.type === "status"
-      ? (outcome.answer.status.attesterEnv ?? [])
-      : [];
-  // K-1752: the T3 credential goes also when `status` fails or names no `t3.` attester, so kitshn can refuse it.
-  return Object.fromEntries(
-    [...new Set([...names, T3_TOKEN_ENV])].flatMap((name) =>
-      process.env[name] ? [[name, process.env[name] as string]] : [],
-    ),
-  );
-}
+/** K-1752: `KITSHN_ATTEST` of this command; the daemon asks the provider that it names to vouch for it. */
+const attestFromEnv = () => (process.env["KITSHN_ATTEST"] ? { attest: process.env["KITSHN_ATTEST"] } : {});
 
 /**
  * K-1714: the agent commands (publish, address, logs, repo, redirect) reach `/agent` through the daemon, which adds
@@ -540,7 +546,7 @@ function daemonTransport(): AgentTransport {
   if (typeof daemonUid === "string") throw new CliError(daemonUid);
   const peer = { platform, daemonUid: daemonUid as number };
   const ask = async (
-    request: Request,
+    request: IdRequest,
     follow?: (answer: Answer) => boolean,
     onLine?: (answer: Answer) => void,
   ) => {
@@ -567,7 +573,7 @@ function daemonTransport(): AgentTransport {
         action: "state",
         target: "",
         ...(all ? { body: { all: true } } : {}),
-        attestations: await attestationsFromEnv(),
+        ...attestFromEnv(),
       });
       if (answer.type === "ask" && answer.outcome === "done") return parseState(answer.result);
       throw new CliError(
@@ -585,9 +591,17 @@ function daemonTransport(): AgentTransport {
         path,
         ...(init.headers ? { headers: { ...init.headers } } : {}),
         ...(body === undefined ? {} : { body }),
-        attestations: await attestationsFromEnv(),
+        ...attestFromEnv(),
       };
-      const answer = await forwardAndWait(ask, request, (line) => console.error(line), Date.now);
+      const answer = await forwardAndWait(
+        ask,
+        request,
+        (line, wait) => {
+          console.error(line);
+          if (args.includes("--json")) process.stdout.write(`${waitingJson(wait)}\n`);
+        },
+        Date.now,
+      );
       return new Response(Buffer.from(answer.body, "base64"), {
         status: answer.status,
         headers: answer.contentType ? { "content-type": answer.contentType } : {},
@@ -607,7 +621,7 @@ async function askToken(repo: string, permission: "read" | "write" | "auto"): Pr
       action: "github-token",
       target: repo,
       body: { permission },
-      attestations: await attestationsFromEnv(),
+      ...attestFromEnv(),
     },
     90_000,
     { platform, daemonUid: daemonUid as number },
@@ -713,7 +727,8 @@ async function ghCommand(argv: ReadonlyArray<string>) {
  */
 async function agentCommand(argv: ReadonlyArray<string>) {
   const [action, ...rest] = argv;
-  if (!(ASK_ACTIONS as ReadonlyArray<string>).includes(action ?? ""))
+  // The actions with a help line; `exec` is no ask of an agent (K-722).
+  if (!Object.hasOwn(ASK_ACTION_HELP, action ?? ""))
     usage(
       `${action ? `kitshn agent does not know the action ${action}.` : "name the action."} The actions:\n${askActionsText()}`,
     );
@@ -742,7 +757,10 @@ async function agentCommand(argv: ReadonlyArray<string>) {
     } else if (word.startsWith("--"))
       usage(`kitshn agent does not know ${word}. It takes --reason, --label, --body and --audience.`);
     else if (target === "") target = word;
-    else usage(`kitshn agent takes one target, not also ${word}. ${ASK_ACTION_HELP[action as AskAction]}.`);
+    else
+      usage(
+        `kitshn agent takes one target, not also ${word}. ${ASK_ACTION_HELP[action as keyof typeof ASK_ACTION_HELP]}.`,
+      );
   }
   if (typeof daemonUid === "string") fail(daemonUid);
   const request: Request = {
@@ -753,7 +771,7 @@ async function agentCommand(argv: ReadonlyArray<string>) {
     ...(body === undefined ? {} : { body }),
     ...(reason === undefined ? {} : { reason }),
     ...(Object.keys(labels).length === 0 ? {} : { labels }),
-    attestations: await attestationsFromEnv(),
+    ...attestFromEnv(),
   };
   const outcome = await askLocal(
     socketPath,
@@ -790,34 +808,6 @@ async function agentCommand(argv: ReadonlyArray<string>) {
 }
 
 /**
- * K-1751: `kitshn attester set --prefix <p.> --url <loopback url> --token-env <NAME>` registers an attester through the
- * daemon, as the daemon user or root. The T3 server runs it on start with its own port.
- */
-async function attesterCommand(argv: ReadonlyArray<string>) {
-  const [action, ...rest] = argv;
-  const value = (name: string) => {
-    const index = rest.indexOf(name);
-    return index >= 0 ? (rest[index + 1] ?? "") : "";
-  };
-  const prefix = value("--prefix");
-  const url = value("--url");
-  const tokenEnv = value("--token-env");
-  if (action !== "set" || !prefix || !url || !tokenEnv)
-    fail("usage: kitshn attester set --prefix <prefix.> --url <loopback url> --token-env <variable>");
-  if (typeof daemonUid === "string") fail(daemonUid);
-  const outcome = await askLocal(
-    socketPath,
-    { id: "1", type: "attester-set", prefix, url, tokenEnv },
-    10_000,
-    { platform, daemonUid: daemonUid as number },
-  ).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
-  if (outcome.kind === "not-running") fail(notRunning());
-  const answer = outcome.answer;
-  if (answer.type === "error") fail(answer.error);
-  console.log(JSON.stringify(answer.type === "attester-set" ? answer.attesters : null));
-}
-
-/**
  * K-701: `kitshn local-users list | add <user> [--provider] | remove <user>` asks the daemon, which edits its own
  * `machine.json`, so the command works the same for root and the daemon user and never writes the caller's own file.
  */
@@ -847,15 +837,24 @@ async function localUsersCommand(argv: ReadonlyArray<string>) {
   console.log(`Local users: ${rows.length > 0 ? rows.join(", ") : "none"}, and the daemon user ${own}.`);
   if (action === "add")
     console.log(
-      `The user ${who} now reaches the daemon with kitshn${provider ? ", and may run its own provider and attester" : ""}.`,
+      `The user ${who} now reaches the daemon with kitshn${provider ? ", and may run its own provider" : ""}.`,
     );
 }
 
 /**
- * K-704: `kitshn providers rebind <name> --to-user <user>` moves a provider name, and the attester of its prefix, to a
- * provider user, as root or the daemon user. The cards stay.
+ * K-704: `kitshn providers rebind <name> --to-user <user>` moves a provider name to a provider user, as root or the
+ * daemon user. The cards stay. K-722: `kitshn providers exec-user <name> <user>` sets who runs exec for it.
  */
 async function providersCommand(argv: ReadonlyArray<string>) {
+  if (argv[0] === "exec-user") {
+    const [, name, user] = argv;
+    if (!name || !user || argv.length !== 3) fail("usage: kitshn providers exec-user <name> <user>");
+    const uid = uidOf(user!);
+    const answer = await ask({ id: "1", type: "provider-exec-user", provider: name!, uid });
+    if (answer === null) fail(notRunning());
+    console.log(`Commands of other machines for ${name} now run as ${user} (user id ${uid}).`);
+    return;
+  }
   const at = argv.indexOf("--to-user");
   const name = argv[1];
   const user = at >= 0 ? argv[at + 1] : undefined;
@@ -908,9 +907,13 @@ function writeChanged(file: string, text: string | Buffer, mode: number): boolea
 
 /**
  * K-603: installs the tunnel as its own user service and starts it. It restarts the tunnel only when cloudflared,
- * its token or its service file changed, so a daemon restart or update never stops the tunnel.
+ * its token or its service file changed, so a daemon restart or update never stops the tunnel. A `background` call comes
+ * from a timer, so a failed step must not end the daemon. A removed machine gets no service back (K-615).
  */
-async function ensureTunnel(config: JoinSecrets) {
+const ensureTunnel = (config: JoinSecrets, background = false) =>
+  unlessTunnelRemoved(paths.data, () => installTunnel(config, background));
+
+async function installTunnel(config: JoinSecrets, background: boolean) {
   const { file: binary, fresh } = await ensureCloudflared();
   const tokenFile = join(paths.data, "tunnel-token");
   const tokenChanged = writeChanged(tokenFile, config.tunnelToken, 0o600);
@@ -924,11 +927,17 @@ async function ensureTunnel(config: JoinSecrets) {
     );
   const unitChanged = writeChanged(
     paths.tunnelService,
-    serviceBytes(tunnelServiceFile(platform, binary, tokenFile)),
+    serviceBytes(
+      tunnelServiceFile(platform, binary, tokenFile, process.env, [
+        "--metrics",
+        `127.0.0.1:${await tunnelMetricsPort()}`,
+        ...pinArgs(readPin(pinFile())),
+      ]),
+    ),
     0o644,
   );
   const steps = fresh || tokenChanged || unitChanged ? tunnel.restart : tunnel.start;
-  for (const step of steps) run(step.argv, step.mayFail);
+  for (const step of steps) run(step.argv, step.mayFail || background);
 }
 
 /**
@@ -1115,6 +1124,10 @@ async function installRelease(
         from: VERSION,
         to: version,
         now: Date.now(),
+        providers: registry()
+          .states()
+          .filter((state) => state.online)
+          .map((state) => state.name),
       },
     );
     if (refused !== null) return failed(refused);
@@ -1167,10 +1180,22 @@ function updateDropped() {
   watch.timer = deadlineTimer(step.marker);
 }
 
-/** K-629: the connection stayed up, so the update holds: the marker goes, and kitshn gets the result. */
+/**
+ * K-629: the connection stayed up, so the update holds: the marker goes, and kitshn gets the result. K-636: each
+ * provider that was online before the swap must be back first, else the previous daemon comes back.
+ */
 function confirmUpdate() {
   const watch = updateWatch;
   if (!watch) return;
+  const lost = providersBack(
+    watch.marker.providers ?? [],
+    registry().states(),
+    registry().refusedForOlderMajor(),
+  );
+  if (lost !== null) {
+    void rollBackUpdate(watch.marker, lost);
+    return;
+  }
   updateWatch = null;
   rmSync(markerPath(paths.data), { force: true });
   log(
@@ -1515,6 +1540,14 @@ async function composeUp(
     refuse(envFileRisks(await readConfig(["--no-interpolate"]), roots, real));
     const config = await readConfig([]);
     refuse(composeRisks(config, command.project, roots, real));
+    // K-826: an instance of a spread app keeps no data, because kitshn cannot move data to another machine yet.
+    if (command.kind === "compose" && command.spread === true) {
+      const kept = spreadData(config, data, real);
+      if (kept.length > 0)
+        throw new Error(
+          `a spread app keeps no data, because kitshn cannot move data between machines yet; remove ${kept.join(", ")}, or use placement "every" or "one" (K-826)`,
+        );
+    }
     // The container user may not be the daemon user; the socket directory must take its socket.
     mkdirSync(sockets, { recursive: true });
     chmodSync(sockets, 0o777);
@@ -1889,7 +1922,14 @@ function runJob(
     return oneAtATime(command.card, async () => {
       const outcome =
         command.kind === "backup"
-          ? await backup(machine, command.card, command.run, command.prune, command.pauseLimitMs)
+          ? await backup(
+              machine,
+              command.card,
+              command.run,
+              command.prune,
+              command.pauseLimitMs,
+              command.repository,
+            )
           : await restore(
               machine,
               command.card,
@@ -1897,6 +1937,7 @@ function runJob(
               command.before,
               command.sources,
               command.pauseLimitMs,
+              command.repository,
             );
       return { ...outcome, exitCode: outcome.ok ? 0 : 1 };
     });
@@ -1909,6 +1950,7 @@ function runJob(
     checkListening();
     return Promise.resolve({ ...outcome, exitCode: outcome.ok ? 0 : 1 });
   }
+  if (command.kind === "tunnel-restart") return restartTunnelJob();
   if (command.kind === "restart") {
     restartSoon(platform, log);
     return Promise.resolve({ ok: true, exitCode: 0, output: "restarting" });
@@ -1925,6 +1967,108 @@ function runJob(
 }
 
 let tunnelState: "starting" | "running" | "stopped" = "stopped";
+/** K-632: the data centers of the tunnel's connections, from its metrics. */
+let tunnelLocations: string | null = null;
+const pinFile = () => join(paths.data, "tunnel-pin.json");
+const metricsPortFile = () => join(paths.data, "tunnel-metrics-port");
+/** K-632: cloudflared's own word on its connection; null until it answers. */
+let tunnelReady: boolean | null = null;
+let readyWatch: ReadyWatch = { notReadySince: null, checkedAt: Date.now() };
+
+const readTunnelPath = (port: number, path: "ready" | "metrics") =>
+  fetch(`http://127.0.0.1:${port}/${path}`, { signal: AbortSignal.timeout(2000) })
+    .then((answer) => answer.text())
+    .catch(() => null);
+
+const keptMetricsPort = () => {
+  const port = Number(readText(metricsPortFile()).trim());
+  return Number.isInteger(port) && port > 0 && port < 65536 ? port : null;
+};
+
+/** K-632: a free port once, kept in the data folder; see `chooseMetricsPort`. */
+async function tunnelMetricsPort() {
+  const port = await chooseMetricsPort(
+    keptMetricsPort(),
+    readTunnelState() === "running",
+    async (kept) => (await bindMetricsPort(kept)) !== null,
+    async () => {
+      const free = await bindMetricsPort(0);
+      if (free === null) throw new Error("no free port for the metrics of the tunnel");
+      return free;
+    },
+  );
+  writeChanged(metricsPortFile(), String(port), 0o600);
+  return port;
+}
+
+/** K-632: at start and every 6 hours, measure the two edge regions and pin the near one. */
+async function measurePin(config: JoinSecrets) {
+  const started = readPin(pinFile());
+  const measurement = await measureRegions();
+  const current = readPin(pinFile());
+  const next = afterMeasure(started, current, measurement);
+  writePin(pinFile(), next);
+  if (JSON.stringify(pinArgs(next)) === JSON.stringify(pinArgs(current))) return;
+  log(next.pin ? `tunnel: pinned to ${next.pin.region} (${next.pin.edges.join(", ")})` : "tunnel: no pin");
+  readyWatch = { notReadySince: null, checkedAt: Date.now() };
+  await ensureTunnel(config, true);
+}
+
+/**
+ * K-632: every 30 seconds: a tunnel that cannot start on its metrics port gets a new one, a pinned tunnel that stays not
+ * ready loses the pin, and the status follows. A read with no answer changes nothing.
+ */
+function watchReady(config: JoinSecrets) {
+  const check = async () => {
+    const port = keptMetricsPort();
+    if (port === null) return;
+    if (tunnelState !== "running" && (await bindMetricsPort(port)) === null) await ensureTunnel(config, true);
+    const ready = readyFrom(await readTunnelPath(port, "ready"));
+    const before = readPin(pinFile());
+    const after = afterReadyCheck(before, ready, readyWatch, Date.now());
+    readyWatch = after.watch;
+    if (after.state !== before) {
+      log(
+        "tunnel: the pinned tunnel has no connection for 60 seconds; it runs without the pin until the next measure",
+      );
+      writePin(pinFile(), after.state);
+      await ensureTunnel(config, true);
+    }
+    if (ready === null) return;
+    const metrics = ready ? await readTunnelPath(port, "metrics") : null;
+    const text = !ready
+      ? null
+      : metrics === null
+        ? tunnelLocations
+        : locationsText(serverLocations(metrics), after.state);
+    if (text === tunnelLocations && ready === tunnelReady) return;
+    tunnelLocations = text;
+    tunnelReady = ready;
+    report();
+  };
+  const logFailure = (error: unknown) => log(`tunnel check failed: ${String(error)}`);
+  void check().catch(logFailure);
+  setInterval(() => void check().catch(logFailure), READY_CHECK_MS);
+}
+
+/** K-634: restarts the tunnel service; a removed machine gets no tunnel back (K-615). */
+async function restartTunnelJob(): Promise<JobOutcome> {
+  let outcome: JobOutcome = {
+    ok: false,
+    exitCode: 1,
+    output: "this machine was removed, so it runs no tunnel (K-615)",
+  };
+  await unlessTunnelRemoved(paths.data, async () => {
+    outcome = restartTunnel(tunnel.restart, (argv) => {
+      const [program = "", ...rest] = argv;
+      return spawnSync(program, rest, { stdio: "ignore", windowsHide: true }).status === 0;
+    });
+    readyWatch = { notReadySince: null, checkedAt: Date.now() };
+  });
+  log(`tunnel: ${outcome.output}`);
+  return outcome;
+}
+
 let socket: WebSocket | null = null;
 
 function report() {
@@ -1935,7 +2079,18 @@ function report() {
       capabilities:
         platform === "win32"
           ? // K-622: "task-restart": this daemon starts its task again from outside the task's run.
-            ["update", "update-gz", "provider", "access", "health", "task-restart"]
+            // K-1608, K-721: pushes, `applied` and the exec relay are the same on every platform.
+            [
+              "update",
+              "update-gz",
+              "provider",
+              "applied",
+              "access",
+              "health",
+              "protocol-2",
+              "task-restart",
+              "tunnel-restart",
+            ]
           : [
               "update",
               "update-gz",
@@ -1946,6 +2101,10 @@ function report() {
               "logs",
               "backup",
               "backup-restore",
+              // K-826: this daemon refuses a spread app with volumes.
+              "compose-spread",
+              // K-827: this daemon backs up an instance into its own repository.
+              "backup-instances",
               "provider",
               // K-1608: this daemon answers `applied` for each push that it saved.
               "applied",
@@ -1953,43 +2112,72 @@ function report() {
               "access",
               // K-630: this daemon checks its providers and links, and answers `checkHealth`.
               "health",
+              // K-721: this daemon speaks provider protocol 2 and applies the pause and exec rights pushes.
+              "protocol-2",
+              // K-634: this daemon restarts its tunnel service as a job.
+              "tunnel-restart",
               ...(doorState.problem === null ? ["doors"] : []),
             ],
       ...(keptBytes === undefined ? {} : { keptBytes }),
       version: VERSION,
+      // K-724: kitshn reads a status without it as 2.0.0.
+      protocol: KITSHN_PROTOCOL,
       os: `${osPlatform()} ${release()}`,
       arch: arch(),
       hostname: hostname(),
       tunnel: tunnelState,
-      // K-1751: the map shows the attesters of each machine.
-      attesters: attestersOf(readMachineFile()).attesters.map(({ prefix, address }) => ({ prefix, address })),
+      ...(tunnelLocations === null ? {} : { tunnelLocations }),
+      ...(tunnelReady === null ? {} : { tunnelReady }),
+      ...(doorState.relays.length === 0 ? {} : { relays: doorState.relays }),
       publicAddresses: publicAddresses(),
       ...(doorState.problem === null ? {} : { doorsProblem: doorState.problem }),
+      ...(doorState.firewall === null ? {} : { hostFirewall: doorState.firewall }),
       listening: [...doorState.listening],
       refusedProviders: registry().refused(),
       offlineProviders: registry().offline(),
+      // K-704: the items that the last register or upsert of each provider dropped, for the machine card.
+      // K-722: how exec of other machines becomes each provider's exec user here; `bridge` shows on the card.
+      execPaths: hub()
+        .execPaths()
+        .map(({ provider, uid, via }) => ({ provider, user: userNameOf(uid) ?? String(uid), via })),
+      providerProblems: registry()
+        .states()
+        .flatMap((state) =>
+          state.problems.slice(0, 10).map((problem) => ({
+            provider: state.name,
+            reason: `${problem.path}: ${problem.reason}`,
+            at: Date.now(),
+          })),
+        ),
     },
   };
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
 }
 
-/** K-2002, K-2006: whether this machine can gate game ports, and which game ports listen. */
-const doorState: { problem: string | null; listening: ReadonlySet<string> } = {
+/** K-2003, K-2007: whether this machine can gate ports, and which gated ports listen. */
+const doorState: {
+  problem: string | null;
+  listening: ReadonlySet<string>;
+  firewall: string | null;
+  relays: ReadonlyArray<string>;
+} = {
   problem: "not checked yet",
   listening: new Set(),
+  firewall: null,
+  relays: [],
 };
 const doorsFile = () => join(paths.data, "doors.json");
 const relays = new Relays(log);
 process.on("exit", () => relays.stopAll());
 
-/** K-2008: the relays of a plan, after its doors are in the table. */
+/** K-2009: the relays of a plan, after its doors are in the table. */
 function syncRelays(plan: DoorPlan) {
   void ensureCloudflared()
     .then(({ file }) => relays.sync(plan.relays, file, readConfig()))
     .catch((error: unknown) => log(`the relays could not start: ${String(error)}`));
 }
 
-/** K-2006: the game ports of the kept plan that something listens on; a change goes out in the status. */
+/** K-2007: the gated ports of the kept plan that something listens on; a change goes out in the status. */
 function checkListening() {
   const plan = keptPlan(doorsFile());
   const wanted = new Set((plan?.ports ?? []).map(({ port, proto }) => `${port}/${proto}`));
@@ -2001,31 +2189,51 @@ function checkListening() {
             ...listening(spawnSync(systemTool("ss"), ["-H", "-ltnu"], { encoding: "utf8" }).stdout ?? ""),
           ].filter((key) => wanted.has(key)),
         );
-  if ([...found].sort().join() === [...doorState.listening].sort().join()) return;
+  const serving = relays.serving(Date.now());
+  const same = (a: Iterable<string>, b: Iterable<string>) => [...a].sort().join() === [...b].sort().join();
+  if (same(found, doorState.listening) && same(serving, doorState.relays)) return;
   doorState.listening = found;
+  doorState.relays = serving;
   report();
 }
 
-/** K-2005: after a restart or a reboot the table is empty or old; the kept plan goes in again before kitshn sends one. */
+/** K-2006: after a restart or a reboot the table is empty or old; the kept plan goes in again before kitshn sends one. */
 function startDoors() {
   doorState.problem = doorsProblem(platform);
   checkListening();
   setInterval(checkListening, 30_000);
   if (platform !== "linux") return;
-  if (doorState.problem === null) applyKeptPlan();
-  // K-2005: each minute, a start problem is checked again (the network was not up yet, or sudo failed once), and
-  // the kept plan goes in again, because a \`flush ruleset\` (nftables.service, a reload) can delete the table at
-  // any time and the daemon user cannot list it. The apply is idempotent.
-  setInterval(() => {
-    if (doorState.problem === null) return applyKeptPlan(true);
+  // K-2006: each minute the problem is checked again (the network was not up yet, sudo failed once, or a declared
+  // address of K-2003 no longer matches), and the kept plan goes in again, because a \`flush ruleset\`
+  // (nftables.service, a reload) can delete the table and the daemon user cannot list it. The apply is idempotent.
+  const check = async (start: boolean) => {
+    await refreshSeenV4();
+    const before = doorState.problem;
     doorState.problem = doorsProblem(platform);
-    if (doorState.problem !== null) return;
-    applyKeptPlan();
-    report();
-  }, 60_000);
+    if (doorState.problem === null) applyKeptPlan(!start && before === null);
+    const firewall = hostFirewallStatus(
+      existsSync(INPUT_RULES_PATH) ? readText(INPUT_RULES_PATH) : null,
+      keptPlan(doorsFile())?.ports ?? [],
+    );
+    if (start || doorState.problem !== before || firewall !== doorState.firewall) {
+      doorState.firewall = firewall;
+      report();
+    }
+  };
+  void check(true);
+  setInterval(() => void check(false), 60_000);
 }
 
-/** K-2005: the plan that this daemon wrote last goes into the table again before kitshn sends a new one. */
+/** A file's text, or "" when it cannot be read. */
+const readText = (file: string) => {
+  try {
+    return readFileSync(file, "utf8");
+  } catch {
+    return "";
+  }
+};
+
+/** K-2006: the plan that this daemon wrote last goes into the table again before kitshn sends a new one. */
 function applyKeptPlan(quiet = false) {
   const plan = keptPlan(doorsFile());
   if (plan === null) {
@@ -2040,11 +2248,14 @@ function applyKeptPlan(quiet = false) {
 }
 
 /** K-605: the tunnel state comes from its service manager; a change goes out in the status. */
+function readTunnelState() {
+  const [program = "", ...rest] = tunnel.state;
+  return tunnelStateOf(platform, spawnSync(program, rest, { encoding: "utf8" }).stdout ?? "");
+}
+
 function watchTunnel() {
   const check = () => {
-    const [program = "", ...rest] = tunnel.state;
-    const result = spawnSync(program, rest, { encoding: "utf8" });
-    const state = tunnelStateOf(platform, result.stdout ?? "");
+    const state = readTunnelState();
     if (state === tunnelState) return;
     tunnelState = state;
     report();
@@ -2123,7 +2334,8 @@ async function answerChallenge(
   }
   const signing = await fingerprintOf(key.x);
   const signature = await signText(key, connectText(config.server, config.machineId, message.challenge));
-  ws.send(JSON.stringify({ type: "answer", signature } satisfies DaemonMessage));
+  // K-724: the protocol goes with the answer, so kitshn decides before it sends this daemon anything.
+  ws.send(JSON.stringify({ type: "answer", signature, protocol: KITSHN_PROTOCOL } satisfies DaemonMessage));
   challenge = message.challenge;
   if (message.fingerprint === signing) return "answered";
   log(
@@ -2148,7 +2360,8 @@ async function askAgain(
   emit: (event: Answer) => void,
 ) {
   if (event.type !== "ask-result" || event.outcome !== "approved") return emit(event);
-  const again = await askKitshn(request, () => {}).catch((error: unknown) => ({
+  // A window action queues no job, so its connection gets no `job-result`.
+  const again = await askKitshn(request, () => {}, -1).catch((error: unknown) => ({
     type: "ask" as const,
     outcome: "refused" as const,
     reason: String(error),
@@ -2167,8 +2380,8 @@ async function askAgain(
 }
 
 /**
- * K-704, K-1751: root or the daemon user moves a provider name to a provider user, with the attester of its prefix.
- * The cards stay the same cards; the new user registers the name next.
+ * K-704: root or the daemon user moves a provider name to a provider user. The cards stay the same cards; the new
+ * user registers the name next.
  */
 function rebindProvider(request: Extract<Request, { type: "provider-rebind" }>): Answer {
   const machine = readMachineFile();
@@ -2190,12 +2403,6 @@ function rebindProvider(request: Extract<Request, { type: "provider-rebind" }>):
         output: `The provider ${request.provider} moved to the user id ${request.uid}; start it as that user and run the command again.`,
       });
     }
-  const next = withAttesterUid(machine as Record<string, unknown>, `${request.provider}.`, request.uid);
-  if (next !== machine) {
-    const temporary = `${paths.config}.${process.pid}.tmp`;
-    writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
-    renameSync(temporary, paths.config);
-  }
   log(`provider ${request.provider} now belongs to the user id ${request.uid}`);
   sendProviders();
   report();
@@ -2225,77 +2432,15 @@ function editLocalUsers(request: Extract<Request, { type: "local-users" }>): Ans
   return { id: request.id, type: "local-users", daemonUid: ownUid(), users };
 }
 
-/** K-1751: writes one attester into `machine.json`, replacing an older entry of the same prefix. */
-function setAttester(request: Extract<Request, { type: "attester-set" }>, caller: Caller): Answer {
-  // K-1751: the registering user must hold the port now; the entry keeps that uid, and each check compares it again.
-  let port = 0;
-  try {
-    port = portOf(request.url);
-  } catch {
-    throw new Error(`kitshn refuses this attester: ${request.url} is not an address (K-1751).`);
-  }
-  if (listenerUid(platform, port) !== caller.uid)
-    throw new Error(
-      `kitshn refuses this attester: port ${port} is not held by user id ${caller.uid} (K-1751).`,
-    );
-  // K-701: a provider user registers only the prefix of a provider name that belongs to it.
-  const prefixProblem = attesterPrefixProblem(
-    request.prefix,
-    request.tokenEnv,
-    caller.uid,
-    ownUid(),
-    registry().ownedBy(caller.uid),
-  );
-  if (prefixProblem) throw new Error(`kitshn refuses this attester: ${prefixProblem} (K-1751).`);
-  const machine = readMachineFile();
-  // A file that the daemon cannot read is never rewritten, so its tokens stay.
-  if (typeof machine !== "object" || machine === null || Array.isArray(machine))
-    throw new Error(`the daemon cannot read ${paths.config}, so it changes no attester.`);
-  const next = withAttester(machine as Record<string, unknown>, {
-    prefix: request.prefix,
-    address: request.url,
-    tokenEnv: request.tokenEnv,
-    uid: caller.uid,
-  });
-  if (typeof next === "string") throw new Error(`kitshn refuses this attester: ${next} (K-1751).`);
-  const temporary = `${paths.config}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
-  renameSync(temporary, paths.config);
-  log(`attester ${request.prefix} set to ${request.url}`);
-  // K-1751: the map shows the new attester without a daemon restart.
-  report();
-  return {
-    id: request.id,
-    type: "attester-set",
-    attesters: attestersOf(next).attesters.map(({ prefix, address, tokenEnv }) => ({
-      prefix,
-      address,
-      tokenEnv,
-    })),
-  };
-}
+/** K-1752: a call whose agent its provider did not vouch for; it never goes as the bare machine. */
+class AttestationError extends Error {}
 
-/** K-1752, K-1753: the labels that the attesters of this machine vouch for, each asked with its own token only. */
-async function attestedFor(attestations: Readonly<Record<string, string>> | undefined) {
-  const { attesters } = attestersOf(readMachineFile());
-  const unregistered = unregisteredT3(attestations, attesters);
-  if (unregistered) throw new AttestationError(unregistered);
-  const attested: Record<string, string> = {};
-  for (const attester of attesters) {
-    const token = attestations?.[attester.tokenEnv];
-    if (!token) continue;
-    // K-1751: a stale port that another user took never gets the caller's token.
-    if (attester.uid !== undefined && listenerUid(platform, portOf(attester.address)) !== attester.uid)
-      throw new AttestationError(
-        `could not check the ${attester.prefix === "t3." ? "T3" : attester.prefix.slice(0, -1)} thread: its port is not held by the user that registered it; restart that service.`,
-      );
-    const result = await attest(attester, token);
-    // K-1752: a call with a token never falls back to the bare machine.
-    const refusal = attestationRefusal(attester, result);
-    if (refusal) throw new AttestationError(refusal);
-    if (result.outcome === "labels") Object.assign(attested, result.labels);
-  }
-  return attested;
+/** K-1752, K-1753: the labels that the provider named in `KITSHN_ATTEST` vouches for; none without it. */
+async function attestedFor(value: string | undefined): Promise<Record<string, string>> {
+  if (!value) return {};
+  const outcome = await hub().attest(value);
+  if ("refused" in outcome) throw new AttestationError(outcome.refused);
+  return outcome.labels;
 }
 
 /**
@@ -2321,13 +2466,14 @@ async function forwardOnce(request: Extract<Request, { type: "forward" }>): Prom
   if (!key)
     throw new Error("this machine has no key, so it cannot forward a call (K-1714). Run kitshn rekey.");
   const url = forwardTarget(joined.server, request.path);
-  if (typeof url === "string") throw new Error(`the daemon forwards only /agent calls: ${url} (K-1714)`);
+  if (typeof url === "string")
+    throw new Error(`the daemon forwards only /agent and /op calls: ${url} (K-1714)`);
   const body = request.body === undefined ? undefined : Buffer.from(request.body, "base64");
   if (body && body.length > MAX_FORWARD_BYTES)
     throw new Error(
       `the body is larger than ${MAX_FORWARD_BYTES} bytes, the limit of a forwarded call (K-1714).`,
     );
-  const labels = JSON.stringify(await attestedFor(request.attestations));
+  const labels = JSON.stringify(await attestedFor(request.attest));
   const at = Date.now();
   const nonce = crypto.randomUUID();
   const labelsHash = createHash("sha256").update(labels).digest("hex");
@@ -2370,6 +2516,7 @@ async function forwardOnce(request: Extract<Request, { type: "forward" }>): Prom
 async function askKitshn(
   request: Extract<Request, { type: "ask" }>,
   emit: (event: Answer) => void,
+  connection: number,
 ): Promise<Answer> {
   const ws = socket;
   if (ws === null || challenge === null)
@@ -2377,25 +2524,37 @@ async function askKitshn(
       "the daemon has no signed connection to kitshn, so it cannot ask (K-1710). See kitshn status.",
     );
   const requestId = crypto.randomUUID();
-  const { id, type: _type, labels, attestations, ...rest } = request;
-  // K-1752, K-1753: only an attester sets the labels of its prefix; the caller's token goes to that attester only.
-  const { attesters } = attestersOf(readMachineFile());
+  const { id, type: _type, labels, attest, ...rest } = request;
+  // K-1752, K-1753: only a provider sets the labels of its prefix; the caller's token goes to that provider only.
   let attested: Record<string, string>;
   try {
-    attested = await attestedFor(attestations);
+    attested = await attestedFor(attest);
   } catch (error) {
-    // K-1752: a thread that no attester vouched for is a refusal of this ask, which git-credential stops on.
+    // K-1752: an agent that its provider did not vouch for is a refusal of this ask, which git-credential stops on.
     if (error instanceof AttestationError)
       return { id, type: "ask", outcome: "refused", reason: error.message };
     throw error;
   }
   const ask = {
     ...rest,
-    ...(labels ? { labels: dropAttested(labels, attesterPrefixes(attesters)) } : {}),
+    ...(labels
+      ? {
+          labels: dropAttested(
+            labels,
+            labelPrefixes(
+              registry()
+                .reports()
+                .map((item) => item.name),
+            ),
+          ),
+        }
+      : {}),
     ...(Object.keys(attested).length > 0 ? { attested } : {}),
   };
   // K-1762: a kept token goes only to the same repo and the same attested thread; an ask without one always asks kitshn.
-  const thread = request.action === "github-token" ? attested["t3.thread.id"] : undefined;
+  const provider = attest?.slice(0, attest.indexOf(":"));
+  const threadId = provider ? attested[`${provider}.thread.id`] : undefined;
+  const thread = request.action === "github-token" && threadId ? `${provider}.${threadId}` : undefined;
   const body = request.body;
   const wanted =
     typeof body === "object" && body !== null ? (body as Record<string, unknown>)["permission"] : "auto";
@@ -2412,10 +2571,21 @@ async function askKitshn(
     });
     ws.send(JSON.stringify({ type: "ask", requestId, ask } satisfies DaemonMessage));
   });
+  // K-1612: the connection that queued a job gets its `job-result`.
+  const queued = (result: unknown) => {
+    const jobId = (result as { id?: unknown } | null)?.id;
+    if (request.action === "job" && typeof jobId === "number") hub().jobQueued(jobId, connection);
+  };
+  if (outcome.outcome === "done") queued(outcome.result);
   if (outcome.outcome === "waiting")
     proposalWaiters.set(outcome.proposalId, [
       ...(proposalWaiters.get(outcome.proposalId) ?? []),
-      WINDOW_ACTIONS.has(request.action) ? (event) => void askAgain(request, event, emit) : emit,
+      WINDOW_ACTIONS.has(request.action)
+        ? (event) => void askAgain(request, event, emit)
+        : (event) => {
+            if (event.type === "ask-result" && event.outcome === "approved") queued(event.result);
+            emit(event);
+          },
     ]);
   if (thread && outcome.outcome === "done" && typeof outcome.result === "object" && outcome.result !== null) {
     const { token, expiresAt, permission } = outcome.result as Record<string, unknown>;
@@ -2495,6 +2665,8 @@ function connect(config: JoinSecrets) {
       headers: { "CF-Access-Client-Id": config.clientId, "CF-Access-Client-Secret": config.clientSecret },
     } as unknown as string);
     current = ws;
+    // K-605: a new connection samples every 5 minutes until kitshn says that someone watches a map.
+    watchedUntil = 0;
     let lastPong = Date.now();
     let ping: ReturnType<typeof setInterval> | null = null;
     /** True when kitshn expects a key that this machine does not have, so the next try fails the same way. */
@@ -2519,6 +2691,7 @@ function connect(config: JoinSecrets) {
       delay = 1000;
       stopped = false;
       updateAccepted();
+      hub().fromKitshnState();
       flushResults();
       report();
       sendProviders();
@@ -2528,7 +2701,7 @@ function connect(config: JoinSecrets) {
       void checkSites().catch((error: unknown) => log(`site check failed: ${String(error)}`));
       void sendServers().catch((error: unknown) => log(`server scan failed: ${String(error)}`));
       void reportVolumes().catch((error: unknown) => log(`volume report failed: ${String(error)}`));
-      ws.send(JSON.stringify({ type: "sample", sample: sample() } satisfies DaemonMessage));
+      sendSample(sample());
       // K-630: kitshn keeps a report per connection; an old one waits for the reach that kitshn pushes now.
       if (lastHealth !== null && Date.now() - lastHealth.at < HEALTH_INTERVAL_MS) sendHealth(lastHealth);
       else setTimeout(() => void checkHealth(), HEALTH_FIRST_MS);
@@ -2540,6 +2713,8 @@ function connect(config: JoinSecrets) {
         return;
       }
       const message = JSON.parse(text) as ServerToDaemon;
+      // K-721: each message of the signed connection is an answer of kitshn.
+      if (socket === ws) hub().fromKitshnState();
       if (message.type === "challenge") {
         void answerChallenge(ws, config, message)
           .then((result) => {
@@ -2553,10 +2728,26 @@ function connect(config: JoinSecrets) {
           });
       } else if (message.type === "accepted") {
         accepted(`with the key ${message.fingerprint}`);
+        // K-724: kitshn refuses or tolerates this daemon by the same rule; the daemon only names it in its log.
+        const kitshn = matchProtocol(
+          { name: "this daemon", version: KITSHN_PROTOCOL, update: ROLLOUT_FIX },
+          {
+            name: "kitshn",
+            version: message.protocol ?? legacyProtocol(PROVIDER_PROTOCOL),
+            update: ROLLOUT_FIX,
+          },
+        );
+        if (kitshn.outcome === "refuse")
+          log(`kitshn protocol: ${kitshn.reason} kitshn sends this daemon only its update.`);
+        if (kitshn.outcome === "tolerate") log(`kitshn protocol: ${kitshn.warning}`);
       } else if (message.type === "rotateKey") {
         void rotateKey(ws);
       } else if (message.type === "checkHealth") {
         void checkHealth();
+      } else if (message.type === "watch") {
+        const watched = Date.now() < watchedUntil;
+        watchedUntil = message.on ? Date.now() + WATCH_LEASE_MS : 0;
+        if (message.on && !watched) sendSample(sample());
       } else if (
         message.type === "grants" ||
         message.type === "desired" ||
@@ -2565,33 +2756,23 @@ function connect(config: JoinSecrets) {
         message.type === "access"
       ) {
         // K-1608: the daemon saves each push, gives it to the provider, and tells kitshn that it applied it.
-        const key =
-          message.type === "grants"
-            ? pushKey.grants(message.provider)
-            : message.type === "settings"
-              ? pushKey.settings(message.provider)
-              : message.type === "reach"
-                ? pushKey.reach(message.provider)
-                : message.type === "access"
-                  ? pushKey.access(message.provider)
-                  : pushKey.desired(message.provider, message.kind);
-        const { hash: _hash, ...event } = message;
-        const value =
-          message.type === "grants"
-            ? message.tables
-            : message.type === "settings"
-              ? message.values
-              : message.type === "reach"
-                ? message.cards
-                : message.type === "access"
-                  ? message.access
-                  : message.state;
-        if (registry().setPushed(key, value)) {
-          const connection = registry().connectionOf(message.provider);
-          const emit = connection === null ? undefined : providerEmitters.get(connection);
-          emit?.(event);
-        }
-        sendOn(ws, { type: "applied", key, hash: message.hash });
+        applyPush(message);
+        sendOn(ws, { type: "applied", key: pushKeyOf(message), hash: message.hash });
+      } else if (message.type === "paused") {
+        hub().fromKitshnState({ paused: message.paused });
+        sendOn(ws, { type: "applied", key: pushKey.paused(), hash: message.hash });
+      } else if (message.type === "execRights") {
+        hub().fromKitshnState({ execMachines: [...message.machines].sort() });
+        sendOn(ws, { type: "applied", key: pushKey.execRights(), hash: message.hash });
+      } else if (message.type === "execState") {
+        hub().execState(message.execId, message.state, message.proposalId);
+      } else if (message.type === "execRun") {
+        hub().execRun(message.provider, message.run);
+      } else if (message.type === "execFrame") {
+        hub().execFrame(message.execId, message.frame);
+      } else if (message.type === "jobEnded") {
+        const { type: _type, ...ended } = message;
+        hub().jobEnded({ type: "job-result", ...ended });
       } else if (message.type === "name") {
         // K-704: the answer to register names the machine, also before the next connection.
         registry().setPushed(MACHINE_NAME_KEY, message.name);
@@ -2603,7 +2784,7 @@ function connect(config: JoinSecrets) {
         )
           sendProviders();
       } else if (message.type === "requestAnswer") {
-        answerWaiters.get(message.requestId)?.(message.error);
+        answerWaiters.get(message.requestId)?.(message.error, message.initialized);
         answerWaiters.delete(message.requestId);
       } else if (message.type === "dropTokens") {
         keptTokens.drop(message.repo);
@@ -2641,6 +2822,7 @@ function connect(config: JoinSecrets) {
         askWaiters.delete(requestId);
       } else if (message.type === "askResult") {
         const { type: _type, ...result } = message;
+        hub().proposalEnded(result.proposalId, result.outcome, result.reason);
         for (const emit of proposalWaiters.get(result.proposalId) ?? [])
           emit({ type: "ask-result", ...result });
         proposalWaiters.delete(result.proposalId);
@@ -2670,7 +2852,11 @@ function connect(config: JoinSecrets) {
       if (socket === ws) updateDropped();
       // K-1805: kitshn forgets the tails of a closed connection.
       if (socket === ws) stopTails();
-      if (socket === ws) socket = null;
+      if (socket === ws) {
+        socket = null;
+        // K-722: the runs of both sides end with the relay.
+        hub().kitshnLost();
+      }
       // K-709: a request in flight gets no answer from a closed connection.
       for (const [requestId, settle] of answerWaiters) {
         settle(`the connection to kitshn closed (${event.code}) before its answer.`);
@@ -2705,6 +2891,7 @@ function connect(config: JoinSecrets) {
         log(
           "the owner removed this machine; removing the tunnel service. Run kitshn service uninstall to stop the daemon.",
         );
+        markTunnelRemoved(paths.data);
         removeTunnel();
       }
       if (current === ws) current = null;
@@ -2834,6 +3021,16 @@ function unexposeCommand(name: string | undefined) {
   console.log(`Stopped exposing ${name}.`);
 }
 
+/** K-605: until when someone watches a map, from the last `watch` of this connection. */
+let watchedUntil = 0;
+let samplesKept = 0;
+
+function sendSample(value: ReturnType<typeof sample>) {
+  if (socket?.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({ type: "sample", sample: value } satisfies DaemonMessage));
+  samplesKept = 0;
+}
+
 let lastSites = "";
 
 /** K-1107: tries each site every 10 seconds and reports the list only when it changes. */
@@ -2948,6 +3145,7 @@ async function runCommand() {
     providerUsers: () => providerUsersOf(readMachineFile()),
     handle: answerLocal,
     log,
+    seen: (connection: number) => hub().seen(connection),
     closed: providerClosed,
     // K-704: a broken register marks the provider refused only when its own user sent it.
     refused: (provider: string, reason: string, uid: number) => {
@@ -2958,12 +3156,19 @@ async function runCommand() {
   };
   const local = await listenLocal(paths.socket, { ...socketOptions, access: "private" });
   process.on("exit", local.stop);
+  // K-704: the daemon pings each provider connection and drops a quiet one.
+  process.on("exit", hub().start());
+  // K-722: a stop or an update of the daemon ends its runs; on Linux systemd ends them with the cgroup anyway.
+  process.on("exit", () => hub().endLocalRuns("the daemon stopped"));
   // K-1609: the link proxy of the providers, in the same private folder; it admits the daemon user and local users.
   // K-1609, K-621: a start without the link proxy still serves the rest; the answer to register then names none.
   const linkOptions = {
     reachOf: (provider: string) => registry().reachOf(provider),
     token: () => (joined ? { clientId: joined.clientId, clientSecret: joined.clientSecret } : null),
     log,
+    // K-1610: kitshn records each forwarded tool call; a call while kitshn is out of reach gets no event.
+    audit: ({ machineId, name, status }: { machineId: string; name: string; status: number }) =>
+      void hub().toKitshn({ type: "linkCall", target: machineId, name, status }),
   };
   const linkAdmits = (uid: number) => linkPeerAdmitted(uid, own, localUsersOf(readMachineFile()));
   const links = await serveLinks(linkSocket, {
@@ -3008,16 +3213,26 @@ async function runCommand() {
       : "",
     RECENT_SAMPLES,
   );
-  await ensureTunnel(config);
-  watchTunnel();
+  // The contract tests run a real daemon with no tunnel, so they never touch the user's services.
+  if (process.env["KITSHN_TUNNEL"] !== "off") {
+    await ensureTunnel(config);
+    watchTunnel();
+    watchReady(config);
+    const pinning = () =>
+      void measurePin(config).catch((error: unknown) =>
+        log(`tunnel: the edge measure failed: ${String(error)}`),
+      );
+    pinning();
+    setInterval(pinning, MEASURE_EVERY_MS);
+  }
   // K-821: the machine card shows what the kept builds take on disk.
   void countKept();
   connect(config);
   setInterval(() => {
     const value = sample();
     keepSample(value);
-    if (socket?.readyState === WebSocket.OPEN)
-      socket.send(JSON.stringify({ type: "sample", sample: value } satisfies DaemonMessage));
+    samplesKept += 1;
+    if (Date.now() < watchedUntil || samplesKept >= SAMPLES_PER_SEND) sendSample(value);
   }, SAMPLE_MS);
   setInterval(pruneSamples, 24 * 60 * 60_000);
   setInterval(() => void checkHealth(), HEALTH_INTERVAL_MS);
@@ -3058,7 +3273,7 @@ function readMachineFile(): unknown {
 }
 
 /** The requests to kitshn that wait for its `answer`, by request id: null, or why kitshn refused. */
-const answerWaiters = new Map<string, (error: string | null) => void>();
+const answerWaiters = new Map<string, (error: string | null, initialized?: boolean) => void>();
 /** K-704: where the daemon keeps the machine's name among its saved pushes. */
 const MACHINE_NAME_KEY = "machine:name";
 
@@ -3140,36 +3355,123 @@ function loadProviders(): Providers {
     report,
   );
 }
-/** K-703: the event channel of each local connection that registered a provider. */
-const providerEmitters = new Map<number, (event: Answer) => void>();
-/** K-707: the provider commands that wait for their `command-result`, by job id. */
+/** K-721: where the daemon keeps what kitshn last said, so a restart without kitshn keeps it. */
+const KITSHN_STATE_KEY = "kitshn:state";
+/** K-704: a test sets a short ping timing; a real daemon uses the defaults. */
+const timingOf = (name: string, fallback: number) => {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+};
+let providerHub: ProviderHub | null = null;
+/** K-704, K-721, K-722: the live side of the provider connections. */
+const hub = (): ProviderHub =>
+  (providerHub ??= new ProviderHub({
+    registry,
+    toKitshn: (message) => {
+      const ws = socket;
+      if (ws === null || challenge === null || ws.readyState !== WebSocket.OPEN) return false;
+      ws.send(JSON.stringify(message));
+      return true;
+    },
+    drop: dropConnection,
+    log,
+    ownUid: ownUid(),
+    platform,
+    pingMs: timingOf("KITSHN_PING_MS", PROVIDER_PING_MS),
+    graceMs: timingOf("KITSHN_GRACE_MS", GRACE_MS),
+    saved: kitshnStateOf(registry().pushedValue(KITSHN_STATE_KEY)),
+    execSudo: execSudoFor,
+    save: (state) => void registry().setPushed(KITSHN_STATE_KEY, state),
+  }));
+
+/**
+ * K-722: the last sudo check of each exec user. A check runs in the background at most every 10 minutes, so a
+ * missing rule writes few lines to the auth log; until the first one ends, the rule counts as missing.
+ */
+const sudoChecks = new Map<number, { name: string | null; at: number; running: boolean }>();
+function execSudoFor(uid: number): string | null {
+  const now = Date.now();
+  const kept = sudoChecks.get(uid) ?? { name: null, at: 0, running: false };
+  sudoChecks.set(uid, kept);
+  const user = platform === "linux" ? userNameOf(uid) : null;
+  if (user !== null && !kept.running && now - kept.at >= 600_000) {
+    kept.running = true;
+    void execSudoReady(user).then((ready) => {
+      Object.assign(kept, { name: ready ? user : null, at: Date.now(), running: false });
+      report();
+    });
+  }
+  return kept.name;
+}
+
+type Push = Extract<ServerToDaemon, { type: "grants" | "desired" | "settings" | "reach" | "access" }>;
+
+/** K-1608: where the daemon saves a push of kitshn. */
+const pushKeyOf = (message: Push) =>
+  message.type === "desired"
+    ? pushKey.desired(message.provider, message.kind)
+    : pushKey[message.type](message.provider);
+
+/** K-1608, K-721: saves a push of kitshn, and gives its provider the event of what changed. */
+function applyPush(message: Push) {
+  const { provider } = message;
+  const servedBefore = JSON.stringify(registry().accessOf(provider)?.served ?? []);
+  const value =
+    message.type === "grants"
+      ? message.tables
+      : message.type === "settings"
+        ? message.values
+        : message.type === "reach"
+          ? message.cards
+          : message.type === "access"
+            ? message.access
+            : { state: message.state, rev: message.rev };
+  if (!registry().setPushed(pushKeyOf(message), value)) return;
+  if (message.type === "grants") return hub().grantsChanged(provider);
+  if (message.type === "settings")
+    return void hub().emitTo(provider, { type: "settings", values: message.values });
+  if (message.type === "reach") return void hub().emitTo(provider, { type: "reach", cards: message.cards });
+  if (message.type === "desired")
+    return void hub().emitTo(provider, {
+      type: "desired",
+      kind: message.kind,
+      state: message.state,
+      rev: message.rev,
+    });
+  // New audiences change which tokens `check` takes, so the provider checks its sessions again.
+  hub().grantsChanged(provider);
+  if (JSON.stringify(message.access.served) !== servedBefore)
+    hub().emitTo(provider, { type: "served", hosts: [...message.access.served] });
+}
+
+/** K-707: the provider commands that wait for their `command-result`, by job id, with the event that they sent. */
 const commandWaiters = new Map<
   number,
-  { readonly provider: string; readonly settle: (outcome: JobOutcome) => void }
+  {
+    readonly provider: string;
+    readonly event: Extract<Answer, { type: "command" }>;
+    readonly settle: (outcome: JobOutcome) => void;
+  }
 >();
 const COMMAND_TIMEOUT_MS = 5 * 60_000;
 
-let providersTimer: ReturnType<typeof setTimeout> | null = null;
 /** K-704: the whole list goes to kitshn on connect and after a change, at most once a second. */
+const providerReport = providerReports(() => {
+  if (socket?.readyState === WebSocket.OPEN)
+    socket.send(
+      JSON.stringify({ type: "providers", providers: registry().reports() } satisfies DaemonMessage),
+    );
+}, 1000);
 function sendProviders() {
-  if (providersTimer) return;
-  providersTimer = setTimeout(() => {
-    providersTimer = null;
-    if (socket?.readyState === WebSocket.OPEN)
-      socket.send(
-        JSON.stringify({ type: "providers", providers: registry().reports() } satisfies DaemonMessage),
-      );
-  }, 1000);
+  providerReport.schedule();
 }
 
 function providerClosed(connection: number) {
-  providerEmitters.delete(connection);
-  const names = registry()
-    .reports()
-    .filter((report) => registry().connectionOf(report.name) === connection);
-  if (!registry().disconnect(connection)) return;
+  hub().closed(connection);
+  const names = registry().disconnect(connection);
+  if (names.length === 0) return;
   for (const [commandId, waiter] of commandWaiters)
-    if (names.some((report) => report.name === waiter.provider)) {
+    if (names.includes(waiter.provider)) {
       commandWaiters.delete(commandId);
       waiter.settle({
         ok: false,
@@ -3202,14 +3504,20 @@ async function runProviderCommand(
   jobId: number,
 ): Promise<JobOutcome> {
   if (registry().connectionOf(command.provider) === null) await registered(command.provider);
-  const connection = registry().connectionOf(command.provider);
-  const emit = connection === null ? undefined : providerEmitters.get(connection);
-  if (!emit)
+  if (registry().connectionOf(command.provider) === null)
     return Promise.resolve({
       ok: false,
       exitCode: null,
       output: `The provider ${command.provider} did not connect within 60 seconds.`,
     });
+  const event = {
+    type: "command" as const,
+    commandId: jobId,
+    command: command.command,
+    resource: command.resource,
+    row: command.row ?? null,
+    deadline: Date.now() + COMMAND_TIMEOUT_MS,
+  };
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       commandWaiters.delete(jobId);
@@ -3221,26 +3529,64 @@ async function runProviderCommand(
     }, COMMAND_TIMEOUT_MS);
     commandWaiters.set(jobId, {
       provider: command.provider,
+      event,
       settle: (outcome) => {
         clearTimeout(timer);
         resolve(outcome);
       },
     });
-    emit({
-      type: "command",
-      provider: command.provider,
-      commandId: jobId,
-      command: command.command,
-      resource: command.resource,
-      ...(command.row === undefined ? {} : { row: command.row }),
-    });
+    hub().emitTo(command.provider, event);
   });
 }
 
 /** K-701, K-702: the requests of the local socket. */
-async function answerLocal(request: Request, caller: Caller, emit: (event: Answer) => void): Promise<Answer> {
+async function answerLocal(
+  request: Request,
+  caller: Caller,
+  emit: (event: Answer) => void,
+): Promise<Answer | null> {
+  // K-704, K-722: the frames without an id get no answer.
+  if (request.type === "pong") return null;
+  if (request.type === "exec-credit") {
+    hub().execControl(request.execId, caller.connection, { type: "credit", bytes: request.bytes });
+    return null;
+  }
+  if (request.type === "exec-frame") {
+    hub().bridgeFrame(request, caller.connection);
+    return null;
+  }
   const { id } = request;
-  if (request.type === "ask") return askKitshn(request, emit);
+  if (request.type === "ask") return askKitshn(request, emit, caller.connection);
+  if (request.type === "check") return hub().check(request, caller.connection);
+  if (request.type === "attest-result") {
+    hub().attested(request, caller.connection);
+    return { id, type: "attest-result" };
+  }
+  if (request.type === "exec") {
+    const { attest, ...run } = request;
+    let attested: Record<string, string>;
+    try {
+      attested = await attestedFor(attest);
+    } catch (error) {
+      if (error instanceof AttestationError) throw new Error(`kitshn refused the run: ${error.message}`);
+      throw error;
+    }
+    return hub().exec(run, { connection: caller.connection, emit }, attested);
+  }
+  if (request.type === "exec-input") {
+    hub().execControl(request.execId, caller.connection, { type: "input", data: request.data });
+    return { id, type: "exec-input" };
+  }
+  if (request.type === "exec-close") {
+    hub().execControl(request.execId, caller.connection, { type: "close", what: request.what });
+    return { id, type: "exec-close" };
+  }
+  if (request.type === "provider-exec-user") {
+    const problem = registry().setExecUser(request.provider, request.uid);
+    if (problem) throw new Error(problem);
+    log(`provider ${request.provider} runs commands of other machines as the user id ${request.uid}`);
+    return { id, type: "provider-exec-user" };
+  }
   if (request.type === "status") {
     if (!joined) throw new Error("the daemon has not read machine.json yet.");
     const key = readKey(keyFile);
@@ -3253,7 +3599,7 @@ async function answerLocal(request: Request, caller: Caller, emit: (event: Answe
         fingerprint: key ? await fingerprintOf(key.x) : null,
         connection: socket === null ? "disconnected" : challenge === null ? "token-only" : "connected",
         tunnel: tunnelState,
-        attesterEnv: attestersOf(readMachineFile()).attesters.map((attester) => attester.tokenEnv),
+        providers: registry().states(),
         server: joined.server,
         refusedProviders: registry().refused(),
         offlineProviders: registry().offline(),
@@ -3299,17 +3645,7 @@ async function answerLocal(request: Request, caller: Caller, emit: (event: Answe
     if (error !== null) throw new Error(error);
     return { id, type: "job-cancel" };
   }
-  if (request.type === "audit") {
-    // K-1610: only the provider's own connection, and only over a signed connection; kitshn names the source.
-    if (registry().connectionOf(request.provider) !== caller.connection)
-      throw new Error(`register ${request.provider} on this connection first (K-704).`);
-    const ws = socket;
-    if (ws === null || challenge === null)
-      throw new Error("the daemon has no signed connection to kitshn, so kitshn cannot record the call now.");
-    sendOn(ws, { type: "audit", audit: request.audit });
-    return { id, type: "audit" };
-  }
-  if (request.type === "desired-set") {
+  if (request.type === "desired-set" || request.type === "desired-init") {
     // K-709: only the connection that registered the provider, and only over a signed connection to kitshn.
     if (registry().connectionOf(request.provider) !== caller.connection)
       throw new Error(`register ${request.provider} on this connection first (K-704).`);
@@ -3323,22 +3659,21 @@ async function answerLocal(request: Request, caller: Caller, emit: (event: Answe
     const problem = desiredProblem(kinds, request.kind, request.value);
     if (problem) throw new Error(problem);
     // kitshn checks again when it writes; the provider gets that answer, not only the daemon's.
-    const { id: _id, type: _type, ...change } = request;
-    const requestId = crypto.randomUUID();
-    const error = await new Promise<string | null>((resolve) => {
-      // Like an ask, a request waits at most 60 seconds for kitshn.
-      const timer = setTimeout(() => {
-        answerWaiters.delete(requestId);
-        resolve("kitshn did not answer within 60 seconds; the state may or may not be stored.");
-      }, 60_000);
-      answerWaiters.set(requestId, (answer) => {
-        clearTimeout(timer);
-        resolve(answer);
+    return forwardDesired(request, providerReport.flush, (change) => {
+      const requestId = crypto.randomUUID();
+      return new Promise((resolve) => {
+        // Like an ask, a request waits at most 60 seconds for kitshn.
+        const timer = setTimeout(() => {
+          answerWaiters.delete(requestId);
+          resolve({ error: "kitshn did not answer within 60 seconds; the state may or may not be stored." });
+        }, 60_000);
+        answerWaiters.set(requestId, (error, initialized) => {
+          clearTimeout(timer);
+          resolve({ error, ...(initialized === undefined ? {} : { initialized }) });
+        });
+        sendOn(ws, { requestId, ...change });
       });
-      sendOn(ws, { type: "desiredSet", requestId, ...change });
     });
-    if (error !== null) throw new Error(error);
-    return { id, type: "desired-set" };
   }
   if (request.type === "provider-rebind") return rebindProvider(request);
   if (request.type === "local-users") return editLocalUsers(request);
@@ -3350,37 +3685,57 @@ async function answerLocal(request: Request, caller: Caller, emit: (event: Answe
   }
   if (request.type === "register" || request.type === "upsert" || request.type === "remove") {
     if (!joined) throw new Error("the daemon has not read machine.json yet.");
-    const handMade = readSites() ?? [];
-    const outcome = registry().apply(
-      request,
-      caller.connection,
-      new Set(handMade.map((site) => site.name)),
-      caller.uid,
-      caller.uid === ownUid() || caller.uid === 0,
-    );
+    const providerCaller = {
+      connection: caller.connection,
+      uid: caller.uid,
+      privileged: caller.uid === ownUid() || caller.uid === 0,
+      takenSites: new Set((readSites() ?? []).map((site) => site.name)),
+      machineName: (registry().pushedValue(MACHINE_NAME_KEY) as string | null) ?? hostname(),
+    };
+    const outcome =
+      request.type === "register"
+        ? registry().register(request, providerCaller)
+        : registry().change(request, providerCaller);
     if (!outcome.ok) throw new Error(outcome.error);
+    if (outcome.warning !== null) log(`kitshn protocol: ${outcome.warning}`);
     if (outcome.changed) {
       sendProviders();
       void checkSites().catch((error: unknown) => log(`site check failed: ${String(error)}`));
     }
-    if (request.type !== "register") return { id, type: request.type };
-    providerEmitters.set(caller.connection, emit);
+    if (request.type === "remove") return { id, type: "remove" };
+    if (request.type === "upsert")
+      return { id, type: "upsert", ...(outcome.problems.length > 0 ? { problems: outcome.problems } : {}) };
+    hub().registered(caller.connection, emit, request.trustAudiences ?? []);
+    // K-704: the same instance took over; the old connection closes, and its waiting commands move here.
+    if (outcome.replaced !== null) dropConnection(outcome.replaced);
+    for (const waiter of commandWaiters.values())
+      if (waiter.provider === request.provider) emit(waiter.event);
     for (const wake of registerWaiters.get(request.provider) ?? []) wake();
     registerWaiters.delete(request.provider);
     log(`provider ${request.provider} registered with ${request.resources.length} resources`);
+    const { pingMs, graceMs } = hub().timing();
     return {
       id,
       type: "register",
-      machineId: joined.machineId,
-      ...registry().savedFor(request.provider),
+      protocol: PROVIDER_PROTOCOL,
+      protocolVersion: KITSHN_PROTOCOL,
+      machine: {
+        id: joined.machineId,
+        name: registry().pushedValue(MACHINE_NAME_KEY) as string | null,
+      },
+      capabilities: ["check", "exec", "attest", "ping"],
+      identityHeaders: [...IDENTITY_HEADERS],
+      problems: outcome.problems,
+      saved: registry().savedFor(request.provider),
       // K-1609, K-701: the daemon user gets the private socket, any other caller the shared one; without a shared
-      // socket the private one, which only a listed root can open, so `link-check` refuses the others with a reason.
+      // socket the private one, which only a listed root can open.
       linkSocket:
         caller.uid !== ownUid() && sharedLinkServed ? sharedLinkSocket : linkServed ? linkSocket : null,
-      machineName: registry().pushedValue(MACHINE_NAME_KEY) as string | null,
+      syncedAt: hub().state().syncedAt,
+      pingMs,
+      graceMs,
     };
   }
-  if (request.type === "attester-set") return setAttester(request, caller);
   if (request.type === "forget-token") {
     keptTokens.drop(request.repo);
     return { id, type: "forget-token" };
@@ -3417,6 +3772,21 @@ if (command === undefined || command === "help" || command === "--help" || comma
 }
 if (command === "--version" || command === "-v") {
   console.log(VERSION);
+  process.exit(0);
+}
+// K-1777: an operation id is never a machine or agent command (`ops.test.ts`).
+if (isOpCommand(command)) {
+  try {
+    // K-636: with a version, the Worker of that release goes first; the operation then updates the daemons.
+    const [target] = args;
+    if (command === "rollout" && target !== undefined && !target.startsWith("--"))
+      await deployWorker(target, await daemonTransport().server(), process.env);
+    await runOpCommand(command, args, daemonTransport);
+  } catch (error) {
+    if (!(error instanceof CliError)) throw error;
+    console.error(`kitshn: ${error.message}`);
+    process.exit(1);
+  }
   process.exit(0);
 }
 if (!isMachineCommand(command) && !isAgentCommand(command) && command !== "git-credential")
@@ -3460,17 +3830,11 @@ switch (command) {
   case "agent":
     await agentCommand(args);
     break;
-  case "attester":
-    await attesterCommand(args);
-    break;
   case "provider":
     await providerCommand(args);
     break;
   case "providers":
     await providersCommand(args);
-    break;
-  case "link-check":
-    linkCheckCommand(args[0]);
     break;
   case "publish":
   case "unpublish":
@@ -3479,17 +3843,20 @@ switch (command) {
   case "repo":
   case "redirect":
   case "time":
-  case "game":
+  case "port":
     await runAgentCommand(command, args, daemonTransport);
     break;
   case "local-users":
     await localUsersCommand(args);
     break;
   case "version":
-    console.log(args.includes("--json") ? versionJson(VERSION) : VERSION);
+    console.log(args.includes("--json") ? versionJson(VERSION, KITSHN_PROTOCOL) : VERSION);
     break;
   case "doors":
-    doorsCommand(args[0], flag("--user"));
+    doorsCommand(args[0], flag("--user"), flag("--public-address"));
+    break;
+  case "exec":
+    execCommand(args[0], flag("--user"), flag("--daemon-user"));
     break;
   case "skill":
     skillCommand(args[0], args.includes("--repo"));

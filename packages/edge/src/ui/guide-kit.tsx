@@ -27,6 +27,7 @@ export function fixtureState(): State {
     stacks: new Map(),
     paused: null,
     machines: new Map(DEMO_MACHINES.map(({ machine }) => [machine.id, machine])),
+    actors: new Map([...initial.actors, ...extra.actors].map((actor) => [actor.id, actor])),
   };
 }
 
@@ -53,6 +54,7 @@ export const machineView = (online: boolean, key: MachineKey | null): MachineVie
     online,
     lastSeen: online ? NOW : NOW - 3_600_000,
     status: null,
+    facts: [],
     sample: null,
     os: first.os,
     keyFailure: null,
@@ -61,6 +63,7 @@ export const machineView = (online: boolean, key: MachineKey | null): MachineVie
     servers: [],
     queued: 0,
     update: null,
+    protocolRefusal: null,
   };
 };
 export const KEY: MachineKey = { kind: "public", publicKey: "demo", fingerprint: "SHA256:demo", since: NOW };

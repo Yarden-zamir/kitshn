@@ -1,5 +1,6 @@
-import type { Command, Machine, MachineKey } from "../core/machine.ts";
+import type { Command, Machine, MachineKey, MachineStatus } from "../core/machine.ts";
 import type { JobView } from "../core/protocol.ts";
+import { FACT_LABELS, type MachineFact, hasLabels, isReservedLabel } from "../core/facts.ts";
 import { type ProviderRefusal, PROVIDER_LIMITS, isProviderName } from "@kitshn/local";
 
 /** K-613: a job waits at most this long for its machine by default. */
@@ -7,10 +8,10 @@ export const JOB_EXPIRY_MS = 24 * 60 * 60 * 1000;
 /** K-1107: a machine that answered no ping for this long counts as offline. */
 export const PING_TIMEOUT_MS = 30_000;
 /**
- * K-1107, K-1302: the alarm checks the pings at least this often; each daemon sample checks them too. Each alarm
- * wakes the Durable Object, and a wake reads rows, so a 30-second alarm cost about 2,880 wakes a day.
+ * K-1107, K-1302: the alarm checks the pings at least this often; each daemon message checks them too. Each alarm
+ * wakes the Durable Object, and a wake reads rows, so a 2-minute alarm cost about 720 wakes a day.
  */
-export const LIVENESS_CHECK_MS = 120_000;
+export const LIVENESS_CHECK_MS = 10 * 60_000;
 /** K-602 */
 export const JOIN_CODE_MS = 10 * 60 * 1000;
 /** K-1601 */
@@ -20,30 +21,44 @@ export const OUTPUT_LIMIT = 64 * 1024;
 
 export type Job = JobView;
 
-/** K-610: the first online machine in the owner's order that has every label, or null. */
+/** K-610: the first online machine in the owner's order that has every label, or null. Fact labels count (K-635). */
 export function pickMachine(
   machines: Iterable<Machine>,
   online: ReadonlySet<string>,
   labels: ReadonlyArray<string>,
+  factsOf: (machine: Machine) => ReadonlyArray<MachineFact>,
 ): Machine | null {
   const fitting = [...machines]
-    .filter((machine) => online.has(machine.id) && labels.every((label) => machine.labels.includes(label)))
+    .filter((machine) => online.has(machine.id) && hasLabels(machine.labels, factsOf(machine), labels))
     .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
   return fitting[0] ?? null;
 }
 
 const LABEL = /^[a-z0-9][a-z0-9-]{0,30}$/;
+const isFactLabel = (label: string): boolean => (FACT_LABELS as ReadonlyArray<string>).includes(label);
 
+/** K-610: the labels that a job needs, which can name a fact label (K-635). */
 export function parseLabels(value: unknown): Array<string> | string {
   if (!Array.isArray(value)) return "Labels must be a list.";
   const labels = value.map((label) => String(label).trim().toLowerCase()).filter(Boolean);
-  const bad = labels.find((label) => !LABEL.test(label));
+  const bad = labels.find((label) => !LABEL.test(label) && !isFactLabel(label));
   return bad ? `The label "${bad}" may use only a to z, 0 to 9 and dashes.` : [...new Set(labels)];
+}
+
+/** K-609, K-635: the labels that the owner sets. Only kitshn gives the names of fact labels. */
+export function parseOwnerLabels(value: unknown): Array<string> | string {
+  const labels = parseLabels(value);
+  if (typeof labels === "string") return labels;
+  const reserved = labels.find(isReservedLabel);
+  return reserved === undefined
+    ? labels
+    : `The label "${reserved}" comes from the daemon: kitshn sets os:, arch: and unix labels by itself (K-635).`;
 }
 
 export function parseCommand(value: unknown): Command | string {
   if (typeof value !== "object" || value === null || !("kind" in value)) return "A job needs a command.";
-  if (value.kind === "diagnostics" || value.kind === "restart") return { kind: value.kind };
+  if (value.kind === "diagnostics" || value.kind === "restart" || value.kind === "tunnel-restart")
+    return { kind: value.kind };
   // The version is not the sender's choice: kitshn fills in its own (K-617).
   if (value.kind === "update") return { kind: "update", version: "" };
   if (value.kind === "shell") {
@@ -212,4 +227,21 @@ export function providerRefusals(raw: unknown): ReadonlyArray<ProviderRefusal> {
     )
     .slice(0, PROVIDER_LIMITS.providers)
     .map(({ provider, reason, at }) => ({ provider, reason: reason.slice(0, 500), at }));
+}
+
+/** K-722: the exec paths of a daemon status, checked; a bad item is left out. */
+export function execPathsOf(raw: unknown): NonNullable<MachineStatus["execPaths"]> {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(
+      (item): item is { provider: string; user: string; via: "sudo" | "bridge" } =>
+        typeof item === "object" &&
+        item !== null &&
+        typeof item.provider === "string" &&
+        isProviderName(item.provider) &&
+        typeof item.user === "string" &&
+        (item.via === "sudo" || item.via === "bridge"),
+    )
+    .slice(0, PROVIDER_LIMITS.providers)
+    .map(({ provider, user, via }) => ({ provider, user: user.slice(0, 32), via }));
 }

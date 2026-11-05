@@ -71,7 +71,7 @@ export default {
             body: {},
             reason: "share the design page",
             labels: {},
-            right: "publishes",
+            right: "shares",
             circleId: "owner",
             shown: `${machineId} wants to publish page-${index} to Everyone.`,
             shownHash: "x",

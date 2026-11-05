@@ -10,6 +10,7 @@ import {
   nextAutoUpdate,
   BUSY_CAP_MS,
   releaseBusyStep,
+  rolloutView,
   startStep,
   stepSent,
   withBusyWaits,
@@ -19,8 +20,10 @@ import {
 const NEW = "aaaaaaaaaaaa";
 const NEWER = "cccccccccccc";
 const OLD = "bbbbbbbbbbbb";
+const PROTOCOL = "2.1.0";
 const online = (version: string, connectedAt = 0): LiveStatus => ({
   version,
+  protocol: PROTOCOL,
   capabilities: ["update"],
   os: "linux 6.8.0",
   connectedAt,
@@ -159,6 +162,37 @@ describe("a step of the rollout (K-627)", () => {
     expect(daemonUpdate(failed, "a", NEW)).toEqual({
       state: "failed",
       reason: "The new daemon failed its start check.",
+    });
+  });
+  it("tells kitshn rollout where each machine stands, and stops on a failure (K-636)", () => {
+    const machines = [
+      { ...behind("c", 3), name: "C" },
+      { ...behind("a", 1, { status: online(NEW, 20) }), name: "A" },
+      { ...behind("b", 2), name: "B" },
+      { ...behind("d", 4, { status: null }), name: "D" },
+      { ...behind("e", 5, { autoUpdate: false }), name: "E" },
+    ];
+    const done = advanceRollout(sent, job("done"), () => online(NEW, 20));
+    const view = rolloutView(NEW, PROTOCOL, done, machines, false);
+    expect(view.state).toBe("running");
+    expect(view.machines.map((machine) => `${machine.id} ${machine.state}`)).toEqual([
+      "a updated",
+      "b behind",
+      "c behind",
+      "d offline",
+      "e skipped",
+    ]);
+    const stopped = { ...done, failed: { machineId: "b", reason: "start check" } };
+    expect(rolloutView(NEW, PROTOCOL, stopped, machines, false)).toMatchObject({
+      state: "stopped",
+      reason: "B: start check",
+      machines: [{ id: "a" }, { id: "b", state: "failed", reason: "start check" }, {}, {}, {}],
+    });
+    expect(rolloutView(NEW, PROTOCOL, done, machines.slice(1, 2), false).state).toBe("done");
+    // K-1504: nothing updates while kitshn is paused, so the view says so instead of running forever.
+    expect(rolloutView(NEW, PROTOCOL, done, machines, true)).toMatchObject({
+      state: "held",
+      reason: expect.stringContaining("paused"),
     });
   });
   it("holds while a daemon on the release has not confirmed it, so a crash just after acceptance never counts", () => {

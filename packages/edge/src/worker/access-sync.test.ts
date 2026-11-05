@@ -3,6 +3,7 @@ import { desiredAccess } from "../core/access.ts";
 import { applyChanges, resolveEdits } from "../core/changes.ts";
 import type { Circle, Resource, State } from "../core/model.ts";
 import { seed } from "../core/seed.ts";
+import { actorOf, chip, login, machineKey } from "../core/testkit.ts";
 import { CloudflareError } from "./cloudflare.ts";
 import {
   type AccessRow,
@@ -41,6 +42,12 @@ function start(): State {
     stacks: new Map(),
     paused: null,
     machines: new Map(),
+    actors: new Map(
+      [...s.actors, actorOf(login("g@x.com")), actorOf(machineKey("vps"), "vps")].map((actor) => [
+        actor.id,
+        actor,
+      ]),
+    ),
   };
 }
 
@@ -842,6 +849,24 @@ describe("daily compare and sessions (K-408, K-409, K-110)", () => {
     ]);
   });
 
+  it("ends no admin session when a machine goes, because its service token goes with it (K-615, K-1777)", async () => {
+    const cf = fakeCloudflare();
+    const state = start();
+    const machine = (id: string) =>
+      [
+        id,
+        { id, name: id, labels: [], order: 0, serviceTokenId: `t-${id}`, clientId: `c-${id}`, tunnelId: id },
+      ] as const;
+    const two: State = { ...state, machines: new Map([machine("m1"), machine("m2")]) };
+    await syncAccess(desiredAccess(two, 0), cf.store, cf.api, "a");
+    for (const left of [new Map([machine("m1")]), new Map()]) {
+      cf.calls.length = 0;
+      await syncAccess(desiredAccess({ ...state, machines: left }, 0), cf.store, cf.api, "a");
+      expect(cf.calls.length).toBeGreaterThan(0);
+      expect(cf.calls.filter((call) => call.endsWith("/revoke_tokens"))).toEqual([]);
+    }
+  });
+
   it("retries a failed session revoke after the daily compare", async () => {
     const cf = fakeCloudflare();
     const state = start();
@@ -977,7 +1002,7 @@ describe("passkey enrollment on the App Launcher (K-113)", () => {
       ...owner,
       id: "guests",
       name: "Guests",
-      members: [{ _tag: "email" as const, email: "g@x.com" }],
+      members: [chip(login("g@x.com"))],
     };
     const paused = {
       ...state,
@@ -1379,13 +1404,7 @@ describe("the approve applications (K-1723)", () => {
       ...state.circles.get("owner")!,
       id: "agents",
       name: "Agents",
-      members: [
-        {
-          _tag: "machine" as const,
-          machineId: "vps",
-          rights: { deploys: { mode: "ask" as const, circleId: "owner" } },
-        },
-      ],
+      members: [chip(machineKey("vps"), { changes: { mode: "ask", circleId: "owner" } })],
     };
     const desired = desiredAccess({ ...state, circles: new Map(state.circles).set("agents", agents) }, 0);
     expect(desired.apps.get("app:approve:passkey")).toMatchObject({
@@ -1413,6 +1432,33 @@ describe("the approve applications (K-1723)", () => {
     const joined = desiredAccess({ ...state, machines: new Map([["vps", tray]]) }, 0);
     expect(joined.apps.get("app:approve:passkey")).toMatchObject({
       policyKeys: ["policy:approve-passkey:owner"],
+    });
+    // An ask of "secrets" needs a passkey also in a circle without one, so its people reach the passkey path too.
+    const helpers: Circle = {
+      ...state.circles.get("owner")!,
+      id: "helpers",
+      name: "Helpers",
+      needsPasskey: false,
+      members: [chip(login("g@x.com"))],
+    };
+    const asking = {
+      ...agents,
+      members: [
+        chip(machineKey("vps"), {
+          changes: { mode: "ask", circleId: "helpers" },
+          secrets: { mode: "ask", circleId: "helpers" },
+        }),
+      ],
+    };
+    const both = desiredAccess(
+      { ...state, circles: new Map(state.circles).set("agents", asking).set("helpers", helpers) },
+      0,
+    );
+    expect(both.apps.get("app:approve:login")?.policyKeys).toEqual(["policy:approve-login:helpers"]);
+    expect(both.apps.get("app:approve:passkey")?.policyKeys).toContain("policy:approve-passkey:helpers");
+    expect(both.policies.get("policy:approve-passkey:helpers")).toMatchObject({
+      include: [{ email: { email: "g@x.com" } }],
+      mfa_config: { session_duration: "10m" },
     });
   });
 });

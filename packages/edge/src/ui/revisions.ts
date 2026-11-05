@@ -1,9 +1,9 @@
-import { type Actor, type RevisionKind, deepEqual } from "../core/changes.ts";
+import { type Author, type RevisionKind, deepEqual } from "../core/changes.ts";
 import type { RevisionView } from "../core/protocol.ts";
 
 /** K-1508: History as plain sentences, grouped by day and by actor, with filters. Pure, for tests. */
 
-export function actorLabel(actor: Actor): string {
+export function actorLabel(actor: Author): string {
   switch (actor._tag) {
     case "person":
       return actor.email;
@@ -17,7 +17,7 @@ export function actorLabel(actor: Actor): string {
 }
 
 /** One filter value per actor; every kitshn reason (an expiry, a deploy) is the same actor "kitshn". */
-export function actorKey(actor: Actor): string {
+export function actorKey(actor: Author): string {
   switch (actor._tag) {
     case "person":
       return `person:${actor.email}`;
@@ -121,7 +121,7 @@ export type Day = "Today" | "Yesterday" | "Older";
 
 export interface HistoryGroup {
   readonly day: Day;
-  readonly actor: Actor;
+  readonly actor: Author;
   readonly revisions: ReadonlyArray<RevisionView>;
 }
 
@@ -136,7 +136,7 @@ export function dayOf(at: number, now: number): Day {
 
 /** Newest first: the revisions of one day and one actor in a row make one group. */
 export function groupHistory(revisions: ReadonlyArray<RevisionView>, now: number): Array<HistoryGroup> {
-  const groups: Array<{ day: Day; actor: Actor; revisions: Array<RevisionView> }> = [];
+  const groups: Array<{ day: Day; actor: Author; revisions: Array<RevisionView> }> = [];
   for (const revision of revisions) {
     const day = dayOf(revision.at, now);
     const last = groups.at(-1);
@@ -174,7 +174,7 @@ export function filterHistory(
  * K-1506, K-1508: the one History row that can take Undo: the caller's own newest revision that changes
  * something and is not undone. kitshn answers whether its undo works now (GET /api/undo).
  */
-export const undoableRow = (revisions: ReadonlyArray<RevisionView>, me: Actor): number | null =>
+export const undoableRow = (revisions: ReadonlyArray<RevisionView>, me: Author): number | null =>
   revisions.find(
     (revision) =>
       revision.undoable &&

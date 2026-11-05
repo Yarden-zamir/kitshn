@@ -2,6 +2,7 @@ import { useMemo, useState } from "preact/hooks";
 import type { Command } from "../core/machine.ts";
 import type { State } from "../core/model.ts";
 import type { JobView, MachineView } from "../core/protocol.ts";
+import type { MachineFact } from "../core/facts.ts";
 import { isRelease, restartsAfterUpdate } from "../core/autoUpdate.ts";
 import { type HealthCell, healthCell, healthProblems } from "../core/health.ts";
 import { ProgressSticker } from "./Progress.tsx";
@@ -54,6 +55,7 @@ export function MachineLive(props: { view: MachineView; state: State }) {
   return (
     <div class="live">
       <div class="sub">{online ? daemon : `seen ${ago(lastSeen)} ago · ${daemon}`}</div>
+      <MachineLabels view={props.view} />
       <div class="meters">
         {online && sample ? (
           <>
@@ -67,6 +69,38 @@ export function MachineLive(props: { view: MachineView; state: State }) {
       </div>
     </div>
   );
+}
+
+/** K-609, K-635: the owner labels, then the fact labels from the daemon, which a dashed border sets apart. */
+export function MachineLabels(props: { view: MachineView }) {
+  return (
+    <span class="machine-labels">
+      {props.view.machine.labels.map((label) => (
+        <span
+          key={label}
+          class="machine-label"
+          tabIndex={0}
+          data-tip={`Owner label: a job or a recipe that needs "${label}" can run here (K-610).`}
+        >
+          {label}
+        </span>
+      ))}
+      <FactLabels facts={props.view.facts} />
+    </span>
+  );
+}
+
+function FactLabels(props: { facts: ReadonlyArray<MachineFact> }) {
+  return props.facts.map((fact) => (
+    <span
+      key={fact.label}
+      class="machine-label fact"
+      tabIndex={0}
+      data-tip={`From the daemon: ${fact.from}. kitshn sets this label from each report, so nobody can change it (K-635).`}
+    >
+      {fact.label}
+    </span>
+  ));
 }
 
 function Meter(props: { label: string; value: number }) {
@@ -331,15 +365,6 @@ function MachineKeyRow(props: { view: MachineView; onToast: (text: string, error
         </button>
       </div>
       <WhyOff reason={rotateOff} />
-      {props.view.status?.attesters?.length ? (
-        <p
-          class="muted"
-          data-tip="Attesters: local services that vouch for the thread of an ask; only their labels count for rights (K-1751)."
-        >
-          Attesters:{" "}
-          {props.view.status.attesters.map((attester) => `${attester.prefix} ${attester.address}`).join(", ")}
-        </p>
-      ) : null}
       {rekey ? (
         <>
           <p>
@@ -559,6 +584,23 @@ export function MachinePanel(props: {
             </details>
           ))
         : null}
+      {view.online
+        ? (view.status?.execPaths ?? [])
+            .filter((entry) => entry.via === "bridge")
+            .map((entry) => (
+              <p key={`exec-${entry.provider}`} class="muted">
+                Exec as {entry.user} needs the {entry.provider} provider running: no sudo rule. Fix as root:{" "}
+                <code>kitshn exec install --user {entry.user} --daemon-user &lt;daemon user&gt;</code>
+              </p>
+            ))
+        : null}
+      {view.online
+        ? (view.status?.providerProblems ?? []).map((entry) => (
+            <p key={`problem-${entry.provider}-${entry.reason}`} class="muted">
+              Provider {entry.provider} dropped {entry.reason}
+            </p>
+          ))
+        : null}
       {view.sample ? (
         <div class="row">
           <span class="label" data-tip="CPU: the share in use, from the latest sample of the minute.">
@@ -600,7 +642,7 @@ export function MachinePanel(props: {
           class="field"
           name="labels"
           aria-label="Labels"
-          data-tip="Labels, split by commas. A job runs on the first online machine that has all labels that it needs."
+          data-tip="Labels, split by commas. A job runs on the first online machine that has all labels that it needs. The daemon gives os:, arch: and unix labels."
           key={view.machine.labels.join(",")}
           defaultValue={view.machine.labels.join(", ")}
           placeholder="docker, server"
@@ -609,6 +651,14 @@ export function MachinePanel(props: {
           Save
         </button>
       </form>
+      {view.facts.length > 0 ? (
+        <div class="row">
+          <span class="label">From the daemon</span>{" "}
+          <span class="machine-labels">
+            <FactLabels facts={view.facts} />
+          </span>
+        </div>
+      ) : null}
       <form
         class="allow-list"
         onSubmit={async (event) => {
@@ -702,6 +752,13 @@ export function MachinePanel(props: {
         </button>
         <button class="btn" data-tip={MACHINE_TIPS.restart} onClick={() => void run({ kind: "restart" })}>
           Restart daemon
+        </button>
+        <button
+          class="btn"
+          data-tip={MACHINE_TIPS.tunnelRestart}
+          onClick={() => void run({ kind: "tunnel-restart" })}
+        >
+          Restart tunnel
         </button>
         {/* A local build names no release, so there is nothing to update to (K-617). */}
         {isRelease(props.version) ? (
@@ -901,6 +958,8 @@ export function HealthGrid(props: {
 /** K-519: the Machines view, a table of status and health. */
 export function MachinesView(props: {
   machines: ReadonlyArray<MachineView>;
+  /** K-402: the Access applications that kitshn made; an account has at most 500. */
+  accessApps: number;
   onAdd: () => void;
   onToast: (text: string, error: boolean) => void;
 }) {
@@ -908,6 +967,12 @@ export function MachinesView(props: {
     <div class="table-view">
       <p class="muted">
         Each machine runs the kitshn daemon. Commands and jobs need control on the machine card.
+      </p>
+      <p
+        class={props.accessApps >= 450 ? "error" : "muted"}
+        data-tip="Each web address has one Access application; the account has at most 500 (K-402)."
+      >
+        Access applications: {props.accessApps} of 500
       </p>
       <button
         class="btn primary"
@@ -942,7 +1007,9 @@ export function MachinesView(props: {
               <td data-label="Status">
                 <PresenceSticker view={view} />
               </td>
-              <td data-label="Labels">{view.machine.labels.join(", ")}</td>
+              <td data-label="Labels">
+                <MachineLabels view={view} />
+              </td>
               <td data-label="CPU">{percent(view.sample?.cpu)}</td>
               <td data-label="Memory">{percent(view.sample?.memory)}</td>
               <td data-label="Disk">{percent(view.sample?.disk)}</td>

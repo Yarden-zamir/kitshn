@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { Machine } from "../src/core/machine.ts";
 import { type Circle, OWNER_CIRCLE_ID, type Resource } from "../src/core/model.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
+import { machine as machineChip, person, withActors } from "./actors.ts";
 import { setup as agentSetup } from "./machine-http.ts";
 
 /** K-1131: the site wizard only makes new sites, through one service that queues `kitshn expose --new`. */
@@ -184,16 +185,16 @@ it("ends a wizard site as the owner who asked, who can undo it; a failed request
   const ownerCircle = circles.find((circle) => circle.id === OWNER_CIRCLE_ID);
   if (!ownerCircle) throw new Error("no Owner circle");
   const joined = await post(owner, "/api/apply", {
-    edits: [
+    edits: withActors([
       {
         _tag: "circle",
         id: OWNER_CIRCLE_ID,
         after: {
           ...ownerCircle,
-          members: [...ownerCircle.members, { _tag: "email", email: "other@example.com" }],
+          members: [...ownerCircle.members, person("other@example.com")],
         },
       },
-    ],
+    ]),
   });
   expect(joined.status, await joined.clone().text()).toBe(200);
   // The owner asks for an hour; another owner asks for the same name for two hours, and `expose --new` fails.
@@ -241,7 +242,7 @@ it("ends a wizard site as the owner who asked, who can undo it; a failed request
 
 it("puts a card of expose --circle in that circle only when the machine controls it, else in the tray (K-1104, K-718)", async () => {
   stubAccessCerts();
-  await agentSetup({ addsPages: { mode: "automatic" } });
+  await agentSetup({ creates: { mode: "automatic" } });
   const stub = env.KITSHN.getByName("kitshn");
   const owner = await accessToken("admin-aud", { email: "owner@example.com" });
   await runInDurableObject(stub, (instance) =>
@@ -277,20 +278,22 @@ it("puts a card of expose --circle in that circle only when the machine controls
 
 it("refuses on the server a change that would admit no one whom a circle admits now (K-539)", async () => {
   stubAccessCerts();
-  await agentSetup({ addsPages: { mode: "automatic" } });
+  await agentSetup({ creates: { mode: "automatic" } });
   const owner = await accessToken("admin-aud", { email: "owner@example.com" });
   const apply = (circle: object) =>
     send("/api/apply", {
       method: "POST",
       headers: { "cf-access-jwt-assertion": owner, "content-type": "application/json" },
-      body: JSON.stringify({ edits: [{ _tag: "circle", id: "people", after: circle }] }),
+      body: JSON.stringify({
+        edits: withActors([{ _tag: "circle", id: "people", after: circle as Circle }]),
+      }),
     });
   const people = {
     id: "people",
     name: "People",
     color: "#FF5277",
     level: "view",
-    members: [{ _tag: "email", email: "her@example.com" }],
+    members: [person("her@example.com")],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -300,7 +303,7 @@ it("refuses on the server a change that would admit no one whom a circle admits 
   };
   const made = await apply(people);
   expect(made.status, await made.clone().text()).toBe(200);
-  const members = [...people.members, { _tag: "machine", machineId: "vps" }];
+  const members = [...people.members, machineChip("vps")];
   // Any may match, so the machine joins; then the switch to "all must match" would lock her out.
   const joined = await apply({ ...people, members });
   expect(joined.status, await joined.clone().text()).toBe(200);
@@ -311,7 +314,7 @@ it("refuses on the server a change that would admit no one whom a circle admits 
 
 it("puts a wizard site in the circle of its request, and a failed job leaves no wish for a later card (K-1131)", async () => {
   stubAccessCerts();
-  await agentSetup({ addsPages: { mode: "automatic" } });
+  await agentSetup({ creates: { mode: "automatic" } });
   const stub = env.KITSHN.getByName("kitshn");
   const owner = await accessToken("admin-aud", { email: "owner@example.com" });
   const ask = async (name: string, circle: string | null) => {
@@ -406,4 +409,45 @@ it("puts a wizard site in the circle of its request, and a failed job leaves no 
     }),
   });
   expect(gone.status).toBe(400);
+});
+
+it("never turns the site of a dropped instance into a card of its own (K-825)", async () => {
+  await setup();
+  const stub = env.KITSHN.getByName("kitshn");
+  await runInDurableObject(stub, async (instance, state) => {
+    const sql = state.storage.sql;
+    const site = (name: string) =>
+      sql.exec(
+        `INSERT INTO live_sites (id, machine_id, name, address, target, dev, up, last_up, state)
+         VALUES (?, 'vps', ?, ?, 'unix:/run/app.sock', 0, 1, 0, 'checking')`,
+        `live-vps-${name}`,
+        name,
+        `${name}.example.com`,
+      );
+    // One instance address left its card (K-1124); the stop of another one waits for the machine.
+    site("gone-vps");
+    sql.exec("INSERT INTO old_addresses (address, card_id) VALUES ('gone-vps.example.com', 'gone-card')");
+    site("stopping-vps");
+    sql.exec(
+      `INSERT INTO jobs (machine_id, labels, command, state, created_at, expires_at, actor, visitor, output)
+       VALUES ('vps', '[]', ?, 'queued', 0, ?, '{}', '{}', '')`,
+      JSON.stringify({ kind: "compose-down", project: "stop-card", name: "stopping-vps", removeData: false }),
+      Number.MAX_SAFE_INTEGER,
+    );
+    const kitshn = instance as unknown as {
+      load(): void;
+      checkSites(api: () => Promise<[]>, budget: number): Promise<number>;
+    };
+    kitshn.load();
+    await kitshn.checkSites(async () => [], 6);
+    const ids = ["live-vps-gone-vps", "live-vps-stopping-vps"];
+    expect(
+      sql.exec("SELECT id, state FROM live_sites WHERE id IN (?, ?) ORDER BY id", ...ids).toArray(),
+    ).toEqual(ids.map((id) => ({ id, state: "checking" })));
+    expect(sql.exec("SELECT id FROM resources WHERE id IN (?, ?)", ...ids).toArray()).toEqual([]);
+    sql.exec("DELETE FROM live_sites WHERE id IN (?, ?)", ...ids);
+    sql.exec("DELETE FROM old_addresses WHERE card_id = 'gone-card'");
+    sql.exec("DELETE FROM jobs WHERE json_extract(command, '$.project') = 'stop-card'");
+    kitshn.load();
+  });
 });

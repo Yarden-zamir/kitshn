@@ -3,35 +3,33 @@ import { env } from "cloudflare:workers";
 import { afterEach, expect, it, vi } from "vitest";
 import { newMachineKey } from "../src/core/machine.ts";
 import { stubAccessCerts } from "./access.ts";
+import { agent } from "./actors.ts";
 import { forwarded, setup } from "./machine-http.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
 // Its own file: HTTP probes of one file share a runtime, and a refused upload of another test held this one up.
-it("checks the conditions of publishes when a forwarded page goes public (K-1714, K-1754)", async () => {
+it("gives a forwarded public page that misses the agent actor the mode of the machine chip (K-1714, K-1754, K-1778)", async () => {
   stubAccessCerts();
   const key = await newMachineKey();
-  await setup(
-    {
-      addsPages: { mode: "automatic" },
-      publishes: { mode: "automatic", conditions: [{ key: "t3.project.name", values: ["kitshn"] }] },
-    },
-    key,
-  );
+  // "shares" runs at once only for the agent of project kitshn; the bare machine has it at default, so it asks the Owner.
+  await setup({ creates: { mode: "automatic" } }, key, { x: 1100, y: 0 }, [
+    agent("vps", [{ key: "t3.project.name", values: ["kitshn"] }], { shares: { mode: "automatic" } }),
+  ]);
   const page = { "x-kitshn-name": "p.html", "content-type": "text/html" };
   const open = await forwarded(key, "POST", "/agent/library", "nonce-public-0123456789", "<p>x</p>", {
     ...page,
     "x-kitshn-public": "true",
   });
-  expect(open.status).toBe(403);
-  expect(await open.json()).toEqual({ error: expect.stringContaining("t3.project.name") });
+  expect(open.status).toBe(409);
+  expect(await open.json()).toMatchObject({ outcome: "waiting" });
 });
 
 it("lets one Owner approval run a forwarded public page whose rights are unset, once and only that page (K-1714, K-1776)", async () => {
   stubAccessCerts();
   const key = await newMachineKey();
   // The agent circle overlaps Everyone (K-718), so a public page has a spot.
-  await setup({ deploys: { mode: "automatic" } }, key, { x: 1100, y: 0 });
+  await setup({ changes: { mode: "automatic" } }, key, { x: 1100, y: 0 });
   const page = { "x-kitshn-name": "q.html", "content-type": "text/html", "x-kitshn-public": "true" };
   const first = await forwarded(key, "POST", "/agent/library", "nonce-owner-0123456789", "<p>q</p>", page);
   expect(first.status).toBe(409);
@@ -50,15 +48,23 @@ it("lets one Owner approval run a forwarded public page whose rights are unset, 
   expect(shown.shown).toContain("<p>q</p>");
   await runInDurableObject(stub, (instance) =>
     (
-      instance as unknown as { decide(id: string, decision: "approved", by: object): Promise<unknown> }
-    ).decide(proposalId, "approved", {
-      actor: { _tag: "person", email: "owner@example.com" },
-      visitor: { email: "owner@example.com", clientId: null, ip: null },
-      machineId: null,
-      reason: null,
-    }),
+      instance as unknown as {
+        decide(id: string, decision: "approved", by: object, seen: null, via: "passkey"): Promise<unknown>;
+      }
+    ).decide(
+      proposalId,
+      "approved",
+      {
+        actor: { _tag: "person", email: "owner@example.com" },
+        visitor: { email: "owner@example.com", clientId: null, ip: null },
+        machineId: null,
+        reason: null,
+      },
+      null,
+      "passkey",
+    ),
   );
-  // "adds pages" and "publishes" both ask the Owner, so the one approval covers both, and the page lands.
+  // "creates" runs at once and "shares" asks the Owner, whose passkey approval lands the page (K-1723).
   const second = await forwarded(key, "POST", "/agent/library", "nonce-owner-1123456789", "<p>q</p>", page);
   expect(second.status, await second.clone().text()).toBe(201);
   // The approval ran one call: the same call again asks again.
@@ -73,20 +79,29 @@ it("binds an approval of a forwarded call to the thread that asked (K-1714)", as
   const now = Date.now();
   const found = await runInDurableObject(env.KITSHN.getByName("kitshn"), (instance, state) => {
     state.storage.sql.exec(
-      `INSERT INTO proposals (id, machine_id, action, target, body, reason, labels, right_name, circle_id, shown, shown_hash,
-       state, created_at, expires_at, verified, decided_at) VALUES ('p-thread', 'vps', 'forward', 'POST /agent/library', 'null',
-       NULL, '{"t3.thread.id":"a"}', 'addsPages', 'owner', 's', 'h-thread', 'approved', ?, ?, '[]', ?)`,
+      `INSERT INTO proposals (id, machine_id, credential, action, target, body, reason, labels, right_name, circle_id, shown, shown_hash,
+       state, created_at, expires_at, verified, decided_at, decided_by) VALUES ('p-thread', 'vps', 'machine/vps', 'forward', 'POST /agent/library', 'null',
+       NULL, '{"t3.thread.id":"a"}', 'addsPages', 'owner', 's', 'h-thread', 'approved', ?, ?, '[]', ?, ?)`,
       now,
       now + 60_000,
       now,
+      JSON.stringify({ actor: { _tag: "person", email: "owner@example.com" }, reason: null }),
     );
     const approval = (thread: string | null) =>
       (
         instance as unknown as {
-          forwardApproval(m: string, h: string, c: string, t: string | null, n: number): string | null;
+          forwardApproval(
+            m: string,
+            h: string,
+            c: string,
+            r: string,
+            t: string | null,
+            n: number,
+          ): object | null;
         }
-      ).forwardApproval("vps", "h-thread", "owner", thread, now);
+      ).forwardApproval("machine/vps", "h-thread", "owner", "creates", thread, now);
     return { same: approval("a"), other: approval("b"), none: approval(null) };
   });
-  expect(found).toEqual({ same: "p-thread", other: null, none: null });
+  // K-1777: the approval says that a person gave it, so its job keeps the 1-hour expiry of K-613.
+  expect(found).toEqual({ same: { id: "p-thread", person: true }, other: null, none: null });
 });

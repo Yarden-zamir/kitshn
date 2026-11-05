@@ -14,10 +14,13 @@ import {
 import { visitorLevel } from "./visitor.ts";
 import type { Machine } from "./machine.ts";
 import {
+  type Circle,
   type Member,
   type Resource,
   type State,
   activeShares,
+  isPerson,
+  isPublicCircle,
   levelName,
   providerCardId,
   shareKey,
@@ -66,28 +69,41 @@ export function providerCards(
   return cards;
 }
 
-const ruleOf = (member: Member, machines: ReadonlyMap<string, Machine>): GrantRule | null => {
+/**
+ * K-706, K-1778: the rules of one member: an actor gives one rule per credential. An agent actor with conditions gives
+ * none, because the provider sees only the machine token (decision 5 of the actor design). A passkey circle gives no
+ * rule of a token or a machine (the passkey line). An empty list is a member that the provider cannot see.
+ */
+const rulesOf = (member: Member, state: State, circle: Circle): ReadonlyArray<GrantRule> => {
+  const { needsPasskey } = circle;
   switch (member._tag) {
-    case "email":
-      return { email: member.email.toLowerCase() };
     case "domain":
-      return { domain: member.domain.toLowerCase() };
+      return [{ domain: member.domain.toLowerCase() }];
     case "ip":
-      return { ip: member.range };
-    case "device": {
-      // A machine's daemon token held as a device member is that machine (K-107): the provider admits machines only
-      // through a machine rule.
-      const machine = [...machines.values()].find((item) => item.clientId === member.clientId);
-      return machine
-        ? { machine: { machineId: machine.id, clientId: machine.clientId } }
-        : { device: { clientId: member.clientId, name: member.name } };
-    }
-    case "machine": {
-      const machine = machines.get(member.machineId);
-      return machine ? { machine: { machineId: machine.id, clientId: machine.clientId } } : null;
-    }
+      return needsPasskey ? [] : [{ ip: member.range }];
     case "everyone":
-      return { everyone: true };
+      return [{ everyone: true }];
+    case "actor": {
+      const actor = state.actors.get(member.actorId);
+      if (!actor || (actor.conditions ?? []).length > 0) return [];
+      return actor.credentials.flatMap((credential): Array<GrantRule> => {
+        if (credential._tag === "login") return [{ email: credential.email.toLowerCase() }];
+        // In "all must match" a person is its one login, as in the Access compile (`allRules`).
+        if (needsPasskey || (circle.match === "all" && isPerson(actor))) return [];
+        if (credential._tag === "token") {
+          // A machine's daemon token held as a token is that machine (K-107): the provider admits machines only
+          // through a machine rule.
+          const machine = [...state.machines.values()].find((item) => item.clientId === credential.clientId);
+          return [
+            machine
+              ? { machine: { machineId: machine.id, clientId: machine.clientId } }
+              : { device: { clientId: credential.clientId, name: credential.name } },
+          ];
+        }
+        const machine = state.machines.get(credential.machineId);
+        return machine ? [{ machine: { machineId: machine.id, clientId: machine.clientId } }] : [];
+      });
+    }
   }
 };
 
@@ -100,9 +116,14 @@ export function grantsOf(state: State, card: Resource, now: number): Array<Grant
   const grants: Array<Grant> = [];
   for (const share of activeShares(state, card, now)) {
     const { circle } = share;
-    const known = circle.members.map((member) => ruleOf(member, state.machines));
-    if (circle.match === "all" && known.includes(null)) continue;
-    const rules = known.filter((rule) => rule !== null);
+    const known = circle.members.map((member) => rulesOf(member, state, circle));
+    // In "all must match", each member is one rule; a member of none or of several would widen it (K-006).
+    if (
+      circle.match === "all" &&
+      known.some((each, index) => each.length !== 1 && circle.members[index]?._tag !== "everyone")
+    )
+      continue;
+    const rules = known.flat();
     if (rules.length === 0) continue;
     const shareEnds = state.shareSettings.get(shareKey(card.id, circle.id))?.endsAt ?? null;
     const ends = [circle.endsAt, shareEnds].filter((time) => time !== null);
@@ -160,7 +181,10 @@ export type ProviderPush =
       readonly provider: string;
       readonly kind: string;
       readonly state: DesiredParts;
+      readonly rev: string | null;
     }
+  | { readonly key: string; readonly type: "paused"; readonly paused: boolean }
+  | { readonly key: string; readonly type: "execRights"; readonly machines: ReadonlyArray<string> }
   | {
       readonly key: string;
       readonly type: "reach";
@@ -197,6 +221,8 @@ export function providerPushes(
     readonly audiencesOf: (cardId: string) => ReadonlyArray<string>;
     /** K-1623: the host that kitshn serves for this card now, or null. */
     readonly servedHost: (cardId: string) => string | null;
+    /** K-709: the rev of the last set of a desired state, or null. */
+    readonly revOf: (kind: string) => string | null;
   },
 ): Array<ProviderPush> {
   return regs.flatMap(({ name, kinds }) => {
@@ -246,6 +272,7 @@ export function providerPushes(
             shared: desired.get(kind.id)?.get("") ?? null,
             machine: desired.get(kind.id)?.get(machineId) ?? null,
           },
+          rev: access.revOf(kind.id),
         })),
     ];
   });
@@ -305,6 +332,9 @@ export function reachOf(state: State, machineId: string, provider: string, now: 
   return [...state.resources.values()].flatMap((card) => {
     if (card.machine === null || card.machine === machineId || card.provider?.name !== provider) return [];
     if (card.provider.droppedAt !== undefined) return [];
+    // A public card's Access application lets every visitor through (K-403), so the machine token would reach its
+    // origin; a link never goes there.
+    if (activeShares(state, card, now).some((share) => isPublicCircle(share.circle))) return [];
     const level = visitorLevel(state, card, visitor, now);
     return level === null
       ? []

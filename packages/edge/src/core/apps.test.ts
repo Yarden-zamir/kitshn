@@ -112,6 +112,7 @@ describe("app removal (K-909)", () => {
       stacks: new Map(),
       paused: null,
       machines: new Map(),
+      actors: new Map(),
     };
     const kept = { name: `${compose.id}_data`, project: compose.id };
     const orphan = { name: "app-old-2-prod_data", project: "app-old-2-prod" };

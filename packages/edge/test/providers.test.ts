@@ -6,6 +6,7 @@ import type { Machine, MachineStatus } from "../src/core/machine.ts";
 import { type Circle, OWNER_CIRCLE_ID, type Resource, providerCardId } from "../src/core/model.ts";
 import { type ActionProgress, currentStep } from "../src/core/progress.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
+import { ACTOR_ROW, actorRows, machine as machineChip, tokenActor } from "./actors.ts";
 
 const machine: Machine = {
   id: "vps",
@@ -239,7 +240,7 @@ it("stores desired state from a provider, and runs a provider command that an ag
     name: "Agents",
     color: "#ffcc00",
     level: "control",
-    members: [{ _tag: "machine", machineId: "vps", rights: { runsCommands: { mode: "automatic" } } }],
+    members: [machineChip("vps", { runs: { mode: "automatic" } })],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -248,6 +249,7 @@ it("stores desired state from a provider, and runs a provider command that an ag
     r: 200,
   };
   await sql("INSERT OR REPLACE INTO circles (id, body) VALUES ('agents', ?)", JSON.stringify(agents));
+  for (const [id, body] of actorRows(agents.members)) await sql(ACTOR_ROW, id, body);
   await sql("INSERT OR REPLACE INTO places (id, x, y) VALUES ('vps', 5000, 5000)");
   await sql("INSERT OR REPLACE INTO places (id, x, y) VALUES (?, 5000, 5000)", appId);
   const command = { kind: "provider", provider: "t3", command: "restart", resource: appId };
@@ -296,9 +298,10 @@ it("counts the pushes that a machine has not applied, and takes applied only for
       .map((row) => row.key),
   );
   expect(keys).toEqual(["grants:t3"]);
-  // Four pushes wait: the grant tables, with a stale hash, and the reach, the card settings and the Access audiences,
-  // with none. A daemon from before K-1623 never applies the access push, so its count leaves that one out.
-  expect(await queued(keyed, null)).toBe(4);
+  // Six pushes wait: the grant tables, with a stale hash, and the reach, the card settings, the Access audiences, the
+  // pause and the exec rights, with none. An older daemon never applies the pushes that it does not name.
+  expect(await queued(keyed, null)).toBe(6);
+  expect(await queued(keyed, status(["applied", "access", "protocol-2"]))).toBe(6);
   expect(await queued(keyed, status(["applied", "access"]))).toBe(4);
   expect(await queued(keyed, status(["applied"]))).toBe(3);
   await sql("INSERT OR REPLACE INTO machines (id, body) VALUES ('vps', ?)", JSON.stringify(machine));
@@ -363,7 +366,7 @@ it("holds a job that waits for an idle machine while a provider is busy, and the
   });
 });
 
-it("records only the calls that a machine reports on machines that it reaches, as its own and only on a signed connection (K-1610)", async () => {
+it("records the forwarded tool calls of a machine on machines that it reaches, as its own and only on a signed connection (K-1610)", async () => {
   const { stub, message, sql } = await setup();
   await message("signed", [report([app])]);
   // vps reaches the T3 card of mac: the card sits in a circle that holds the machine vps.
@@ -393,7 +396,7 @@ it("records only the calls that a machine reports on machines that it reaches, a
     name: "Links",
     color: "#7CFF8A",
     level: "use",
-    members: [{ _tag: "machine", machineId: "vps" }],
+    members: [machineChip("vps")],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -404,35 +407,28 @@ it("records only the calls that a machine reports on machines that it reaches, a
   await sql("INSERT OR REPLACE INTO machines (id, body) VALUES ('mac', ?)", JSON.stringify(mac));
   await sql("INSERT OR REPLACE INTO resources (id, body) VALUES (?, ?)", macCard.id, JSON.stringify(macCard));
   await sql("INSERT OR REPLACE INTO circles (id, body) VALUES ('links', ?)", JSON.stringify(links));
+  for (const [id, body] of actorRows(links.members)) await sql(ACTOR_ROW, id, body);
   await sql("INSERT OR REPLACE INTO places (id, x, y) VALUES (?, 7000, 7000)", macCard.id);
   await sql("DELETE FROM link_events");
-  const audit = {
-    kind: "exec",
-    target: "mac",
-    thread: "thread-1",
-    name: "git",
-    cwd: "/home/kcw",
-    outcome: "succeeded",
-    exitCode: 0,
-    at: 0,
-  };
+  const call = { type: "linkCall", target: "mac", name: "read_file", status: 200 };
   const raw = (check: "signed" | "token", body: object) =>
     runInDurableObject(stub, (instance) =>
       instance.webSocketMessage(daemonSocket(check), JSON.stringify(body)),
     );
-  await raw("token", { type: "audit", audit });
-  await raw("signed", { type: "audit", audit: { ...audit, outcome: "maybe" } });
-  // A machine that vps does not reach, and a command line instead of a command name.
-  await raw("signed", { type: "audit", audit: { ...audit, target: "other" } });
-  await raw("signed", { type: "audit", audit: { ...audit, name: "curl -H secret" } });
-  await raw("signed", { type: "audit", audit });
+  await raw("token", call);
+  // A machine that vps does not reach, and a command line instead of a tool name.
+  await raw("signed", { ...call, target: "other" });
+  await raw("signed", { ...call, name: "curl -H secret" });
+  await raw("signed", call);
+  await raw("signed", { ...call, status: 403 });
   const rows = await runInDurableObject(stub, (_, state) =>
     state.storage.sql
       .exec("SELECT source, target, kind, name, outcome, exit_code FROM link_events")
       .toArray(),
   );
   expect(rows).toEqual([
-    { source: "vps", target: "mac", kind: "exec", name: "git", outcome: "succeeded", exit_code: 0 },
+    { source: "vps", target: "mac", kind: "tool", name: "read_file", outcome: "succeeded", exit_code: null },
+    { source: "vps", target: "mac", kind: "tool", name: "read_file", outcome: "refused", exit_code: null },
   ]);
   await sql("DELETE FROM circles WHERE id = 'links'");
   await sql("DELETE FROM resources WHERE id = 'p-mac-app'");
@@ -649,7 +645,7 @@ it("lists for a device the provider cards with an address that its token opens, 
     name: "Phone",
     color: "#00B3FF",
     level: "use",
-    members: [{ _tag: "device", tokenId: "t-phone", clientId: "phone.access", name: "Yarden's phone" }],
+    members: [tokenActor("t-phone", "phone.access", "Yarden's phone")],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -658,6 +654,7 @@ it("lists for a device the provider cards with an address that its token opens, 
     r: 200,
   };
   await sql("INSERT OR REPLACE INTO circles (id, body) VALUES ('phone', ?)", JSON.stringify(phone));
+  for (const [id, body] of actorRows(phone.members)) await sql(ACTOR_ROW, id, body);
   await message("signed", [
     report([
       { ...app, site: { name: "t3-vps", port: 3773 } },
@@ -681,6 +678,8 @@ it("lists for a device the provider cards with an address that its token opens, 
         card: appId,
         kind: "t3.app",
         level: "use",
+        // No daemon socket is open in this test.
+        online: false,
       },
     ],
   });
@@ -1151,6 +1150,96 @@ it("opens a health notification after two failed checks in a row, and closes it 
   expect(await notifications()).toEqual([{ key: "vps:link:t3:laptop", state: "closed" }]);
 });
 
+it("restarts the tunnel of an online machine that gave no answer 2 times in a row, once per streak (K-634)", async () => {
+  const { stub } = await setup();
+  const laptop: Machine = { ...machine, id: "laptop", name: "laptop", clientId: "laptop.access" };
+  const sent: Array<unknown> = [];
+  const laptopSocket = {
+    ...daemonSocket("signed", sent),
+    deserializeAttachment: () => ({
+      ...daemonSocket("signed").deserializeAttachment(),
+      machineId: "laptop",
+      status: {
+        version: "dev",
+        os: "Darwin",
+        arch: "arm64",
+        hostname: "l",
+        tunnel: "running",
+        capabilities: ["tunnel-restart"],
+      },
+    }),
+  } as unknown as WebSocket;
+  await runInDurableObject(stub, (instance, state) => {
+    state.storage.sql.exec(
+      "INSERT OR REPLACE INTO machines (id, body) VALUES ('laptop', ?)",
+      JSON.stringify(laptop),
+    );
+    state.storage.sql.exec("DELETE FROM jobs");
+    state.storage.sql.exec("DELETE FROM meta WHERE key LIKE 'tunnel-restart:%'");
+    state.storage.sql.exec("DELETE FROM notifications WHERE source = 'health'");
+    const self = instance as unknown as { load(): void; openSocket(id: string): WebSocket | null };
+    self.load();
+    self.openSocket = (id) => (id === "laptop" ? laptopSocket : null);
+  });
+  const silent = (failures: number) =>
+    runInDurableObject(stub, (instance) =>
+      instance.webSocketMessage(
+        daemonSocket("signed"),
+        JSON.stringify({
+          type: "health",
+          report: {
+            at: 1,
+            providers: [],
+            links: [
+              {
+                provider: "t3",
+                machineId: "laptop",
+                status: null,
+                ms: 10_000,
+                failures,
+                since: Date.now() - 1000,
+                error: "no answer from l.example.com: TimeoutError",
+              },
+            ],
+          },
+        }),
+      ),
+    );
+  const read = () =>
+    runInDurableObject(stub, (_, state) => ({
+      jobs: state.storage.sql
+        .exec<{ command: string }>("SELECT command FROM jobs")
+        .toArray()
+        .map((row) => JSON.parse(row.command)),
+      revision: state.storage.sql
+        .exec<{ summary: string }>("SELECT summary FROM revisions ORDER BY id DESC LIMIT 1")
+        .one().summary,
+      notice: state.storage.sql
+        .exec<{ text: string }>("SELECT text FROM notifications WHERE source = 'health'")
+        .toArray()[0]?.text,
+    }));
+  await silent(1);
+  expect((await read()).jobs).toEqual([]);
+  await silent(2);
+  const after = await read();
+  expect(after.jobs).toEqual([{ kind: "tunnel-restart" }]);
+  expect(after.revision).toContain("Restarted the tunnel of laptop");
+  expect(after.notice).toContain("kitshn restarted the tunnel of laptop");
+  expect(sent).toContainEqual(expect.objectContaining({ type: "job", command: { kind: "tunnel-restart" } }));
+  // The same streak goes on: no second restart.
+  await silent(3);
+  expect((await read()).jobs).toHaveLength(1);
+  await runInDurableObject(stub, (_, state) => {
+    for (const query of [
+      "DELETE FROM machines WHERE id = 'laptop'",
+      "DELETE FROM jobs",
+      "DELETE FROM meta WHERE key LIKE 'tunnel-restart:%'",
+    ])
+      state.storage.sql.exec(query);
+  });
+  await evictDurableObject(stub);
+});
+
 it("opens one notification for a refused provider from a signed status, and closes it when one passes (K-704)", async () => {
   const { stub } = await setup();
   const status = (check: "signed" | "token", refusedProviders: Array<object>) =>
@@ -1227,4 +1316,131 @@ it("opens a notification for a provider offline 5 minutes, keeps it beside refus
   ]);
   await status([]);
   expect((await notifications()).map((row) => row.state)).toEqual(["closed"]);
+});
+
+it("initializes only absent desired parts and preserves owner-set empty or disabled state (K-709)", async () => {
+  const { stub, sql } = await setup();
+  const sent: Array<unknown> = [];
+  const kind = "t3.init";
+  const raw = (message: object) =>
+    runInDurableObject(stub, (instance) =>
+      instance.webSocketMessage(daemonSocket("signed", sent), JSON.stringify(message)),
+    );
+  await sql("DELETE FROM desired_state WHERE kind = ?", kind);
+  await raw({
+    type: "providers",
+    providers: [
+      {
+        ...report([]),
+        kinds: [...report([]).kinds, { id: kind, name: "Initialization", levels: {}, state: {} }],
+      },
+    ],
+  });
+  stubAccessCerts();
+  const token = await accessToken("admin-aud", { email: "owner@example.com" });
+  let sequence = 0;
+  const init = async (part: "shared" | "machine") => {
+    const requestId = `init-${sequence++}`;
+    await raw({ type: "desiredInit", requestId, provider: "t3", kind, part, value: { enabled: true } });
+    return sent.find((item) => (item as { requestId?: string }).requestId === requestId);
+  };
+  for (const part of ["shared", "machine"] as const) {
+    const machineId = part === "shared" ? "" : "vps";
+    expect(await init(part)).toMatchObject({ type: "requestAnswer", error: null, initialized: true });
+    for (const value of [{}, { enabled: false }]) {
+      const response = await send(`/api/desired/${kind}`, {
+        method: "PUT",
+        headers: { "cf-access-jwt-assertion": token, "content-type": "application/json" },
+        body: JSON.stringify({ machineId: machineId || null, value }),
+      });
+      expect(response.status).toBe(200);
+      const revisions = () =>
+        runInDurableObject(
+          stub,
+          (_, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM revisions").one().n,
+        );
+      const before = await revisions();
+      expect(await init(part)).toMatchObject({ type: "requestAnswer", error: null, initialized: false });
+      expect(await revisions()).toBe(before);
+      const saved = await runInDurableObject(
+        stub,
+        (_, state) =>
+          state.storage.sql
+            .exec<{ body: string }>(
+              "SELECT body FROM desired_state WHERE kind = ? AND machine_id = ?",
+              kind,
+              machineId,
+            )
+            .one().body,
+      );
+      expect(JSON.parse(saved)).toEqual(value);
+    }
+  }
+});
+
+it("pushes a set desired state with its rev to the newest socket, also when only the rev changes (K-706, K-709)", async () => {
+  const { stub, sql } = await setup();
+  await sql("DELETE FROM desired_state");
+  await sql("DELETE FROM desired_revs");
+  const value = { server: { threadAddressing: true }, client: {} };
+  await runInDurableObject(stub, async (instance, state) => {
+    const kitshn = instance as unknown as {
+      webSocketMessage(socket: WebSocket, message: string): Promise<void>;
+    };
+    const signedSocket = () => {
+      const pair = new WebSocketPair();
+      state.acceptWebSocket(pair[1], ["vps", "machines"]);
+      pair[1].serializeAttachment({
+        kind: "machine",
+        machineId: "vps",
+        since: Date.now(),
+        challenge: "",
+        check: "signed",
+        answered: true,
+        rotateBy: null,
+        protocol: "2.2.0",
+        status: null,
+        sample: null,
+      });
+      return pair;
+    };
+    // A reconnect: kitshn closed the older socket, and its peer never answers the close, so it stays listed.
+    const old = signedSocket();
+    old[1].close(4001, "A newer connection of this machine replaced it.");
+    const pair = signedSocket();
+    pair[0].accept();
+    const received: Array<{ type: string; kind?: string; state?: unknown; rev?: string | null }> = [];
+    pair[0].addEventListener("message", (event) => void received.push(JSON.parse(String(event.data))));
+    const daemon = (message: object) => kitshn.webSocketMessage(pair[1], JSON.stringify(message));
+    const stateKind = { id: "t3.settings", name: "settings", levels: {}, state: {} };
+    await daemon({
+      type: "providers",
+      providers: [{ ...report([app]), kinds: [...report([]).kinds, stateKind] }],
+    });
+    const set = (requestId: string, rev: string) =>
+      daemon({
+        type: "desiredSet",
+        requestId,
+        provider: "t3",
+        kind: "t3.settings",
+        part: "machine",
+        value,
+        rev,
+      });
+    await set("s1", "rev-1");
+    await set("s2", "rev-2");
+    const parts = { shared: null, machine: value };
+    await vi.waitFor(() =>
+      expect(
+        received
+          .filter((item) => item.type === "desired" && item.kind === "t3.settings")
+          .map(({ state, rev }) => ({ state, rev })),
+      ).toEqual([
+        { state: { shared: null, machine: null }, rev: null },
+        { state: parts, rev: "rev-1" },
+        { state: parts, rev: "rev-2" },
+      ]),
+    );
+    pair[1].close(1000, "test over");
+  });
 });

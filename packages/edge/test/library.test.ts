@@ -5,15 +5,17 @@ import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test"
 import { env } from "cloudflare:workers";
 import worker from "../src/worker/index.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
+import { key, withActors } from "./actors.ts";
 
 /** K-1116, K-1117: an agent key publishes a page, updates it by name, and the owner restores its previous version. */
 
-const agentCircle = (id: string, clientId: string, x: number, publishes = false): Circle => ({
+const agentCircle = (id: string, clientId: string, x: number, shares = false): Circle => ({
   id,
   name: id,
   color: "#7c3aed",
   level: "control",
-  members: [{ _tag: "device", tokenId: `t-${id}`, clientId, name: id, ...(publishes ? { publishes } : {}) }],
+  // K-1730: taking down its own page has no Undo, so the key needs "destroys".
+  members: [key(`t-${id}`, clientId, id, shares ? { shares, destroys: true } : { destroys: true })],
   match: "any",
   needsPasskey: false,
   endsAt: null,
@@ -29,7 +31,7 @@ async function apply(edits: ReadonlyArray<Edit>) {
   const answer = await send("/api/apply", {
     method: "POST",
     headers: { "cf-access-jwt-assertion": await owner(), "content-type": "application/json" },
-    body: JSON.stringify({ edits }),
+    body: JSON.stringify({ edits: withActors(edits) }),
   });
   expect(answer.status, await answer.clone().text()).toBe(200);
 }

@@ -6,11 +6,13 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { gzipSync } from "node:zlib";
 import { AGENT_USAGE, isAgentCommand, keyTransport, runAgentCommand } from "./agent.ts";
+import { OPS_HELP, isOpCommand, runOpCommand } from "./ops.ts";
 import { type AssetSession, jsonOf, uploadAssets } from "./assets.ts";
 import { CliError, fail } from "./cli-error.ts";
 import { errorOutput } from "./output.ts";
 import { type Artifact, artifactsByApp } from "./artifacts.ts";
 import { RecipeError, readApps } from "./parse.ts";
+import { envLines } from "./params.ts";
 import {
   type AppResult,
   type Apps,
@@ -356,10 +358,6 @@ function params(): Map<string, string> {
   return values;
 }
 
-/** K-808: Compose env lines `<NAME>="value"`, quoted as JSON like KitSHn 1, so a line break or a `#` survives. */
-const envLines = (values: ReadonlyMap<string, string>) =>
-  [...values].map(([key, value]) => `${key}=${JSON.stringify(value)}`).join("\n");
-
 async function upload(server: string, path: string, deployId: string, body: Buffer, type: string) {
   const response = await fetch(new URL(path, server), {
     method: "POST",
@@ -427,11 +425,18 @@ const flag = (name: string, fallback: string) => {
   return index >= 0 ? (args[index + 1] ?? fallback) : fallback;
 };
 
-if (isAgentCommand(command))
-  await runAgentCommand(command, args, () =>
-    keyTransport(flag("--server", process.env["KITSHN_SERVER"] ?? "")),
-  );
-else {
+const transport = () => keyTransport(flag("--server", process.env["KITSHN_SERVER"] ?? ""));
+if (isAgentCommand(command)) await runAgentCommand(command, args, transport);
+// K-1777, K-1778: the same operations as the map and the machine, with the token of an actor.
+else if (command !== undefined && isOpCommand(command)) {
+  try {
+    await runOpCommand(command, args, transport);
+  } catch (error) {
+    if (!(error instanceof CliError)) throw error;
+    console.error(`kitshn: ${error.message}`);
+    process.exit(1);
+  }
+} else {
   if (json) console.log = console.error.bind(console);
   try {
     if (command === "check") console.log(JSON.stringify(loadApps(flag("--dir", ".")), null, 2));
@@ -446,9 +451,15 @@ else {
     process.exit(1);
   }
 }
-if (command !== "check" && command !== "deploy" && !isAgentCommand(command)) {
+if (
+  command !== "check" &&
+  command !== "deploy" &&
+  !isAgentCommand(command) &&
+  !(command !== undefined && isOpCommand(command))
+) {
   console.log(`kitshn check [--dir <app>]                  check kitshn.config.ts and print it as JSON (K-802)
 kitshn deploy --server <address> [--dir <app>]   deploy from GitHub Actions (K-803)
 ${AGENT_USAGE}
-                                             with an agent key: --server or KITSHN_SERVER, and CF_ACCESS_CLIENT_ID and _SECRET`);
+${OPS_HELP}
+                                             with a token of an actor: --server or KITSHN_SERVER, and KITSHN_TOKEN=<client id>:<secret>`);
 }

@@ -133,7 +133,7 @@ import {
 } from "./actions.ts";
 import type { Rect } from "./popover.ts";
 import { AddSite } from "./Add.tsx";
-import { GameDoors, isGameCard } from "./Games.tsx";
+import { PortDoors, isPortCard } from "./Ports.tsx";
 import { AddRepoGroup, GitHubDefaultWay, RepoGroupPanel, matchedCards } from "./RepoGroups.tsx";
 import { Palette } from "./Palette.tsx";
 import {
@@ -147,13 +147,15 @@ import {
 } from "./Pause.tsx";
 import { playResumeSound, pressSound, showPanic, unlockAudio } from "./panic.ts";
 import { GONE_STICKER, REPO_STICKERS, RepoList, setRepoState } from "./Repos.tsx";
+import { cardInstances } from "../core/instances.ts";
+import { approveVia } from "../core/asks.ts";
 import { AskEvents, LinkEvents, BotRuns, approveFromHash } from "./Asks.tsx";
 import { PassSettingsPanel } from "./Passes.tsx";
 import { LibraryView } from "./Library.tsx";
 import { AddMachine, MachinePanel, MachinesView, queueJob, setAutoUpdate } from "./Machines.tsx";
 import { ACCESS_TIPS, ALONE_KEY, MapView, type Selection, TrayCard, type View, measureMap } from "./Map.tsx";
 import { type DropTarget, dropPlan, givesNoOne } from "./drop.ts";
-import { joinPlan, leaveEdit, machineMember } from "./members.ts";
+import { joinPlan, leaveEdit, machineMember, memberKind } from "./members.ts";
 import { connectChecklist, isNewMachine } from "./machine-signs.ts";
 import { overlay } from "./held.ts";
 import { HistoryView } from "./History.tsx";
@@ -250,6 +252,8 @@ const CONNECTION_TIPS: Record<Connection, string> = {
   offline: "Offline: kitshn is not reachable. The map tries again.",
   refused: "Refused: kitshn did not take the connection. The panel says why.",
 };
+const PAUSED_TIP =
+  "Paused: no input for 10 minutes, so kitshn sends this map no changes. The map refreshes on the next input (K-605).";
 
 const TABS = {
   map: "Map: circles say who, and a card inside a circle is shared with it. The panel shows what you select; after Close, this opens it again.",
@@ -311,6 +315,7 @@ const routeFromHash = (): {
 
 export function App() {
   const store = useStore();
+  const paused = store.connection === "live" && store.idle;
   const [selection, setSelection] = useState<Selection>({ cards: new Set(), circle: null });
   const [hidden, setHidden] = useState<ReadonlySet<CardKind>>(new Set());
   const [savedView] = useState(loadView);
@@ -807,7 +812,7 @@ export function App() {
         error: true,
         undo: null,
       });
-    const kind = state?.circles.get(proposal.circleId)?.needsPasskey ? "passkey" : "login";
+    const kind = approveVia(state?.circles.get(proposal.circleId), proposal.right);
     if (
       !(await ask(
         `Approve this ask of ${proposal.machineName}? kitshn runs it at once:\n\n${proposal.shown}`,
@@ -919,7 +924,7 @@ export function App() {
         .slice(0, 2)
         .map((diff) =>
           diff.to
-            ? (givesNoOne(diff.resource, diff.circle, state?.machines ?? new Map()) ??
+            ? (givesNoOne(diff.resource, diff.circle, state ?? { machines: new Map(), actors: new Map() }) ??
               `Shared ${diff.resource.name} with ${diff.circle.name} · ${diff.to}`)
             : `Removed ${diff.resource.name} from ${diff.circle.name}`,
         )
@@ -1628,19 +1633,19 @@ export function App() {
     );
   };
 
-  /** K-534: the way out of a game card, from its menu, its panel and the palette; it has no Undo, so it asks. */
-  const removeGame = async (resource: Resource) => {
+  /** K-534: the way out of a port card, from its menu, its panel and the palette; it has no Undo, so it asks. */
+  const removePortCard = async (resource: Resource) => {
     if (
       !(await ask(
-        `Remove the game ${resource.name}? Its doors close for everyone at once and its records go. This has no Undo.`,
+        `Remove the port card ${resource.name}? Its doors close for everyone at once and its records go. This has no Undo.`,
       ))
     )
       return;
-    const result = await callApi<object>("DELETE", `/api/games/${encodeURIComponent(resource.id)}`);
+    const result = await callApi<object>("DELETE", `/api/ports/${encodeURIComponent(resource.id)}`);
     showToast(
       "error" in result
         ? { text: result.error, error: true, undo: null }
-        : { text: `Removed the game ${resource.name}.`, error: false, undo: null },
+        : { text: `Removed the port card ${resource.name}.`, error: false, undo: null },
     );
   };
 
@@ -1649,7 +1654,9 @@ export function App() {
     select: (selected) => {
       select(selected);
       location.hash = "map";
-      // "Show details" brings the item clear of the panel.
+      // "Show details" and a tap on a phone bring the item clear of the panel.
+      // Known limit: a card of an open stack pans to its place, not to where the stack draws it, because only the
+      // map knows the card heights; a low card can stay under a phone's sheet. Revisit if tall stacks get common.
       const boxes = [
         ...[...selected.cards].flatMap((id) => {
           const place = state.places.get(id);
@@ -1705,7 +1712,7 @@ export function App() {
         'input[aria-label="Stack name"]',
       ),
     removeApp: (resource) => void removeApp(resource),
-    removeGame: (resource) => void removeGame(resource),
+    removePortCard: (resource) => void removePortCard(resource),
     forgetProvider: (machineId, provider, card) => void forgetProvider(machineId, provider, card),
     takeAddress: (resource) => void takeAddress(resource),
     giveAddressBack: (resource) => void giveAddressBack(resource),
@@ -1798,6 +1805,7 @@ export function App() {
           progress={store.snapshot.progress}
           selection={selection}
           onSelect={select}
+          onTapSelect={(selected) => (wideScreen() ? select(selected) : handlers.select(selected))}
           hidden={hidden}
           view={view}
           onView={(next) => {
@@ -1905,6 +1913,7 @@ export function App() {
           ) : shownPanel === "machines" ? (
             <MachinesView
               machines={store.snapshot.machines}
+              accessApps={store.snapshot.accessApps}
               onAdd={() => setAddingMachine(true)}
               onToast={(text, error) => showToast({ text, error, undo: null })}
             />
@@ -1944,7 +1953,7 @@ export function App() {
               onPlace={placeInView}
               onReshare={(resource, circle, share, part) => void reshare(resource, circle, share, part)}
               onTime={handlers.setTime}
-              onRemoveGame={handlers.removeGame}
+              onRemovePortCard={handlers.removePortCard}
               onNewCircle={(ids) => void newCircleFor(ids)}
               onJoinCircle={(machine, circle) => void joinCircle(machine, circle)}
               onLeaveCircle={leaveCircle}
@@ -2029,6 +2038,7 @@ export function App() {
       {backupsCard ? (
         <BackupsDialog
           card={backupsCard}
+          machineName={(id) => state?.machines.get(id)?.name ?? id}
           ask={ask}
           onClose={() => setBackupsCard(null)}
           onDone={(text, error) => showToast({ text, error, undo: null })}
@@ -2321,13 +2331,13 @@ export function App() {
           {wide ? "⌘K" : "Find"}
         </button>
         {/* A phone shows the connection only when it is not live, so the toolbar fits one row. */}
-        {wide || store.connection !== "live" ? (
+        {wide || store.connection !== "live" || paused ? (
           <span
-            class={`sticker ${store.connection === "live" ? "ok" : "wait"}`}
+            class={`sticker ${store.connection === "live" && !paused ? "ok" : "wait"}`}
             style={{ "--tilt": "3deg" }}
-            data-tip={CONNECTION_TIPS[store.connection]}
+            data-tip={paused ? PAUSED_TIP : CONNECTION_TIPS[store.connection]}
           >
-            {store.connection}
+            {paused ? "paused" : store.connection}
           </span>
         ) : null}
       </header>
@@ -2479,8 +2489,8 @@ function Panel(props: {
   onReshare: (resource: Resource, circle: Circle, share: boolean, part: StackPart) => void;
   /** K-212: a new end time, null for no end, or "now". */
   onTime: (resource: Resource, endsAt: number | null | "now") => void;
-  /** K-534: removes a game card after a confirm. */
-  onRemoveGame: (resource: Resource) => void;
+  /** K-534: removes a port card after a confirm. */
+  onRemovePortCard: (resource: Resource) => void;
   onNewCircle: (ids: ReadonlyArray<string>) => void;
   onJoinCircle: (machine: Resource, circle: Circle) => void;
   onLeaveCircle: (machine: Resource, circle: Circle) => void;
@@ -2572,7 +2582,7 @@ function Panel(props: {
         onPlace={props.onPlace}
         onReshare={props.onReshare}
         onTime={props.onTime}
-        onRemoveGame={props.onRemoveGame}
+        onRemovePortCard={props.onRemovePortCard}
         onNewCircle={props.onNewCircle}
         onJoinCircle={props.onJoinCircle}
         onLeaveCircle={props.onLeaveCircle}
@@ -2929,6 +2939,60 @@ function Redirects(props: {
   );
 }
 
+const INSTANCE_STICKER: Record<Resource["status"], string> = {
+  running: "ok",
+  deploying: "wait",
+  stopped: "info",
+  offline: "info",
+  unknown: "info",
+  failed: "",
+};
+
+/** K-824, K-827, K-828: each instance of a Compose card: its machine, its status, its own address, and the primary. */
+function InstanceList(props: { resource: Resource; state: State }) {
+  const { resource, state } = props;
+  const rows = cardInstances(resource);
+  return (
+    <section aria-label="Instances">
+      <div
+        class="label"
+        data-tip="Instances: the copies of this app, one per machine (K-823). Each has its own address; the primary also serves the main address (K-828)."
+      >
+        Instances
+      </div>
+      <ul>
+        {rows.map((row) => (
+          <li key={row.machine} class="row">
+            <span>{state.machines.get(row.machine)?.name ?? row.machine}</span>
+            <span
+              class={`sticker ${INSTANCE_STICKER[row.status]}`}
+              data-tip={`${row.status}: the state of the instance on this machine (K-827).`}
+            >
+              {row.status}
+            </span>
+            {row.machine === resource.primary ? (
+              <span
+                class="sticker info"
+                data-tip={`Primary: ${resource.addresses[0] ?? "the main address"} goes to this instance now (K-828).`}
+              >
+                main
+              </span>
+            ) : null}
+            <a
+              href={`https://${row.address}`}
+              target="_blank"
+              rel="noreferrer"
+              data-tip="The own address of this instance (K-824)."
+            >
+              {row.address}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function CardPanel(props: {
   resource: Resource;
   /** K-1733: every repo that kitshn knows, for the matches of a repo group. */
@@ -2946,8 +3010,8 @@ function CardPanel(props: {
   onReshare: (resource: Resource, circle: Circle, share: boolean, part: StackPart) => void;
   /** K-212: a new end time, null for no end, or "now". */
   onTime: (resource: Resource, endsAt: number | null | "now") => void;
-  /** K-534: removes a game card after a confirm. */
-  onRemoveGame: (resource: Resource) => void;
+  /** K-534: removes a port card after a confirm. */
+  onRemovePortCard: (resource: Resource) => void;
   onNewCircle: (ids: ReadonlyArray<string>) => void;
   onJoinCircle: (machine: Resource, circle: Circle) => void;
   onLeaveCircle: (machine: Resource, circle: Circle) => void;
@@ -3048,6 +3112,9 @@ function CardPanel(props: {
             Open
           </a>
         </div>
+      ) : null}
+      {resource.kind === "site.compose" && (resource.instances ?? []).length > 0 ? (
+        <InstanceList resource={resource} state={state} />
       ) : null}
       {props.peek && peekable(resource) ? (
         <PeekRow key={resource.id} resource={resource} state={state} zone={props.zone} />
@@ -3202,8 +3269,8 @@ function CardPanel(props: {
                 </div>
                 <div class="row">
                   {circle.members.map((member, index) => (
-                    <span class="chip" key={index} data-tip={MEMBER_HELP[member._tag]}>
-                      {MEMBER_ICONS[member._tag]} {memberLabel(member)}
+                    <span class="chip" key={index} data-tip={MEMBER_HELP[memberKind(member, state)]}>
+                      {MEMBER_ICONS[memberKind(member, state)]} {memberLabel(member, state)}
                     </span>
                   ))}
                 </div>
@@ -3311,8 +3378,8 @@ function CardPanel(props: {
           </div>
         </>
       ) : null}
-      {isGameCard(resource) ? (
-        <GameDoors resource={resource} onRemove={() => props.onRemoveGame(resource)} />
+      {isPortCard(resource) ? (
+        <PortDoors resource={resource} onRemove={() => props.onRemovePortCard(resource)} />
       ) : null}
       {props.repo ? (
         <div class="row">

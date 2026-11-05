@@ -1,14 +1,19 @@
 // Section 17: what an ask of an agent on a machine needs, and how kitshn runs it. Pure, for tests.
 import {
+  type Actor,
   type Circle,
-  HIGH_RISK_RIGHTS,
-  MACHINE_RIGHT_NAMES,
-  type MachineRight,
+  type Directory,
+  type Effect,
+  HIGH_RISK_EFFECTS,
   type RightCondition,
   type RightMode,
+  type State,
+  isPerson,
+  machineIdOf,
+  memberActor,
 } from "./model.ts";
-import { FORWARD_HEADERS, type Machine } from "./machine.ts";
-import { type Visitor, circleMatches } from "./visitor.ts";
+import { FORWARD_HEADERS } from "./machine.ts";
+import { type Attested, type Visitor, circleMatches } from "./visitor.ts";
 
 /** K-1711: the actions of an ask. The daemon checks the same list (`@kitshn/local`). */
 export const ASK_ACTIONS = [
@@ -29,6 +34,8 @@ export const ASK_ACTIONS = [
   "history",
   "backup",
   "restore",
+  /** K-722: only an exec start of a daemon makes one; an ask of it is refused. */
+  "exec",
 ] as const;
 export type AskAction = (typeof ASK_ACTIONS)[number];
 
@@ -39,27 +46,28 @@ export const isAskAction = (value: unknown): value is AskAction =>
   typeof value === "string" && (ASK_ACTIONS as ReadonlyArray<string>).includes(value);
 
 /**
- * K-1711: the right that an action needs. `none` needs no right; `member` needs membership of the approver circle
- * (K-1723); `apply` needs "publishes" only for a move into Everyone, which agentRefusal decides.
+ * K-1711: the effect of an action. `none` needs none; `member` needs membership of the approver circle (K-1723);
+ * `apply` checks the edits with agentRefusal, and an edit that raises access follows "shares" (K-1778).
  */
-export const ASK_RIGHT: Record<AskAction, MachineRight | "none" | "member" | "apply"> = {
+export const ASK_RIGHT: Record<AskAction, Effect | "none" | "member" | "apply"> = {
   state: "none",
   apply: "apply",
   organize: "apply",
   publish: "apply",
-  allow: "addsApps",
-  deploy: "deploys",
-  job: "runsCommands",
+  allow: "runs",
+  deploy: "changes",
+  job: "runs",
   "job-read": "none",
-  "github-token": "readsCode",
-  "audience-add": "addsAudiences",
+  "github-token": "reads",
+  "audience-add": "shares",
   "audience-remove": "none",
-  pass: "getsPasses",
+  pass: "shares",
   approve: "member",
   deny: "member",
   history: "none",
-  backup: "deploys",
-  restore: "restores",
+  backup: "changes",
+  restore: "destroys",
+  exec: "runs",
 };
 
 /** K-1750: at most 10 labels, each key with a prefix, of `a-z`, `0-9`, `.` and `-`, at most 64 characters. */
@@ -133,6 +141,7 @@ export function askRequest(
     case "history":
     case "backup":
     case "restore":
+    case "exec":
       return `kitshn runs ${action} itself, not through an agent path.`;
   }
 }
@@ -146,6 +155,8 @@ export function shownAsk(action: ProposalAction, target: string, body: unknown):
   switch (action) {
     case "job":
       return `run on ${target}: ${JSON.stringify(object["command"] ?? null)}`;
+    case "exec":
+      return `run on ${target} as ${String(object["provider"] ?? "the daemon user")}: ${JSON.stringify(object["command"] ?? null)}`;
     case "deploy":
       return `deploy ${target} (${object["mode"] === "build" ? "build" : "redeploy"})`;
     case "apply":
@@ -172,6 +183,34 @@ export function shownAsk(action: ProposalAction, target: string, body: unknown):
   }
 }
 
+/**
+ * K-1722: the request headers of a forwarded call that a notification and a push show, because they decide what the
+ * call does: its name, address, circle, publish, deploy, and on `/op` what the answer gives (K-1777). No other header.
+ */
+export const NOTIFIED_HEADERS: ReadonlySet<string> = new Set([
+  "x-kitshn-name",
+  "x-kitshn-address",
+  "x-kitshn-circle",
+  "x-kitshn-public",
+  "x-kitshn-deploy",
+  "gives",
+]);
+
+/**
+ * K-1722: the text of an ask in a notification and a push: the shown text, where a forwarded call keeps only the
+ * headers of NOTIFIED_HEADERS. The Inbox shows the whole shown text.
+ */
+export function askNotificationText(action: ProposalAction, target: string, body: unknown): string {
+  if (action !== "forward") return shownAsk(action, target, body);
+  const object = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+  const headers =
+    typeof object["headers"] === "object" && object["headers"] !== null ? object["headers"] : {};
+  return shownAsk("forward", target, {
+    ...object,
+    headers: Object.fromEntries(Object.entries(headers).filter(([key]) => NOTIFIED_HEADERS.has(key))),
+  });
+}
+
 /** K-1722: the SHA-256 of the shown text, hex. */
 export async function shownHash(shown: string): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(shown)));
@@ -181,19 +220,23 @@ export async function shownHash(shown: string): Promise<string> {
 /** K-1722: the longest shown text of a proposal; a longer ask is refused, so each snapshot stays small. */
 export const MAX_SHOWN = 4096;
 
-/** K-1722: at most 20 open proposals for each machine; a new ask past it is refused. */
+/** K-1722, K-1778: at most 20 open proposals for each credential that asks; a new ask past it is refused. */
 export const MAX_OPEN_PROPOSALS = 20;
 
 /** K-1722: a proposal of an ask that waits for its approver circle. */
 export interface Proposal {
   readonly id: string;
+  /** The machine that asked; empty for a token or a login (K-1778). */
   readonly machineId: string;
+  /** K-1778: the credential that asked: `machine/<id>`, `token/<id>` or `login/<email>`. It never approves. */
+  readonly credential: string;
   readonly action: ProposalAction;
   readonly target: string;
   readonly body: unknown;
   readonly reason: string | null;
   readonly labels: Readonly<Record<string, string>>;
-  readonly right: MachineRight;
+  /** K-1730: the effect that the ask is for; a target out of scope asks for "shares" (K-1778). */
+  readonly right: Effect;
   readonly circleId: string;
   /** What the approver reads, and its SHA-256 hex (shownAsk). */
   readonly shown: string;
@@ -215,25 +258,34 @@ export const APPROVED_WINDOW_MS = 60 * 60_000;
  */
 export const WINDOW_ACTIONS: ReadonlySet<AskAction> = new Set(["github-token", "pass"]);
 
-/** K-1727: a machine of this circle approves asks; in a circle that needs a passkey only with "machines may approve". */
-export const machinesApprove = (circle: Circle) => !circle.needsPasskey || circle.machinesMayApprove === true;
+/** K-1723: an approval of an ask for these effects needs a passkey proof, because they raise access or hand out secrets. */
+export const PASSKEY_EFFECTS: ReadonlySet<Effect> = new Set(["shares", "secrets"]);
+
+/** K-1723: the approve path of an ask; a passkey circle and an ask of a passkey effect go through the passkey check. */
+export const approveVia = (circle: Pick<Circle, "needsPasskey"> | undefined, right: Effect) =>
+  circle?.needsPasskey === true || PASSKEY_EFFECTS.has(right) ? "passkey" : "login";
+
+/** K-1727: a proof without a passkey answers the asks of this circle; in a passkey circle only with the setting on. */
+export const approvesWithoutPasskey = (circle: Circle) =>
+  !circle.needsPasskey || circle.approvesWithoutPasskey === true;
 
 /**
- * K-1723, K-1727, K-1902: why this visitor may not answer the asks of an approver circle, or null when it may. The
- * answer check and the live list of asks use it, so who sees an ask and who answers it never differ. `machine` says
- * that the visitor is a machine, which answers only where machines approve.
+ * K-1723, K-1727, K-1902: why this proof may not answer the asks of an approver circle, or null when it may. The answer
+ * check and the live list of asks use it, so who sees an ask and who answers it never differ. `withoutPasskey` says that
+ * the proof has no passkey (a token or a machine), which answers only where `approvesWithoutPasskey` lets it.
  */
 export function answerRefusal(
   circle: Circle | undefined,
   circleId: string,
   visitor: Visitor,
-  machines: ReadonlyMap<string, Machine>,
-  machine: boolean,
+  directory: Directory,
+  attested: Attested | null,
+  withoutPasskey: boolean,
 ): string | null {
-  if (!circle || !circleMatches(circle, visitor, machines))
+  if (!circle || !circleMatches(circle, visitor, directory, attested))
     return `Only a member of the approver circle ${circle?.name ?? circleId} answers this ask (K-1723).`;
-  if (machine && !machinesApprove(circle))
-    return `${circle.name} needs a passkey, and "machines may approve" is off, so a machine does not answer its asks (K-1727).`;
+  if (withoutPasskey && !approvesWithoutPasskey(circle))
+    return `${circle.name} needs a passkey, and "approves without passkey" is off, so a token or a machine does not answer its asks (K-1727).`;
   return null;
 }
 
@@ -241,96 +293,110 @@ export function answerRefusal(
 export const ASK_EVENT_DAYS = 30;
 export const ASK_EVENT_COUNT = 5000;
 
+/** K-1778: whether a member is a person or names nobody: a person actor or a rule other than a network. */
+const isPersonMember = (member: Circle["members"][number], directory: Directory) => {
+  const actor = memberActor(member, directory);
+  return member._tag === "domain" || (actor !== undefined && isPerson(actor));
+};
+
+/** K-1778: whether a member is an actor that proves calls without a passkey: a machine, an agent or a script. */
+const isAgentMember = (member: Circle["members"][number], directory: Directory) => {
+  const actor = memberActor(member, directory);
+  return actor !== undefined && !isPerson(actor);
+};
+
+/** K-1730: what each effect lets an actor do, in the words of the map. */
+export const EFFECT_HELP: Record<Effect, string> = {
+  reads: "Reads: the map, logs, History, job output and repo read tokens.",
+  maintains:
+    "Maintains: closed machine care (restart, update, tunnel restart, diagnostics, order, automatic update), and closing invites and asks.",
+  creates:
+    "Creates: new cards (apps, pages, sites, ports, repos). They land only in the actor's own circles, so creating never shares.",
+  changes:
+    "Changes: existing cards in scope: deploys, settings, desired state, repo push tokens and backups.",
+  runs: "Runs: shell and exec on machines in scope.",
+  destroys:
+    "Destroys: anything without Undo: remove an app, restore over data, delete volumes, forget a card.",
+  shares:
+    "Shares: shares what this actor manages: its cards into a circle or Everyone, audiences and passes. Circles, members, levels, effects and targets out of scope ask the Owner. With Secrets automatic too, it acts as the owner. A person approves an ask of it with a passkey.",
+  secrets:
+    "Secrets: hands out a secret: invite codes, key reset codes and tokens. A person approves an ask of it with a passkey.",
+};
+
+/** K-1725: the effects that the map warns about at "automatic", with what they do with no person. */
+const AUTOMATIC_WARNING: Readonly<Partial<Record<Effect, string>>> = {
+  shares: `"shares" runs at once: the actor shares what this actor manages, such as its cards into any circle or Everyone, audiences and passes, with no person. Circles, members, levels and effects still ask the Owner.`,
+  secrets: `"secrets" alone gives nothing at once: each secret still asks the Owner. With "shares" automatic too, the actor acts as you, the owner.`,
+  runs: `"runs" runs at once: the actor runs shell commands on its machines with no person.`,
+  destroys: `"destroys" runs at once: the actor removes data that has no Undo with no person.`,
+};
+
+/** K-1725: the effects that run a shell, destroy data, raise access or hand out a secret, so their sticker warns. */
+export const WARNED_EFFECTS: ReadonlySet<Effect> = new Set(Object.keys(AUTOMATIC_WARNING) as Array<Effect>);
+
+/** K-1778: "shares" and "secrets" automatic together make an actor with control of the admin card the owner (K-104). */
+const OWNER_WARNING = `"shares" and "secrets" run at once: where the actor has control of the admin card, it acts as you, the owner, with no person.`;
+
+/** K-1725: the warning of one effect at "automatic", which for "shares" and "secrets" depends on the other one. */
+export function automaticWarning(
+  effect: Effect,
+  rights: Readonly<Partial<Record<Effect, RightMode>>>,
+): string | undefined {
+  const owner = rights.shares?.mode === "automatic" && rights.secrets?.mode === "automatic";
+  return owner && (effect === "shares" || effect === "secrets") ? OWNER_WARNING : AUTOMATIC_WARNING[effect];
+}
+
 /**
- * K-1725: the warnings of the rights of one machine. The map shows them and refuses nothing: all configurations are
- * allowed.
+ * K-1725: the warnings of the effect modes of one actor in a circle. The map shows them and refuses nothing: all configurations
+ * are allowed.
  */
 export function rightWarnings(
-  circles: ReadonlyMap<string, Circle>,
-  machineId: string,
-  rights: Readonly<Partial<Record<MachineRight, RightMode>>>,
+  state: Pick<State, "circles" | "actors" | "machines">,
+  actor: Actor,
+  rights: Readonly<Partial<Record<Effect, RightMode>>>,
 ): Array<string> {
   const warnings: Array<string> = [];
-  for (const [right, mode] of Object.entries(rights) as Array<[MachineRight, RightMode | undefined]>) {
+  for (const [right, mode] of Object.entries(rights) as Array<[Effect, RightMode | undefined]>) {
     if (!mode || mode.mode === "off") continue;
-    const name = MACHINE_RIGHT_NAMES[right];
+    const name = right;
     if (mode.mode === "automatic") {
-      if (right === "writesCode" && (mode.conditions ?? []).length === 0)
+      const warning = automaticWarning(right, rights);
+      if (warning !== undefined) warnings.push(warning);
+      if (right === "changes" && machineIdOf(actor) !== null && (actor.conditions ?? []).length === 0)
         warnings.push(
-          `"${name}" runs at once with no thread condition, so any process of the machine writes code.`,
+          `"changes" runs at once for an actor with no thread condition, so any process of the machine pushes code and deploys.`,
         );
       continue;
     }
-    const circle = circles.get(mode.circleId);
+    const circle = state.circles.get(mode.circleId);
     if (!circle) {
       warnings.push(`"${name}" asks a circle that is gone, so no one can approve it.`);
       continue;
     }
-    const machinesHere =
-      machinesApprove(circle) && circle.members.some((member) => member._tag === "machine");
+    const agentsHere =
+      approvesWithoutPasskey(circle) && circle.members.some((member) => isAgentMember(member, state));
+    // K-1778: the credential that asked never approves, so a circle of this actor alone answers no ask of it.
     if (
-      machinesApprove(circle) &&
-      circle.members.some((member) => member._tag === "machine" && member.machineId === machineId)
+      circle.members.length > 0 &&
+      circle.members.every((member) => member._tag === "actor" && member.actorId === actor.id)
     )
-      warnings.push(`"${name}" asks ${circle.name}, which holds this machine, so it can approve itself.`);
-    if (
-      HIGH_RISK_RIGHTS.has(right) &&
-      !circle.members.some((member) => member._tag === "email" || member._tag === "domain")
-    )
+      warnings.push(
+        `"${name}" asks ${circle.name}, which holds only this actor, and an actor never approves its own ask.`,
+      );
+    if (HIGH_RISK_EFFECTS.has(right) && !circle.members.some((member) => isPersonMember(member, state)))
       warnings.push(
         `"${name}" asks ${circle.name}, which has no person, so no person sees it before it runs.`,
       );
-    if (machinesHere)
+    if (agentsHere)
       warnings.push(
-        `${circle.name} has machines: their agents read the reason and the labels, which the asking agent writes.`,
+        `${circle.name} has agents: they read the reason and the labels, which the asking agent writes.`,
       );
-    if (machinesHere && circle.needsPasskey)
+    if (agentsHere && circle.needsPasskey)
       warnings.push(
-        `${circle.name} needs a passkey, but "machines may approve" is on, so its machines approve with no passkey.`,
+        `${circle.name} needs a passkey, but "approves without passkey" is on, so its agents approve with no passkey.`,
       );
   }
   return [...new Set(warnings)];
-}
-
-/**
- * K-1725, K-1727: the machines of this circle that it would let approve their own asks, because one of their rights asks
- * this circle. The circle editor warns at once, when the owner adds the machine or sets the rule.
- */
-export function selfApprovers(circles: ReadonlyMap<string, Circle>, circle: Circle): Array<string> {
-  if (!machinesApprove(circle)) return [];
-  return circle.members.flatMap((member) => {
-    if (member._tag !== "machine") return [];
-    const asks = [...circles.values()].some((other) =>
-      (other.id === circle.id ? circle : other).members.some(
-        (each) =>
-          each._tag === "machine" &&
-          each.machineId === member.machineId &&
-          Object.values(each.rights ?? {}).some(
-            (mode) => mode?.mode === "ask" && mode.circleId === circle.id,
-          ),
-      ),
-    );
-    return asks ? [member.machineId] : [];
-  });
-}
-
-/**
- * K-1754: why the attested labels of an ask fail the conditions of its right, or null. A condition counts only on a
- * prefix that an attester of the machine reports, because only then the daemon dropped the caller's own labels of it.
- */
-export function conditionProblem(
-  conditions: ReadonlyArray<RightCondition> | undefined,
-  labels: Readonly<Record<string, string>>,
-  attesterPrefixes: ReadonlyArray<string>,
-): string | null {
-  for (const condition of conditions ?? []) {
-    if (!attesterPrefixes.some((prefix) => condition.key.startsWith(prefix)))
-      return `The condition on ${condition.key} has no attester on this machine (K-1754).`;
-    const value = labels[condition.key];
-    if (value === undefined || !condition.values.includes(value))
-      return `The right needs ${condition.key} to be ${condition.values.join(" or ")}, and the ask has ${value === undefined ? "no such verified label" : value} (K-1754).`;
-  }
-  return null;
 }
 
 /** K-1754: conditions as the editor writes them: `key=value,value; key=value`. */

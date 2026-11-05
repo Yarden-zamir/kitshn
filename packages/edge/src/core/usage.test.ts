@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { type Analytics, analyticsRows, bucketRow, countRows, usageLevel, withBucket } from "./usage.ts";
+import {
+  type Analytics,
+  PERMISSION,
+  analyticsRows,
+  bucketRow,
+  countRows,
+  usageLevel,
+  withBucket,
+} from "./usage.ts";
 
 const used = (rows: ReadonlyArray<{ label: string; used: number | null }>, label: string) =>
   rows.find((row) => row.label === label)?.used;
@@ -27,7 +35,7 @@ describe("free plan usage (K-1303)", () => {
     const rows = analyticsRows(data, { rows: "not authorized" });
     const read = rows.find((row) => row.label === "Durable Object rows read");
     expect(read?.used).toBeNull();
-    expect(read?.error).toContain("Account Analytics: Read");
+    expect(read?.error).toContain(PERMISSION.analytics);
     expect(used(rows, "Durable Object storage")).toBeNull();
     // No group of operations means no operation today.
     expect(used(rows, "KV reads")).toBe(0);

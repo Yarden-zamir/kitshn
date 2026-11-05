@@ -279,6 +279,25 @@ export function nestedSources(config: unknown, real: (path: string) => string): 
   });
 }
 
+/**
+ * K-826: the mounts of a config that keep data on this machine: each volume, named or not, and each bind below the
+ * data folder of the app. A spread app has none, because kitshn cannot move data to another machine yet.
+ */
+export function spreadData(config: unknown, data: string, real: (path: string) => string): Array<string> {
+  const folder = real(data);
+  return Object.entries(record(record(config)["services"]))
+    .flatMap(([name, service]) =>
+      list(record(service)["volumes"]).flatMap((volume) => {
+        const v = record(volume);
+        if (v["type"] === "volume") return [`${name}: volume ${String(v["source"] ?? "(anonymous)")}`];
+        if (v["type"] !== "bind" || typeof v["source"] !== "string") return [];
+        const source = real(v["source"]);
+        return source === folder || source.startsWith(`${folder}/`) ? [`${name}: bind ${v["source"]}`] : [];
+      }),
+    )
+    .sort();
+}
+
 /** K-818: every bind source of a config, checked again right before `up` with nothing of the app running. */
 export function bindSources(config: unknown): Array<string> {
   return Object.values(record(record(config)["services"])).flatMap((service) =>

@@ -262,7 +262,7 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
   // that actor, so its Undo works (K-1506). Null when an undo brought the time back.
   ["CREATE TABLE card_ends (id TEXT PRIMARY KEY, ends_at INTEGER NOT NULL, set_by TEXT)"],
   // 37: section 20. A game card (K-2001) with the last public addresses of its machine, so its records stay while the
-  // machine is offline; the open doors (K-2004) with the address that opened each (K-2005); and the A, AAAA and SRV records that kitshn made for it (K-2007).
+  // machine is offline; the open doors (K-2005) with the address that opened each (K-2006); and the A, AAAA and SRV records that kitshn made for it (K-2008).
   [
     `CREATE TABLE games (card_id TEXT PRIMARY KEY, machine_id TEXT NOT NULL, name TEXT NOT NULL UNIQUE, ports TEXT NOT NULL,
       door_ms INTEGER NOT NULL, srv TEXT, relay_id TEXT, v4 TEXT, v6 TEXT)`,
@@ -299,10 +299,124 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
     "ALTER TABLE proposals ADD COLUMN used_at INTEGER",
     "ALTER TABLE handovers ADD COLUMN approved TEXT NOT NULL DEFAULT '[]'",
   ],
+  // 42: provider protocol 2. The exec runs that kitshn relays (K-722), so an evicted Durable Object finds each run
+  // again, and the rev of the last set of each desired state (K-709). Its code step moves each `t3.agents` share to
+  // the `t3.app` card of the same machine, once, by its own mark in `meta`.
+  [
+    `CREATE TABLE exec_runs (exec_id TEXT PRIMARY KEY, source TEXT NOT NULL, target TEXT NOT NULL, provider TEXT,
+      command TEXT NOT NULL, cwd TEXT, thread TEXT, proposal_id TEXT, state TEXT NOT NULL, started_at INTEGER NOT NULL)`,
+    "CREATE TABLE desired_revs (kind TEXT PRIMARY KEY, rev TEXT NOT NULL)",
+  ],
+  // 43: section 20 is "Ports" (K-2001): the kind `game` becomes `port`, and its tables follow the name.
+  [
+    "ALTER TABLE games RENAME TO port_cards",
+    "ALTER TABLE game_records RENAME TO port_records",
+    `UPDATE resources SET body = json_set(body, '$.kind', 'port') WHERE json_extract(body, '$.kind') = 'game'`,
+  ],
+  // 44: actors (K-1778). Its code step (`migrateMembers`) turns the email, device and machine members of each circle into
+  // actors and their chips, once, in the transaction of the migration. The circle bodies of before stay in
+  // `circles_before_actors`, so an owner can go back by hand to a kitshn of before it.
+  [
+    "CREATE TABLE circles_before_actors (id TEXT PRIMARY KEY, body TEXT NOT NULL)",
+    "INSERT INTO circles_before_actors (id, body) SELECT id, body FROM circles",
+    "CREATE TABLE actors (id TEXT PRIMARY KEY, body TEXT NOT NULL)",
+    // The actor that a device invite adds its token to; null makes a new actor of the token (K-1601).
+    "ALTER TABLE device_invites ADD COLUMN actor_id TEXT",
+  ],
+  // 45: a proposal belongs to the credential that asked (K-1778): `machine/<id>`, `token/<id>` or `login/<email>`. A
+  // token actor has no machine, so its `machine_id` is empty. The credential never approves its own ask. A call that the
+  // Owner decides now asks for the right "raises access" (K-1778), not "owner".
+  [
+    "ALTER TABLE proposals ADD COLUMN credential TEXT NOT NULL DEFAULT ''",
+    "UPDATE proposals SET credential = 'machine/' || machine_id",
+    "CREATE INDEX proposals_credential ON proposals (credential, state)",
+    "UPDATE proposals SET right_name = 'raisesAccess' WHERE right_name = 'owner'",
+  ],
+  // 46: effects (K-1730). Its code step (`migrateRights`) moves the rights of each chip, the proposals and the approvals
+  // of deploys and handovers to effects, once, in the transaction of the migration. A queued job keeps the approval of
+  // its call with the right names of before, so it fails, and the caller sends it again.
+  [
+    "UPDATE github_tokens SET right_name = CASE right_name WHEN 'writesCode' THEN 'changes' ELSE 'reads' END",
+    `UPDATE jobs SET state = 'failed', output = 'kitshn moved to effects; send the job again (K-1730)'
+      WHERE state = 'queued' AND json_extract(visitor, '$.ownerApproved') IS NOT NULL`,
+  ],
+  // 47: placement (K-823). `compose` keeps the `compose` part of the recipe as JSON, so the drift of K-825 reads its
+  // labels and placement. `deploy_instances` holds the job of each instance of a deploy beyond the home one (K-827);
+  // `deferred` marks a machine that was offline at plan time, whose job the deploy does not wait for.
+  [
+    "ALTER TABLE deploys ADD COLUMN compose TEXT",
+    `CREATE TABLE deploy_instances (deploy_id TEXT NOT NULL, machine_id TEXT NOT NULL, address TEXT NOT NULL,
+      job_id INTEGER, deferred INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (deploy_id, machine_id))`,
+    "CREATE INDEX deploy_instances_job ON deploy_instances (job_id)",
+    // K-827: the repository of an instance that is not the home one; null for the card's own repository.
+    "ALTER TABLE backups ADD COLUMN repository TEXT",
+  ],
+  // 48: rows read (K-1302). Each wake, load, snapshot and forwarded call filters these tables; an index reads only
+  // the rows it needs.
+  [
+    "CREATE INDEX forward_nonces_at ON forward_nonces (at)",
+    "CREATE INDEX notifications_state ON notifications (state)",
+    "CREATE INDEX library_previous ON library (previous_size) WHERE previous_size IS NOT NULL",
+    "CREATE INDEX library_added ON library (kind) WHERE added_by IS NOT NULL",
+    "CREATE INDEX repos_first_seen ON repos (first_seen)",
+  ],
+  // 49: rows read (K-1302, K-004). `deploy_cards` holds what a snapshot needs of the deploys, one row per card, so no
+  // read scans `deploys`, which grows with each deploy. Two triggers keep it; the rows of before fill it once. A row
+  // counts as deployed with a repo id or once done, and both stay so. `preview` is the pull request environment. The
+  // rowid keeps the order of the first deploy of each card.
+  [
+    `CREATE TABLE deploy_cards (resource_id TEXT PRIMARY KEY, newest_id TEXT NOT NULL, newest_state TEXT NOT NULL,
+      newest_reason TEXT, deployed INTEGER NOT NULL, preview TEXT, repo_ids TEXT NOT NULL)`,
+    `CREATE TRIGGER deploy_cards_insert AFTER INSERT ON deploys WHEN NEW.kind = 'deploy' BEGIN
+      INSERT INTO deploy_cards (resource_id, newest_id, newest_state, newest_reason, deployed, preview, repo_ids)
+      VALUES (NEW.resource_id, NEW.id, NEW.state, NEW.reason, NEW.repo_id IS NOT NULL OR NEW.state = 'done',
+        CASE WHEN (NEW.repo_id IS NOT NULL OR NEW.state = 'done') AND NEW.environment GLOB 'pr-[0-9]*'
+          THEN NEW.environment END,
+        CASE WHEN NEW.repo_id IS NULL THEN '[]' ELSE json_array(NEW.repo_id) END)
+      ON CONFLICT (resource_id) DO UPDATE SET newest_id = NEW.id, newest_state = NEW.state, newest_reason = NEW.reason,
+        deployed = deployed OR excluded.deployed, preview = COALESCE(excluded.preview, preview),
+        repo_ids = CASE WHEN NEW.repo_id IS NULL OR NEW.repo_id IN (SELECT value FROM json_each(repo_ids))
+          THEN repo_ids ELSE json_insert(repo_ids, '$[#]', NEW.repo_id) END;
+    END`,
+    `CREATE TRIGGER deploy_cards_update AFTER UPDATE OF state, reason, repo_id ON deploys WHEN NEW.kind = 'deploy' BEGIN
+      UPDATE deploy_cards SET
+        newest_state = CASE WHEN newest_id = NEW.id THEN NEW.state ELSE newest_state END,
+        newest_reason = CASE WHEN newest_id = NEW.id THEN NEW.reason ELSE newest_reason END,
+        deployed = deployed OR NEW.repo_id IS NOT NULL OR NEW.state = 'done',
+        preview = CASE WHEN (NEW.repo_id IS NOT NULL OR NEW.state = 'done') AND NEW.environment GLOB 'pr-[0-9]*'
+          THEN NEW.environment ELSE preview END,
+        repo_ids = CASE WHEN NEW.repo_id IS NULL OR NEW.repo_id IN (SELECT value FROM json_each(repo_ids))
+          THEN repo_ids ELSE json_insert(repo_ids, '$[#]', NEW.repo_id) END
+      WHERE resource_id = NEW.resource_id;
+    END`,
+    `INSERT INTO deploy_cards (resource_id, newest_id, newest_state, newest_reason, deployed, preview, repo_ids)
+     SELECT newest.resource_id, newest.id, newest.state, newest.reason,
+       EXISTS (SELECT 1 FROM deploys d WHERE d.resource_id = newest.resource_id AND d.kind = 'deploy'
+         AND (d.repo_id IS NOT NULL OR d.state = 'done')),
+       (SELECT d.environment FROM deploys d WHERE d.resource_id = newest.resource_id AND d.kind = 'deploy'
+         AND (d.repo_id IS NOT NULL OR d.state = 'done') AND d.environment GLOB 'pr-[0-9]*' ORDER BY d.rowid DESC LIMIT 1),
+       (SELECT json_group_array(repo_id) FROM (SELECT d.repo_id FROM deploys d WHERE d.resource_id = newest.resource_id
+         AND d.kind = 'deploy' AND d.repo_id IS NOT NULL GROUP BY d.repo_id ORDER BY MIN(d.rowid)))
+     FROM deploys newest WHERE newest.kind = 'deploy' AND newest.rowid =
+       (SELECT MAX(d.rowid) FROM deploys d WHERE d.resource_id = newest.resource_id AND d.kind = 'deploy')
+     ORDER BY (SELECT MIN(d.rowid) FROM deploys d WHERE d.resource_id = newest.resource_id AND d.kind = 'deploy')`,
+    // K-817: the Compose deploys that still hold a DNS record are the ones of the last hour (DEPLOY_MS).
+    "CREATE INDEX deploys_compose_live ON deploys (expires_at) WHERE kind = 'deploy' AND app = 'compose'",
+    // K-410: the next retry of a failed tunnel, DNS or route write reads only the failed rows.
+    "CREATE INDEX tunnel_objects_retry ON tunnel_objects (retry_at) WHERE error IS NOT NULL",
+    "CREATE INDEX dns_objects_retry ON dns_objects (retry_at) WHERE error IS NOT NULL",
+    "CREATE INDEX route_objects_retry ON route_objects (retry_at) WHERE error IS NOT NULL",
+  ],
 ];
 
 /** K-819: the migration after which the Durable Object derives the repo ids of older deploy rows. */
 export const REPO_GATE_MIGRATION = 6;
+/** K-722: the migration after which the `t3.agents` kind is gone; an import from before it runs the code step. */
+export const AGENTS_MIGRATION = 42;
+/** K-1778: the migration of the actors; a database or an import from before it runs `migrateMembers`. */
+export const ACTORS_MIGRATION = 44;
+/** K-1730: the migration of the effects; a database or an import from before it runs `migrateRights`. */
+export const EFFECTS_MIGRATION = 46;
 
 /**
  * Runs the migrations after `from`, up to `to` (K-1833 stops at the schema of an export). Returns the new version.

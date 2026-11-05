@@ -1,7 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { readAnswer, readRequest } from "./index.ts";
+import { type Request, readAnswer, readRequest } from "./index.ts";
 
 describe("local socket framing (K-702)", () => {
+  it("keeps one request member per desired type, so a caller can narrow by type (K-709)", () => {
+    // A member with both literals made Extract<Request, { type: "desired-set" }> never, so this did not typecheck.
+    const set: Extract<Request, { type: "desired-set" }> = {
+      id: "s",
+      type: "desired-set",
+      provider: "t3",
+      kind: "t3.settings",
+      part: "machine",
+      value: {},
+    };
+    const init: Extract<Request, { type: "desired-init" }> = { ...set, id: "i", type: "desired-init" };
+    expect([readRequest(JSON.stringify(set)).ok, readRequest(JSON.stringify(init)).ok]).toEqual([true, true]);
+  });
+
   it("reads a request with its id", () => {
     expect(readRequest('{"id":"a","type":"status"}')).toEqual({
       ok: true,

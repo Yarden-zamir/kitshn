@@ -2,6 +2,9 @@
   "name": "@kitshn/daemon",
   "private": true,
   "type": "module",
+  "exports": {
+    "./service": "./src/service.ts"
+  },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "bun --bun vitest run",
@@ -10,12 +13,14 @@
   "dependencies": {
     "@kitshn/edge": "workspace:*",
     "@kitshn/local": "workspace:*",
-    "kitshn": "workspace:*",
-    "effect": "4.0.6"
+    "effect": "4.0.6",
+    "jose": "6.2.14",
+    "kitshn": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "1.4.4",
     "typescript": "7.0.2",
     "vitest": "5.0.5"
-  }
+  },
+  "version": "0.0.0"
 }

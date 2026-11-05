@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MachineView } from "../core/protocol.ts";
 import { seed } from "../core/seed.ts";
+import { actorOf, chip, machineKey } from "../core/testkit.ts";
 import type { State } from "../core/model.ts";
 import { connectChecklist, isNewMachine, machineProblems } from "./machine-signs.ts";
 
@@ -52,6 +53,7 @@ describe("connectChecklist (K-633)", () => {
       stacks: new Map(),
       paused: null,
       machines: new Map(),
+      actors: new Map([...s.actors, actorOf(machineKey("mac"), "mac")].map((actor) => [actor.id, actor])),
       ...over,
     }) as State;
   const done = (rows: ReturnType<typeof connectChecklist>) =>
@@ -72,7 +74,7 @@ describe("connectChecklist (K-633)", () => {
       machine: "mac",
       provider: { name: "t3" },
     };
-    const circle = { ...s.circles[0]!, members: [{ _tag: "machine" as const, machineId: "mac" }] };
+    const circle = { ...s.circles[0]!, members: [chip(machineKey("mac"))] };
     const rows = connectChecklist(
       view({ online: false, lastSeen: 5 }),
       state({

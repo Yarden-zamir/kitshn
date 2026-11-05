@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { type DeployRun, type LogAnswer, type LogLine, matchesText, tailLines } from "../core/logs.ts";
 import type { Resource } from "../core/model.ts";
+import { TOKEN_PERMISSIONS, TOKEN_PLACE } from "../core/token.ts";
 import { Radio, Switch, useDialogEscape } from "./controls.tsx";
 import { callApi, startTail, stopTail } from "./store.ts";
 
@@ -23,9 +24,9 @@ const LIVE_LINES = 2000;
 
 /** K-1806: the exact steps, because the search box is the only place where the owner meets this. */
 export const OBSERVABILITY_STEPS = [
-  "Open https://dash.cloudflare.com/profile/api-tokens.",
+  `Open ${TOKEN_PLACE}.`,
   "Find the token of kitshn and click Edit.",
-  'Add the permission "Account", "Workers Observability", "Edit".',
+  `Add the permission "${TOKEN_PERMISSIONS.workersObservability.label}".`,
   "Click Continue to summary, then Update token. The token value stays the same, so kitshn needs no deploy.",
   "Search again.",
 ] as const;
@@ -234,8 +235,7 @@ export function LogsDialog(props: { card: Resource; onClose: () => void }) {
             {answer?.state === "needs-permission" ? (
               <div class="help">
                 <p>
-                  Search in Worker logs needs the token permission "Workers Observability: Edit". Live works
-                  without it.
+                  {`Search in Worker logs needs the token permission "${TOKEN_PERMISSIONS.workersObservability.label}". Live works without it.`}
                 </p>
                 <ol>
                   {OBSERVABILITY_STEPS.map((step) => (

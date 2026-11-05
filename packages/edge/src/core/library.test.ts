@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { type ContentVisitor, contentAccess, fileNameError, loginStep } from "./library.ts";
 import type { Circle, Resource, State } from "./model.ts";
 import { seed } from "./seed.ts";
+import { actorOf, chip, login } from "./testkit.ts";
 
 const OWNER = "owner@example.com";
 
@@ -20,7 +21,7 @@ function start(): State {
     ...s.circles[0]!,
     id: "friends",
     name: "Friends",
-    members: [{ _tag: "email", email: "friend@example.com" }],
+    members: [chip(login("friend@example.com"))],
     needsPasskey: false,
     x: 2000,
     y: 0,
@@ -35,6 +36,7 @@ function start(): State {
     stacks: new Map(),
     paused: null,
     machines: new Map(),
+    actors: new Map([...s.actors, actorOf(login("friend@example.com"))].map((actor) => [actor.id, actor])),
   };
 }
 
@@ -87,7 +89,7 @@ describe("page and file access (K-1004)", () => {
     expect(decide({ ...state, circles }, person("friend@example.com"))).toBe("allow");
   });
 
-  it("asks no passkey of a visitor who matches a network member, logged in or not (K-402)", () => {
+  it("lets in a network member of a passkey circle only as a login after the passkey step (K-1778)", () => {
     const state = at(start(), 2000);
     const friends = state.circles.get("friends")!;
     const office: Circle = {
@@ -96,9 +98,9 @@ describe("page and file access (K-1004)", () => {
       members: [{ _tag: "ip", range: "203.0.113.0/24" }],
     };
     const circles = new Map(state.circles).set("friends", office);
-    expect(decide({ ...state, circles }, anonymous)).toBe("allow");
+    expect(decide({ ...state, circles }, { ...anonymous, ip: "203.0.113.9" })).toBe("login");
     expect(decide({ ...state, circles }, { ...person("friend@example.com"), ip: "203.0.113.9" })).toBe(
-      "allow",
+      "passkey",
     );
   });
 

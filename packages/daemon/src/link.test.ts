@@ -1,9 +1,10 @@
-import { chmodSync, mkdtempSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import type { ReachedCard } from "@kitshn/local";
 import { describe, expect, it } from "vitest";
-import { linkPeerAdmitted, linkSocketProblem, linkTarget, serveLinks } from "./link.ts";
+import { forwardBody, linkPeerAdmitted, linkTarget, serveLinks } from "./link.ts";
 
 const platform = process.platform === "darwin" ? "darwin" : "linux";
 const own = process.getuid!();
@@ -77,23 +78,23 @@ describe("the link proxy (K-1609)", () => {
     });
     const folder = mkdtempSync(join(tmpdir(), "kitshn-link-"));
     const path = join(folder, "link.sock");
+    const calls: Array<object> = [];
     const links = await serveLinks(path, {
       reachOf: (provider) => (provider === "t3" ? [card(`127.0.0.1:${upstream.port}`)] : []),
       token: () => ({ clientId: "a.access", clientSecret: "secret" }),
       log: () => {},
+      audit: (call) => calls.push(call),
       scheme: "http",
       peers: { platform, access: "private", admits: (uid) => linkPeerAdmitted(uid, own, []) },
     });
     try {
-      // Whoever asks, also a local user, takes a socket of the daemon user with mode 0600, and no other owner (K-701).
-      expect(linkSocketProblem(platform, path, own)).toBeNull();
-      expect(linkSocketProblem(platform, path, own + 1)).toMatch(/not to the daemon user/);
       const answer = await fetch("http://link/t3/b/api/thing", {
         unix: path,
         method: "POST",
         headers: {
           "CF-Access-Client-Id": "forged",
           "x-keep": "1",
+          "Kitshn-Audit-Name": "read_file",
           cookie: "CF_Authorization=person; lang=he",
         },
         body: "x".repeat(200_000),
@@ -102,18 +103,81 @@ describe("the link proxy (K-1609)", () => {
       expect(seen[0]?.get("cf-access-client-id")).toBe("a.access");
       expect(seen[0]?.get("cf-access-client-secret")).toBe("secret");
       expect(seen[0]?.get("x-keep")).toBe("1");
+      // K-1610: the tool name goes to History, never to B.
+      expect(seen[0]?.has("kitshn-audit-name")).toBe(false);
+      expect(calls).toEqual([{ provider: "t3", machineId: "b", name: "read_file", status: 200 }]);
       // An Access session never crosses the proxy, in either direction.
       expect(seen[0]?.get("cookie")).toBe("lang=he");
       expect(answer.headers.getSetCookie()).toEqual(["theme=dark; Path=/"]);
+      // A call without the header still goes to History, under its method and path without the query.
+      await (await fetch("http://link/t3/b/api/thing?token=x", { unix: path } as RequestInit)).text();
+      expect(calls.at(-1)).toEqual({ provider: "t3", machineId: "b", name: "GET:/api/thing", status: 200 });
       const refused = await fetch("http://link/t3/other/api", { unix: path } as RequestInit);
       expect(refused.status).toBe(403);
 
       expect(await webSocketEcho(path, "/t3/b/ws", "hi")).toBe("echo hi");
-      // A provider refuses a socket that another user could open or replace (K-621).
-      chmodSync(path, 0o666);
-      expect(linkSocketProblem(platform, path, own)).toMatch(/mode 666/);
-      expect(linkSocketProblem(platform, join(folder, "none.sock"), own)).toMatch(/no link proxy/);
     } finally {
+      links.stop();
+      void upstream.stop(true);
+    }
+  });
+
+  it("stops reading upstream while a slow client has filled its buffer", async () => {
+    const slow = new PassThrough({ highWaterMark: 1 });
+    const abort = new AbortController();
+    let pulled = 0;
+    async function* source() {
+      pulled++;
+      yield new Uint8Array([1]);
+      pulled++;
+      yield new Uint8Array([2]);
+    }
+    const forwarding = forwardBody(source(), slow, abort.signal);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(pulled).toBe(1);
+    slow.resume();
+    await forwarding;
+    expect(pulled).toBe(2);
+  });
+
+  it("cancels an upstream stream when its local client disconnects", async () => {
+    const cancelled = Promise.withResolvers<void>();
+    const upstream = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(request) {
+        request.signal.addEventListener("abort", () => cancelled.resolve());
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("first\n"));
+            },
+            cancel() {
+              cancelled.resolve();
+            },
+          }),
+        );
+      },
+    });
+    const path = join(mkdtempSync(join(tmpdir(), "kitshn-link-cancel-")), "link.sock");
+    const links = await serveLinks(path, {
+      reachOf: (provider) => (provider === "t3" ? [card(`127.0.0.1:${upstream.port}`)] : []),
+      token: () => ({ clientId: "a.access", clientSecret: "secret" }),
+      log: () => {},
+      scheme: "http",
+      peers: { platform, access: "private", admits: (uid) => linkPeerAdmitted(uid, own, []) },
+    });
+    const client = new AbortController();
+    try {
+      const answer = await fetch("http://link/t3/b/v1/messages", {
+        unix: path,
+        signal: client.signal,
+      } as RequestInit);
+      expect(new TextDecoder().decode((await answer.body!.getReader().read()).value)).toBe("first\n");
+      client.abort();
+      await cancelled.promise;
+    } finally {
+      client.abort();
       links.stop();
       void upstream.stop(true);
     }

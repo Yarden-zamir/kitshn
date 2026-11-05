@@ -183,11 +183,14 @@ const usageFail = (text: string): never => {
 export function keyTransport(server: string): AgentTransport {
   if (!server)
     fail("name the kitshn server with --server or KITSHN_SERVER, for example https://kit.example.com.");
-  const id = process.env["CF_ACCESS_CLIENT_ID"];
-  const secret = process.env["CF_ACCESS_CLIENT_SECRET"];
+  // K-1778: KITSHN_TOKEN is `<client id>:<secret>` of a token of an actor; the two Access variables still work.
+  const token = process.env["KITSHN_TOKEN"] ?? "";
+  const colon = token.indexOf(":");
+  const id = colon > 0 ? token.slice(0, colon) : process.env["CF_ACCESS_CLIENT_ID"];
+  const secret = colon > 0 ? token.slice(colon + 1) : process.env["CF_ACCESS_CLIENT_SECRET"];
   if (!id || !secret)
     fail(
-      "on a joined machine, run kitshn of the machine; elsewhere set CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET to the service token of an agent key.",
+      "on a joined machine, run kitshn of the machine; elsewhere set KITSHN_TOKEN=<client id>:<secret> to a token of an actor.",
     );
   const credentials = { "cf-access-client-id": id ?? "", "cf-access-client-secret": secret ?? "" };
   const call: AgentTransport["call"] = (path, init) =>
@@ -212,7 +215,7 @@ export const AGENT_COMMANDS = [
   "repo",
   "redirect",
   "time",
-  "game",
+  "port",
 ] as const;
 export type AgentCommand = (typeof AGENT_COMMANDS)[number];
 export const isAgentCommand = (value: unknown): value is AgentCommand =>
@@ -236,11 +239,11 @@ kitshn publish --previous <card> [--json]    go back to the previous version of 
   time: `kitshn time <card> <30m|1h|4h|1d|stop|now> [--json]
                                              a card leaves every circle for the tray after this time (K-212);
                                              stop keeps it until someone moves it, now ends it at once`,
-  game: `kitshn game add --machine <machine> --name <name> --port 25565/tcp [--port <port/proto>] [--door 12h] [--srv minecraft] [--relay <machine>] [--json]
-                                             a game card: its ports open per person from its join page (K-2001)
-kitshn game doors <card> [--json]            the open doors, records and listening ports of a game card (K-2006)
-kitshn game close <card> <address> [--json]  close one door of a game card (K-2006)
-kitshn game remove <card> [--json]           remove a game card, its doors and its records (K-2006)`,
+  port: `kitshn port add --machine <machine> --name <name> --port 25565/tcp [--port <port/proto>] [--door 12h] [--srv minecraft] [--relay <machine>] [--json]
+                                             a port card: its ports open per person from its connect page (K-2001)
+kitshn port doors <card> [--json]            the open doors, records and listening ports of a port card (K-2007)
+kitshn port close <card> <address> [--json]  close one door of a port card (K-2007)
+kitshn port remove <card> [--json]           remove a port card, its doors and its records (K-2007)`,
 };
 
 /** The help lines of all agent commands. */
@@ -439,7 +442,9 @@ async function logs(
   const found = answer.answer;
   if (found?.state === "error") fail(found.error);
   if (found?.state === "needs-permission")
-    fail('search in Worker logs needs the token permission "Workers Observability: Edit" (K-1806).');
+    fail(
+      'search in Worker logs needs the token permission "Account > Workers Observability > Edit" (K-1806).',
+    );
   // With --json, stdout holds only the answer; console.log goes to stderr in that mode.
   if (options.json) return void process.stdout.write(`${JSON.stringify(found ?? answer.runs)}\n`);
   if (options.deploys) {
@@ -588,8 +593,8 @@ async function redirect(t: AgentTransport, card: string, address: string, remove
   );
 }
 
-/** K-2001, K-2006: `kitshn game add|doors|close`. An agent never opens a door; a person does on the join page. */
-async function game(transport: () => AgentTransport, args: ReadonlyArray<string>) {
+/** K-2001, K-2007: `kitshn port add|doors|close`. An agent never opens a door; a person does on the connect page. */
+async function portCard(transport: () => AgentTransport, args: ReadonlyArray<string>) {
   const valued = new Set(["--machine", "--name", "--port", "--door", "--srv", "--relay", "--server"]);
   const values = (name: string) =>
     args.flatMap((arg, index) => (arg === name ? [args[index + 1] ?? ""] : []));
@@ -601,7 +606,7 @@ async function game(transport: () => AgentTransport, args: ReadonlyArray<string>
     const door = values("--door")[0] ?? "12h";
     const hours = door.endsWith("d") ? Number(door.slice(0, -1)) * 24 : Number(door.replace(/h$/, ""));
     if (!Number.isFinite(hours)) usageFail(`--door is a time like 12h or 2d, not ${door}.`);
-    response = await transport().call("/agent/games", {
+    response = await transport().call("/agent/ports", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -624,14 +629,16 @@ async function game(transport: () => AgentTransport, args: ReadonlyArray<string>
         method: "DELETE",
       },
     );
-  } else return usageFail(`name what to do with the game:\n${AGENT_HELP.game}`);
+  } else return usageFail(`name what to do with the port card:\n${AGENT_HELP.port}`);
   const data = (await response.json().catch(() => null)) as Record<string, unknown> | null;
-  if (!response.ok || !data) fail(String(data?.["error"] ?? answered(response.status, "/agent/games")));
+  if (!response.ok || !data) fail(String(data?.["error"] ?? answered(response.status, "/agent/ports")));
   if (json) return void process.stdout.write(`${JSON.stringify(data)}\n`);
   if (action === "add")
-    console.log(`kitshn: added ${String(data?.["address"])}; players open it at ${String(data?.["join"])}.`);
+    console.log(
+      `kitshn: added ${String(data?.["address"])}; players open it at ${String(data?.["connect"])}.`,
+    );
   else if (action === "close") console.log(`kitshn: closed ${address} on ${card}.`);
-  else if (action === "remove") console.log(`kitshn: removed the game card ${card}.`);
+  else if (action === "remove") console.log(`kitshn: removed the port card ${card}.`);
   else console.log(JSON.stringify(data, null, 2));
 }
 
@@ -696,8 +703,8 @@ export async function runAgentCommand(
       const [card, word] = words([]);
       if (!card || !word) usage("name the card and the time.");
       await cardTime(transport(), card ?? "", word ?? "");
-    } else if (command === "game") {
-      await game(transport, args);
+    } else if (command === "port") {
+      await portCard(transport, args);
     } else if (command === "address") {
       const [card, name] = words([]);
       if (!card || !name) usage("name the card and its new address name.");

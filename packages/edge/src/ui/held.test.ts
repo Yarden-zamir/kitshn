@@ -15,6 +15,7 @@ function start(): State {
     stacks: new Map(),
     paused: null,
     machines: new Map(),
+    actors: new Map(s.actors.map((actor) => [actor.id, actor])),
   };
 }
 

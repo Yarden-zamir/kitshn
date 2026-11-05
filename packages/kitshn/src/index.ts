@@ -34,6 +34,11 @@ export interface ComposeApp {
   readonly runsOn?: ReadonlyArray<string>;
   /** The Compose file, a path inside the repo. Without it, kitshn takes the file names that Compose finds. */
   readonly file?: string;
+  /**
+   * K-823: how many instances run. `"one"` (the default) runs on the first machine that qualifies, `"every"` on each,
+   * and `{ spread: n }` (1 to 10) on the n least busy. A spread app has no volumes (K-826).
+   */
+  readonly placement?: "one" | "every" | { readonly spread: number };
 }
 
 /**

@@ -115,6 +115,16 @@ describe("Compose recipes (K-804, K-812)", () => {
     expect(() => decodeRecipe({ compose: {}, static: { output: "dist" }, deploy })).toThrow();
     expect(() => decodeRecipe({ deploy })).toThrow();
   });
+  it("takes a placement and refuses a bad one at parse time (K-823)", () => {
+    const placed = (placement: unknown) => ({ compose: { placement }, deploy });
+    for (const placement of ["one", "every", { spread: 1 }, { spread: 10 }])
+      expect(decodeRecipe(placed(placement))).toEqual(placed(placement));
+    expect(() => decodeRecipe(placed("all"))).toThrow();
+    expect(() => decodeRecipe(placed({ spread: 0 }))).toThrow(/from 1 to 10/);
+    expect(() => decodeRecipe(placed({ spread: 11 }))).toThrow(/from 1 to 10/);
+    expect(() => decodeRecipe(placed({ spread: 1.5 }))).toThrow();
+    expect(() => decodeRecipe(placed({ spread: 2, balance: true }))).toThrow();
+  });
 });
 
 describe("several addresses (K-817)", () => {

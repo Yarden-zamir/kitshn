@@ -532,10 +532,20 @@ input[type="search"]::-webkit-search-cancel-button {
    The bars change with each sample, once a minute, with no transition. */
 .card .live {
   display: grid;
-  /* Two sticker lines hold the widest set: "2 needs you", "12 queued" and BEHIND. */
-  grid-template-rows: 1lh 14px 54px;
+  /* Two label lines hold the owner labels and the facts (K-635). Two sticker lines hold the widest set: "2 needs you",
+     "12 queued" and BEHIND. */
+  grid-template-rows: 1lh 34px 14px 54px;
   row-gap: 4px;
   overflow: hidden;
+}
+.card .live .machine-labels {
+  align-content: flex-start;
+  gap: 2px;
+  overflow: hidden;
+}
+.card .live .machine-label {
+  padding: 0 2px;
+  font-size: 0.62rem;
 }
 .card .live .meters {
   display: flex;
@@ -775,6 +785,21 @@ button.count {
 .card .foot .more {
   margin-left: auto;
 }
+/* A finger gets the skill's 1.75rem target; the target grows around the button, so its look stays. */
+@media (pointer: coarse) {
+  .more {
+    position: relative;
+  }
+  .more::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, 1.75rem);
+    height: max(100%, 1.75rem);
+    transform: translate(-50%, -50%);
+  }
+}
 /* A status sticker sits on the top edge, above the title line, so it never covers the name. */
 .card .states {
   position: absolute;
@@ -881,6 +906,11 @@ button.count {
   padding: 0;
   color: inherit;
   cursor: pointer;
+}
+@media (pointer: coarse) {
+  .tray-toggle {
+    min-height: 1.75rem;
+  }
 }
 
 .tray .card {
@@ -1281,6 +1311,8 @@ pre.output.log-lines {
   --cap: 2.05rem;
   --skirt: 6px;
   position: relative;
+  /* The lid and the note stack inside the frame only, so a panel's sticky head stays above them. */
+  isolation: isolate;
   padding: 3px;
   background: var(--hazard-stripes);
   border: var(--bw) solid #000000;
@@ -2002,6 +2034,11 @@ pre.output {
   flex: 1;
   margin: 0;
 }
+.overlay-head .btn {
+  justify-content: center;
+  min-width: 1.75rem;
+  min-height: 1.75rem;
+}
 /* The full view: below the toolbar (`--bar-bottom`, measured in App.tsx). */
 .overlay-panel.large {
   top: calc(var(--bar-bottom, 102px) + 10px);
@@ -2265,7 +2302,7 @@ a > code {
   padding: 1px 6px;
 }
 
-/* K-718: an agent key among the members of a circle, and its rights. */
+/* K-718: an agent key among the members of a circle, and its effects. */
 .chip .sticker.agent,
 .chip .sticker.right {
   margin-left: 4px;
@@ -2276,6 +2313,10 @@ a > code {
 }
 .sticker.right {
   background: var(--green);
+}
+/* K-1725: an effect that raises access, hands out secrets, runs shells or destroys data at automatic. */
+.sticker.right.warn {
+  background: var(--warning);
 }
 
 /* K-521: an owner's stack, as one card with a list of its cards. */
@@ -2345,6 +2386,21 @@ a > code {
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+}
+/* K-1722: an ask reads top to bottom: who asks for what, the exact text, why, then the answer. */
+.repo-list li.ask {
+  display: grid;
+  gap: 4px;
+}
+.ask-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.ask p,
+.ask .row {
+  margin: 0;
 }
 
 /* K-526: the one add button of the toolbar; a big "+" so it reads as add, not as a dot. */
@@ -2818,4 +2874,27 @@ details.raw[open] > summary::before {
 /* U16: a folded toolbar gives the title's room to its buttons; the browser tab names the page. */
 .bar.folded h1 {
   display: none;
+}
+/* K-609, K-635: an owner label has a solid border; a fact label from the daemon has a dashed one. */
+.machine-labels {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.machine-label {
+  padding: 0 4px;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+.machine-label.fact {
+  color: var(--muted);
+  border-style: dashed;
+}
+.card.sel .machine-label.fact {
+  color: inherit;
 }

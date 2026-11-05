@@ -323,18 +323,20 @@ export function tunnelServiceFile(
   cloudflared: string,
   tokenFile: string,
   env: Record<string, string | undefined> = process.env,
+  // K-632: the tunnel's own metrics port, where the daemon reads its data centers, and the edge pin when there is one.
+  tunnelArgs: ReadonlyArray<string> = [],
 ): string {
-  // K-622: a free metrics port of its own, and its own empty config next to the token, so the tunnel never shares
-  // a port or a `.cloudflared` config with another cloudflared on the PC.
+  // K-622: its own empty config next to the token, so the tunnel never shares a `.cloudflared` config with another
+  // cloudflared on the PC.
   if (platform === "win32")
     return windowsTask(
       env,
       "kitshn tunnel (cloudflared)",
       cloudflared,
-      `--no-autoupdate --config "${win32.join(win32.dirname(tokenFile), "cloudflared.yml")}" --metrics 127.0.0.1:0 tunnel run --token-file "${tokenFile}"`,
+      `--no-autoupdate --config "${win32.join(win32.dirname(tokenFile), "cloudflared.yml")}" tunnel ${tunnelArgs.join(" ")} run --token-file "${tokenFile}"`,
     );
   if (platform === "darwin") {
-    const args = [cloudflared, "--no-autoupdate", "tunnel", "run", "--token-file", tokenFile];
+    const args = [cloudflared, "--no-autoupdate", "tunnel", ...tunnelArgs, "run", "--token-file", tokenFile];
     return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -353,7 +355,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart="${cloudflared}" --no-autoupdate tunnel run --token-file "${tokenFile}"
+ExecStart="${cloudflared}" --no-autoupdate tunnel ${tunnelArgs.join(" ")} run --token-file "${tokenFile}"
 Restart=always
 RestartSec=5
 
@@ -432,6 +434,18 @@ export function tunnelCommands(
     stop: [{ argv: ["systemctl", "--user", "disable", "--now", "kitshn-tunnel.service"], mayFail: true }],
     state: ["systemctl", "--user", "is-active", "kitshn-tunnel.service"],
   } satisfies Record<string, ReadonlyArray<Step> | ReadonlyArray<string>>;
+}
+
+/**
+ * K-634: the job "tunnel-restart" runs the restart steps of the tunnel service as its file stands, and fails with the
+ * steps that failed. A step that may fail means "already so", so it never fails the job.
+ */
+export function restartTunnel(steps: ReadonlyArray<Step>, runStep: (argv: ReadonlyArray<string>) => boolean) {
+  const failed: Array<string> = [];
+  for (const step of steps) if (!runStep(step.argv) && !step.mayFail) failed.push(step.argv.join(" "));
+  return failed.length === 0
+    ? { ok: true, exitCode: 0, output: "the tunnel restarted" }
+    : { ok: false, exitCode: 1, output: `the tunnel restart failed: ${failed.join("; ")}` };
 }
 
 /** K-605: the tunnel state for the status report, from the output of the state command. */
@@ -516,6 +530,8 @@ export function expectedHash(sums: string, file: string): string | null {
 
 /**
  * K-1714: the one stable answer that marks kitshn 2 for tools that pick a `kitshn` binary. KitSHn 1 has no
- * `version --json`, so its failure or another answer marks it. Fields are only added, never renamed.
+ * `version --json`, so its failure or another answer marks it. Fields are only added, never renamed. `protocol` is
+ * the KITSHN_PROTOCOL of this binary (K-724); a binary before it omits it, which reads as 2.0.0.
  */
-export const versionJson = (version: string) => JSON.stringify({ product: "kitshn", generation: 2, version });
+export const versionJson = (version: string, protocol: string) =>
+  JSON.stringify({ product: "kitshn", generation: 2, version, protocol });

@@ -1,12 +1,19 @@
-import type { Machine } from "./machine.ts";
 import {
   ADMIN_RESOURCE_ID,
   type Circle,
+  type Directory,
+  type Effect,
   type Member,
   OWNER_CIRCLE_ID,
   type State,
   activeShares,
+  isPerson,
+  memberActor,
 } from "./model.ts";
+import { approveVia } from "./asks.ts";
+
+/** K-1777: the policy that lets the service token of each machine reach the gate of `/op`. */
+export const OP_TOKENS_POLICY = "policy:op:tokens";
 
 /** An Access rule, in the shape of the Cloudflare API. */
 export type Rule =
@@ -98,39 +105,70 @@ export const ENROLLMENT_POLICY_NAME = `${ACCESS_NAME_PREFIX}passkey enrollment`;
 export const appName = (resourceName: string) =>
   resourceName.startsWith(ACCESS_NAME_PREFIX) ? resourceName : `${ACCESS_NAME_PREFIX}${resourceName}`;
 
-const personRule = (member: Member): Rule | null =>
-  member._tag === "email"
-    ? { email: { email: member.email } }
-    : member._tag === "domain"
-      ? { email_domain: { domain: member.domain } }
-      : null;
-
-/** A device or a machine is its service token (K-106, K-107). An unknown machine compiles to no rule. */
-const tokenRule = (member: Member, machines: ReadonlyMap<string, Machine>): Rule | null => {
-  if (member._tag === "device") return { service_token: { token_id: member.tokenId } };
-  if (member._tag !== "machine") return null;
-  const machine = machines.get(member.machineId);
-  return machine ? { service_token: { token_id: machine.serviceTokenId } } : null;
+/**
+ * K-1778: an actor that Access can see: one without conditions. Access sees only the machine token, so an agent actor
+ * with conditions compiles to no rule (decision 5 of the actor design).
+ */
+const seenActor = (member: Member, directory: Directory) => {
+  const actor = memberActor(member, directory);
+  return actor && (actor.conditions ?? []).length === 0 ? actor : undefined;
 };
 
-const networkRule = (member: Member): Rule | null =>
-  member._tag === "ip" ? { ip: { ip: member.range } } : null;
+/** The logins of a person actor, and an email domain. */
+const personRules = (member: Member, directory: Directory): Array<Rule> => {
+  if (member._tag === "domain") return [{ email_domain: { domain: member.domain } }];
+  return (seenActor(member, directory)?.credentials ?? []).flatMap((credential) =>
+    credential._tag === "login" ? [{ email: { email: credential.email } }] : [],
+  );
+};
 
-const present = <T>(values: ReadonlyArray<T | null>): Array<T> => values.filter((value) => value !== null);
+/** A token or a machine is its service token (K-106, K-107). An unknown machine compiles to no rule. */
+const tokenRules = (member: Member, directory: Directory): Array<Rule> =>
+  (seenActor(member, directory)?.credentials ?? []).flatMap((credential): Array<Rule> => {
+    if (credential._tag === "token") return [{ service_token: { token_id: credential.tokenId } }];
+    if (credential._tag !== "machine") return [];
+    const machine = directory.machines.get(credential.machineId);
+    return machine ? [{ service_token: { token_id: machine.serviceTokenId } }] : [];
+  });
+
+const networkRules = (member: Member): Array<Rule> =>
+  member._tag === "ip" ? [{ ip: { ip: member.range } }] : [];
+
+/**
+ * K-402: in an "all must match" circle each member is one rule: a person by its one login, any other actor by its one
+ * token. Null when a member cannot be one rule, so the circle gets no policy (K-006).
+ */
+function allRules(circle: Circle, directory: Directory) {
+  const people: Array<Rule> = [];
+  const tokens: Array<Rule> = [];
+  const networks: Array<Rule> = [];
+  for (const member of circle.members) {
+    if (member._tag === "everyone") continue;
+    if (member._tag === "ip") networks.push(...networkRules(member));
+    else if (member._tag === "domain") people.push(...personRules(member, directory));
+    else {
+      const actor = seenActor(member, directory);
+      if (!actor) return null;
+      const rules = isPerson(actor) ? personRules(member, directory) : tokenRules(member, directory);
+      const [rule] = rules;
+      if (!rule || rules.length !== 1) return null;
+      (isPerson(actor) ? people : tokens).push(rule);
+    }
+  }
+  return { people, tokens, networks };
+}
 
 /**
  * K-402: a circle becomes reusable policies. Access needs the Service Auth decision for service tokens and
  * networks without login, so a circle makes up to two policies: people (allow, with the passkey check of
  * K-103) and devices and networks (non_identity). "Everyone" makes one Bypass policy (K-403).
  */
-export function circlePolicies(
-  circle: Circle,
-  machines: ReadonlyMap<string, Machine>,
-): Map<string, PolicyBody> {
+export function circlePolicies(circle: Circle, directory: Directory): Map<string, PolicyBody> {
   const policies = new Map<string, PolicyBody>();
-  const people = present(circle.members.map(personRule));
-  const tokens = present(circle.members.map((member) => tokenRule(member, machines)));
-  const networks = present(circle.members.map(networkRule));
+  const people = circle.members.flatMap((member) => personRules(member, directory));
+  // K-1778: the passkey line. No token, machine or network holds a circle that needs a passkey, also a token of a person.
+  const tokens = circle.needsPasskey ? [] : circle.members.flatMap((member) => tokenRules(member, directory));
+  const networks = circle.needsPasskey ? [] : circle.members.flatMap(networkRules);
   const base = { exclude: [] as Array<Rule> };
   const mfa = circle.needsPasskey ? { mfa_config: PASSKEY_MFA } : {};
   const isPublic = circle.members.some((member) => member._tag === "everyone");
@@ -170,14 +208,11 @@ export function circlePolicies(
 
   // "All must match": the first rule includes, the others require. "Everyone" adds nothing here.
   // A member that cannot become a require rule would widen the circle, so such a circle gets no
-  // policy (K-006): an unknown machine, people with a token, or two tokens.
-  const impossible =
-    circle.members.some((member) => member._tag === "machine" && !machines.has(member.machineId)) ||
-    (people.length > 0 && tokens.length > 0) ||
-    tokens.length > 1;
-  if (impossible) return policies;
-  if (people.length > 0) {
-    const [first, ...rest] = people;
+  // policy (K-006): an actor that Access cannot see, people with a token, or two tokens.
+  const all = allRules(circle, directory);
+  if (!all || (all.people.length > 0 && all.tokens.length > 0) || all.tokens.length > 1) return policies;
+  if (all.people.length > 0) {
+    const [first, ...rest] = all.people;
     if (first) {
       policies.set(`policy:${circle.id}:people`, {
         ...base,
@@ -185,12 +220,13 @@ export function circlePolicies(
         name: peoplePolicyName(circle),
         decision: "allow",
         include: [first],
-        require: [...rest, ...networks],
+        require: [...rest, ...all.networks],
       });
     }
     return policies;
   }
-  const [first, ...rest] = [...tokens, ...networks];
+  if (circle.needsPasskey) return policies;
+  const [first, ...rest] = [...all.tokens, ...all.networks];
   if (first) {
     policies.set(`policy:${circle.id}:tokens`, {
       ...base,
@@ -213,8 +249,8 @@ export function circlePolicies(
 }
 
 /** Resource kinds that the Worker serves and checks itself (K-404) get no Access application. */
-// K-2003: a game card has no Access application; the Worker checks its join page like a page.
-const WORKER_CHECKED = new Set(["page", "file", "game"]);
+// K-2004: a port card has no Access application; the Worker checks its connect page like a page.
+const WORKER_CHECKED = new Set(["page", "file", "port"]);
 
 /** K-909: the address of a removed app that its machine still serves; `id` was its card id. */
 export interface RemovedSite {
@@ -254,9 +290,9 @@ export function desiredAccess(
   const policies = new Map<string, PolicyBody>();
   const apps = new Map<string, AppBody>();
   for (const resource of state.resources.values()) {
-    // K-2008: the relay host of a game behind NAT lets in only the service token of its relay machine; a pause
+    // K-2009: the relay host of a port card behind NAT lets in only the service token of its relay machine; a pause
     // closes it, as it closes every device.
-    const relay = resource.kind === "game" && resource.relay ? state.machines.get(resource.relay) : undefined;
+    const relay = resource.kind === "port" && resource.relay ? state.machines.get(resource.relay) : undefined;
     const relayAddress = resource.addresses[1];
     if (relay && relayAddress && !state.paused) {
       const key = `policy:relay:${relay.id}`;
@@ -282,18 +318,41 @@ export function desiredAccess(
     // K-1130: no Cloudflare login of a card is the bare one: closed in no circle, the chef page when only the Owner
     // circle's people open it, else the kitshn sign-in.
     const people = shares.filter((share) =>
-      circlePolicies(share.circle, state.machines).has(`policy:${share.circle.id}:people`),
+      circlePolicies(share.circle, state).has(`policy:${share.circle.id}:people`),
     );
     const chef = people.length > 0 && people.every((share) => share.circle.id === OWNER_CIRCLE_ID);
     // A card whose circles hold no people (machines only) is closed to every person.
     const loginPage = page(people.length === 0 ? pages?.closed : chef ? pages?.chef : pages?.login);
     for (const share of shares) {
-      for (const [key, body] of circlePolicies(share.circle, state.machines)) {
+      for (const [key, body] of circlePolicies(share.circle, state)) {
         // K-1504: during a pause only people pass; the devices and networks policy of Owner drops out.
         if (state.paused && !key.endsWith(":people")) continue;
         policies.set(key, body);
         policyKeys.push(key);
       }
+    }
+    // K-1777, K-1778: `/op` sits below the admin address, and every token of kitshn reaches its Worker gate: each
+    // machine token, and each token credential of an actor. Never "any valid service token", which would let in every
+    // token of the account. A machine still proves its key there (K-1714). During a pause only people pass.
+    const opTokens = [
+      ...new Set([
+        ...[...state.machines.values()].map((machine) => machine.serviceTokenId),
+        ...[...state.actors.values()].flatMap((actor) =>
+          actor.credentials.flatMap((credential) =>
+            credential._tag === "token" ? [credential.tokenId] : [],
+          ),
+        ),
+      ]),
+    ].sort();
+    if (resource.id === ADMIN_RESOURCE_ID && !state.paused && opTokens.length > 0) {
+      policies.set(OP_TOKENS_POLICY, {
+        name: `${ACCESS_NAME_PREFIX}operation tokens`,
+        decision: "non_identity",
+        include: opTokens.map((token_id) => ({ service_token: { token_id } })),
+        require: [],
+        exclude: [],
+      });
+      policyKeys.push(OP_TOKENS_POLICY);
     }
     // Bypass and Service Auth policies first, as the Access dashboard orders them.
     const order = { bypass: 0, non_identity: 1, allow: 2 } as const;
@@ -319,7 +378,7 @@ export function desiredAccess(
   }
   const ownerKey = `policy:${OWNER_CIRCLE_ID}:people`;
   const owner = state.circles.get(OWNER_CIRCLE_ID);
-  const ownerPeople = owner ? circlePolicies(owner, state.machines).get(ownerKey) : undefined;
+  const ownerPeople = owner ? circlePolicies(owner, state).get(ownerKey) : undefined;
   // Never a Bypass; without people, the application has no policy and lets no one in (K-006).
   const removedKeys = ownerPeople?.decision === "allow" ? [ownerKey] : [];
   if (ownerPeople && removed.length > 0 && removedKeys.length > 0) policies.set(ownerKey, ownerPeople);
@@ -345,7 +404,7 @@ export function desiredAccess(
     for (const { circle } of activeShares(state, resource, now)) {
       if (seen.has(circle.id)) continue;
       seen.add(circle.id);
-      const people = circlePolicies(circle, state.machines).get(`policy:${circle.id}:people`);
+      const people = circlePolicies(circle, state).get(`policy:${circle.id}:people`);
       // "Everyone" compiles to a Bypass: its items open without a login, and a Bypass would let in anyone.
       if (people?.decision !== "allow") continue;
       // The login applications get their own copies, so a stuck login step never holds back a policy of a
@@ -370,7 +429,8 @@ export function desiredAccess(
     if (circle.endsAt !== null && circle.endsAt <= now) continue;
     // K-1504: during a pause only the Owner circle keeps its people.
     if (state.paused && circle.id !== OWNER_CIRCLE_ID) continue;
-    for (const rule of present(circle.members.map(personRule))) enrolling.set(JSON.stringify(rule), rule);
+    for (const rule of circle.members.flatMap((member) => personRules(member, state)))
+      enrolling.set(JSON.stringify(rule), rule);
   }
   if (enrolling.size > 0) {
     policies.set(ENROLLMENT_KEY, {
@@ -386,36 +446,43 @@ export function desiredAccess(
   // no other policy, so its token proves a fresh passkey; a circle without it goes on `/api/approve/login`, where the
   // Durable Object refuses a passkey circle. "All must match" is left out, as for K-113. During a pause no ask runs.
   // K-1776: an unset right asks the Owner, so the Owner is an approver while any machine is joined, also one in the tray.
+  // An ask of "shares" or "secrets" needs a passkey proof in any circle (K-1723), so a circle that some chip asks for
+  // one of them also gets a passkey policy on `/api/approve/passkey`, next to its login policy.
   const host = state.resources.get(ADMIN_RESOURCE_ID)?.addresses[0];
-  const asked = new Set([
-    ...(state.machines.size > 0 ? [OWNER_CIRCLE_ID] : []),
-    ...[...state.circles.values()].flatMap((circle) =>
-      circle.members.flatMap((member) =>
-        member._tag === "machine"
-          ? Object.values(member.rights ?? {}).flatMap((mode) =>
-              mode?.mode === "ask" ? [mode.circleId] : [],
-            )
-          : [],
-      ),
-    ),
-  ]);
+  const asked = new Map<string, Set<"passkey" | "login">>();
+  const ask = (circleId: string, kind: "passkey" | "login") =>
+    asked.set(circleId, (asked.get(circleId) ?? new Set()).add(kind));
+  // K-1776: an unset effect asks the Owner, also "shares", so the Owner gets both kinds while any machine is joined.
+  if (state.machines.size > 0) {
+    ask(OWNER_CIRCLE_ID, approveVia(state.circles.get(OWNER_CIRCLE_ID), "changes"));
+    ask(OWNER_CIRCLE_ID, "passkey");
+  }
+  for (const circle of state.circles.values())
+    for (const member of circle.members)
+      if (member._tag === "actor")
+        for (const [effect, mode] of Object.entries(member.rights ?? {}))
+          if (mode?.mode === "ask") {
+            const target = state.circles.get(mode.circleId);
+            ask(mode.circleId, approveVia(target, effect as Effect));
+          }
   const approvers = { passkey: [] as Array<string>, login: [] as Array<string> };
-  for (const id of state.paused || !host ? [] : asked) {
+  for (const [id, kinds] of state.paused || !host ? [] : asked) {
     const circle = state.circles.get(id);
     if (!circle || circle.match === "all" || (circle.endsAt !== null && circle.endsAt <= now)) continue;
-    const include = present(circle.members.map(personRule));
+    const include = circle.members.flatMap((member) => personRules(member, state));
     if (include.length === 0) continue;
-    const kind = circle.needsPasskey ? "passkey" : "login";
-    const key = `policy:approve-${kind}:${circle.id}`;
-    policies.set(key, {
-      name: `${ACCESS_NAME_PREFIX}approvers ${circle.name}${circle.needsPasskey ? " (passkey)" : ""}`,
-      decision: "allow",
-      include,
-      require: [],
-      exclude: [],
-      ...(circle.needsPasskey ? { mfa_config: { ...PASSKEY_MFA, session_duration: "10m" } } : {}),
-    });
-    approvers[kind].push(key);
+    for (const kind of kinds) {
+      const key = `policy:approve-${kind}:${circle.id}`;
+      policies.set(key, {
+        name: `${ACCESS_NAME_PREFIX}approvers ${circle.name}${kind === "passkey" ? " (passkey)" : ""}`,
+        decision: "allow",
+        include,
+        require: [],
+        exclude: [],
+        ...(kind === "passkey" ? { mfa_config: { ...PASSKEY_MFA, session_duration: "10m" } } : {}),
+      });
+      approvers[kind].push(key);
+    }
   }
   for (const kind of ["passkey", "login"] as const) {
     if (!host || approvers[kind].length === 0) continue;

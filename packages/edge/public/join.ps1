@@ -1,4 +1,4 @@
-# kitshn join for Windows (SPEC K-625): installs the kitshn daemon for this user, joins the machine with a one-time
+# kitshn join for Windows (K-625): installs the kitshn daemon for this user, joins the machine with a one-time
 # code, and starts the daemon at logon through Task Scheduler (K-622). "Add machine" on the map prints the command:
 #
 #   & ([scriptblock]::Create((irm https://kit.example.com/join/windows.ps1))) <code> https://kit.example.com

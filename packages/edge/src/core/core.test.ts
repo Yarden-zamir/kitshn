@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { ASK_APP, circlePolicies, desiredAccess } from "./access.ts";
+import { ASK_APP, OP_TOKENS_POLICY, circlePolicies, desiredAccess } from "./access.ts";
 import {
-  type Actor,
+  type Author,
   applyChanges,
   type Change,
   conflictOf,
@@ -43,9 +43,16 @@ import {
 } from "./model.ts";
 import { placeInside } from "./place.ts";
 import { seed } from "./seed.ts";
-import { circleMatches, ipInRange, visitorLevel } from "./visitor.ts";
+import { adminPasskey, circleMatches, ipInRange, visitorLevel } from "./visitor.ts";
+import { actorOf, chip, login, machineKey, token } from "./testkit.ts";
 
 const OWNER = "owner@example.com";
+const HER = login("her@example.com");
+const B = login("b@example.com");
+const BOT = token("t", "c", "Bot");
+const PHONE = token("t1", "c1.access", "her phone");
+const M1 = machineKey("m1");
+const NO_ONE = { machines: new Map(), actors: new Map() };
 
 function start(): State {
   const s = seed([OWNER], "kit.example.com");
@@ -63,7 +70,7 @@ function start(): State {
     name: "Her",
     color: "#FF5277",
     level: "use",
-    members: [{ _tag: "email", email: "her@example.com" }],
+    members: [chip(HER)],
     match: "any",
     needsPasskey: false,
     endsAt: null,
@@ -71,6 +78,7 @@ function start(): State {
     y: 0,
     r: 200,
   };
+  const actors = [...s.actors, actorOf(HER), actorOf(B), actorOf(BOT), actorOf(PHONE), actorOf(M1)];
   return {
     circles: new Map([...s.circles, her].map((circle) => [circle.id, circle])),
     resources: new Map([...s.resources, site].map((resource) => [resource.id, resource])),
@@ -80,6 +88,7 @@ function start(): State {
     stacks: new Map(),
     paused: null,
     machines: new Map(),
+    actors: new Map(actors.map((actor) => [actor.id, actor])),
   };
 }
 
@@ -159,7 +168,7 @@ describe("admin guard (K-105)", () => {
         after: {
           ...owner,
           match: "all",
-          members: [...owner.members, { _tag: "email", email: "b@example.com" }],
+          members: [...owner.members, chip(B)],
         },
       },
     ]);
@@ -274,25 +283,24 @@ describe("changes and undo (K-1501, K-1502)", () => {
     expect(summarize(state, after, changes)).toBe("riffle: − Owner; riffle: + Her · view");
   });
 
-  it("names an agent right that a circle edit gives or takes (K-718)", () => {
+  it("names a right that a circle edit sets on an actor chip (K-1720)", () => {
     const state = start();
     const owner = state.circles.get("owner")!;
-    const bot = { _tag: "device" as const, tokenId: "t", clientId: "c", name: "Bot" };
     const withBot = edit(state, [
-      { _tag: "circle", id: "owner", after: { ...owner, members: [...owner.members, bot] } },
+      { _tag: "circle", id: "owner", after: { ...owner, members: [...owner.members, chip(BOT)] } },
     ]).after;
     const gave = edit(withBot, [
       {
         _tag: "circle",
         id: "owner",
-        after: { ...owner, members: [...owner.members, { ...bot, publishes: true }] },
+        after: { ...owner, members: [...owner.members, chip(BOT, { shares: { mode: "automatic" } })] },
       },
     ]);
-    expect(summarize(withBot, gave.after, gave.changes)).toBe("Gave Bot may publish in Owner");
+    expect(summarize(withBot, gave.after, gave.changes)).toBe("Set shares of Bot to automatic in Owner");
     const took = edit(gave.after, [
-      { _tag: "circle", id: "owner", after: { ...owner, members: [...owner.members, bot] } },
+      { _tag: "circle", id: "owner", after: { ...owner, members: [...owner.members, chip(BOT)] } },
     ]);
-    expect(summarize(gave.after, took.after, took.changes)).toBe("Took may publish from Bot in Owner");
+    expect(summarize(gave.after, took.after, took.changes)).toBe("Set shares of Bot to default in Owner");
   });
 
   it("uses a share override over the circle default (K-205)", () => {
@@ -413,12 +421,8 @@ describe("visitors (K-203, K-207)", () => {
         { _tag: "ip", range: "10.0.0.0/8" },
       ],
     };
-    expect(circleMatches(qlik, { email: "a@qlik.com", clientId: null, ip: "10.1.2.3" }, new Map())).toBe(
-      true,
-    );
-    expect(circleMatches(qlik, { email: "a@qlik.com", clientId: null, ip: "8.8.8.8" }, new Map())).toBe(
-      false,
-    );
+    expect(circleMatches(qlik, { email: "a@qlik.com", clientId: null, ip: "10.1.2.3" }, NO_ONE)).toBe(true);
+    expect(circleMatches(qlik, { email: "a@qlik.com", clientId: null, ip: "8.8.8.8" }, NO_ONE)).toBe(false);
   });
 
   it("gives the owner control of the admin and nobody else", () => {
@@ -444,7 +448,7 @@ describe("visitors (K-203, K-207)", () => {
 
 describe("Access compile (K-401 to K-403)", () => {
   it("compiles the Owner circle to one allow policy with the passkey check", () => {
-    const policies = circlePolicies(circle(start(), OWNER_CIRCLE_ID), new Map());
+    const policies = circlePolicies(circle(start(), OWNER_CIRCLE_ID), start());
     expect([...policies.keys()]).toEqual(["policy:owner:people"]);
     const body = policies.get("policy:owner:people")!;
     expect(body.decision).toBe("allow");
@@ -464,16 +468,10 @@ describe("Access compile (K-401 to K-403)", () => {
 
   it("compiles Everyone to a bypass and devices to Service Auth", () => {
     expect(
-      circlePolicies(circle(start(), EVERYONE_CIRCLE_ID), new Map()).get("policy:everyone:people")?.decision,
+      circlePolicies(circle(start(), EVERYONE_CIRCLE_ID), start()).get("policy:everyone:people")?.decision,
     ).toBe("bypass");
-    const devices: Circle = {
-      ...circle(start(), "her"),
-      members: [
-        { _tag: "email", email: "her@example.com" },
-        { _tag: "device", tokenId: "t1", clientId: "c1.access", name: "her phone" },
-      ],
-    };
-    const policies = circlePolicies(devices, new Map());
+    const devices: Circle = { ...circle(start(), "her"), members: [chip(HER), chip(PHONE)] };
+    const policies = circlePolicies(devices, start());
     expect(policies.get("policy:her:tokens")?.decision).toBe("non_identity");
     expect(policies.get("policy:her:people")?.mfa_config).toBeUndefined();
   });
@@ -483,23 +481,25 @@ describe("Access compile (K-401 to K-403)", () => {
     const withToken: Circle = {
       ...base,
       match: "all",
-      members: [
-        { _tag: "email", email: "her@example.com" },
-        { _tag: "device", tokenId: "t1", clientId: "c1.access", name: "her phone" },
-      ],
+      members: [chip(HER), chip(PHONE)],
     };
-    expect(circlePolicies(withToken, new Map()).size).toBe(0);
-    const withMachine: Circle = {
-      ...withToken,
-      members: [withToken.members[0]!, { _tag: "machine", machineId: "m1" }],
-    };
-    expect(circlePolicies(withMachine, new Map()).size).toBe(0);
+    expect(circlePolicies(withToken, start()).size).toBe(0);
+    const withMachine: Circle = { ...withToken, members: [chip(HER), chip(M1)] };
+    expect(circlePolicies(withMachine, start()).size).toBe(0);
   });
 
   it("gives each addressed card an application with the policies of its circles", () => {
     const state = start();
     const access = desiredAccess(state, 0);
-    expect(access.apps.get("app:kitshn-admin:kit.example.com")?.policyKeys).toEqual(["policy:owner:people"]);
+    // K-1778: every token of an actor reaches the gate of `/op`, also with no machine joined.
+    expect(access.apps.get("app:kitshn-admin:kit.example.com")?.policyKeys).toEqual([
+      OP_TOKENS_POLICY,
+      "policy:owner:people",
+    ]);
+    expect(access.policies.get(OP_TOKENS_POLICY)?.include).toEqual([
+      { service_token: { token_id: "t" } },
+      { service_token: { token_id: "t1" } },
+    ]);
     expect(access.apps.get("app:riffle:riffle.example.com")?.policyKeys).toEqual(["policy:owner:people"]);
     const moved = applyChanges(
       state,
@@ -512,6 +512,28 @@ describe("Access compile (K-401 to K-403)", () => {
       desiredAccess(state, 0, [], old).apps.get("app:riffle:old-riffle.example.com")?.policyKeys,
     ).toEqual(["policy:owner:people"]);
     expect(access.apps.get("app:riffle:riffle.example.com")).not.toHaveProperty("custom_pages");
+    // K-1777: with a machine joined, the token of each machine reaches the gate of `/op`, except during a pause.
+    const joined: State = {
+      ...state,
+      machines: new Map([
+        [
+          "m1",
+          { id: "m1", name: "m1", labels: [], order: 0, serviceTokenId: "t", clientId: "c", tunnelId: "u" },
+        ],
+      ]),
+    };
+    expect(desiredAccess(joined, 0).apps.get("app:kitshn-admin:kit.example.com")?.policyKeys).toEqual([
+      OP_TOKENS_POLICY,
+      "policy:owner:people",
+    ]);
+    expect(desiredAccess(joined, 0).policies.get(OP_TOKENS_POLICY)?.include).toEqual([
+      { service_token: { token_id: "t" } },
+      { service_token: { token_id: "t1" } },
+    ]);
+    expect(
+      desiredAccess({ ...joined, paused: "lockdown" }, 0).apps.get("app:kitshn-admin:kit.example.com")
+        ?.policyKeys,
+    ).toEqual(["policy:owner:people"]);
   });
 });
 
@@ -535,7 +557,7 @@ describe("kitshn login pages (K-1130)", () => {
       x: 3000,
       y: 3000,
       r: 400,
-      members: [{ _tag: "device", tokenId: "t1", clientId: "c1.access", name: "a machine" }],
+      members: [chip(PHONE)],
     };
     const machinesOnly = applyChanges(
       tray,
@@ -662,10 +684,7 @@ describe("page and file logins (K-1004)", () => {
   it("adds nothing for circles of only networks or devices, which need no login", () => {
     const state = withPage(start(), 450);
     const her = circle(state, "her");
-    for (const members of [
-      [{ _tag: "ip" as const, range: "10.0.0.0/8" }],
-      [{ _tag: "device" as const, tokenId: "t1", clientId: "c1.access", name: "phone" }],
-    ]) {
+    for (const members of [[{ _tag: "ip" as const, range: "10.0.0.0/8" }], [chip(PHONE)]]) {
       const only = { ...state, circles: new Map(state.circles).set("her", { ...her, members }) };
       expect(desiredAccess(only, 0).logins.login).toEqual(["policy:owner:login"]);
     }
@@ -723,9 +742,8 @@ describe("pause (K-1504)", () => {
   it("stops owner devices during a pause and keeps refusing a public admin", () => {
     const state = start();
     const owner = circle(state, OWNER_CIRCLE_ID);
-    const device = { _tag: "device" as const, tokenId: "t1", clientId: "c1.access", name: "agent" };
     const withDevice = edit(state, [
-      { _tag: "circle", id: OWNER_CIRCLE_ID, after: { ...owner, members: [...owner.members, device] } },
+      { _tag: "circle", id: OWNER_CIRCLE_ID, after: { ...owner, members: [...owner.members, chip(PHONE)] } },
     ]);
     const paused = edit(withDevice.after, [{ _tag: "pause", after: "lockdown" }]).after;
     const admin = paused.resources.get(ADMIN_RESOURCE_ID)!;
@@ -1005,18 +1023,15 @@ describe("emergency pause (K-1504)", () => {
       places: new Map([...placed.places].filter(([id]) => id !== "riffle")),
     };
     expect(() => refuseRaiseWhilePaused(placed, tray)).not.toThrow();
-    // K-718: an agent right that turns on raises access; one that turns off lowers it.
-    const device = { _tag: "device" as const, tokenId: "t", clientId: "c", name: "Bot" };
-    const withDevice = (member: typeof device & { publishes?: true }) => ({
+    // K-718: a right that opens raises access; one that turns off lowers it.
+    const off = chip(BOT, { shares: { mode: "off" } });
+    const on = chip(BOT, { shares: { mode: "automatic" } });
+    const withDevice = (member: Circle["members"][number]) => ({
       ...paused,
       circles: new Map(paused.circles).set("owner", { ...owner, members: [...owner.members, member] }),
     });
-    expect(() =>
-      refuseRaiseWhilePaused(withDevice(device), withDevice({ ...device, publishes: true })),
-    ).toThrow(/only goes down/);
-    expect(() =>
-      refuseRaiseWhilePaused(withDevice({ ...device, publishes: true }), withDevice(device)),
-    ).not.toThrow();
+    expect(() => refuseRaiseWhilePaused(withDevice(off), withDevice(on))).toThrow(/only goes down/);
+    expect(() => refuseRaiseWhilePaused(withDevice(on), withDevice(off))).not.toThrow();
   });
 });
 
@@ -1034,7 +1049,7 @@ describe("undo that follows intent (K-1505 to K-1507)", () => {
     edit(state, [{ _tag: "place", id, after: { x, y } }]);
 
   /** A small History: each step is an actor and edits; returns the state and the stored revisions. */
-  const history = (state: State, steps: ReadonlyArray<readonly [Actor, Array<Edit>]>) => {
+  const history = (state: State, steps: ReadonlyArray<readonly [Author, Array<Edit>]>) => {
     const revisions: Array<StoredRevision & { readonly changes: ReadonlyArray<Change> }> = [];
     for (const [actor, edits] of steps) {
       const step = edit(state, edits);
@@ -1364,5 +1379,109 @@ describe("share summaries (K-1501, K-1508)", () => {
     expect(describeDiff({ resource: riffle, circle: her, from: "view", to: "use" })).toBe(
       "riffle: Her · view → use",
     );
+  });
+});
+
+describe("actors and the passkey line (K-1778)", () => {
+  /** The owner with a phone token, and Her with a phone token, both in a circle that holds riffle. */
+  const withPhones = () => {
+    const state = start();
+    const ownerLogin = login(OWNER);
+    const owner = {
+      ...actorOf(ownerLogin),
+      credentials: [ownerLogin, token("t-op", "owner-phone.access", "phone")],
+    };
+    const her = { ...actorOf(HER), credentials: [HER, PHONE] };
+    return {
+      ...state,
+      actors: new Map([...state.actors, [owner.id, owner], [her.id, her]]),
+    };
+  };
+  const tokenOf = (clientId: string) => ({ email: null, clientId, ip: null });
+
+  it("lets a token of a person into the circles of that person, but never into a passkey circle", () => {
+    const state = withPhones();
+    const admin = state.resources.get(ADMIN_RESOURCE_ID)!;
+    expect(visitorLevel(state, admin, { email: OWNER, clientId: null, ip: null }, 0)).toBe("control");
+    expect(visitorLevel(state, admin, tokenOf("owner-phone.access"), 0)).toBeNull();
+    const riffle = state.resources.get("riffle")!;
+    const shared = { ...state, places: new Map(state.places).set("riffle", { x: 400, y: 0 }) };
+    expect(visitorLevel(shared, riffle, tokenOf("c1.access"), 0)).toBe("view");
+  });
+
+  it("takes a login of the admin as a passkey proof only when every circle that gives it the admin needs a passkey", () => {
+    const state = withPhones();
+    const owner = { email: OWNER, clientId: null, ip: null };
+    expect(adminPasskey(state, owner, 0)).toBe(true);
+    expect(adminPasskey(state, tokenOf("owner-phone.access"), 0)).toBe(false);
+    // A second circle without a passkey gives the owner the admin too, so Access may have let the login in without one.
+    const plain = {
+      ...circle(state, "her"),
+      level: "control" as const,
+      members: [chip(login(OWNER))],
+      x: 0,
+      y: 40,
+      r: 50,
+    };
+    const both = { ...state, circles: new Map(state.circles).set("her", plain) };
+    expect(adminPasskey(both, owner, 0)).toBe(false);
+  });
+
+  it("compiles no token, machine or network of a passkey circle into Access", () => {
+    const state = withPhones();
+    const owner = {
+      ...circle(state, OWNER_CIRCLE_ID),
+      members: [
+        ...circle(state, OWNER_CIRCLE_ID).members,
+        { _tag: "ip", range: "10.0.0.0/8" } as const,
+        chip(M1),
+      ],
+    };
+    expect([...circlePolicies(owner, state).keys()]).toEqual(["policy:owner:people"]);
+    const her = circlePolicies(circle(state, "her"), state);
+    expect(her.get("policy:her:tokens")?.include).toEqual([{ service_token: { token_id: "t1" } }]);
+  });
+
+  it("refuses a credential with two actors, conditions on an actor without one machine key, and a chip of no actor", () => {
+    const state = start();
+    const twice = { ...actorOf(BOT), id: "a-other", name: "Other" };
+    expect(ruleViolation({ ...state, actors: new Map(state.actors).set(twice.id, twice) })).toMatch(
+      /same credential/,
+    );
+    const conditions = [{ key: "t3.project.name", values: ["kitshn"] }];
+    const odd = { ...actorOf(BOT), conditions };
+    expect(ruleViolation({ ...state, actors: new Map(state.actors).set(odd.id, odd) })).toMatch(
+      /one machine credential/,
+    );
+    const agent = { ...actorOf(M1), id: "a-agent", conditions };
+    expect(ruleViolation({ ...state, actors: new Map(state.actors).set(agent.id, agent) })).toBeNull();
+    const her = circle(state, "her");
+    const ghost = { ...her, members: [{ _tag: "actor", actorId: "a-ghost" } as const] };
+    expect(ruleViolation({ ...state, circles: new Map(state.circles).set("her", ghost) })).toMatch(
+      /does not exist/,
+    );
+  });
+
+  it("keeps the admin with a person actor of a passkey circle (K-105)", () => {
+    const state = start();
+    const owner = circle(state, OWNER_CIRCLE_ID);
+    // A token actor alone in the Owner circle is no person, so the admin would lose its passkey person.
+    const tokens = { ...owner, members: [chip(BOT)] };
+    expect(ruleViolation({ ...state, circles: new Map(state.circles).set(OWNER_CIRCLE_ID, tokens) })).toMatch(
+      /person and needs a passkey/,
+    );
+  });
+
+  it("refuses while paused an actor edit that adds a credential, and allows one that removes it", () => {
+    const paused = { ...withPhones(), paused: "lockdown" as const };
+    const her = paused.actors.get(actorOf(HER).id)!;
+    const more = { ...her, credentials: [...her.credentials, token("t9", "c9", "laptop")] };
+    expect(() =>
+      refuseRaiseWhilePaused(paused, { ...paused, actors: new Map(paused.actors).set(her.id, more) }),
+    ).toThrow(/actor/);
+    const less = { ...her, credentials: [HER] };
+    expect(() =>
+      refuseRaiseWhilePaused(paused, { ...paused, actors: new Map(paused.actors).set(her.id, less) }),
+    ).not.toThrow();
   });
 });

@@ -9,6 +9,7 @@ import {
   rightLines,
   serverTable,
   unexposeRefusal,
+  waitingJson,
 } from "./cli.ts";
 
 const request: Extract<Request, { type: "forward" }> = {
@@ -17,7 +18,6 @@ const request: Extract<Request, { type: "forward" }> = {
   method: "POST",
   path: "/agent/library",
   body: "eA==",
-  attestations: {},
 };
 
 const forwardAnswer = (status: number, body: object): Answer => ({
@@ -59,13 +59,15 @@ describe("a forwarded call that waits for an approval (K-1776)", () => {
     const answer = await forwardAndWait(
       ask,
       request,
-      (line) => lines.push(line),
+      (line, wait) => lines.push(line, waitingJson(wait)),
       () => 0,
     );
     expect(answer.status).toBe(200);
     expect(sent).toEqual([request, request]);
     expect(lines).toEqual([
       expect.stringMatching(/^waiting: Owner must approve proposal p-1 \(expires in 1 h\)/),
+      // K-1714: the line that `--json` prints on stdout; the fork decodes it.
+      JSON.stringify({ outcome: "waiting", proposalId: "p-1", circle: "Owner", expiresAt: 3_600_000 }),
     ]);
   });
 
@@ -157,10 +159,10 @@ describe("command text (UX audit C5, C10, C11, C12)", () => {
   it("names the rights by their map names, with the circle that an ask goes to", () => {
     expect(
       rightLines([
-        { id: "addsPages", name: "adds pages", mode: "automatic" },
-        { id: "deploys", name: "deploys", mode: "ask", circle: { id: "owner", name: "Owner" } },
+        { id: "creates", name: "creates", mode: "automatic" },
+        { id: "changes", name: "changes", mode: "ask", circle: { id: "owner", name: "Owner" } },
       ]),
-    ).toEqual(["adds pages: automatic", "deploys: asks Owner"]);
+    ).toEqual(["creates: automatic", "changes: asks Owner"]);
   });
 
   it("lists the exposed names when unexpose finds no site", () => {

@@ -1,6 +1,6 @@
 import { type ComponentChildren, Fragment } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
-import type { Actor, Item, RevisionKind } from "../core/changes.ts";
+import type { Author, Item, RevisionKind } from "../core/changes.ts";
 import type { State, UndoSource } from "../core/model.ts";
 import type { RevisionView } from "../core/protocol.ts";
 import { CHECKING_TIP, type UndoAnswer } from "./actions.ts";
@@ -47,7 +47,7 @@ const timeOf = (at: number, older: boolean) =>
  */
 export function HistoryView(props: {
   revisions: ReadonlyArray<RevisionView>;
-  me: Actor;
+  me: Author;
   state: State;
   onUndo: (id: number) => void;
   onShow: (revision: RevisionView) => void;
@@ -91,7 +91,7 @@ export function HistoryView(props: {
     ...new Map(props.revisions.map((revision) => [actorKey(revision.actor), revision.actor])).values(),
   ];
   // Every kitshn reason groups as one actor "kitshn"; each row of it names its own reason.
-  const who = (actor: Actor) =>
+  const who = (actor: Author) =>
     actor._tag === "kitshn" ? "kitshn" : actorKey(actor) === actorKey(props.me) ? "You" : actorLabel(actor);
 
   return (

@@ -1,11 +1,13 @@
-import type { Actor, Item, RevisionKind } from "./changes.ts";
+import type { Author, Item, RevisionKind } from "./changes.ts";
 import type { DaemonUpdate } from "./autoUpdate.ts";
 import type { Command, Machine, MachineStatus, ProjectVolume, Sample } from "./machine.ts";
 import type { ServerReport } from "./sites.ts";
 import type { BackupRun, BucketSize } from "./backups.ts";
 import type { MachineOs } from "./icons.ts";
+import type { MachineFact } from "./facts.ts";
 import type { LogLine, TailAnswer } from "./logs.ts";
 import type {
+  Actor,
   Circle,
   GitHubWay,
   PauseMode,
@@ -35,9 +37,12 @@ export interface AskEventView {
   readonly outcome: "done" | "waiting" | "refused" | "not-kitshn";
   /** The reason of a refusal, or the proposal id of a waiting ask. */
   readonly detail: string;
-  /** K-1752: the label keys that an attester set; the rest are claims. */
+  /** K-1752: the label keys that a provider vouched for; the rest are claims. */
   readonly verified: ReadonlyArray<string>;
 }
+
+/** K-1302: the newest ask and link events that a snapshot holds, and that a map keeps. */
+export const RECENT_EVENTS = 50;
 
 /** K-1610: one call of a source machine on a target machine, as History shows it: an event, with no Undo. */
 export interface LinkEventView {
@@ -56,7 +61,7 @@ export interface LinkEventView {
 /** K-1722: an open proposal, with the name of the machine that asked, for the Asks list. */
 export type ProposalView = Proposal & {
   readonly machineName: string;
-  /** K-1752: the label keys that an attester set; the rest are claims. */
+  /** K-1752: the label keys that a provider vouched for; the rest are claims. */
   readonly verified: ReadonlyArray<string>;
 };
 
@@ -85,7 +90,7 @@ export interface DeployNote {
 export interface RevisionView {
   readonly id: number;
   readonly at: number;
-  readonly actor: Actor;
+  readonly actor: Author;
   readonly summary: string;
   readonly undoes: number | null;
   /** K-1509: where a whole-revision Undo came from; null for other revisions and older undos. */
@@ -107,7 +112,11 @@ export type AccessState =
   | { readonly state: "failed"; readonly error: string };
 
 export interface Snapshot {
+  /** K-402: the Access applications that kitshn made, against the account's limit of 500. */
+  readonly accessApps: number;
   readonly circles: ReadonlyArray<Circle>;
+  /** K-1778: the actors that circles name, with their credentials. A token credential names no secret. */
+  readonly actors: ReadonlyArray<Actor>;
   readonly resources: ReadonlyArray<Resource>;
   readonly places: Readonly<Record<string, Point>>;
   readonly shareSettings: Readonly<Record<string, ShareSetting>>;
@@ -152,7 +161,7 @@ export interface Snapshot {
   /** K-1128: the redirect addresses of each site card, by card id. */
   readonly redirects: Readonly<Record<string, ReadonlyArray<string>>>;
   /** K-1504: who paused and when, while paused. */
-  readonly pausedBy: { readonly actor: Actor; readonly at: number } | null;
+  readonly pausedBy: { readonly actor: Author; readonly at: number } | null;
   readonly machines: ReadonlyArray<MachineView>;
   /** K-717: the stored card setting values, by card id; a missing value is the default of its setting. */
   readonly cardSettings: Readonly<Record<string, Readonly<Record<string, string>>>>;
@@ -197,7 +206,7 @@ export interface Snapshot {
   readonly accessTeam: string;
   /** The zone that sites, pages and files live on (K-1111). */
   readonly zone: string;
-  readonly me: Actor;
+  readonly me: Author;
   /** The newest revision in this snapshot; a map shows a held edit until a snapshot reaches it. */
   readonly revision: number;
 }
@@ -206,6 +215,8 @@ export type ServerMessage =
   | { readonly type: "snapshot"; readonly snapshot: Snapshot }
   /** One machine changed (status or sample); cheaper than a whole snapshot. */
   | { readonly type: "machine"; readonly view: MachineView }
+  /** K-1610: a new link event for History, to a watching map, instead of a snapshot (K-1302). */
+  | { readonly type: "linkEvent"; readonly event: LinkEventView }
   | {
       readonly type: "result";
       readonly requestId: string;
@@ -226,13 +237,17 @@ export type ServerMessage =
       readonly lines: ReadonlyArray<LogLine>;
       readonly skipped: number;
     }
-  | { readonly type: "tailEnd"; readonly tail: string; readonly reason: string };
+  | { readonly type: "tailEnd"; readonly tail: string; readonly reason: string }
+  /** K-605: the answer to a visible `watching` when the map holds the current state. */
+  | { readonly type: "watched" };
 
 export interface MachineView {
   readonly machine: Machine;
   readonly online: boolean;
   readonly lastSeen: number | null;
   readonly status: MachineStatus | null;
+  /** K-635: the labels that kitshn derives from the live status; none while offline. */
+  readonly facts: ReadonlyArray<MachineFact>;
   readonly sample: Sample | null;
   /** K-524: the system of the last status, also while offline; null before the first status or for another system. */
   readonly os: MachineOs | null;
@@ -248,6 +263,8 @@ export interface MachineView {
   readonly queued: number | null;
   /** K-628: the update of its daemon to the release of the Worker; null when no update job of that release exists. */
   readonly update: DaemonUpdate | null;
+  /** K-724: why kitshn reads only what an update needs from this daemon: another protocol major. Null while offline. */
+  readonly protocolRefusal: string | null;
 }
 
 export interface JobView {

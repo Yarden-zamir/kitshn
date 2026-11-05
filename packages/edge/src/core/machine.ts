@@ -1,19 +1,27 @@
 import type { LogAnswer, LogLine, LogSearch } from "./logs.ts";
 import type { BackupReport } from "./backups.ts";
-import type { MachineRight } from "./model.ts";
+import type { Effect } from "./model.ts";
 import type {
   CardSettingValues,
   DesiredParts,
+  ExecFrame,
+  ExecRun,
   GrantTables,
   HealthReport,
-  LinkAudit,
   ProviderReport,
   ProviderAccess,
   ProviderRefusal,
   ReachedCard,
 } from "@kitshn/local";
 import type { ServerReport } from "./sites.ts";
-import type { DoorPlan } from "./game.ts";
+import type { DoorPlan } from "./port.ts";
+import {
+  KITSHN_PROTOCOL,
+  type ProtocolMatch,
+  ROLLOUT_FIX,
+  legacyProtocol,
+  matchProtocol,
+} from "@kitshn/local/protocol";
 /** A joined machine (K-602). Its resource card has the same id and the kind `machine`. */
 export interface Machine {
   readonly id: string;
@@ -66,27 +74,80 @@ export const allowedFor = (machine: Machine, repo: string): Array<string> =>
 /** K-605: what a daemon reports about itself. */
 export interface MachineStatus {
   readonly version: string;
+  /** K-724: the KITSHN_PROTOCOL of the daemon; a daemon before K-724 names none (`daemonProtocol`). */
+  readonly protocol?: string;
   readonly os: string;
   readonly arch: string;
   readonly hostname: string;
   readonly tunnel: "starting" | "running" | "stopped";
+  /** K-632: the data centers of the tunnel's connections, for example `hfa02 ×4 (pinned)`. */
+  readonly tunnelLocations?: string;
+  /** K-632: cloudflared's `/ready`; absent until it answered. */
+  readonly tunnelReady?: boolean;
+  /** K-2009: the relays that hold their port, as `<hostname> <port>`. */
+  readonly relays?: ReadonlyArray<string>;
   /** Job kinds that this daemon knows beyond shell, diagnostics and restart. Old daemons send none. */
   readonly capabilities?: ReadonlyArray<string>;
   /** K-821: the bytes of the images that the daemon keeps for rollbacks, at most; shared layers count once per image. */
   readonly keptBytes?: number;
-  /** K-1751: the attesters of `machine.json`; their prefixes are the labels that rights may check (K-1754). */
-  readonly attesters?: ReadonlyArray<{ readonly prefix: string; readonly address: string }>;
-  /** K-2002: the public addresses on the machine's interfaces, for the records of its game cards. */
+  /** K-2003: the public addresses on the machine's interfaces, for the records of its port cards. */
   readonly publicAddresses?: { readonly v4: string | null; readonly v6: string | null };
-  /** K-2002: why the machine cannot gate game ports; absent when it reports the capability `doors`. */
+  /** K-2003: why the machine cannot gate ports; absent when it reports the capability `doors`. */
   readonly doorsProblem?: string;
-  /** K-2006: the game ports (`25565/tcp`) of the last door plan that something listens on. */
+  /** K-2003: the host firewall rules that stop a new connection to the ports, named for the owner. */
+  readonly hostFirewall?: string;
+  /** K-2007: the gated ports (`25565/tcp`) of the last door plan that something listens on. */
   readonly listening?: ReadonlyArray<string>;
   /** K-704: the providers whose last registration the daemon refused; only from a signed connection. */
   readonly refusedProviders?: ReadonlyArray<ProviderRefusal>;
   /** K-704, K-515: the registered providers without a connection, since `at` and why; only from a signed connection. */
   readonly offlineProviders?: ReadonlyArray<ProviderRefusal>;
+  /**
+   * K-722: how exec of other machines becomes each provider's exec user: through the sudo rule of `kitshn exec
+   * install`, or through the provider's bridge when the rule is missing, so a broken provider blocks exec.
+   */
+  readonly execPaths?: ReadonlyArray<{
+    readonly provider: string;
+    readonly user: string;
+    readonly via: "sudo" | "bridge";
+  }>;
+  /** K-704: the items that the last register or upsert of a provider dropped (`path: reason`); signed only. */
+  readonly providerProblems?: ReadonlyArray<ProviderRefusal>;
 }
+
+/**
+ * K-724: the protocol of a daemon. A kitshn 2 daemon before K-724 names none and reads as 2.0.0; its capabilities
+ * (such as "protocol-2") still gate the features that it lacks.
+ */
+export const daemonProtocol = (status: Pick<MachineStatus, "protocol">) =>
+  status.protocol ?? legacyProtocol(2);
+
+/**
+ * K-724: the protocol that a daemon names in its challenge answer or status. Absent: a daemon before K-724, 2.0.0.
+ * Another type than a string is no version, so it refuses.
+ */
+export const namedProtocol = (value: unknown): string =>
+  value === undefined
+    ? legacyProtocol(2)
+    : typeof value === "string"
+      ? value.slice(0, 40)
+      : String(JSON.stringify(value)).slice(0, 40);
+
+/** K-724: how kitshn treats the daemon of a machine that speaks `version`. */
+export const daemonProtocolMatch = (version: string, machineName: string): ProtocolMatch =>
+  matchProtocol(
+    { name: "kitshn", version: KITSHN_PROTOCOL, update: ROLLOUT_FIX },
+    { name: `the daemon of ${machineName}`, version, update: ROLLOUT_FIX },
+  );
+
+/**
+ * K-724: the jobs that a daemon of another protocol major still gets. "update" is the way out, so the rollout reaches
+ * it; "restart" and "diagnostics" help a person find why it did not update.
+ */
+export const PROTOCOL_CARE_JOBS: ReadonlySet<Command["kind"]> = new Set(["update", "restart", "diagnostics"]);
+
+/** K-724: the messages that kitshn reads from a daemon of another protocol major: enough to update it. */
+export const PROTOCOL_CARE_MESSAGES: ReadonlySet<string> = new Set(["status", "sample", "jobResult"]);
 
 /** K-605, K-606: the latest resource sample. The Durable Object keeps it in memory only. */
 export interface Sample {
@@ -101,6 +162,8 @@ export type Command =
   | { readonly kind: "shell"; readonly script: string }
   | { readonly kind: "diagnostics" }
   | { readonly kind: "restart" }
+  /** K-634: restart the tunnel service of the machine; the daemon keeps running. */
+  | { readonly kind: "tunnel-restart" }
   /** K-612, K-617: replace the daemon with the release that the Worker names, then restart. */
   | { readonly kind: "update"; readonly version: string }
   /**
@@ -118,6 +181,8 @@ export type Command =
       readonly repo: string;
       /** The Compose file of the recipe; with null, the daemon takes the files that Compose finds on its own. */
       readonly file: string | null;
+      /** K-826: an instance of a spread app; the daemon refuses a config with volumes. */
+      readonly spread?: true;
     }
   /**
    * K-718: start the last build of a Compose app that came up, from the copy on the machine. It never takes
@@ -167,6 +232,8 @@ export type Command =
   | {
       readonly kind: "backup";
       readonly card: string;
+      /** K-827: the repository of an instance that is not the home one; without it, the card's own. */
+      readonly repository?: string;
       readonly run: string;
       readonly prune: boolean;
       /** K-1816: the hard limit of the paused pass, from the pause of the last run. */
@@ -185,11 +252,13 @@ export type Command =
       readonly row?: string;
     }
   /** K-1820: back up as the run `before` first, then write the run `run` back. Only kitshn makes this job. */
-  /** K-2005: the game ports of this machine and their open doors; the whole list each time. Only kitshn makes it. */
+  /** K-2006: the gated ports of this machine and their open doors; the whole list each time. Only kitshn makes it. */
   | { readonly kind: "doors"; readonly plan: DoorPlan }
   | {
       readonly kind: "backup-restore";
       readonly card: string;
+      /** K-827: as for `backup`. */
+      readonly repository?: string;
       readonly run: string;
       readonly before: string;
       /** The sources of the run; the daemon checks that each exists before the app stops. */
@@ -233,7 +302,7 @@ export interface AskWire {
   readonly body?: unknown;
   readonly reason?: string;
   readonly labels?: Readonly<Record<string, string>>;
-  /** K-1752: the labels that an attester of the machine set; only these count for rights (K-1754). */
+  /** K-1752: the labels that a provider of the machine vouched for; only these count for rights (K-1754). */
   readonly attested?: Readonly<Record<string, string>>;
 }
 
@@ -242,7 +311,7 @@ export type AskOutcome =
   | { readonly outcome: "done"; readonly result: unknown }
   | { readonly outcome: "waiting"; readonly proposalId: string }
   /** K-1776: `need` names the right that refused the call. */
-  | { readonly outcome: "refused"; readonly reason: string; readonly need?: MachineRight }
+  | { readonly outcome: "refused"; readonly reason: string; readonly need?: Effect }
   /** K-1760: the owner of the repo is "not kitshn"; the machine uses its own login. */
   | { readonly outcome: "not-kitshn"; readonly reason: string };
 
@@ -256,7 +325,12 @@ export interface AskResult {
 
 export type DaemonMessage =
   /** K-1704: the signature of `connectText` with the key that the challenge names. */
-  | { readonly type: "answer"; readonly signature: string }
+  | {
+      readonly type: "answer";
+      readonly signature: string;
+      /** K-724: the KITSHN_PROTOCOL of the daemon, so kitshn decides before it sends anything. */
+      readonly protocol?: string;
+    }
   /** K-1705: a new public half, with the signature of `rotateText` by the old private half. */
   | { readonly type: "rotate"; readonly publicKey: string; readonly signature: string }
   | { readonly type: "status"; readonly status: MachineStatus }
@@ -287,24 +361,64 @@ export type DaemonMessage =
   | { readonly type: "providers"; readonly providers: ReadonlyArray<ProviderReport> }
   /** K-709: a provider set a part of a desired state; kitshn stores it and pushes it to every machine. */
   | {
-      readonly type: "desiredSet";
+      readonly type: "desiredSet" | "desiredInit";
       /** kitshn answers with `requestAnswer` and this id. */
       readonly requestId: string;
       readonly provider: string;
       readonly kind: string;
       readonly part: "shared" | "machine";
       readonly value: unknown;
+      /** K-709: the provider's mark of this set; the next `desired` push of the kind carries it. */
+      readonly rev?: string;
     }
   /** K-1612: a local user cancels a queued job of this machine; kitshn answers with `requestAnswer`. */
   | { readonly type: "cancelJob"; readonly requestId: string; readonly jobId: number }
-  /** K-1610: a provider of the machine reports one exec run or forwarded tool call on another machine. */
-  | { readonly type: "audit"; readonly audit: LinkAudit }
+  /**
+   * K-722: A starts a run on the machine `target`. `provider` is the provider of the connection that asks, whose
+   * exec user runs it on B; `attested` holds the labels that its provider vouched for (K-1752). kitshn answers with
+   * `execState`, or ends the run at once with an `exit` frame.
+   */
+  | {
+      readonly type: "execStart";
+      readonly execId: string;
+      readonly target: string;
+      readonly provider: string | null;
+      /** K-722: the provider on the target that A names, when A controls cards of several there. */
+      readonly targetProvider?: string;
+      readonly run: ExecRun;
+      readonly attested: Readonly<Record<string, string>>;
+    }
+  /**
+   * K-1610: one call that the link proxy of this machine forwarded with a tool name (MM-1922), and the status of its
+   * answer, 0 when the link failed. Never its arguments or its answer.
+   */
+  | { readonly type: "linkCall"; readonly target: string; readonly name: string; readonly status: number }
+  /** K-722: one frame of a run: from B its output, stdin credit and exit; from A its credit, stdin and close. */
+  | { readonly type: "execFrame"; readonly execId: string; readonly frame: ExecFrame }
   /** K-1608: the daemon saved the push with this key and hash and gave it to its provider. */
   | { readonly type: "applied"; readonly key: string; readonly hash: string }
   /** K-630: the check of its providers and links, every 10 minutes and after `checkHealth`. */
   | { readonly type: "health"; readonly report: HealthReport };
 
 /** Messages from kitshn to a daemon. */
+/**
+ * K-605: while a map is visible, it sends `watching` this often; kitshn passes it on as `watch`. A daemon samples each
+ * minute until WATCH_LEASE_MS after the last one, so a map tab left open in the background ends the fast samples.
+ */
+export const WATCH_RENEW_MS = 2 * 60_000;
+export const WATCH_LEASE_MS = 5 * 60_000;
+/** K-605: a map that gets no answer to `watching` this long holds a dead socket, such as after a sleep, and reconnects. */
+export const WATCH_ANSWER_MS = 10_000;
+
+/**
+ * K-605: what a visible map sends over its WebSocket, every WATCH_RENEW_MS. When it turns hidden, it sends
+ * `visible: false` once, and kitshn stops its snapshots until the next `watching` (K-1302).
+ */
+export interface WatchingMessage {
+  readonly type: "watching";
+  readonly visible?: false;
+}
+
 export type ServerToDaemon =
   /**
    * K-1704: the first message of each connection. `fingerprint` names the key that kitshn expects, so a daemon
@@ -313,11 +427,22 @@ export type ServerToDaemon =
    */
   | { readonly type: "challenge"; readonly challenge: string; readonly fingerprint: string | null }
   /** K-1704: the answer passed; from now on kitshn reads the messages of this connection. */
-  | { readonly type: "accepted"; readonly fingerprint: string }
+  | {
+      readonly type: "accepted";
+      readonly fingerprint: string;
+      /** K-724: the KITSHN_PROTOCOL of kitshn; a Worker before K-724 names none, which reads as 2.0.0. */
+      readonly protocol: string;
+    }
   /** K-1705: "Rotate key" in the machine panel. */
   | { readonly type: "rotateKey" }
   /** K-631: "Check now" in the Machines view; the daemon checks at once and sends `health`. */
   | { readonly type: "checkHealth" }
+  /**
+   * K-605: a map that someone looks at. `on` lasts WATCH_LEASE_MS unless kitshn sends it again, and the first `on`
+   * asks for a sample now. `off` comes when the last watching map closes or turns hidden, and on each connection
+   * without one.
+   */
+  | { readonly type: "watch"; readonly on: boolean }
   /** K-704: the name of the machine on the map, on each signed connection and after a rename. */
   | { readonly type: "name"; readonly name: string }
   /** K-704: the owner forgot this provider on the map; the daemon drops it unless a connection holds it. */
@@ -330,14 +455,44 @@ export type ServerToDaemon =
       readonly hash: string;
     }
   /** The answer to a request of the daemon that names a `requestId`: null, or why kitshn refused. */
-  | { readonly type: "requestAnswer"; readonly requestId: string; readonly error: string | null }
-  /** K-709: the shared part and this machine's part of one desired state. */
+  | {
+      readonly type: "requestAnswer";
+      readonly requestId: string;
+      readonly error: string | null;
+      /** K-709: only a desiredInit answer; false means the existing part won. */
+      readonly initialized?: boolean;
+    }
+  /** K-709: the shared part and this machine's part of one desired state, with the `rev` of its last set. */
   | {
       readonly type: "desired";
       readonly provider: string;
       readonly kind: string;
       readonly state: DesiredParts;
+      readonly rev: string | null;
       readonly hash: string;
+    }
+  /** K-721: whether kitshn is paused (K-1504), on each signed connection and on each change. */
+  | { readonly type: "paused"; readonly paused: boolean; readonly hash: string }
+  /** K-722: the machines whose "runs" covers this machine at automatic, on connect and on each change. */
+  | { readonly type: "execRights"; readonly machines: ReadonlyArray<string>; readonly hash: string }
+  /** K-722, A: how a run that this machine started stands. */
+  | {
+      readonly type: "execState";
+      readonly execId: string;
+      readonly state: "running" | "waiting";
+      readonly proposalId?: string;
+    }
+  /** K-722, B: run this for another machine, as the exec user of `provider`. */
+  | { readonly type: "execRun"; readonly provider: string | null; readonly run: ExecRun }
+  /** K-722: a frame of a run, from the other machine. */
+  | { readonly type: "execFrame"; readonly execId: string; readonly frame: ExecFrame }
+  /** K-1612: a job that this machine queued with an ask ended. */
+  | {
+      readonly type: "jobEnded";
+      readonly jobId: number;
+      readonly state: "done" | "failed" | "expired";
+      readonly exitCode: number | null;
+      readonly output: string;
     }
   /** K-1609: the cards of one provider on other machines that this machine reaches. */
   | {
@@ -475,7 +630,9 @@ export const forwardText = (
  * below `/agent/` and hold no encoded slash, backslash, dot or percent, so no later decoding can climb out of it.
  */
 export function forwardPathProblem(pathname: string): string | null {
-  if (!pathname.startsWith("/agent/")) return `${pathname} is not below /agent/`;
+  // K-1777: `/op/` carries the operations; `/agent/` keeps the short forms until it goes.
+  if (!pathname.startsWith("/agent/") && !pathname.startsWith("/op/"))
+    return `${pathname} is not below /agent/ or /op/`;
   const lower = pathname.toLowerCase();
   for (const bad of ["%2f", "%5c", "%2e", "%25", "\\", "/./", "/../"])
     if (lower.includes(bad)) return `${pathname} holds ${bad}`;

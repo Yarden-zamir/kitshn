@@ -10,6 +10,7 @@ import {
 } from "../core/model.ts";
 import type { MachineView } from "../core/protocol.ts";
 import { seed } from "../core/seed.ts";
+import { actorOf, chip, login } from "../core/testkit.ts";
 import {
   CHECKING_TIP,
   type MenuTarget,
@@ -49,7 +50,7 @@ const her: Circle = {
   name: "Her",
   color: "#FF5277",
   level: "use",
-  members: [{ _tag: "email", email: "her@example.com" }],
+  members: [chip(login("her@example.com"))],
   match: "any",
   needsPasskey: false,
   endsAt: null,
@@ -90,6 +91,7 @@ function context(version = "0123456789ab"): ActionContext {
     stacks: new Map([["s1", { id: "s1", name: "Docs", members: ["a", "b"] }]]),
     paused: null,
     machines: new Map(),
+    actors: new Map([...s.actors, actorOf(login("her@example.com"))].map((actor) => [actor.id, actor])),
   };
   const machine: MachineView = {
     machine: {
@@ -104,6 +106,7 @@ function context(version = "0123456789ab"): ActionContext {
     online: true,
     lastSeen: null,
     status: null,
+    facts: [],
     sample: null,
     os: null,
     keyFailure: null,
@@ -112,6 +115,7 @@ function context(version = "0123456789ab"): ActionContext {
     servers: [],
     queued: 0,
     update: null,
+    protocolRefusal: null,
   };
   return {
     state,
@@ -611,20 +615,20 @@ describe("per-item undo (K-1507)", () => {
   });
 });
 
-describe("game cards (K-534)", () => {
-  it("offer Remove game as a dangerous action, the way out of the Game step", () => {
+describe("port cards (K-534)", () => {
+  it("offer Remove ports as a dangerous action, the way out of the Ports step", () => {
     const { handlers, calls } = recorder();
     const base = context();
-    const game = card("mc", "game", ["mc.example.com"]);
+    const portCard = card("mc", "port", ["mc.example.com"]);
     const ctx = {
       ...base,
-      state: { ...base.state, resources: new Map(base.state.resources).set("mc", game) },
+      state: { ...base.state, resources: new Map(base.state.resources).set("mc", portCard) },
     };
     const groups = actionsFor(ctx, handlers, { _tag: "card", id: "mc" });
-    const remove = find(groups, "remove-game");
+    const remove = find(groups, "remove-port card");
     expect(remove.danger).toBe(true);
     run(remove);
-    expect(calls).toEqual([["removeGame", game]]);
-    expect(ids(actionsFor(base, handlers, { _tag: "card", id: "riffle" }))).not.toContain("remove-game");
+    expect(calls).toEqual([["removePortCard", portCard]]);
+    expect(ids(actionsFor(base, handlers, { _tag: "card", id: "riffle" }))).not.toContain("remove-port card");
   });
 });

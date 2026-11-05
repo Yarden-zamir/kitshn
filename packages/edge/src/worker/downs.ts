@@ -6,13 +6,18 @@ type Sql = (query: string, ...bindings: Array<string | number | null>) => Readon
 
 const REMOVAL_DOWN = `json_extract(command, '$.kind') = 'compose-down' AND json_extract(command, '$.removeData') = 0`;
 
-/** Fails the queued removal downs of a project, for example when a deploy or an undo starts the app again. */
-export function failQueuedDowns(sql: Sql, project: string, output: string) {
+/**
+ * Fails the queued removal downs of a project, for example when a deploy or an undo starts the app again. With a
+ * machine, only the downs there: the stop of a dropped instance on another machine stays (K-825).
+ */
+export function failQueuedDowns(sql: Sql, project: string, output: string, machineId: string | null = null) {
   sql(
     `UPDATE jobs SET state = 'failed', output = ? WHERE state = 'queued' AND ${REMOVAL_DOWN}
-     AND json_extract(command, '$.project') = ?`,
+     AND json_extract(command, '$.project') = ? AND (? IS NULL OR machine_id = ?)`,
     output,
     project,
+    machineId,
+    machineId,
   );
 }
 

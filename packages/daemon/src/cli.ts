@@ -1,21 +1,26 @@
 // The text of the `kitshn` commands of a machine, apart from the commands that print it, so tests can read it.
-import type { Answer, AskAction, Request } from "@kitshn/local";
+import type { Answer, AskAction, IdRequest } from "@kitshn/local";
 import { fail } from "kitshn/cli-error";
 import type { ServerReport } from "@kitshn/edge/sites";
 import {
   AGENT_COMMANDS,
   AGENT_HELP,
   type AgentState,
+  type ForwardWait,
   type StateRight,
   forwardWaiting,
   isAgentCommand,
   waitingLine,
 } from "kitshn/agent";
+import { OPS_HELP } from "kitshn/ops";
 import type { SiteEntry } from "./sites.ts";
 
-/** C7 of the UX audit: one line for each action of `kitshn agent` (K-1711). */
-export const ASK_ACTION_HELP: Record<AskAction, string> = {
-  state: `the cards, circles, rights and open asks of this machine; --body '{"all":true}' adds servers and link events`,
+/**
+ * C7 of the UX audit: one line for each action of `kitshn agent` (K-1711). `exec` is no ask of an agent: only the
+ * exec request of a provider starts a run on another machine (K-722).
+ */
+export const ASK_ACTION_HELP: Record<Exclude<AskAction, "exec">, string> = {
+  state: `the cards, circles, effects and open asks of this machine; --body '{"all":true}' adds servers and link events`,
   apply: `move a card or change a share: --body '{"edits":[...]}'`,
   organize: "tidy the cards that you manage into a grid, as one Undo (K-532)",
   publish: `move a card into Everyone, or out with --body '{"public":false}'`,
@@ -53,19 +58,16 @@ kitshn service uninstall                stop and remove the user service`,
   rekey:
     "kitshn rekey <code>                     make a new machine key with the key code of its panel (K-1706, K-1708)",
   status:
-    "kitshn status                           the machine, its map name, server, rights, key, connection and tunnel",
+    "kitshn status                           the machine, its map name, server, effects, key, connection and tunnel",
   health:
     "kitshn health [--now] [--json]          the last check of the providers and links of this machine (K-630)",
   "local-users": `kitshn local-users list|add|remove <u>  who else may use the local socket, as the daemon user (K-701);
-                                        add <u> --provider also lets it run a provider and its attester`,
+                                        add <u> --provider also lets it run a provider`,
   providers: `kitshn providers rebind <name> --to-user <u>
-                                        move a provider and its attester to a provider user (K-704)`,
-  attester: `kitshn attester set --prefix <p.> --url <loopback url> --token-env <NAME>
-                                        register an attester of thread labels, as the daemon user or root (K-1751)`,
+                                        move a provider to a provider user (K-704)
+kitshn providers exec-user <name> <u>   the user that runs commands of other machines for that provider (K-722)`,
   provider: `kitshn provider                         join stdin and stdout to the local socket, for a provider (K-704)
 kitshn provider forget <name>           drop a provider that does not run, as the daemon user or root (K-704)`,
-  "link-check":
-    "kitshn link-check <socket or pipe>      exit 0 when this account's daemon serves that link proxy (K-1609)",
   agent: `kitshn agent <action> [target]          ask kitshn as this machine (K-1710): --reason, --label k=v, --body json;
                                         kitshn agent --help lists the actions`,
   "setup-git": "kitshn setup-git                        git asks kitshn first for github.com tokens (K-1763)",
@@ -79,11 +81,15 @@ kitshn provider forget <name>           drop a provider that does not run, as th
   unexpose: "kitshn unexpose <name>                  stop sharing it",
   servers:
     "kitshn servers [--json]                 the servers that listen on this machine, and what kitshn exposes (K-619)",
-  doors: `kitshn doors install --user <u>         as root: the helper that gates game ports, for the daemon user (K-2005)
+  doors: `kitshn doors install --user <u>         as root: the helper that gates the ports of port cards, for the daemon user (K-2006)
+                                        --public-address <IPv4>: the address of a cloud machine behind its provider's NAT (K-2003)
 kitshn doors uninstall                  as root: remove it and its firewall table`,
+  exec: `kitshn exec install --user <u> --daemon-user <d>
+                                        as root: the daemon user runs exec of other machines as <u> (K-722)
+kitshn exec uninstall --user <u>        as root: remove that rule; exec as <u> then needs its provider's bridge`,
   skill: `kitshn skill install [--repo]           the skill for coding agents, global or in this repo (K-618)
 kitshn skill check                      exit 1 when a copy of the skill is from another release`,
-  version: `kitshn version [--json]                 the version; --json: {"product":"kitshn","generation":2,"version"}`,
+  version: `kitshn version [--json]                 the version; --json: {"product":"kitshn","generation":2,"version","protocol"}`,
 } as const;
 
 export type MachineCommand = keyof typeof MACHINE_HELP;
@@ -105,9 +111,7 @@ export function helpText(command: string | null, version: string): string {
     "health",
     "local-users",
     "providers",
-    "attester",
     "provider",
-    "link-check",
     "agent",
   ];
   const rest = (Object.keys(MACHINE_HELP) as Array<MachineCommand>).filter((name) => !order.includes(name));
@@ -115,6 +119,7 @@ export function helpText(command: string | null, version: string): string {
     `kitshn ${version}`,
     "",
     ...order.map((name) => MACHINE_HELP[name]),
+    OPS_HELP,
     ...AGENT_COMMANDS.map((name) => AGENT_HELP[name]),
     ...rest.map((name) => MACHINE_HELP[name]),
     "",
@@ -122,7 +127,7 @@ export function helpText(command: string | null, version: string): string {
   ].join("\n");
 }
 
-/** C11 of the UX audit: one line for each right of the machine, by its name on the map. */
+/** C11 of the UX audit: one line for each effect of the machine, with its mode. */
 export function rightLines(rights: ReadonlyArray<StateRight>): Array<string> {
   return rights.map(
     (right) =>
@@ -215,7 +220,7 @@ export function unexposeRefusal(name: string | undefined, sites: ReadonlyArray<S
 
 /** One request to the daemon: `follow` keeps the connection for a later line, which `onLine` sees first (K-1722). */
 export type LocalAsk = (
-  request: Request,
+  request: IdRequest,
   follow?: (answer: Answer) => boolean,
   onLine?: (answer: Answer) => void,
 ) => Promise<Answer>;
@@ -227,15 +232,19 @@ const waitOf = (answer: Answer) =>
     ? forwardWaiting(answer.status, Buffer.from(answer.body, "base64").toString("utf8"))
     : null;
 
+/** K-1714: the waiting answer that `--json` prints as one line on stdout, before the result line. */
+export const waitingJson = (wait: ForwardWait) => JSON.stringify({ outcome: "waiting", ...wait });
+
 /**
  * K-1714, K-1776: one forwarded call. While it waits for an approval, it prints the waiting line and keeps the
  * connection for the answer of the proposal; after "approved" it sends the same call once more, from the same
- * thread, because the approval runs only that call. "denied" or "expired" fail with one line.
+ * thread, because the approval runs only that call. "denied" or "expired" fail with one line. `say` also gets the
+ * wait, so `--json` can print it as data.
  */
 export async function forwardAndWait(
   ask: LocalAsk,
-  request: Extract<Request, { type: "forward" }>,
-  say: (line: string) => void,
+  request: Extract<IdRequest, { type: "forward" }>,
+  say: (line: string, wait: ForwardWait) => void,
   now: () => number,
 ): Promise<ForwardAnswer> {
   const forward = (answer: Answer): ForwardAnswer =>
@@ -247,7 +256,7 @@ export async function forwardAndWait(
     (answer) => waitOf(answer) !== null,
     (answer) => {
       const wait = waitOf(answer);
-      if (wait) say(waitingLine(wait, now(), true));
+      if (wait) say(waitingLine(wait, now(), true), wait);
     },
   );
   if (first.type !== "ask-result") return forward(first);

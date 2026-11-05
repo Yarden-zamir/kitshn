@@ -1,9 +1,9 @@
 name: spec numbers
 
-# A PR that adds a K- number fails when main or another open PR already defines it with other text.
+# A PR that adds a K- number to docs/ fails when main or another open PR already defines it with other text.
 on:
   pull_request:
-    paths: [SPEC.md, scripts/next-k.ts, .github/workflows/spec-numbers.yml]
+    paths: [docs/**, scripts/next-k.ts, .github/workflows/spec-numbers.yml]
 
 permissions:
   contents: read

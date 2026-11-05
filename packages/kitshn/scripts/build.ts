@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
-const version = process.env["GITHUB_SHA"]?.slice(0, 12) ?? "dev";
+const version = (process.env["KITSHN_SHA"] ?? process.env["GITHUB_SHA"])?.slice(0, 12) ?? "dev";
 const skill = readFileSync(new URL("../skill/SKILL.md", import.meta.url), "utf8");
 execFileSync(
   "bun",

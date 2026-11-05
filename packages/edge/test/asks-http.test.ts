@@ -10,9 +10,10 @@ afterEach(() => vi.restoreAllMocks());
 it("takes a call that the daemon forwarded and signed, with the right of its path, once per nonce (K-1714)", async () => {
   stubAccessCerts();
   const key = await newMachineKey();
-  await setup({ deploys: { mode: "automatic" } }, key);
+  // K-1777: an address change has the effect "changes", as the row card-address.
+  await setup({ creates: { mode: "automatic" }, changes: { mode: "ask", circleId: "owner" } }, key);
   const address = "/agent/cards/no-such-card/address";
-  // K-1776: an unset right asks the Owner, and the same call again gets the same proposal, not a second one.
+  // K-1776: an effect that asks the Owner waits.
   const unset = await forwarded(key, "POST", address, "nonce-off-0123456789");
   expect(unset.status).toBe(409);
   const waiting = (await unset.json()) as {
@@ -26,6 +27,8 @@ it("takes a call that the daemon forwarded and signed, with the right of its pat
     circle: "Owner",
     error: expect.stringMatching(/^waiting: /),
   });
+  // K-1722: the same call again joins the open proposal on the key of its approval, also with no thread, so a copy
+  // makes no second proposal and no second push.
   const again = await forwarded(key, "POST", address, "nonce-off-1123456789");
   expect(((await again.json()) as { proposalId: string }).proposalId).toBe(waiting.proposalId);
   // A changed call is another call, so the approval of the first does not run it.
@@ -56,13 +59,25 @@ it("takes a call that the daemon forwarded and signed, with the right of its pat
   expect((await approved.json()) as { error?: string }).toEqual({
     error: expect.not.stringMatching(/K-1714|K-1776|adds pages|waiting/),
   });
+  // The approval ran the call once: the next copy waits for a new approval.
+  const later = await forwarded(key, "POST", address, "nonce-off-3223456789");
+  expect(later.status).toBe(409);
+  expect(((await later.json()) as { proposalId: string }).proposalId).not.toBe(waiting.proposalId);
   await runInDurableObject(stub, (_, state) => state.storage.sql.exec("DELETE FROM ask_events"));
   // "off" still refuses at once, with the right for the CLI's offer.
-  await setup({ deploys: { mode: "automatic" }, addsPages: { mode: "off" } }, key);
+  await setup({ creates: { mode: "automatic" }, changes: { mode: "off" } }, key);
   const off = await forwarded(key, "POST", address, "nonce-off-4123456789");
   expect(off.status).toBe(403);
-  expect(await off.json()).toEqual({ error: expect.stringContaining("is off"), need: "addsPages" });
-  await setup({ deploys: { mode: "automatic" }, addsPages: { mode: "automatic" } }, key);
+  expect(await off.json()).toEqual({ error: expect.stringContaining("is off"), need: "changes" });
+  // The previous version of a library card follows "changes" too, as the row library-previous.
+  const previous = await forwarded(
+    key,
+    "POST",
+    "/agent/library/no-such-card/previous",
+    "nonce-off-5123456789",
+  );
+  expect(await previous.json()).toEqual({ error: expect.stringContaining("is off"), need: "changes" });
+  await setup({ creates: { mode: "automatic" }, changes: { mode: "automatic" } }, key);
   const passed = await forwarded(
     key,
     "POST",
@@ -99,7 +114,7 @@ it("takes a call that the daemon forwarded and signed, with the right of its pat
 
 it("refuses the machine's own token on every agent path over HTTP without the daemon's signature (K-1714)", async () => {
   stubAccessCerts();
-  await setup({ runsCommands: { mode: "automatic" }, deploys: { mode: "automatic" } });
+  await setup({ runs: { mode: "automatic" }, changes: { mode: "automatic" } });
   const token = await accessToken("agent-aud", { common_name: "vps.access" });
   const headers = { "cf-access-jwt-assertion": token, "content-type": "application/json" };
   for (const [method, path] of [

@@ -1,31 +1,57 @@
 // Spec numbers across open pull requests, so two PRs never take the same K- number.
 //   node scripts/next-k.ts <block>   prints the next free number of a block: 11 gives a number from K-1101 to K-1199.
-//   node scripts/next-k.ts --check   fails when this checkout's SPEC.md adds a number that origin/main or another open PR
-//                                    defines with other text, or uses one number twice. PR_NUMBER skips this PR's head.
-// It reads origin/main with git and the open PRs with gh, so it needs a fetched origin and a gh login (GH_TOKEN in CI).
+//   node scripts/next-k.ts --check   fails when this checkout's docs add a number that origin/main or another open PR
+//                                    defines with other text, or use one number twice. PR_NUMBER skips this PR's head.
+// The numbers are the `- **K-<n>**` lines of every Markdown file under docs/ (see docs/README.md).
+// It reads origin/main and the open PR heads with git, and lists the open PRs with gh, so it needs a fetched origin
+// and a gh login (GH_TOKEN in CI).
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 
 const MARK = "- **K-";
+const DOCS = "docs";
 
 const run = (command: string, args: ReadonlyArray<string>) =>
   execFileSync(command, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 
-/** Each `- **K-<n>** <text>` line of a spec, in order. */
-function lines(spec: string): Array<{ readonly number: number; readonly text: string }> {
-  return spec.split("\n").flatMap((line) => {
-    const rest = line.trimStart();
-    if (!rest.startsWith(MARK)) return [];
-    const end = rest.indexOf("**", MARK.length);
-    const number = Number(rest.slice(MARK.length, end));
-    if (end < 0 || !Number.isInteger(number))
-      throw new Error(`SPEC.md has a K- line that does not parse: ${line}`);
-    return [{ number, text: rest.slice(end + 2).trim() }];
-  });
+/** Each `- **K-<n>** <text>` line of the docs, in order, with the file that holds it. */
+function lines(
+  files: ReadonlyArray<{ readonly path: string; readonly text: string }>,
+): Array<{ readonly number: number; readonly text: string; readonly path: string }> {
+  return files.flatMap((file) =>
+    file.text.split("\n").flatMap((line) => {
+      const rest = line.trimStart();
+      if (!rest.startsWith(MARK)) return [];
+      const end = rest.indexOf("**", MARK.length);
+      const number = Number(rest.slice(MARK.length, end));
+      if (end < 0 || !Number.isInteger(number))
+        throw new Error(`${file.path} has a K- line that does not parse: ${line}`);
+      return [{ number, text: rest.slice(end + 2).trim(), path: file.path }];
+    }),
+  );
 }
 
-const definitions = (spec: string): ReadonlyMap<number, string> =>
-  new Map(lines(spec).map((line) => [line.number, line.text]));
+const isDoc = (path: string) => path.endsWith(".md");
+
+/** The docs of this checkout. */
+function workingDocs() {
+  return readdirSync(DOCS, { recursive: true, encoding: "utf8" })
+    .map((name) => join(DOCS, name))
+    .filter(isDoc)
+    .map((path) => ({ path, text: readFileSync(path, "utf8") }));
+}
+
+/** The docs of a commit that this clone has. */
+function docsAt(ref: string) {
+  return run("git", ["ls-tree", "-r", "--name-only", ref, "--", DOCS])
+    .split("\n")
+    .filter(isDoc)
+    .map((path) => ({ path, text: run("git", ["show", `${ref}:${path}`]) }));
+}
+
+const definitions = (files: ReturnType<typeof docsAt>): ReadonlyMap<number, string> =>
+  new Map(lines(files).map((line) => [line.number, line.text]));
 
 interface Source {
   readonly name: string;
@@ -34,9 +60,8 @@ interface Source {
 
 /** True when HEAD and `head` share a commit that origin/main does not have: two PRs of one stack. */
 function sameStack(head: string) {
-  const fetched = spawnSync("git", ["fetch", "--quiet", "origin", head]).status === 0;
   const shared = spawnSync("git", ["merge-base", "HEAD", head], { encoding: "utf8" });
-  if (!fetched || shared.status !== 0) return false;
+  if (shared.status !== 0) return false;
   const onMain = spawnSync("git", [
     "merge-base",
     "--is-ancestor",
@@ -52,28 +77,19 @@ function sameStack(head: string) {
  * PR's stack: a lower PR may change the text of a number that this PR still carries until its next rebase.
  */
 function sources(skipPr: string | undefined, skipStack = false): Array<Source> {
-  const main = { name: "origin/main", definitions: definitions(run("git", ["show", "origin/main:SPEC.md"])) };
-  const repo = run("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]).trim();
+  const main = { name: "origin/main", definitions: definitions(docsAt("origin/main")) };
   const prs = JSON.parse(
     run("gh", ["pr", "list", "--state", "open", "--limit", "200", "--json", "number,headRefOid"]),
   ) as Array<{ readonly number: number; readonly headRefOid: string }>;
   const open = prs
-    .filter((pr) => String(pr.number) !== skipPr && !(skipStack && sameStack(pr.headRefOid)))
+    .filter((pr) => String(pr.number) !== skipPr)
     .flatMap((pr) => {
-      let spec: string;
-      try {
-        spec = run("gh", [
-          "api",
-          "-H",
-          "Accept: application/vnd.github.raw",
-          `repos/${repo}/contents/SPEC.md?ref=${pr.headRefOid}`,
-        ]);
-      } catch {
-        // A head without SPEC.md, or of a deleted fork, defines nothing.
-        return [];
-      }
-      return [{ name: `#${pr.number}`, definitions: definitions(spec) }];
-    });
+      // GitHub serves a PR head by its SHA, also from a fork. A head that does not fetch defines nothing.
+      const fetched = spawnSync("git", ["fetch", "--quiet", "origin", pr.headRefOid]).status === 0;
+      return fetched ? [pr] : [];
+    })
+    .filter((pr) => !(skipStack && sameStack(pr.headRefOid)))
+    .map((pr) => ({ name: `#${pr.number}`, definitions: definitions(docsAt(pr.headRefOid)) }));
   return [main, ...open];
 }
 
@@ -88,18 +104,16 @@ function nextFree(block: number, all: ReadonlyArray<Source>) {
 }
 
 function clashes(all: ReadonlyArray<Source>): Array<string> {
-  const spec = readFileSync("SPEC.md", "utf8");
-  const mine = lines(spec);
-  const seen = new Set<number>();
-  const twice = mine.flatMap((line) => {
-    if (!seen.has(line.number)) return (seen.add(line.number), []);
-    return [`K-${line.number} appears twice in this SPEC.md.`];
+  const docs = workingDocs();
+  const seen = new Map<number, string>();
+  const twice = lines(docs).flatMap((line) => {
+    const first = seen.get(line.number);
+    if (first === undefined) return (seen.set(line.number, line.path), []);
+    return [`K-${line.number} appears twice: in ${first} and in ${line.path}.`];
   });
-  // New means: not in the spec where this branch left main. An edit of an older requirement is no clash.
-  const base = definitions(
-    run("git", ["show", `${run("git", ["merge-base", "HEAD", "origin/main"]).trim()}:SPEC.md`]),
-  );
-  const taken = [...definitions(spec)]
+  // New means: not in the docs where this branch left main. An edit of an older requirement is no clash.
+  const base = definitions(docsAt(run("git", ["merge-base", "HEAD", "origin/main"]).trim()));
+  const taken = [...definitions(docs)]
     .filter(([number]) => !base.has(number))
     .flatMap(([number, text]) =>
       all
@@ -118,7 +132,7 @@ if (argument === "--check") {
     console.error("Pick a free number with: node scripts/next-k.ts <block>");
     process.exit(1);
   }
-  console.log("No K- number of this SPEC.md clashes with origin/main or another open PR.");
+  console.log("No K- number of these docs clashes with origin/main or another open PR.");
 } else if (Number.isInteger(block) && block >= 1 && block <= 99) {
   console.log(`K-${nextFree(block, sources(undefined))}`);
 } else {

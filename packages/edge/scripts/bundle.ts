@@ -49,7 +49,7 @@ for (const path of files(client)) {
   cpSync(path, join(out, "assets", hash.slice(0, 2), hash));
 }
 writeFileSync(join(out, "assets.json"), `${JSON.stringify(manifest, null, 2)}\n`);
-const version = process.env["GITHUB_SHA"]?.slice(0, 12) ?? "local";
+const version = (process.env["KITSHN_SHA"] ?? process.env["GITHUB_SHA"])?.slice(0, 12) ?? "local";
 writeFileSync(join(out, "version"), `${version}\n`);
 execFileSync("tar", ["-czf", join(root, "dist/kitshn-edge.tar.gz"), "-C", out, "."]);
 console.log(`dist/kitshn-edge.tar.gz: ${Object.keys(manifest).length} assets, version ${version}`);

@@ -18,7 +18,7 @@ import {
   orphanVolumes,
 } from "../core/apps.ts";
 import {
-  type Actor,
+  type Author,
   type AppCard,
   type Change,
   type Edit,
@@ -68,26 +68,29 @@ import {
   releaseBusyStep,
   withBusyWaits,
   parseRollout,
+  rolloutView,
   startStep,
   stepSent,
 } from "../core/autoUpdate.ts";
 import {
   ADMIN_RESOURCE_ID,
-  AGENT_RIGHTS,
-  AGENT_RIGHT_NAMES,
-  MACHINE_RIGHTS,
+  type Actor,
+  type Credential,
+  actorIdOf,
+  credentialKey,
+  machineActorId,
+  EFFECTS,
   OWNER_CIRCLE_ID,
   shareKey,
-  MACHINE_RIGHT_NAMES,
-  type MachineRight,
+  type Effect,
   type GitHubWay,
   GITHUB_WAYS,
   type Circle,
-  type Member,
   type Point,
   type Resource,
   type ShareSetting,
   pauseModeOf,
+  memberActor,
   type Stack,
   type State,
   UNDO_SOURCES,
@@ -95,6 +98,7 @@ import {
   circlesHolding,
   fnv,
   levelName,
+  activeShares,
 } from "../core/model.ts";
 import {
   type Command,
@@ -105,11 +109,18 @@ import {
   type ProjectVolume,
   type Sample,
   type ServerToDaemon,
+  WATCH_LEASE_MS,
+  WATCH_RENEW_MS,
   type AskOutcome,
   type AskResult,
   type AppAccess,
+  PROTOCOL_CARE_JOBS,
+  PROTOCOL_CARE_MESSAGES,
   allowedFor,
   connectText,
+  daemonProtocol,
+  daemonProtocolMatch,
+  namedProtocol,
   FORWARD_HEADERS,
   FORWARD_WINDOW_MS,
   forwardPathProblem,
@@ -154,6 +165,8 @@ import {
   R2_FREE_BYTES,
   gigabytes,
   BACK_UP_NOW,
+  instanceRepository,
+  repositoryParts,
 } from "../core/backups.ts";
 import { bucketSize, stateExport, writeExport } from "./backups.ts";
 import {
@@ -168,14 +181,14 @@ import {
 import { MIGRATIONS } from "./migrations.ts";
 import {
   type DoorRow,
-  type GameRecordRow,
-  type GameRow,
+  type PortRecordRow,
+  type PortRow,
   doorOf,
-  gameOf,
-  gameRecords,
-  gameStatus,
+  portOf,
+  portRecords,
+  portStatus,
   recordBody,
-} from "./games.ts";
+} from "./ports.ts";
 import {
   DEFAULT_DOOR_MS,
   type Door,
@@ -184,14 +197,14 @@ import {
   doorFamily,
   doorMachine,
   doorPlan,
-  gameError,
-  joinAddress,
+  portCardError,
+  connectAddress,
   openDoors,
   parsePort,
   portKey,
   busyPort,
   relayHost,
-} from "../core/game.ts";
+} from "../core/port.ts";
 import type {
   AddressHold,
   DeployNote,
@@ -205,6 +218,7 @@ import type {
   ServerMessage,
   Snapshot,
 } from "../core/protocol.ts";
+import { RECENT_EVENTS } from "../core/protocol.ts";
 import {
   type AllowingAgent,
   type RepoGate,
@@ -221,6 +235,8 @@ import {
   agentHas,
   agentHomeCircle,
   agentMayCommand,
+  agentMayRunOn,
+  CLOSED_COMMANDS,
   agentRefusal,
   cardsControlledBy,
   circlesOf,
@@ -229,12 +245,18 @@ import {
   mayDeployOn,
   agentUploadPlace,
   codeRightMode,
+  codeInScope,
   codeRightOff,
+  effectiveMode,
+  machineEffectiveMode,
   machineOf,
-  machineRightMode,
-  machineRightOff,
+  rightMode,
+  rightOff,
+  sharesReach,
 } from "../core/agent.ts";
 import { DEMO_MACHINES, DEMO_ICONS, demo, demoUsage } from "../core/demo.ts";
+import { type LegacyCircle, migrateMembers } from "../core/actors.ts";
+import { EFFECT_OF, LEGACY_RIGHTS, type LegacyRightsCircle, migrateRights } from "../core/effects.ts";
 import { type Usage, type UsageRow, usageLevel } from "../core/usage.ts";
 import {
   HOUR_MS,
@@ -248,15 +270,15 @@ import {
 } from "../core/notify.ts";
 import { readUsage } from "./usage.ts";
 import {
-  FAILING_FOR_MS,
   UPTIME_FETCHES_PER_RUN,
   UPTIME_KEEP_MS,
-  UPTIME_IDLE_MS,
+  UPTIME_TURN_MS,
   UPTIME_RUN_MS,
   UP,
   type Uptime,
   type UptimeChange,
   cardsOfRun,
+  cardsToFetch,
   nextUptime,
   probeUp,
   stored,
@@ -276,14 +298,45 @@ import {
   MAX_SHOWN,
   askRequest,
   isAskAction,
-  conditionProblem,
   labelProblem,
   shownAsk,
   shownHash,
+  PASSKEY_EFFECTS,
+  approveVia,
+  askNotificationText,
   WINDOW_ACTIONS,
   answerRefusal,
 } from "../core/asks.ts";
+import {
+  type Decision,
+  type Operation,
+  OPERATIONS,
+  type Scope,
+  type ScopeResult,
+  type SecretOpId,
+  agentRead,
+  decide,
+  effectDefault,
+  isOpId,
+  isPersonGate,
+  isSecretOp,
+  opRequest,
+} from "../core/operations.ts";
 import { type MachineOs, machineOs } from "../core/icons.ts";
+import { deployLabels, hasLabels, isReservedLabel, machineFacts } from "../core/facts.ts";
+import {
+  type Candidate,
+  type Instance,
+  type Placement,
+  cardInstances,
+  instanceAddress,
+  otherInstances,
+  placeMachines,
+  placementDrift,
+  placementOf,
+  primaryInstance,
+  spreadRefusal,
+} from "../core/instances.ts";
 import {
   contentSecurityPolicy,
   type ContentVisitor,
@@ -306,12 +359,27 @@ import {
 import { badgeState } from "../core/badge.ts";
 import { listedApps } from "../core/listing.ts";
 import { commandsFor, machineBusy, providerCards, providerPushes, reachOf } from "../core/providers.ts";
-import { healthCell, healthNotices } from "../core/health.ts";
+import {
+  HEALTH_NOTIFY_AFTER,
+  TUNNEL_RESTART_GAP_MS,
+  healthCell,
+  healthNotices,
+  tunnelRestarts,
+} from "../core/health.ts";
+import {
+  commandName,
+  execMachinesOf,
+  execOutcome,
+  execProviderOn,
+  migrateAgentShares,
+} from "../core/exec.ts";
 import {
   HealthReport as HealthReportSchema,
   type HealthReport,
-  type LinkAudit,
-  LinkAudit as LinkAuditSchema,
+  ExecFrame as ExecFrameSchema,
+  ExecRun as ExecRunSchema,
+  type ExecFrame,
+  type ExecRun,
   type ProviderClient,
   type ProviderCommand,
   desiredProblem,
@@ -319,6 +387,7 @@ import {
   type ProviderRefusal,
   type ProviderReport,
   decodeProviderReports,
+  KITSHN_PROTOCOL,
   pushKey,
   reportProblem,
 } from "@kitshn/local";
@@ -333,7 +402,14 @@ import {
   withRetry,
 } from "../core/progress.ts";
 import { seed } from "../core/seed.ts";
-import { type Visitor, circleMatches, visitorLevel } from "../core/visitor.ts";
+import {
+  type Attested,
+  type Visitor,
+  adminPasskey,
+  circleMatches,
+  passkeyHolds,
+  visitorLevel,
+} from "../core/visitor.ts";
 import { APPROVE_APPS } from "../core/access.ts";
 import {
   DEFAULT_LEVELS,
@@ -341,6 +417,7 @@ import {
   PUSH_TEST_MS,
   type PushDevice,
   deviceWants,
+  approvesOnPush,
   pushMessage,
 } from "../core/push.ts";
 import { type VapidKey, generateVapidJwk, pushTopic, sendPush, vapidKey } from "./push.ts";
@@ -389,7 +466,7 @@ import {
 } from "./access-sync.ts";
 import { approverOf } from "./auth.ts";
 import { MAX_KEYS, type PassKey, RETIRED_MS, discovery, jwks, newPassKey, signPass } from "./passes.ts";
-import type { Caller, Deployer } from "./auth.ts";
+import type { Caller, Deployer, JobApproval } from "./auth.ts";
 import { CloudflareError, cloudflare } from "./cloudflare.ts";
 import {
   NotInstalled,
@@ -404,7 +481,13 @@ import {
   openToken,
 } from "./github.ts";
 import { REPLACED, dropLiveSite, failQueuedDowns, removalDown, requeueDowns } from "./downs.ts";
-import { REPO_GATE_MIGRATION, migrate } from "./migrations.ts";
+import {
+  ACTORS_MIGRATION,
+  AGENTS_MIGRATION,
+  EFFECTS_MIGRATION,
+  REPO_GATE_MIGRATION,
+  migrate,
+} from "./migrations.ts";
 import {
   BADGE_DEPLOY_QUERY,
   DEPLOY_MS,
@@ -427,8 +510,19 @@ import {
   pullRequestNumber,
 } from "./deploys.ts";
 import { DEFAULT_APP } from "kitshn/names";
-import { AppKey, type Recipe, WorkerApp, decodeRecipe, deployOrder, plan, repoSlug } from "kitshn/recipe";
+import {
+  AppKey,
+  ComposeApp,
+  MAX_SPREAD,
+  type Recipe,
+  WorkerApp,
+  decodeRecipe,
+  deployOrder,
+  plan,
+  repoSlug,
+} from "kitshn/recipe";
 import { removeStaleDomains, zoneFor, zoneOfAddressIn, zonesOf, zonesOrMain } from "./zones.ts";
+import { BIC_CALLS, type BicHosts, privateHosts, syncBic } from "./bic-sync.ts";
 import {
   type ComposeRun,
   wantedRecords,
@@ -463,11 +557,13 @@ import {
   machineIdFor,
   parseCommand,
   parseLabels,
+  parseOwnerLabels,
   legacyUpdateScript,
   type MachineCheck,
   answerCheck,
   pickMachine,
   providerRefusals,
+  execPathsOf,
   rekeyDecision,
   socketStart,
 } from "./machines.ts";
@@ -481,6 +577,10 @@ type Attachment =
       readonly caller: Caller;
       /** K-1805, K-1807: the tails of this map; kept on the socket, so they survive hibernation. */
       readonly tails?: ReadonlyArray<MapTail>;
+      /** K-605: until when this map counts as watched, from its last `watching` message. */
+      readonly watchingUntil?: number;
+      /** K-1302: a broadcast skipped this map while nobody watched it, so its next `watching` brings a snapshot. */
+      readonly missed?: true;
     }
   | {
       readonly kind: "machine";
@@ -492,7 +592,7 @@ type Attachment =
       /** K-1704: each socket takes one answer only. */
       readonly answered: boolean;
       /** K-1705: who pressed "Rotate key" in the panel; History names them. */
-      readonly rotateBy: Actor | null;
+      readonly rotateBy: Author | null;
       /** K-605, K-606: kept on the socket, so they survive hibernation and cost no row writes. */
       readonly status: MachineStatus | null;
       readonly sample: Sample | null;
@@ -502,6 +602,8 @@ type Attachment =
       readonly servers?: ReadonlyArray<ServerReport>;
       /** K-630: the last health check of this connection; an older daemon sends none. */
       readonly health?: HealthReport;
+      /** K-724: the protocol that the daemon named in its answer; a socket of a Worker before K-724 has none. */
+      readonly protocol?: string;
     };
 
 /** K-1805: a Compose tail runs on the daemon; K-1807: a Worker tail is a Cloudflare tail of the script. */
@@ -512,15 +614,43 @@ type MapTail =
 /** The attachment of a socket; null for one that never got one, which every reader skips. */
 const attachmentOf = (socket: WebSocket) => socket.deserializeAttachment() as Attachment | null;
 
+type MapAttachment = Extract<Attachment, { kind: "map" }>;
+
+/**
+ * K-605: a map that sent `watching` within WATCH_LEASE_MS and not `visible: false` since. The lease also ends a map
+ * socket that died without a close, such as a sleeping phone, with no timer that keeps the object awake.
+ */
+const watches = (socket: WebSocket, attachment: MapAttachment, now: number) =>
+  socket.readyState === WebSocket.OPEN && (attachment.watchingUntil ?? 0) > now;
+
 /** K-619, K-909: every write of a machine socket's attachment, trimmed to the attachment budget. */
 const saveMachine = (socket: WebSocket, attachment: Extract<Attachment, { kind: "machine" }>) =>
   socket.serializeAttachment(fitAttachment(attachment));
 
-const decodeLinkAudit = Schema.decodeUnknownSync(LinkAuditSchema);
 const decodeHealth = Schema.decodeUnknownSync(HealthReportSchema);
-/** K-1610: how often the maps hear of new link events, and how many reports of one machine kitshn takes a minute. */
-const LINK_BROADCAST_MS = 10_000;
-const LINK_AUDITS_PER_MINUTE = 120;
+const decodeExecFrame = Schema.decodeUnknownSync(ExecFrameSchema);
+/** K-722: the meta key that marks the `t3.agents` step of migration 42 as done. */
+const AGENTS_MIGRATED = "agents-migrated";
+/** K-1778: the last revision before the actor model; an Undo never reaches it, because it holds members of before. */
+const ACTORS_UNDO_FLOOR = "actors-undo-floor";
+const decodeExecRun = Schema.decodeUnknownSync(ExecRunSchema);
+/** K-1610: the forwarded calls of one machine that kitshn records in a minute; the rest are counted and dropped. */
+const LINK_CALLS_PER_MINUTE = 120;
+/** K-1610: the link events that stay; each insert trims by id, so a trim reads only the rows it deletes (K-1302). */
+const LINK_EVENTS_KEPT = 2000;
+
+/** K-722: one run that kitshn relays; a row of `exec_runs`, so an evicted Durable Object finds it again. */
+type ExecRow = {
+  readonly exec_id: string;
+  readonly source: string;
+  readonly target: string;
+  readonly provider: string | null;
+  readonly command: string;
+  readonly cwd: string | null;
+  readonly thread: string | null;
+  readonly proposal_id: string | null;
+  readonly state: "waiting" | "running";
+};
 
 /** K-704: what kitshn keeps of one provider's registration; its cards are rows of `resources`. */
 interface ProviderRegistration {
@@ -722,8 +852,6 @@ interface DeployFacts {
   /** `id` is the newest deploy of the card, the episode of its deploy notification (K-1905). */
   readonly notes: ReadonlyArray<{ resource_id: string; id: string; state: string; reason: string | null }>;
   readonly repoCards: ReadonlyArray<{ repo_id: string; resource_id: string }>;
-  /** K-817, K-901: the Compose deploys that are planned, running or done and not expired, with their addresses. */
-  readonly composeRuns: ReadonlyArray<ComposeRun>;
   /** K-718: the newest deploy of each card, for `/agent/state`. */
   readonly newest: ReadonlyMap<string, { id: string; state: string; reason: string | null }>;
 }
@@ -744,6 +872,8 @@ export class Kitshn extends DurableObject<Env> {
    * costs about 4 rows per revision. Writers change it only when it is loaded, because SQL has their row.
    */
   private revisionCache: Array<RevisionView> | null = null;
+  /** K-1302: a load can follow new revisions; the next read takes only the rows after the newest one it holds. */
+  private revisionsStale = false;
   /** K-1126: the last uptime turn of this wake; an alarm in the same turn fetches nothing. */
   private uptimeSlot: number | null = null;
   /** K-1125: the cards that are down or failing, read on first use (K-1302); a card with no row is up. */
@@ -794,6 +924,22 @@ export class Kitshn extends DurableObject<Env> {
     (notification: Notification, action: string, caller: Caller) => Promise<string | null> | string | null
   >();
   private get revisions(): Array<RevisionView> {
+    if (this.revisionCache && this.revisionsStale) {
+      const fresh = this.loadRevisions(this.revisionCache[0]?.id ?? 0);
+      const undone = new Map(
+        fresh.flatMap((revision) =>
+          revision.undoes === null ? [] : [[revision.undoes, revision.id] as const],
+        ),
+      );
+      this.revisionCache = [
+        ...fresh,
+        ...this.revisionCache.map((old) => {
+          const undoneBy = undone.get(old.id);
+          return undoneBy === undefined ? old : { ...old, undoneBy };
+        }),
+      ].slice(0, RECENT_REVISIONS);
+    }
+    this.revisionsStale = false;
     this.revisionCache ??= this.loadRevisions();
     return this.revisionCache;
   }
@@ -847,7 +993,7 @@ export class Kitshn extends DurableObject<Env> {
    */
   private siteAskers = new Map<
     number,
-    { readonly siteId: string; readonly by: Actor; readonly circle: string | null; done: boolean }
+    { readonly siteId: string; readonly by: Author; readonly circle: string | null; done: boolean }
   >();
   /** K-1716: false once `github_tokens` is known to be empty, so a broadcast reads no row of it. True after a wake. */
   private tokensLive = true;
@@ -856,10 +1002,10 @@ export class Kitshn extends DurableObject<Env> {
   private checkingRepos = false;
   /** K-606: presence is stored on change; status and the latest sample live on the socket. */
   private presence = new Map<string, { online: boolean; lastSeen: number; os: MachineOs | null }>();
-  /** K-2004: the last open or close of a door, by card and person. */
+  /** K-2005: the last open or close of a door, by card and person. */
   private doorTurns = new Map<string, number>();
-  /** K-2004: the open-to-all game cards of the last door plans; null after a restart, so the next check sends all. */
-  private openGamesSent: string | null = null;
+  /** K-2005: the open-to-all port cards of the last door plans; null after a restart, so the next check sends all. */
+  private openPortsSent: string | null = null;
   /**
    * K-1113: the hash of each stored card icon, the bytes stay in SQLite until a map asks. K-1114: when each icon
    * last changed, so a daemon changes one at most once an hour. Read on first use (K-1302).
@@ -885,9 +1031,7 @@ export class Kitshn extends DurableObject<Env> {
   }
   /** K-1104: live sites of the machines. */
   private liveSites = new Map<string, LiveSite>();
-  /** K-1610: when an audit last told the maps of new link events. */
-  private linkBroadcastAt = 0;
-  /** K-1610: the audit reports of each machine in the current minute. */
+  /** K-1610: the recorded link calls of each machine in the current minute. */
   private linkRates = new Map<string, { minute: number; count: number; dropped: number }>();
   /** K-704: the kinds and commands of each machine's providers, by machine id. */
   private providerRegs = new Map<string, Array<ProviderRegistration>>();
@@ -897,10 +1041,23 @@ export class Kitshn extends DurableObject<Env> {
   private sentGrants = new Map<string, string>();
   /** K-709: the parts of each desired state, by kind and by machine id ("" for the shared part). */
   private desiredState = new Map<string, Map<string, unknown>>();
+  /** K-709: the rev of the last set of each desired state, from `desired_revs`. */
+  private desiredRevs = new Map<string, string>();
   /** K-717: card setting values, by card id. */
   private cardSettings = new Map<string, Record<string, string>>();
-  /** K-1608: the hash of the last push that each machine applied, by `<machine id>/<push key>`. */
-  private applied = new Map<string, string>();
+  /**
+   * K-1608: the hash of the last push that each machine applied, by `<machine id>/<push key>`. K-1302: read on first
+   * use after a load, so a wake that pushes nothing reads no row of it.
+   */
+  private appliedCache: Map<string, string> | null = null;
+  private get applied(): Map<string, string> {
+    this.appliedCache ??= new Map(
+      this.sql<{ machine_id: string; key: string; hash: string }>(
+        "SELECT machine_id, key, hash FROM applied_state",
+      ).map((row) => [`${row.machine_id}/${row.key}`, row.hash]),
+    );
+    return this.appliedCache;
+  }
   /** K-1117: the library items that an update, a restore or a delete changes now. */
   private busyItems = new Set<string>();
   /**
@@ -913,11 +1070,15 @@ export class Kitshn extends DurableObject<Env> {
   private folderDrops = new Map<string, Point>();
   /** Address checks that failed, and when to try them again. Memory only; a restart retries at once. */
   private checkRetryAt = new Map<string, number>();
-  /**
-   * K-1302: the deploy rows that each snapshot needs, read once. Each scan reads the whole deploys table, which
-   * kitshn never prunes; `sql` drops this memo on every write that names the table.
-   */
+  /** K-1302: the deploy facts that each snapshot needs, read once; `sql` drops them on every write to `deploys`. */
   private deployFacts: DeployFacts | null = null;
+  /** K-1302: the rows that `sql` wrote, so a wake knows whether its start steps changed anything. */
+  private rowsWritten = 0;
+  /** K-1302: the newest 50 rows of each event table, which each snapshot shows; `sql` drops them on a write. */
+  private recentAskRows: Array<AskEventRow> | null = null;
+  private recentLinkRows: Array<LinkEventRow> | null = null;
+  /** K-825: when kitshn last started a build for the placement of a card; in memory, so an eviction asks once more. */
+  private readonly placementBuilds = new Map<string, number>();
 
   /** K-1305: the last Usage answer, kept in memory for 5 minutes, so the view costs no writes. */
   private usage: Usage | null = null;
@@ -1065,8 +1226,10 @@ export class Kitshn extends DurableObject<Env> {
     let changed = false;
     for (const [cardId, row] of this.progressRows()) {
       if (row.progress.outcome.state !== "running") continue;
-      // No client shows the action of a card that is gone, so it reads nothing until an Undo brings the card back.
-      if (!this.state.resources.has(cardId)) continue;
+      // No client shows the action of a card that is gone, so only a settle (an alarm run or a wake) reads it. An
+      // action that ended there goes, so a removed card keeps no sticker forever; an Undo brings the card back bare.
+      const gone = !this.state.resources.has(cardId);
+      if (gone && !settle) continue;
       // A job, a handover, a deploy and a run rollback resume from their stored state. A give-back and a restore to
       // a time run only in their request and its finish, so a running one at wake lost them.
       const source = row.source;
@@ -1075,21 +1238,27 @@ export class Kitshn extends DurableObject<Env> {
           ? this.jobProgress(source.jobId, row.progress, now)
           : source._tag === "takeover"
             ? this.takeoverProgress(cardId, row.progress, now)
-            : source._tag === "deploy"
-              ? settle
-                ? this.deployProgress(source.deployId, row.progress, now)
-                : row.progress
-              : source._tag === "rollback"
+            : source._tag === "relay"
+              ? this.relayProgress(cardId, row.progress, now)
+              : source._tag === "deploy"
                 ? settle
-                  ? this.runRollbackProgress(source.id, row.progress, now)
+                  ? this.deployProgress(source.deployId, row.progress, now)
                   : row.progress
-                : source._tag === "health"
-                  ? now >= source.until
-                    ? failProgress(row.progress, "The daemon sent no health report within a minute.", now)
+                : source._tag === "rollback"
+                  ? settle
+                    ? this.runRollbackProgress(source.id, row.progress, now)
                     : row.progress
-                  : wake
-                    ? failProgress(row.progress, INTERRUPTED, now)
-                    : row.progress;
+                  : source._tag === "health"
+                    ? now >= source.until
+                      ? failProgress(row.progress, "The daemon sent no health report within a minute.", now)
+                      : row.progress
+                    : wake
+                      ? failProgress(row.progress, INTERRUPTED, now)
+                      : row.progress;
+      if (gone) {
+        if (progress.outcome.state !== "running" && this.setProgress(cardId, null)) changed = true;
+        continue;
+      }
       if (this.setProgress(cardId, { ...row, progress })) changed = true;
     }
     // The open jobs only after a new job came, so most map updates read no job rows.
@@ -1195,6 +1364,70 @@ export class Kitshn extends DurableObject<Env> {
     return reachStep(progress, row.next, now);
   }
 
+  /** K-407, K-410: a refused or unclear Cloudflare write of the step that runs shows on the sticker. */
+  private alarmWait(alarmStep: AlarmStep, now: number): ActionProgress["retry"] {
+    const failure = this.alarmSteps().get(alarmStep);
+    return failure && failure.retryAt > now
+      ? { reason: `The ${alarmStep} step of kitshn failed.`, at: failure.retryAt }
+      : null;
+  }
+
+  /** K-2009, K-538: the step of a new relayed port card, from what each step leaves behind. */
+  private relayProgress(cardId: string, progress: ActionProgress, now: number): ActionProgress {
+    const [row] = this.portRows("card_id = ?", cardId);
+    const portCard = row ? portOf(row) : null;
+    const address = this.state.resources.get(cardId)?.addresses[1];
+    const port = portCard?.ports[0];
+    if (!portCard?.relay || !address || !port)
+      return failProgress(progress, "The relay stopped: its port card went.", now);
+    const tunnel = this.tunnelRows().find((item) => item.machine_id === portCard.machine);
+    const [dns] = this.sql<{ error: string | null; retry_at: number }>(
+      "SELECT error, retry_at FROM dns_objects WHERE address = ?",
+      address,
+    );
+    const [record] = this.sql<PortRecordRow>(
+      "SELECT * FROM port_records WHERE card_id = ? AND type = 'A'",
+      cardId,
+    );
+    const relayMachine = this.state.machines.get(portCard.relay);
+    const relayStatus = relayMachine ? this.machineView(relayMachine).status : null;
+    const step = !this.access.get(`app:${cardId}:${address}`)?.cfId
+      ? 0
+      : !tunnel?.applied.includes(address)
+        ? 1
+        : !dns || dns.error
+          ? 2
+          : !record || record.error
+            ? 3
+            : !relayStatus?.relays?.includes(`${address} ${port.port}`)
+              ? 4
+              : 5;
+    if (step === 5) return finishProgress(progress, now);
+    let retry: ActionProgress["retry"] = null;
+    if (step === 0) {
+      const access = accessStates(this.desired(now), this.access)[cardId];
+      if (access?.state === "failed") return failProgress(progress, access.error, now);
+      retry =
+        access?.state === "retrying"
+          ? { reason: access.error, at: access.at }
+          : this.alarmWait("Access", now);
+    } else if (step === 1) {
+      retry = tunnel?.error ? { reason: tunnel.error, at: tunnel.retry_at } : this.alarmWait("tunnels", now);
+    } else if (step === 2) {
+      retry = dns?.error ? { reason: dns.error, at: dns.retry_at } : this.alarmWait("DNS", now);
+    } else if (step === 3) {
+      retry = record?.error
+        ? { reason: record.error, at: record.retry_at }
+        : this.alarmWait("port card DNS", now);
+    } else if (!relayStatus) {
+      retry = {
+        reason: `${relayMachine?.name ?? portCard.relay} is offline, so the relay waits for it.`,
+        at: now,
+      };
+    }
+    return withRetry(reachStep(progress, step, now), retry);
+  }
+
   /** K-1623, K-538: the step of "Take the address", from the handover, the Access row and the machine's push. */
   private takeoverProgress(cardId: string, progress: ActionProgress, now: number): ActionProgress {
     const site = this.liveSites.get(cardId);
@@ -1212,13 +1445,7 @@ export class Kitshn extends DurableObject<Env> {
           : now < handover.ingressAt + HANDOVER_INGRESS_MS
             ? 3
             : 4;
-    // K-407, K-410: a refused or unclear Cloudflare write of the step that runs shows on the sticker.
-    const waiting = (alarmStep: AlarmStep) => {
-      const failure = this.alarmSteps().get(alarmStep);
-      return failure && failure.retryAt > now
-        ? { reason: `The ${alarmStep} step of kitshn failed.`, at: failure.retryAt }
-        : null;
-    };
+    const waiting = (alarmStep: AlarmStep) => this.alarmWait(alarmStep, now);
     let retry: ActionProgress["retry"] = null;
     if (step === 0) {
       const access = accessStates(this.desired(now), this.access)[cardId];
@@ -1264,18 +1491,9 @@ export class Kitshn extends DurableObject<Env> {
         : `answered ${answer.status}`;
     });
     void ctx.blockConcurrencyWhile(async () => {
-      // Numbered migrations: each runs once per database, with its version, in one transaction.
-      ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
-      const [version] = ctx.storage.sql
-        .exec<{ value: string }>("SELECT value FROM meta WHERE key = 'schema_version'")
-        .toArray();
-      const from = Number(version?.value ?? 0);
-      ctx.storage.transactionSync(() => {
-        migrate((query) => ctx.storage.sql.exec(query), from);
-        // The rest of migration 6 needs code: the repo id comes out of each card id.
-        if (from < REPO_GATE_MIGRATION) this.backfillRepoIds();
-      });
+      this.migrateSchema();
       this.load();
+      const written = this.rowsWritten;
       // K-1833: a bootstrap with KITSHN_IMPORT asks for one import, before the start steps, so they run on the
       // imported state. Each start reads the meta row of a due finish, and one more while the variable is set.
       await this.importIfDue();
@@ -1287,14 +1505,57 @@ export class Kitshn extends DurableObject<Env> {
       // K-538: the progress rows and the open jobs, read at wake, so a map update reads only new jobs. An action that
       // nothing drives after a restart ends as interrupted.
       this.reconcileProgress(Date.now(), true);
-      await this.scheduleAlarm();
+      // A hibernating daemon socket can survive a Worker deployment. Reconsider its saved status once per release,
+      // instead of relying on a new connection or status message to begin the configured rollout (K-627).
+      this.resumeAutoUpdatesAfterWake();
+      // K-1302: only this object changes its state, and each change plans the alarm, so a pending alarm already holds
+      // the next due item. A wake plans again only when a start step wrote, no alarm waits, or the deploy is new: a
+      // new version, or a binding or secret that came or went (a token that the owner adds later turns on Access work).
+      const deployed = `${this.env.KITSHN_VERSION} ${Object.entries(this.env)
+        .filter(([, value]) => value !== undefined && value !== "")
+        .map(([name]) => name)
+        .sort()
+        .join(",")}`;
+      if (
+        this.rowsWritten !== written ||
+        this.meta("alarm_planned_for") !== deployed ||
+        (await ctx.storage.getAlarm()) === null
+      ) {
+        await this.scheduleAlarm();
+        this.setMeta("alarm_planned_for", deployed);
+      }
+    });
+  }
+
+  /** Numbered migrations: each runs once per database, with its version, in one transaction. */
+  private migrateSchema() {
+    const storage = this.ctx.storage;
+    storage.sql.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+    const [version] = storage.sql
+      .exec<{ value: string }>("SELECT value FROM meta WHERE key = 'schema_version'")
+      .toArray();
+    const from = Number(version?.value ?? 0);
+    storage.transactionSync(() => {
+      migrate((query) => storage.sql.exec(query), from);
+      // The rest of migration 6 needs code: the repo id comes out of each card id.
+      if (from < REPO_GATE_MIGRATION) this.backfillRepoIds();
+      if (from < ACTORS_MIGRATION) this.migrateActors();
+      if (from < EFFECTS_MIGRATION) this.migrateEffects();
+      this.migrateAgents();
     });
   }
 
   private sql<T extends Record<string, SqlStorageValue>>(query: string, ...bindings: Array<SqlStorageValue>) {
-    if (!query.trimStart().startsWith("SELECT") && query.includes("deploys")) this.deployFacts = null;
+    if (!query.trimStart().startsWith("SELECT")) {
+      if (query.includes("deploys")) this.deployFacts = null;
+      if (query.includes("ask_events")) this.recentAskRows = null;
+      if (query.includes("link_events")) this.recentLinkRows = null;
+    }
     if (query.trimStart().startsWith("INSERT INTO jobs")) this.jobsAdded = true;
-    return this.ctx.storage.sql.exec<T>(query, ...bindings).toArray();
+    const cursor = this.ctx.storage.sql.exec<T>(query, ...bindings);
+    const rows = cursor.toArray();
+    this.rowsWritten += cursor.rowsWritten;
+    return rows;
   }
 
   /** The SQL of the job helpers in downs.ts, which tests run on node:sqlite. */
@@ -1303,15 +1564,22 @@ export class Kitshn extends DurableObject<Env> {
   private load() {
     const json = <T>(rows: Array<{ id: string; body: string }>) =>
       new Map(rows.map((row) => [row.id, JSON.parse(row.body) as T]));
-    this.state = {
-      circles: json<Circle>(this.sql("SELECT id, body FROM circles")),
-      resources: json<Resource>(this.sql("SELECT id, body FROM resources")),
-      places: new Map(
+    // K-1302: the places, read on first use, as a wake for a daemon message or a device needs none.
+    let places: Map<string, Point> | null = null;
+    const readPlaces = () =>
+      new Map(
         this.sql<{ id: string; x: number; y: number }>("SELECT id, x, y FROM places").map((row) => [
           row.id,
           { x: row.x, y: row.y },
         ]),
-      ),
+      );
+    this.state = {
+      circles: json<Circle>(this.sql("SELECT id, body FROM circles")),
+      resources: json<Resource>(this.sql("SELECT id, body FROM resources")),
+      get places() {
+        places ??= readPlaces();
+        return places;
+      },
       shareSettings: json<ShareSetting>(this.sql("SELECT id, body FROM share_settings")),
       ends: new Map(
         this.sql<{ id: string; ends_at: number }>("SELECT id, ends_at FROM card_ends").map((row) => [
@@ -1322,6 +1590,7 @@ export class Kitshn extends DurableObject<Env> {
       stacks: json<Stack>(this.sql("SELECT id, body FROM stacks")),
       paused: pauseModeOf(this.meta("paused")),
       machines: json<Machine>(this.sql("SELECT id, body FROM machines")),
+      actors: json<Actor>(this.sql("SELECT id, body FROM actors")),
     };
     this.liveSites = new Map(
       this.sql<{
@@ -1357,16 +1626,18 @@ export class Kitshn extends DurableObject<Env> {
         row.machine_id,
         JSON.parse(row.body) as unknown,
       );
+    this.desiredRevs = new Map(
+      this.sql<{ kind: string; rev: string }>("SELECT kind, rev FROM desired_revs").map((row) => [
+        row.kind,
+        row.rev,
+      ]),
+    );
     this.cardSettings = new Map();
     for (const row of this.sql<{ card_id: string; key: string; value: string }>(
       "SELECT card_id, key, value FROM card_settings",
     ))
       this.cardSettings.set(row.card_id, { ...this.cardSettings.get(row.card_id), [row.key]: row.value });
-    this.applied = new Map(
-      this.sql<{ machine_id: string; key: string; hash: string }>(
-        "SELECT machine_id, key, hash FROM applied_state",
-      ).map((row) => [`${row.machine_id}/${row.key}`, row.hash]),
-    );
+    this.appliedCache = null;
     this.providerRegs = new Map();
     for (const row of this.sql<{ machine_id: string; body: string }>(
       "SELECT machine_id, body FROM providers ORDER BY machine_id, name",
@@ -1387,14 +1658,15 @@ export class Kitshn extends DurableObject<Env> {
     this.iconCache = null;
     this.accessWarnings = JSON.parse(this.meta("access_warnings") ?? "[]") as Array<string>;
     // The Access rows stay: every write goes through accessStore() or also sets the map (the daily reset).
-    this.revisionCache = null;
+    this.revisionsStale = true;
     this.uptimeCache = null;
     this.openCache = null;
     this.muteCache = null;
     this.dismissedCache = null;
   }
 
-  private loadRevisions(): Array<RevisionView> {
+  /** The recent revisions newer than `after`, newest first. */
+  private loadRevisions(after = 0): Array<RevisionView> {
     const rows = this.sql<{
       id: number;
       at: number;
@@ -1412,7 +1684,8 @@ export class Kitshn extends DurableObject<Env> {
              'members', CASE WHEN json_extract(value, '$._tag') = 'stack'
                THEN json_array(json_extract(value, '$.before.members'), json_extract(value, '$.after.members')) END))
            FROM json_each(changes)) AS targets
-       FROM revisions ORDER BY id DESC LIMIT ?`,
+       FROM revisions WHERE id > ? ORDER BY id DESC LIMIT ?`,
+      after,
       RECENT_REVISIONS,
     );
     // An undo comes after the revision that it undoes, so the undo of a recent revision is a recent row too.
@@ -1422,7 +1695,7 @@ export class Kitshn extends DurableObject<Env> {
     return rows.map((row) => ({
       id: row.id,
       at: row.at,
-      actor: JSON.parse(row.actor) as Actor,
+      actor: JSON.parse(row.actor) as Author,
       summary: row.summary,
       undoes: row.undoes,
       undoSource: undoSourceOf(row.undo_source),
@@ -1437,14 +1710,20 @@ export class Kitshn extends DurableObject<Env> {
       .map((email) => email.trim())
       .filter(Boolean);
     if (emails.length === 0) throw new Error("OWNER_EMAILS is empty: kitshn cannot make the Owner circle.");
-    const initial = seed(emails, this.env.KITSHN_HOST, ownerDevices(this.env.OWNER_DEVICES));
+    const initial = seed(emails, this.env.KITSHN_HOST, ownerTokens(this.env.OWNER_DEVICES));
     const extra =
       this.env.DEV_DEMO && this.env.KITSHN_HOST === "localhost"
         ? demo()
-        : { resources: [], places: [], circles: [] };
+        : { resources: [], places: [], circles: [], actors: [] };
     this.ctx.storage.transactionSync(() => {
       for (const resource of [...initial.resources, ...extra.resources]) this.putResource(resource);
       const changes: Array<Change> = [
+        ...[...initial.actors, ...extra.actors].map((actor): Change => ({
+          _tag: "actor",
+          id: actor.id,
+          before: null,
+          after: actor,
+        })),
         ...[...initial.circles, ...extra.circles].map((circle): Change => ({
           _tag: "circle",
           id: circle.id,
@@ -1494,6 +1773,12 @@ export class Kitshn extends DurableObject<Env> {
             machine.id,
             JSON.stringify(machine),
           );
+          const actor: Actor = {
+            id: machineActorId(machine.id),
+            name: machine.name,
+            credentials: [{ _tag: "machine", machineId: machine.id }],
+          };
+          this.sql("INSERT OR IGNORE INTO actors (id, body) VALUES (?, ?)", actor.id, JSON.stringify(actor));
           this.sql(
             "INSERT OR IGNORE INTO presence (id, online, last_seen, os) VALUES (?, 0, ?, ?)",
             machine.id,
@@ -1580,11 +1865,13 @@ export class Kitshn extends DurableObject<Env> {
       const table =
         change._tag === "circle"
           ? "circles"
-          : change._tag === "place"
-            ? "places"
-            : change._tag === "stack"
-              ? "stacks"
-              : "share_settings";
+          : change._tag === "actor"
+            ? "actors"
+            : change._tag === "place"
+              ? "places"
+              : change._tag === "stack"
+                ? "stacks"
+                : "share_settings";
       if (change.after === null) this.sql(`DELETE FROM ${table} WHERE id = ?`, change.id);
       else if (change._tag === "place") {
         this.sql(
@@ -1607,7 +1894,7 @@ export class Kitshn extends DurableObject<Env> {
    * caller's transaction. The UI asks before a drop makes a card public (K-210); an agent key lands only where
    * K-1116 lets it; the pause and K-105 hold for both (K-1504).
    */
-  private addCard(actor: Actor, resource: Resource, spot: Point | null, what: string): number {
+  private addCard(actor: Author, resource: Resource, spot: Point | null, what: string): number {
     this.putResource(resource);
     if (!spot) return this.insertRevision(actor, `Added ${what} to the tray`, [], null);
     const changes: Array<Change> = [{ _tag: "place", id: resource.id, before: null, after: spot }];
@@ -1632,7 +1919,7 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   private insertRevision(
-    actor: Actor,
+    actor: Author,
     summary: string,
     changes: ReadonlyArray<Change | Forget>,
     undoes: number | null,
@@ -1863,7 +2150,7 @@ export class Kitshn extends DurableObject<Env> {
    * Organize (K-532) or the end of a timed card (K-212), has that summary and never joins another.
    */
   private commit(
-    actor: Actor,
+    actor: Author,
     changes: ReadonlyArray<Change>,
     undo: UndoOf | null,
     named: string | null = null,
@@ -1903,8 +2190,9 @@ export class Kitshn extends DurableObject<Env> {
         this.setMeta("paused_at", String(Date.now()));
         // K-1504: jobs that devices and agent keys queued do not run after Resume.
         this.sql(
-          `UPDATE jobs SET state = 'failed', output = 'The emergency pause ended this job.'
+          `UPDATE jobs SET state = 'failed', output = ?
            WHERE state = 'queued' AND json_extract(visitor, '$.email') IS NULL AND json_extract(visitor, '$.clientId') IS NOT NULL`,
+          PAUSE_ENDED_JOB,
         );
         // K-1716: the pause denies every open ask.
         this.denyOpenProposals(null, "the emergency pause");
@@ -1937,7 +2225,7 @@ export class Kitshn extends DurableObject<Env> {
     if (changes.some((change) => change._tag === "pause" || change._tag === "autoUpdate")) this.autoUpdate();
     this.clearAccessFailures();
     this.closeLostDoors(now);
-    this.syncOpenGames(now);
+    this.syncOpenPorts(now);
     for (const change of changes) {
       if (change._tag === "shareSetting" || change._tag === "cardEnd" || change._tag === "place")
         this.stuckShares.delete(change.id);
@@ -1967,7 +2255,7 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /** K-1505: the newest revision with these moves merged in, when they join it. */
-  private movesToMerge(actor: Actor, now: number, changes: ReadonlyArray<Change>) {
+  private movesToMerge(actor: Author, now: number, changes: ReadonlyArray<Change>) {
     const [row] = this.sql<{
       id: number;
       at: number;
@@ -1981,7 +2269,7 @@ export class Kitshn extends DurableObject<Env> {
     if (!row || row.item_undo !== null || row.summary.startsWith(`${ORGANIZE_SUMMARY}:`)) return null;
     const previous = JSON.parse(row.changes) as Array<Change>;
     const merged = mergeMoves(
-      { actor: JSON.parse(row.actor) as Actor, at: row.at, changes: previous, undoes: row.undoes },
+      { actor: JSON.parse(row.actor) as Author, at: row.at, changes: previous, undoes: row.undoes },
       actor,
       now,
       changes,
@@ -1989,7 +2277,7 @@ export class Kitshn extends DurableObject<Env> {
     return merged && { id: row.id, summary: row.summary, previous, changes: merged };
   }
 
-  private apply(actor: Actor, edits: ReadonlyArray<Edit>) {
+  private apply(actor: Author, edits: ReadonlyArray<Edit>) {
     return this.commit(actor, refuseResume(resolveEdits(this.state, edits)), null);
   }
 
@@ -1997,7 +2285,7 @@ export class Kitshn extends DurableObject<Env> {
    * K-532: Organize, as one revision. It moves only the cards that `movable` names; a refusal throws and saves
    * nothing. `organize` checks already that no share changes.
    */
-  private organize(actor: Actor, sizes: DrawnSizes, movable: (id: string) => boolean) {
+  private organize(actor: Author, sizes: DrawnSizes, movable: (id: string) => boolean) {
     this.drawn = sizes;
     const plan = organize(this.state, sizes, movable);
     if ("refused" in plan) throw new RuleError(plan.refused);
@@ -2047,13 +2335,17 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /** K-1502, K-1506: Undo reverses the caller's own newest revision, and runs the same rules as an edit. */
-  private undo(actor: Actor, revisionId: number, source: UndoSource | null) {
+  private undo(actor: Author, revisionId: number, source: UndoSource | null) {
+    if (revisionId <= Number(this.meta(ACTORS_UNDO_FLOOR) ?? 0))
+      throw new RuleError(
+        `Revision #${revisionId} is from before migration 44 or 46, which moved the circle members to actors and their rights to effects (K-1778, K-1730), so it has no Undo.`,
+      );
     const target = undoTarget(this.state, this.storedRevisions(), actor, { revision: revisionId });
     return this.commitUndo(actor, target.changes, { revision: target.revision, item: null, source });
   }
 
   /** K-1507: undoes the caller's own newest change to one card or circle, and only that item's part of it. */
-  private undoItem(actor: Actor, item: Item) {
+  private undoItem(actor: Author, item: Item) {
     const target = undoTarget(this.state, this.storedRevisions(), actor, { item });
     const name =
       item.kind === "card"
@@ -2065,17 +2357,18 @@ export class Kitshn extends DurableObject<Env> {
   /** Every revision that History keeps (K-1503: at most 5,000). */
   private storedRevisions(): Array<StoredRevision> {
     return this.sql<{ id: number; actor: string; summary: string; changes: string; undoes: number | null }>(
-      "SELECT id, actor, summary, changes, undoes FROM revisions",
+      "SELECT id, actor, summary, changes, undoes FROM revisions WHERE id > ?",
+      Number(this.meta(ACTORS_UNDO_FLOOR) ?? 0),
     ).map((row) => ({
       id: row.id,
-      actor: JSON.parse(row.actor) as Actor,
+      actor: JSON.parse(row.actor) as Author,
       summary: row.summary,
       changes: JSON.parse(row.changes) as Array<Change>,
       undoes: row.undoes,
     }));
   }
 
-  private commitUndo(actor: Actor, original: ReadonlyArray<Change>, undo: UndoOf) {
+  private commitUndo(actor: Author, original: ReadonlyArray<Change>, undo: UndoOf) {
     return this.commitApps(actor, prepareUndo(this.state, original, Date.now()), undo);
   }
 
@@ -2299,6 +2592,7 @@ export class Kitshn extends DurableObject<Env> {
 
   /** K-1804, K-1805: the connection of the card's machine, when it is online and its daemon reads logs. */
   private logDaemon(resource: Resource): { socket: WebSocket; name: string } | { error: string } {
+    // K-827 known limit: the home instance only. Revisit when an "every" app needs the logs of each machine.
     const machine = resource.machine ? this.state.machines.get(resource.machine) : undefined;
     if (!machine) return { error: "The card has no machine, so it has no logs to read." };
     const socket = this.checkedSockets(machine.id).at(-1);
@@ -2483,8 +2777,10 @@ export class Kitshn extends DurableObject<Env> {
   private latestBackups(): Map<string, BackupRun> {
     if (this.backupMemory) return this.backupMemory;
     const memory = new Map<string, BackupRun>();
+    // K-827: the card panel shows the newest run of the card's own repository, the home instance.
     for (const row of this.sql<BackupRow>(
-      "SELECT * FROM backups WHERE (card, at) IN (SELECT card, MAX(at) FROM backups GROUP BY card)",
+      `SELECT * FROM backups WHERE repository IS NULL AND (card, at) IN
+       (SELECT card, MAX(at) FROM backups WHERE repository IS NULL GROUP BY card)`,
     ))
       memory.set(row.card, backupRun(row));
     this.backupMemory = memory;
@@ -2499,11 +2795,18 @@ export class Kitshn extends DurableObject<Env> {
   /** K-1814: restic of a machine reaches a card's repository only while that machine runs a job of the card. */
   private backupAccess(body: { card: string; clientId: string }) {
     const machine = [...this.state.machines.values()].find((item) => item.clientId === body.clientId);
-    const resource = this.state.resources.get(body.card);
+    // K-827: `card` names a repository: the card's own for the home instance, or `<card>@<machine id>`.
+    const repository = body.card;
+    const parts = repositoryParts(repository);
+    const resource = this.state.resources.get(parts.card);
     const refuse = (error: string) => Response.json({ error }, { status: 403 });
     if (!machine) return refuse("This service token is no machine of kitshn.");
-    if (resource?.kind !== "site.compose" || resource.machine !== machine.id)
-      return refuse(`${body.card} is no Compose card of ${machine.name} (K-1814).`);
+    const runs =
+      parts.machineId === null
+        ? resource?.machine === machine.id
+        : parts.machineId === machine.id && runsOnMachine(resource, machine.id);
+    if (resource?.kind !== "site.compose" || !runs)
+      return refuse(`${repository} is no Compose repository of ${machine.name} (K-1814, K-827).`);
     // A dropped socket marks the job failed for now; the job keeps its access until it expires (K-1814).
     const running = this.sql<{ command: string }>(
       `SELECT command FROM jobs WHERE machine_id = ? AND expires_at > ?
@@ -2512,11 +2815,15 @@ export class Kitshn extends DurableObject<Env> {
       Date.now(),
     ).some((row) => {
       const command = JSON.parse(row.command) as Command;
-      return (command.kind === "backup" || command.kind === "backup-restore") && command.card === body.card;
+      return (
+        (command.kind === "backup" || command.kind === "backup-restore") &&
+        command.card === parts.card &&
+        (command.repository ?? command.card) === repository
+      );
     });
     return running
       ? Response.json({ ok: true })
-      : refuse(`${machine.name} runs no backup of ${body.card} now (K-1814).`);
+      : refuse(`${machine.name} runs no backup of ${repository} now (K-1814).`);
   }
 
   /** K-1817, K-1819, K-1820: why a card cannot back up now, or null. */
@@ -2530,15 +2837,17 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /** K-1818, K-1820: a restore passes the size guard, because it is the step that the owner needs most. */
-  private restoreRefusal(card: string): string | null {
+  private restoreRefusal(card: string, machineId?: string | null): string | null {
     const resource = this.state.resources.get(card);
     if (resource?.kind !== "site.compose") return `The card "${card}" is no Compose app (K-1811).`;
-    if (!resource.machine) return `${resource.name} runs on no machine.`;
+    // K-827: the machine of the instance that runs the job; the home one by default.
+    const machine = machineId === undefined ? resource.machine : machineId;
+    if (!machine) return `${resource.name} runs on no machine.`;
     if (!this.env.BUCKET) return "R2 is off on this account.";
     if (!this.env.KITSHN_BACKUP_KEY)
       return "Backups are off: kitshn has no KITSHN_BACKUP_KEY. Run the bootstrap with KITSHN_BACKUP_KEY_NOW=1 (K-1815).";
     // K-1817: an online daemon says whether it can back up; an offline one gets the job when it connects.
-    const socket = this.checkedSockets(resource.machine).at(-1);
+    const socket = this.checkedSockets(machine).at(-1);
     const attachment = socket ? attachmentOf(socket) : null;
     if (
       attachment?.kind === "machine" &&
@@ -2547,14 +2856,17 @@ export class Kitshn extends DurableObject<Env> {
     )
       return missingFeature(
         attachment.status,
-        this.state.machines.get(resource.machine)?.name ?? resource.machine,
+        this.state.machines.get(machine)?.name ?? machine,
         "backups",
-        `Update the daemon of ${this.state.machines.get(resource.machine)?.name ?? resource.machine} to back up (K-1817).`,
+        `Update the daemon of ${this.state.machines.get(machine)?.name ?? machine} to back up (K-1817).`,
       );
     return null;
   }
 
-  /** K-1816: the hard limit of the next paused pass of a card, from the pause of its last run. */
+  /**
+   * K-1816: the hard limit of the next paused pass of a card, from the pause of its last run. Known limit (K-827): one
+   * limit for every instance of the card. Revisit when instances of one card pause for very different times.
+   */
   private pauseLimitOf(card: string) {
     const [row] = this.sql<{ pause_ms: number }>(
       "SELECT pause_ms FROM backups WHERE card = ? AND state = 'done' AND pause_ms IS NOT NULL ORDER BY at DESC LIMIT 1",
@@ -2624,6 +2936,11 @@ export class Kitshn extends DurableObject<Env> {
       this.ctx.storage.transactionSync(() => {
         writeImport(this.ctx.storage.sql, state, (from) => {
           if (from < REPO_GATE_MIGRATION) this.backfillRepoIds();
+          if (from < ACTORS_MIGRATION) this.migrateActors();
+          if (from < EFFECTS_MIGRATION) this.migrateEffects();
+          // An export from before migration 42 still holds `t3.agents` shares, so its step runs again.
+          if (from < AGENTS_MIGRATION) this.sql("DELETE FROM meta WHERE key = ?", AGENTS_MIGRATED);
+          this.migrateAgents();
           this.insertRevision(
             IMPORT_ACTOR,
             `Imported the state of ${new Date(state.exportedAt).toISOString()} (K-1833)`,
@@ -2680,32 +2997,74 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /** K-1817: one backup job and its row. Returns the run and the job. */
-  private queueBackup(card: string, actor: Actor, prune: boolean, now: number) {
+  private queueBackup(card: string, actor: Author, prune: boolean, now: number) {
     const resource = this.state.resources.get(card);
     if (!resource?.machine) throw new Error(`${card} has no machine.`);
+    const home = resource.machine;
+    // K-827: each other instance backs up into its own repository, on a daemon that knows instance repositories.
+    const others = otherInstances(resource)
+      .map((instance) => instance.machine)
+      .filter((id) =>
+        this.machineStatus(id)?.capabilities?.some((capability) => capability === "backup-instances"),
+      );
     const run = crypto.randomUUID();
     const jobId = this.ctx.storage.transactionSync(() => {
       const queued = this.queueKitshnJob(
-        resource.machine!,
+        home,
         { kind: "backup", card, run, prune, pauseLimitMs: this.pauseLimitOf(card) },
         actor,
         now + DAY,
       );
-      this.insertBackup(run, card, resource.machine!, now, queued);
+      this.insertBackup(run, card, home, now, queued);
+      for (const machineId of others) {
+        const instanceRun = crypto.randomUUID();
+        const repository = instanceRepository(card, machineId);
+        const instanceJob = this.queueKitshnJob(
+          machineId,
+          {
+            kind: "backup",
+            card,
+            repository,
+            run: instanceRun,
+            prune,
+            pauseLimitMs: this.pauseLimitOf(card),
+          },
+          actor,
+          now + DAY,
+        );
+        this.insertBackup(instanceRun, card, machineId, now, instanceJob, repository);
+      }
       return queued;
     });
     return { run, jobId };
   }
 
-  private insertBackup(run: string, card: string, machineId: string, at: number, jobId: number) {
+  /** K-605: the newest status of a connected machine, or null. */
+  private machineStatus(machineId: string) {
+    const socket = this.openSocket(machineId);
+    const attachment = socket ? attachmentOf(socket) : null;
+    return attachment?.kind === "machine" ? attachment.status : null;
+  }
+
+  private insertBackup(
+    run: string,
+    card: string,
+    machineId: string,
+    at: number,
+    jobId: number,
+    repository: string | null = null,
+  ) {
     this.sql(
-      "INSERT INTO backups (run, card, machine_id, at, state, job_id) VALUES (?, ?, ?, ?, 'running', ?)",
+      "INSERT INTO backups (run, card, machine_id, at, state, job_id, repository) VALUES (?, ?, ?, ?, 'running', ?, ?)",
       run,
       card,
       machineId,
       at,
       jobId,
+      repository,
     );
+    // K-1819, K-827: the card panel shows the newest backup of the home instance; "Backups…" lists every instance.
+    if (repository !== null) return;
     this.latestBackups().set(card, {
       run,
       card,
@@ -2735,7 +3094,7 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /** K-1817: "Back up now". */
-  private backUpNow(actor: Actor, card: string) {
+  private backUpNow(actor: Author, card: string) {
     const refusal = this.backupRefusal(card);
     if (refusal) return Response.json({ error: refusal }, { status: 409 });
     const { run, jobId } = this.queueBackup(card, actor, false, Date.now());
@@ -2747,24 +3106,43 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /** K-1820: a backup as the way back, then the run written back. */
-  private restoreBackup(actor: Actor, card: string, run: string) {
-    const refusal = this.restoreRefusal(card);
-    if (refusal) return Response.json({ error: refusal }, { status: 409 });
+  private restoreBackup(actor: Author, card: string, run: string) {
     const [row] = this.sql<BackupRow>("SELECT * FROM backups WHERE run = ? AND card = ?", run, card);
-    if (row?.state !== "done" || row.sources === null)
+    // K-827: a run goes back to the instance of its repository: the home one for the card's own repository.
+    const target =
+      row?.repository == null
+        ? (this.state.resources.get(card)?.machine ?? null)
+        : repositoryParts(row.repository).machineId;
+    const refusal = this.restoreRefusal(card, target);
+    if (refusal) return Response.json({ error: refusal }, { status: 409 });
+    if (row?.state !== "done" || row.sources === null || target === null)
       return Response.json({ error: "kitshn has no finished backup run like this." }, { status: 404 });
     const sources = JSON.parse(row.sources) as Array<string>;
     const resource = this.state.resources.get(card)!;
+    if (!runsOnMachine(resource, target))
+      return Response.json(
+        { error: "The instance of this backup no longer runs; kitshn cannot move data yet (K-826)." },
+        { status: 409 },
+      );
+    const repository = row.repository === null ? {} : { repository: row.repository };
     const before = crypto.randomUUID();
     const now = Date.now();
     const jobId = this.ctx.storage.transactionSync(() => {
       const queued = this.queueKitshnJob(
-        resource.machine!,
-        { kind: "backup-restore", card, run, before, sources, pauseLimitMs: this.pauseLimitOf(card) },
+        target,
+        {
+          kind: "backup-restore",
+          card,
+          ...repository,
+          run,
+          before,
+          sources,
+          pauseLimitMs: this.pauseLimitOf(card),
+        },
         actor,
         now + DAY,
       );
-      this.insertBackup(before, card, resource.machine!, now, queued);
+      this.insertBackup(before, card, target, now, queued, row.repository);
       return queued;
     });
     this.startBackupAction(card, jobId, "Restore", "Back up the app as it is, then write the backup back");
@@ -2776,7 +3154,7 @@ export class Kitshn extends DurableObject<Env> {
   /** K-1817, K-1819, K-1820: the end of a backup or restore job. */
   private backupResult(
     command: Extract<Command, { kind: "backup" | "backup-restore" }>,
-    actor: Actor,
+    actor: Author,
     result: Record<string, unknown>,
   ) {
     const run = command.kind === "backup" ? command.run : command.before;
@@ -2803,9 +3181,11 @@ export class Kitshn extends DurableObject<Env> {
     // K-1817: a run that the retention removed from the repository loses its row too.
     if (Array.isArray(report?.["kept"])) {
       const kept = new Set(report["kept"].filter((item): item is string => typeof item === "string"));
+      // K-827: one repository holds the runs of one instance only.
       for (const row of this.sql<{ run: string }>(
-        "SELECT run FROM backups WHERE card = ? AND state = 'done'",
+        "SELECT run FROM backups WHERE card = ? AND repository IS ? AND state = 'done'",
         command.card,
+        command.repository ?? null,
       ))
         if (!kept.has(row.run)) this.sql("DELETE FROM backups WHERE run = ?", row.run);
     }
@@ -2864,7 +3244,7 @@ export class Kitshn extends DurableObject<Env> {
     }
     const { deployedCards, previewCards } = this.deployedAndPreviewCards();
     const previews = new Set(previewCards);
-    const actor: Actor = { _tag: "kitshn", reason: "the daily backup (K-1817)" };
+    const actor: Author = { _tag: "kitshn", reason: "the daily backup (K-1817)" };
     // K-1817: prune once a week, on Sundays (UTC).
     const prune = new Date(now).getUTCDay() === 0;
     for (const card of deployedCards) {
@@ -2888,12 +3268,15 @@ export class Kitshn extends DurableObject<Env> {
       if (this.state.resources.has(card)) this.sql("DELETE FROM backup_gone WHERE card = ?", card);
     const gone = this.sql<{ card: string }>("SELECT card FROM backup_gone WHERE since < ?", now - 7 * DAY);
     for (const { card } of gone) {
-      let cursor: string | undefined;
-      do {
-        const page = await bucket.list({ prefix: `backups/${card}/`, ...(cursor ? { cursor } : {}) });
-        if (page.objects.length > 0) await bucket.delete(page.objects.map((object) => object.key));
-        cursor = page.truncated ? page.cursor : undefined;
-      } while (cursor);
+      // K-827: the repositories of the other instances go with the card's own.
+      for (const prefix of [`backups/${card}/`, `backups/${card}@`]) {
+        let cursor: string | undefined;
+        do {
+          const page = await bucket.list({ prefix, ...(cursor ? { cursor } : {}) });
+          if (page.objects.length > 0) await bucket.delete(page.objects.map((object) => object.key));
+          cursor = page.truncated ? page.cursor : undefined;
+        } while (cursor);
+      }
       this.sql("DELETE FROM backups WHERE card = ?", card);
       this.sql("DELETE FROM backup_gone WHERE card = ?", card);
     }
@@ -3034,7 +3417,7 @@ export class Kitshn extends DurableObject<Env> {
    * secrets (or the Compose params) of that deploy come back with it.
    */
   private async rollbackCard(
-    actor: Actor,
+    actor: Author,
     card: string,
     deployId: string,
     group: string | null,
@@ -3061,9 +3444,10 @@ export class Kitshn extends DurableObject<Env> {
       this.sql(
         `INSERT INTO deploys (id, repo, repo_id, environment, resource_id, address, script, starts_in, kind, sha, state,
            expires_at, branch, app, machine_id, job_id, compose_file, addresses, worker, app_key, reason, version_id,
-           run_id, run_attempt, images, needs, origin, workflow)
+           run_id, run_attempt, images, needs, origin, workflow, compose)
          SELECT ?, repo, repo_id, environment, resource_id, address, script, starts_in, kind, sha, ?, ?, branch, app,
-           machine_id, ?, compose_file, addresses, worker, app_key, ?, version_id, NULL, NULL, images, needs, ?, workflow
+           machine_id, ?, compose_file, addresses, worker, app_key, ?, version_id, NULL, NULL, images, needs, ?, workflow,
+           compose
          FROM deploys WHERE id = ?`,
         id,
         state,
@@ -3112,30 +3496,62 @@ export class Kitshn extends DurableObject<Env> {
           `Update the daemon on ${machine.name} first: it cannot roll back yet (K-821).`,
         ),
       };
+    const rollbackOn = (on: Machine, address: string): Command => ({
+      kind: "compose-rollback",
+      deployId: origin,
+      allowed: allowedFor(on, target.repo),
+      project: card,
+      name: address.slice(0, -this.env.KITSHN_ZONE.length - 1),
+      environment: target.environment,
+      repo: target.repo,
+      file: target.compose_file,
+      group,
+    });
+    // K-827: each other instance whose machine built the origin deploy rolls back too; a newer one has no kept build.
+    const built = new Set(this.deployInstances(origin).map((instance) => instance.machine_id));
+    const others = otherInstances(resource).flatMap((instance) => {
+      const other = this.state.machines.get(instance.machine);
+      return other &&
+        built.has(other.id) &&
+        this.machineView(other).status?.capabilities?.includes("compose-rollback")
+        ? [{ machine: other, address: instance.address }]
+        : [];
+    });
+    const skipped = otherInstances(resource).length - others.length;
     const jobId = this.ctx.storage.transactionSync(() => {
       const queued = this.queueKitshnJob(
         machine.id,
-        {
-          kind: "compose-rollback",
-          deployId: origin,
-          allowed: allowedFor(machine, target.repo),
-          project: card,
-          name: target.address.slice(0, -this.env.KITSHN_ZONE.length - 1),
-          environment: target.environment,
-          repo: target.repo,
-          file: target.compose_file,
-          group,
-        },
+        rollbackOn(machine, target.address),
         actor,
         Date.now() + DEPLOY_MS,
       );
       insert("running", queued);
+      for (const other of others) {
+        const otherJob = this.queueKitshnJob(
+          other.machine.id,
+          rollbackOn(other.machine, other.address),
+          actor,
+          Date.now() + DEPLOY_MS,
+        );
+        this.sql(
+          "INSERT INTO deploy_instances (deploy_id, machine_id, address, job_id) VALUES (?, ?, ?, ?)",
+          id,
+          other.machine.id,
+          other.address,
+          otherJob,
+        );
+      }
       this.insertRevision(actor, `Rolled back ${resource.name} to ${sha} (K-821)`, [], null);
       return queued;
     });
     this.deliverJobs();
+    const names = [machine, ...others.map((other) => other.machine)].map((item) => item.name).join(", ");
+    const left =
+      skipped > 0
+        ? ` ${skipped} other instance(s) did not build ${sha} or cannot roll back, so they keep their build.`
+        : "";
     return {
-      note: `${machine.name} starts the kept build ${sha} of ${resource.name}, with the params of that deploy; its data does not roll back.`,
+      note: `${names} start the kept build ${sha} of ${resource.name}, with the params of that deploy; its data does not roll back.${left}`,
       jobId,
     };
   }
@@ -3281,7 +3697,7 @@ export class Kitshn extends DurableObject<Env> {
           return;
         }
         const result = await this.rollbackCard(
-          JSON.parse(row.actor) as Actor,
+          JSON.parse(row.actor) as Author,
           step.card,
           step.deployId ?? "",
           id,
@@ -3341,7 +3757,7 @@ export class Kitshn extends DurableObject<Env> {
        WHERE rollbacks.state = 'running' AND (jobs.id IS NULL OR (jobs.state NOT IN ('queued', 'sent')
          AND NOT (jobs.state = 'failed' AND jobs.output = '${OFFLINE_OUTPUT}' AND jobs.expires_at > ?)))`,
       Date.now(),
-    ).filter((row) => !this.advancing.has(row.id));
+    ).filter((row) => !this.advancing.has(row.id) && !this.rollbackStepWaits(row.job_id));
     for (const row of stuck)
       this.finishRollback(row.id, "failed", [
         ...(JSON.parse(row.notes) as Array<string>),
@@ -3363,7 +3779,7 @@ export class Kitshn extends DurableObject<Env> {
     if (!row) return;
     this.settleRollbackAction(id);
     this.recordRevision(
-      JSON.parse(row.actor) as Actor,
+      JSON.parse(row.actor) as Author,
       state === "done" ? "The run rollback ended (K-821)" : `The run rollback stopped: ${notes.at(-1) ?? ""}`,
     );
   }
@@ -3388,7 +3804,7 @@ export class Kitshn extends DurableObject<Env> {
    * goes with them. Returns the revision and a note for each app: what started or stopped, or why not.
    */
   private async commitApps(
-    actor: Actor,
+    actor: Author,
     changes: ReadonlyArray<Change>,
     undo: UndoOf | null,
   ): Promise<{ revision: number | null; notes: Array<string>; summary: string }> {
@@ -3489,71 +3905,87 @@ export class Kitshn extends DurableObject<Env> {
       .filter((card) => this.state.resources.has(card));
   }
 
-  /** One scan of the deploy rows; it grows with each deploy. Revisit with a prune when it passes 10,000 rows. */
+  /**
+   * K-1302: what a snapshot needs of the deploys, from `deploy_cards`: one row per card that a deploy made, which the
+   * triggers of migration 49 keep. Known limit: the table keeps a row for each card that ever had a deploy, also a
+   * removed one, for its Undo. Revisit when it passes 2,000 rows.
+   */
   private deploys(): DeployFacts {
     if (this.deployFacts) return this.deployFacts;
-    const deployed = new Set<string>();
-    const previews = new Set<string>();
-    const pullRequests = new Map<string, number>();
-    const repoCards = new Map<string, Set<string>>();
+    const deployed: Array<string> = [];
+    const previews: Array<string> = [];
+    const pullRequests: Array<readonly [string, number]> = [];
+    const repoCards = new Map<string, Array<string>>();
     const newest = new Map<string, { id: string; state: string; reason: string | null }>();
-    const composeRuns: Array<ComposeRun> = [];
     for (const row of this.sql<{
+      resource_id: string;
+      newest_id: string;
+      newest_state: string;
+      newest_reason: string | null;
+      deployed: number;
+      preview: string | null;
+      repo_ids: string;
+    }>("SELECT * FROM deploy_cards ORDER BY rowid")) {
+      if (row.deployed === 1) {
+        deployed.push(row.resource_id);
+        if (row.preview !== null) {
+          previews.push(row.resource_id);
+          const number = pullRequestNumber(row.preview);
+          if (number !== null) pullRequests.push([row.resource_id, number]);
+        }
+      }
+      for (const repoId of JSON.parse(row.repo_ids) as Array<string>)
+        repoCards.set(repoId, [...(repoCards.get(repoId) ?? []), row.resource_id]);
+      newest.set(row.resource_id, { id: row.newest_id, state: row.newest_state, reason: row.newest_reason });
+    }
+    this.deployFacts = {
+      deployed,
+      previews,
+      pullRequests,
+      notes: [...newest]
+        .filter(([, row]) => row.state === "failed" || row.state === "skipped")
+        .map(([resource_id, row]) => ({ resource_id, ...row })),
+      repoCards: [...repoCards].flatMap(([repo_id, cards]) =>
+        cards.map((resource_id) => ({ repo_id, resource_id })),
+      ),
+      newest,
+    };
+    return this.deployFacts;
+  }
+
+  /**
+   * K-817, K-901: the Compose deploys that are planned, running or done and not expired, with their addresses. A done
+   * deploy counts until it expires, so its record stays until the live site of its card holds it.
+   */
+  private composeRuns(now: number): Array<ComposeRun> {
+    return this.sql<{
       id: string;
       resource_id: string;
-      repo_id: string | null;
-      environment: string;
-      state: string;
-      reason: string | null;
-      app: string;
       address: string;
       addresses: string | null;
       machine_id: string | null;
       expires_at: number;
     }>(
-      `SELECT id, resource_id, repo_id, environment, state, reason, app, address, addresses, machine_id, expires_at
-       FROM deploys WHERE kind = 'deploy' ORDER BY rowid`,
-    )) {
-      // A done deploy counts until it expires, so its record stays until the live site of its card holds it.
-      if (
-        row.app === "compose" &&
-        (row.state === "planned" || row.state === "running" || row.state === "done") &&
-        row.expires_at > Date.now()
-      )
-        composeRuns.push({
-          card: row.resource_id,
-          addresses: row.addresses === null ? [row.address] : (JSON.parse(row.addresses) as Array<string>),
-          machineId: row.machine_id,
-          expiresAt: row.expires_at,
-        });
-      if (row.repo_id !== null || row.state === "done") {
-        deployed.add(row.resource_id);
-        // As the GLOB 'pr-[0-9]*' of K-821: "pr-" and a digit.
-        const digit = row.environment.charAt(3);
-        if (row.environment.startsWith("pr-") && digit >= "0" && digit <= "9") {
-          previews.add(row.resource_id);
-          const number = pullRequestNumber(row.environment);
-          if (number !== null) pullRequests.set(row.resource_id, number);
-        }
-      }
-      if (row.repo_id !== null)
-        repoCards.set(row.repo_id, (repoCards.get(row.repo_id) ?? new Set()).add(row.resource_id));
-      newest.set(row.resource_id, { id: row.id, state: row.state, reason: row.reason });
-    }
-    this.deployFacts = {
-      deployed: [...deployed],
-      previews: [...previews],
-      pullRequests: [...pullRequests],
-      notes: [...newest]
-        .filter(([, row]) => row.state === "failed" || row.state === "skipped")
-        .map(([resource_id, row]) => ({ resource_id, ...row })),
-      repoCards: [...repoCards].flatMap(([repo_id, cards]) =>
-        [...cards].map((resource_id) => ({ repo_id, resource_id })),
-      ),
-      composeRuns,
-      newest,
-    };
-    return this.deployFacts;
+      // K-1302: the index reads only the deploys of the last hour; without it, the query fails instead of a scan.
+      `SELECT id, resource_id, address, addresses, machine_id, expires_at FROM deploys INDEXED BY deploys_compose_live
+       WHERE kind = 'deploy' AND app = 'compose' AND expires_at > ? AND state IN ('planned', 'running', 'done')
+       ORDER BY rowid`,
+      now,
+    ).flatMap((row) => [
+      {
+        card: row.resource_id,
+        addresses: row.addresses === null ? [row.address] : (JSON.parse(row.addresses) as Array<string>),
+        machineId: row.machine_id,
+        expiresAt: row.expires_at,
+      },
+      // K-824: each other instance gets the record of its own address on its own machine's tunnel.
+      ...this.deployInstances(row.id).map((instance) => ({
+        card: row.resource_id,
+        addresses: [instance.address],
+        machineId: instance.machine_id,
+        expiresAt: row.expires_at,
+      })),
+    ]);
   }
 
   /** K-909, K-821: the deployed cards on the map and, of them, the preview cards. */
@@ -3617,24 +4049,37 @@ export class Kitshn extends DurableObject<Env> {
         (capability) => this.machineView(machine).status?.capabilities?.includes(capability) ?? false,
       ),
       takesDeploys: machine.labels.includes("deploy"),
-      runsCard: this.state.resources.get(card)?.machine === machine.id,
+      runsCard: runsOnMachine(this.state.resources.get(card), machine.id),
       allowed: allowedFor(machine, repo),
     };
   }
 
   /** K-909: stops a removed Compose app and keeps its volumes. The job waits for the machine, however long. */
-  private stopCompose(actor: Actor, card: AppCard) {
+  private stopCompose(actor: Author, card: AppCard) {
     const teardown = appTeardown(card, this.env.KITSHN_ZONE, this.isFolderSite(card.id));
     if (teardown.kind !== "compose") throw new Error(`${card.name} is no Compose app.`);
+    // K-827: each other instance stops on its own machine and keeps its volumes there.
+    const others = otherInstances(card).flatMap((instance) => {
+      const machine = this.state.machines.get(instance.machine);
+      const name = instance.address.slice(0, -this.env.KITSHN_ZONE.length - 1);
+      return machine ? [{ machine, command: { ...teardown.command, name } }] : [];
+    });
     const machine = teardown.machineId ? this.state.machines.get(teardown.machineId) : undefined;
     if (!machine) return `kitshn knows no machine of ${card.name}, so nothing stops there.`;
-    this.queueKitshnJob(machine.id, teardown.command, actor, NEVER);
-    const when = this.jobMachines().has(machine.id) ? "now" : `when ${machine.name} comes online with a key`;
-    return `${card.name} stops on ${machine.name} ${when}; its volumes stay on the machine.`;
+    const ready = this.jobMachines();
+    return [{ machine, command: teardown.command }, ...others]
+      .map((target) => {
+        this.queueKitshnJob(target.machine.id, target.command, actor, NEVER);
+        const when = ready.has(target.machine.id)
+          ? "now"
+          : `when ${target.machine.name} comes online with a key`;
+        return `${card.name} stops on ${target.machine.name} ${when}; its volumes stay on the machine.`;
+      })
+      .join(" ");
   }
 
   /** K-909: the undo of a removal starts the app again where it can, and says why where it cannot. */
-  private async restartApp(actor: Actor, card: AppCard) {
+  private async restartApp(actor: Author, card: AppCard) {
     if (keepsScript(card, this.isFolderSite(card.id))) return await this.reattachWorker(card);
     const done = this.lastDone(card.id);
     const machine = done?.machine_id ? this.state.machines.get(done.machine_id) : undefined;
@@ -3653,8 +4098,10 @@ export class Kitshn extends DurableObject<Env> {
     if (plan.kind === "none") return `${back}, but kitshn did not start it: ${plan.reason}`;
     if (plan.kind === "redeploy") {
       if (!machine) throw new Error("A redeploy plan without its machine.");
-      this.queueKitshnJob(machine.id, plan.command, actor, Date.now() + DEPLOY_MS);
-      return `${back} and starts its last good build on ${machine.name}.`;
+      const targets = [{ machine, command: plan.command }, ...this.instanceRedeploys(card, plan.command)];
+      for (const target of targets)
+        this.queueKitshnJob(target.machine.id, target.command, actor, Date.now() + DEPLOY_MS);
+      return `${back} and starts its last good build on ${targets.map((target) => target.machine.name).join(", ")}.`;
     }
     try {
       const repo = await this.dispatchBuild(
@@ -3669,12 +4116,33 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   private authorized(caller: Caller) {
-    return this.hasAdmin(caller.visitor);
+    return caller.gated !== undefined || this.hasAdmin(caller.visitor);
   }
 
-  private hasAdmin(visitor: Visitor) {
+  /** K-1777: a gated caller passed the gate of its operation, so the owner checks of the handler hold. */
+  private callerControls(caller: Caller, id: string): boolean {
+    return caller.gated !== undefined || this.canControl(caller.visitor, id);
+  }
+
+  private callerIsOwner(caller: Caller): boolean {
+    return caller.gated !== undefined || this.isOwner(caller.visitor);
+  }
+
+  /**
+   * K-104, K-1778: control on the admin card. Only a login proves a person; any other proof holds the admin only with
+   * "shares" and "secrets" automatic, because the admin raises access and hands out secrets. So a token in a circle of
+   * the admin acts as the owner only when the owner set both.
+   */
+  private hasAdmin(visitor: Visitor, attested: Attested | null = null) {
     const admin = this.state.resources.get(ADMIN_RESOURCE_ID);
-    return admin !== undefined && visitorLevel(this.state, admin, visitor, Date.now()) === "control";
+    const now = Date.now();
+    const automatic = (effect: Effect) =>
+      effectiveMode(this.state, visitor, effect, now, attested).mode === "automatic";
+    return (
+      admin !== undefined &&
+      visitorLevel(this.state, admin, visitor, now) === "control" &&
+      (visitor.email !== null || (automatic("shares") && automatic("secrets")))
+    );
   }
 
   private snapshot(caller: Caller, repos: ReadonlyArray<RepoView> = this.repoViews()): Snapshot {
@@ -3682,12 +4150,16 @@ export class Kitshn extends DurableObject<Env> {
     const desired = this.desired(Date.now());
     const loginError = this.meta("login_error");
     return {
+      accessApps: [...this.access].filter(([key, row]) => key.startsWith("app:") && Boolean(row.cfId)).length,
       circles: [...this.state.circles.values()],
+      actors: [...this.state.actors.values()],
       // K-304: a provider card of an offline machine is offline, whatever its provider reported last.
       resources: [...this.state.resources.values()].map((card) =>
         card.provider && card.machine !== null && this.presence.get(card.machine)?.online !== true
           ? { ...card, status: "offline" as const }
-          : card,
+          : (card.instances ?? []).length > 0 && card.machine !== null
+            ? { ...card, primary: this.primaryOf(card) ?? card.machine }
+            : card,
       ),
       places: Object.fromEntries(this.state.places) as Record<string, Point>,
       shareSettings: Object.fromEntries(this.state.shareSettings) as Record<string, ShareSetting>,
@@ -3733,7 +4205,7 @@ export class Kitshn extends DurableObject<Env> {
       progress: Object.fromEntries(
         [...this.progressRows()].flatMap(([id, row]) =>
           this.state.resources.has(id) && progressShown(row.progress, Date.now())
-            ? [[id, { ...row.progress, canDismiss: this.canControl(caller.visitor, id) }]]
+            ? [[id, { ...row.progress, canDismiss: this.callerControls(caller, id) }]]
             : [],
         ),
       ),
@@ -3770,7 +4242,7 @@ export class Kitshn extends DurableObject<Env> {
         ]),
       ),
       // K-1902: the live asks go only to who may answer them; History keeps every ask for the owner (K-1717).
-      proposals: this.answerableProposals(caller.visitor),
+      proposals: this.answerableProposals(caller.visitor, null),
       askEvents: this.recentAskEvents(),
       linkEvents: this.recentLinkEvents(),
       githubDefaultWay: this.meta("github_default_way") === "app" ? "app" : "not-kitshn",
@@ -3796,6 +4268,16 @@ export class Kitshn extends DurableObject<Env> {
     };
   }
 
+  /**
+   * K-635: the fact labels of the live daemon report. An offline machine has none: no job goes to it, and kitshn keeps
+   * no row for them (K-1302). Keep them in `presence` if a person needs them to plan while the machine is offline.
+   */
+  private liveFacts(machineId: string) {
+    const socket = this.openSocket(machineId);
+    const attachment = socket ? attachmentOf(socket) : null;
+    return machineFacts(attachment?.kind === "machine" ? attachment.status : null);
+  }
+
   private machineView(machine: Machine): MachineView {
     const socket = this.openSocket(machine.id);
     const attachment = socket ? attachmentOf(socket) : null;
@@ -3805,6 +4287,7 @@ export class Kitshn extends DurableObject<Env> {
       online: socket !== null,
       lastSeen: this.presence.get(machine.id)?.lastSeen ?? null,
       status: live?.status ?? null,
+      facts: machineFacts(live?.status ?? null),
       sample: live?.sample ?? null,
       os: this.presence.get(machine.id)?.os ?? null,
       keyFailure: this.keyFailures.get(machine.id) ?? null,
@@ -3814,7 +4297,42 @@ export class Kitshn extends DurableObject<Env> {
       queued: this.queuedFor(machine, live?.status ?? null),
       // K-628: kept between the events that change it (K-627), so a view reads no job rows.
       update: daemonUpdate(this.rollout(), machine.id, this.env.KITSHN_VERSION),
+      protocolRefusal: this.protocolRefusal(machine.id),
     };
+  }
+
+  /** K-724: why kitshn refuses the daemon of a machine for its protocol, or null; null also while it is offline. */
+  private protocolRefusal(machineId: string): string | null {
+    const machine = this.state.machines.get(machineId);
+    const socket = this.openSocket(machineId);
+    const attachment = socket ? attachmentOf(socket) : null;
+    if (!machine || attachment?.kind !== "machine") return null;
+    const version = attachment.protocol ?? daemonProtocol(attachment.status ?? {});
+    const match = daemonProtocolMatch(version, machine.name);
+    return match.outcome === "refuse" ? match.reason : null;
+  }
+
+  /** K-724: the answer to a message that a daemon of another protocol major sent, where the message waits for one. */
+  private refuseByProtocol(socket: WebSocket, message: Record<string, unknown>, reason: string) {
+    if (message["type"] === "ask" && typeof message["requestId"] === "string")
+      send(socket, {
+        type: "askAnswer",
+        requestId: message["requestId"],
+        outcome: "refused",
+        reason,
+      } satisfies ServerToDaemon);
+    else if (typeof message["requestId"] === "string")
+      send(socket, {
+        type: "requestAnswer",
+        requestId: message["requestId"],
+        error: reason,
+      } satisfies ServerToDaemon);
+    else if (message["type"] === "execStart" && typeof message["execId"] === "string")
+      send(socket, {
+        type: "execFrame",
+        execId: message["execId"],
+        frame: { type: "exit", exitCode: null, signal: null, durationMs: 0, reason: `refused: ${reason}` },
+      } satisfies ServerToDaemon);
   }
 
   /**
@@ -3848,9 +4366,64 @@ export class Kitshn extends DurableObject<Env> {
     return open.at(-1) ?? null;
   }
 
+  /**
+   * K-706: the socket that gets the pushes: the newest open one, when it is signed. An older socket that a reconnect
+   * closed stays listed until its peer answers, and a push to it is lost.
+   */
+  private signedSocket(machineId: string): WebSocket | null {
+    const socket = this.openSocket(machineId);
+    const attachment = socket ? attachmentOf(socket) : null;
+    return attachment?.kind === "machine" && attachment.check === "signed" ? socket : null;
+  }
+
   /** K-1704: the sockets of a machine that kitshn reads and sends jobs to. */
   private checkedSockets(machineId: string) {
     return this.ctx.getWebSockets(machineId).filter((socket) => {
+      const attachment = attachmentOf(socket);
+      return attachment?.kind === "machine" && attachment.check !== "waiting";
+    });
+  }
+
+  /** K-605: whether a map watches now (`watches`); `closing` is a socket that is going. */
+  private mapsWatching(closing: WebSocket | null = null) {
+    const now = Date.now();
+    return this.ctx.getWebSockets("map").some((socket) => {
+      const attachment = attachmentOf(socket);
+      return socket !== closing && attachment?.kind === "map" && watches(socket, attachment, now);
+    });
+  }
+
+  /**
+   * K-605: a visible map renews its watch, and each daemon samples each minute for WATCH_LEASE_MS. The map gets the
+   * current state if it missed a broadcast (K-1302), else `watched`; with no answer, it connects again. A hidden map
+   * ends its watch.
+   */
+  private mapWatching(socket: WebSocket, attachment: MapAttachment, visible: boolean) {
+    const { missed, ...rest } = attachment;
+    if (!visible) {
+      socket.serializeAttachment({ ...attachment, watchingUntil: 0 } satisfies Attachment);
+      if (!this.mapsWatching()) this.sendWatch(false);
+      return;
+    }
+    const now = Date.now();
+    socket.serializeAttachment({ ...rest, watchingUntil: now + WATCH_LEASE_MS } satisfies Attachment);
+    send(
+      socket,
+      missed ? { type: "snapshot", snapshot: this.snapshot(attachment.caller) } : { type: "watched" },
+    );
+    // Each map request renews too, so the daemons hear only a new watch or a renewal as often as `watching` comes.
+    const renewedAt = (attachment.watchingUntil ?? 0) - WATCH_LEASE_MS;
+    if (!watches(socket, attachment, now) || now - renewedAt >= WATCH_RENEW_MS / 2) this.sendWatch(true);
+  }
+
+  /** K-605: tells daemon sockets whether a map is watched, so their samples come each minute or every 5 minutes. */
+  private sendWatch(on: boolean, sockets = this.watchingSockets()) {
+    for (const socket of sockets) send(socket, { type: "watch", on } satisfies ServerToDaemon);
+  }
+
+  /** K-1704: the daemon sockets that passed their check, or count on their token. */
+  private watchingSockets() {
+    return this.ctx.getWebSockets("machines").filter((socket) => {
       const attachment = attachmentOf(socket);
       return attachment?.kind === "machine" && attachment.check !== "waiting";
     });
@@ -3873,6 +4446,7 @@ export class Kitshn extends DurableObject<Env> {
     this.revokeTokens(null, true);
     // K-1608: the pushes go out, and their hashes count the queue, before the maps read the counts.
     this.pushGrants();
+    const now = Date.now();
     for (const socket of this.ctx.getWebSockets("map")) {
       const attachment = attachmentOf(socket);
       if (attachment?.kind !== "map") continue;
@@ -3881,24 +4455,34 @@ export class Kitshn extends DurableObject<Env> {
         socket.close(4003, "You lost access to the kitshn admin.");
         continue;
       }
+      // K-1302: a snapshot reads History, so only a map that someone watches gets one; the others get it on `watching`.
+      if (!watches(socket, attachment, now)) {
+        if (!attachment.missed)
+          socket.serializeAttachment({ ...attachment, missed: true } satisfies Attachment);
+        continue;
+      }
       send(socket, { type: "snapshot", snapshot: this.snapshot(caller, repos) });
     }
   }
 
-  /** K-706: sends each provider of each signed connection its grant tables when they changed since the last send. */
-  private pushGrants(now = Date.now()) {
+  /**
+   * K-706: sends each provider of each signed connection its grant tables when they changed since the last send.
+   * K-1608: what the daemon applied counts as sent, so a wake sends nothing again; only the new connection of
+   * `connected` gets every push.
+   */
+  private pushGrants(now = Date.now(), connected: string | null = null) {
     this.pushHashes.clear();
     for (const machineId of this.providerRegs.keys()) {
       const pushes = this.pushesOf(machineId, now);
       this.pushHashes.set(machineId, new Map(pushes.map(({ key, hash }) => [key, hash])));
-      const socket = this.ctx.getWebSockets(machineId).find((item) => {
-        const attachment = attachmentOf(item);
-        return attachment?.kind === "machine" && attachment.check === "signed";
-      });
-      if (!socket) continue;
+      const socket = this.signedSocket(machineId);
+      // K-724: a daemon of another protocol major gets no push; its update sends them all again.
+      if (!socket || this.protocolRefusal(machineId) !== null) continue;
       for (const { key, hash, push } of pushes) {
-        if (this.sentGrants.get(`${machineId}/${key}`) === hash) continue;
-        this.sentGrants.set(`${machineId}/${key}`, hash);
+        const id = `${machineId}/${key}`;
+        if (this.sentGrants.get(id) === hash) continue;
+        this.sentGrants.set(id, hash);
+        if (machineId !== connected && this.applied.get(id) === hash) continue;
         const { key: _key, ...message } = push;
         send(socket, { ...message, hash } as ServerToDaemon);
       }
@@ -3925,11 +4509,25 @@ export class Kitshn extends DurableObject<Env> {
             : null;
         },
         audiencesOf: (cardId) => this.audiencesOf(cardId),
+        revOf: (kind) => this.desiredRevs.get(kind) ?? null,
       },
-    ).map((push) => {
-      const text = JSON.stringify(push);
-      return { key: push.key, hash: `${fnv(text)}${fnv(text, 0x050c5d1f)}`, push };
-    });
+    )
+      .concat(
+        (this.providerRegs.get(machineId) ?? []).length === 0
+          ? []
+          : [
+              { key: pushKey.paused(), type: "paused", paused: this.state.paused !== null },
+              {
+                key: pushKey.execRights(),
+                type: "execRights",
+                machines: execMachinesOf(this.state, machineId, now),
+              },
+            ],
+      )
+      .map((push) => {
+        const text = JSON.stringify(push);
+        return { key: push.key, hash: `${fnv(text)}${fnv(text, 0x050c5d1f)}`, push };
+      });
   }
 
   /** K-603: the AUD tags of kitshn's Access applications of a card that exist in Cloudflare. */
@@ -3983,7 +4581,7 @@ export class Kitshn extends DurableObject<Env> {
     const machineId = typeof body["machineId"] === "string" ? body["machineId"] : null;
     if (machineId !== null && !this.state.machines.has(machineId))
       return Response.json({ error: `No machine "${machineId}" exists.` }, { status: 404 });
-    if (machineId !== null && !this.canControl(caller.visitor, machineId))
+    if (machineId !== null && !this.callerControls(caller, machineId))
       return Response.json({ error: "A part of a machine needs control on that machine." }, { status: 403 });
     const refusal = this.writeDesired(kind, machineId ?? "", body["value"], caller.actor);
     return refusal ? Response.json({ error: refusal }, { status: 413 }) : Response.json({ ok: true });
@@ -4005,9 +4603,7 @@ export class Kitshn extends DurableObject<Env> {
         { error: `${setting.title} is one of ${setting.values.join(", ")}.` },
         { status: 400 },
       );
-    const state =
-      this.state.paused && this.hasAdmin(caller.visitor) ? { ...this.state, paused: null } : this.state;
-    if (visitorLevel(state, card, caller.visitor, Date.now()) !== "control")
+    if (!this.callerControls(caller, card.id))
       return Response.json(
         { error: `${setting.title} needs control on ${card.name} (K-717).` },
         { status: 403 },
@@ -4044,9 +4640,13 @@ export class Kitshn extends DurableObject<Env> {
     if (status !== null && !status.capabilities?.includes("applied")) return null;
     // A daemon from before K-1623 never applies the access push, so its count leaves that push out.
     const access = status === null || status.capabilities?.includes("access") === true;
+    // K-721: only a daemon of provider protocol 2 applies the pushes of the pause and the exec rights.
+    const v2 = status === null || status.capabilities?.includes("protocol-2") === true;
     return [...pushes].filter(
       ([key, hash]) =>
-        (access || !key.startsWith("access:")) && this.applied.get(`${machine.id}/${key}`) !== hash,
+        (access || !key.startsWith("access:")) &&
+        (v2 || !key.startsWith("kitshn:")) &&
+        this.applied.get(`${machine.id}/${key}`) !== hash,
     ).length;
   }
 
@@ -4065,32 +4665,50 @@ export class Kitshn extends DurableObject<Env> {
    */
   private setDesiredFromMachine(
     machine: Machine,
-    message: Extract<DaemonMessage, { type: "desiredSet" }>,
+    message: Extract<DaemonMessage, { type: "desiredSet" | "desiredInit" }>,
   ): string | null {
     const kinds =
       this.providerRegs.get(machine.id)?.find((item) => item.name === message.provider)?.kinds ?? [];
     return (
       desiredProblem(kinds, message.kind, message.value) ??
-      this.writeDesired(message.kind, message.part === "shared" ? "" : machine.id, message.value, {
-        _tag: "machine",
-        machineId: machine.id,
-        name: machine.name,
-      })
+      this.writeDesired(
+        message.kind,
+        message.part === "shared" ? "" : machine.id,
+        message.value,
+        { _tag: "machine", machineId: machine.id, name: machine.name },
+        typeof message.rev === "string" ? message.rev.slice(0, 64) : null,
+      )
     );
   }
 
   /** K-709: stores one part of a desired state, or says why not. A part of null clears it. */
-  private writeDesired(kind: string, machineId: string, value: unknown, actor: Actor): string | null {
+  private writeDesired(
+    kind: string,
+    machineId: string,
+    value: unknown,
+    actor: Author,
+    rev: string | null = null,
+  ): string | null {
     const text = JSON.stringify(value ?? null);
     const kinds = [...this.providerRegs.values()].flatMap((regs) => regs.flatMap((reg) => reg.kinds));
     const problem = desiredProblem(kinds, kind, value);
     if (problem) return problem;
-    if (deepEqual(this.desiredState.get(kind)?.get(machineId) ?? null, value ?? null)) return null;
+    const same = deepEqual(this.desiredState.get(kind)?.get(machineId) ?? null, value ?? null);
+    // K-709: a set with a rev stores the rev also when the value stays, so its provider sees that it arrived.
+    if (same && (rev === null || this.desiredRevs.get(kind) === rev)) return null;
+    if (same) {
+      this.sql("INSERT OR REPLACE INTO desired_revs (kind, rev) VALUES (?, ?)", kind, rev);
+      this.desiredRevs.set(kind, rev!);
+      this.pushGrants();
+      return null;
+    }
     const where =
       machineId === ""
         ? "the shared part"
         : `the part of ${this.state.machines.get(machineId)?.name ?? machineId}`;
     this.ctx.storage.transactionSync(() => {
+      if (rev === null) this.sql("DELETE FROM desired_revs WHERE kind = ?", kind);
+      else this.sql("INSERT OR REPLACE INTO desired_revs (kind, rev) VALUES (?, ?)", kind, rev);
       if (value === null || value === undefined)
         this.sql("DELETE FROM desired_state WHERE kind = ? AND machine_id = ?", kind, machineId);
       else
@@ -4346,7 +4964,7 @@ export class Kitshn extends DurableObject<Env> {
     if (path === "/internal/backup-access")
       return this.backupAccess((await request.json()) as { card: string; clientId: string });
     if (path === "/internal/content") return this.contentDecision((await request.json()) as ContentRequest);
-    if (path === "/internal/game") return this.gameDecision((await request.json()) as GameRequest);
+    if (path === "/internal/connect") return this.connectDecision((await request.json()) as ConnectRequest);
     if (path === "/internal/well-known/openid-configuration" || path === "/internal/well-known/jwks.json")
       return this.wellKnown(path.slice("/internal/well-known/".length).replace(".json", ""));
     if (path.startsWith("/deploy/")) {
@@ -4380,10 +4998,36 @@ export class Kitshn extends DurableObject<Env> {
     }
     const header = request.headers.get("x-kitshn-caller");
     if (!header) return new Response("The Worker sent no caller.", { status: 500 });
-    const caller = JSON.parse(header) as Caller;
+    // K-1777: only the operation path gates a caller; a header never carries a gate.
+    const { gated: _gated, attested: _attested, ...caller } = JSON.parse(header) as Caller;
     if (path === "/connect") return this.connectMachine(request, caller);
+    if (path.startsWith("/op/")) return this.opRequest(path.slice("/op/".length), request, caller);
     // Only the Worker's fresh passkey route sends this path (K-1504).
     if (path === "/fresh/resume" && request.method === "POST") return this.resume(caller);
+    if (path === "/fresh/restore-time" && request.method === "POST")
+      return await this.restoreTime(caller, await request.json().catch(() => null));
+    if (path === "/fresh/restored" && request.method === "POST")
+      return await this.restored(caller, await request.json().catch(() => null));
+    if (path.startsWith("/agent/")) return this.agentRequest(path, request, caller);
+    if (path === "/device/machines" && request.method === "GET")
+      return Response.json(this.deviceMachines(caller.visitor));
+    if (path.startsWith("/connect/deploys/")) return this.deploySource(path, caller);
+    // K-1714: a machine acts only through /op or /connect, signed, so its token alone never reaches an owner route.
+    if (machineOf(this.state, caller.visitor))
+      return Response.json(
+        {
+          error: "A machine acts only through its daemon: kitshn <operation> signs the call on /op (K-1714).",
+        },
+        { status: 403 },
+      );
+    return this.ownerRoute(path, request, caller);
+  }
+
+  /**
+   * K-1777: the owner routes. The map calls them with a login, and an operation calls them with a gated caller after
+   * `decide` let the call run. The rules that also bind the owner (K-105, K-1504) stay in the handlers.
+   */
+  private async ownerRoute(path: string, request: Request, caller: Caller): Promise<Response> {
     // K-1723: the owner denies an ask from the map.
     if (path.startsWith("/api/proposals/") && path.endsWith("/deny") && request.method === "POST")
       return this.answerProposal(
@@ -4393,14 +5037,6 @@ export class Kitshn extends DurableObject<Env> {
         null,
         await request.json().catch(() => null),
       );
-    if (path === "/fresh/restore-time" && request.method === "POST")
-      return await this.restoreTime(caller, await request.json().catch(() => null));
-    if (path === "/fresh/restored" && request.method === "POST")
-      return await this.restored(caller, await request.json().catch(() => null));
-    if (path.startsWith("/agent/")) return this.agentRequest(path, request, caller);
-    if (path === "/device/machines" && request.method === "GET")
-      return Response.json(this.deviceMachines(caller.visitor));
-    if (path.startsWith("/connect/deploys/")) return this.deploySource(path, caller);
     if (!this.authorized(caller)) {
       return Response.json(
         { error: "You have no control level on the kitshn admin (K-104)." },
@@ -4422,6 +5058,9 @@ export class Kitshn extends DurableObject<Env> {
     if (path === "/api/sign-out" && request.method === "POST") return this.signOut(caller);
     if (path === "/api/sign-out/retry" && request.method === "POST") return this.retrySignOut(caller);
     if (path === "/api/health/check" && request.method === "POST") return this.checkHealthNow(caller);
+    if (path === "/api/rollout" && request.method === "GET") return Response.json(this.currentRollout());
+    if (path === "/api/rollout" && request.method === "POST")
+      return this.startRollout(caller, await request.json().catch(() => null));
     if (path === "/api/machines" && request.method === "POST")
       return this.addMachine(caller, await request.json().catch(() => null), new URL(request.url).origin);
     if (path.startsWith("/api/desired/")) {
@@ -4668,12 +5307,33 @@ export class Kitshn extends DurableObject<Env> {
       this.broadcast();
       return Response.json({ githubWay: way });
     }
-    if (path.startsWith("/api/repos/") && request.method === "POST")
-      return await this.setRepoState(
-        caller,
-        decodeURIComponent(path.slice("/api/repos/".length)),
-        await request.json().catch(() => null),
+    if (path.startsWith("/api/repos/") && request.method === "POST") {
+      const repoId = decodeURIComponent(path.slice("/api/repos/".length));
+      const body: unknown = await request.json().catch(() => null);
+      if (caller.gated === undefined || !isRecord(body) || body["state"] !== "allowed")
+        return await this.setRepoState(caller, repoId, body);
+      // K-819, K-1777: a gated caller allows as an agent, as /agent/repos does: only a waiting repo, under its own
+      // credential, so it never unblocks a repo of the owner or takes over one that another agent allowed.
+      const [row] = this.sql<RepoRow>("SELECT * FROM repos WHERE repo_id = ?", repoId);
+      const refusal = agentAllowRefusal(
+        row ? repoGateOf(row) : undefined,
+        body["state"],
+        true,
+        row?.gone_at !== null && row?.gone_at !== undefined,
       );
+      if (refusal) return Response.json({ error: refusal.error }, { status: refusal.status });
+      const name =
+        caller.actor._tag === "machine" || caller.actor._tag === "device" ? caller.actor.name : null;
+      if (caller.visitor.clientId === null || name === null)
+        return Response.json(
+          {
+            error:
+              "Only a token or a machine allows a repo as an agent. Allow it with the passkey of the admin (K-819).",
+          },
+          { status: 403 },
+        );
+      return await this.setRepoState(caller, repoId, body, { clientId: caller.visitor.clientId, name });
+    }
     if (path.startsWith("/api/jobs/") && path.endsWith("/cancel") && request.method === "POST") {
       const error = this.cancelJob(
         Number(path.slice("/api/jobs/".length, -"/cancel".length)),
@@ -4690,14 +5350,14 @@ export class Kitshn extends DurableObject<Env> {
     if (path === "/api/devices" && request.method === "GET") return this.listDevices();
     if (path === "/api/usage" && request.method === "GET") return await this.readUsage();
     if (path === "/api/library" && request.method === "GET") return Response.json(this.libraryItems());
-    // Section 20: game cards and their doors (K-2001, K-2006).
-    if (path === "/api/games" && request.method === "GET")
-      return Response.json(this.gameRows().map((row) => this.gameView(row, Date.now())));
-    if (path === "/api/games" && request.method === "POST")
-      return this.createGame(caller.actor, await request.json().catch(() => null));
-    if (path.startsWith("/api/games/") && request.method === "DELETE") {
-      const [card = "", doors, address] = path.slice("/api/games/".length).split("/");
-      if (doors === undefined) return this.deleteGame(caller.actor, card);
+    // Section 20: port cards and their doors (K-2001, K-2007).
+    if (path === "/api/ports" && request.method === "GET")
+      return Response.json(this.portRows().map((row) => this.portView(row, Date.now())));
+    if (path === "/api/ports" && request.method === "POST")
+      return this.createPortCard(caller.actor, await request.json().catch(() => null));
+    if (path.startsWith("/api/ports/") && request.method === "DELETE") {
+      const [card = "", doors, address] = path.slice("/api/ports/".length).split("/");
+      if (doors === undefined) return this.deletePortCard(caller.actor, card);
       if (doors === "doors" && address)
         return this.closeDoorBy(caller.actor, card, decodeURIComponent(address));
     }
@@ -4796,6 +5456,9 @@ export class Kitshn extends DurableObject<Env> {
         attachment,
         typeof data === "string" ? data : new TextDecoder().decode(data),
       );
+      // K-1107: the message woke the Durable Object anyway, so it checks the pings of every machine now. With samples
+      // every 5 minutes, link calls and status, this covers most checks, so the alarm checks only every 10 minutes.
+      if (socket.readyState === WebSocket.OPEN) this.checkLiveness(Date.now());
       return;
     }
     const caller = attachment.caller;
@@ -4806,6 +5469,10 @@ export class Kitshn extends DurableObject<Env> {
     let message: ClientMessage;
     try {
       const parsed: unknown = JSON.parse(typeof data === "string" ? data : new TextDecoder().decode(data));
+      if (isRecord(parsed) && parsed.type === "watching")
+        return this.mapWatching(socket, attachment, parsed.visible !== false);
+      // K-605: a map that sends a request is in use, so it watches, and the broadcast of its change reaches it.
+      this.mapWatching(socket, attachment, true);
       if (isRecord(parsed) && (parsed.type === "tail" || parsed.type === "tailStop"))
         return await this.tailMessage(socket, decodeTailMessage(parsed));
       message = decodeClientMessage(parsed);
@@ -4839,6 +5506,7 @@ export class Kitshn extends DurableObject<Env> {
     const attachment = attachmentOf(socket);
     if (attachment?.kind === "map") {
       for (const tail of attachment.tails ?? []) void this.stopTail(tail);
+      if (!this.mapsWatching(socket)) this.sendWatch(false);
       return;
     }
     if (attachment?.kind !== "machine") return;
@@ -4851,27 +5519,34 @@ export class Kitshn extends DurableObject<Env> {
     );
     const others = this.checkedSockets(attachment.machineId).filter((other) => other !== socket);
     if (others.length > 0) return;
+    // K-722: a run ends with the connection of either machine.
+    this.endExecRuns(attachment.machineId);
     // A job that the machine had when its connection ended has no result coming.
     requeueDowns(this.query, attachment.machineId);
-    this.sql(
-      `UPDATE jobs SET state = 'failed', output = '${OFFLINE_OUTPUT}' WHERE machine_id = ? AND state = 'sent'`,
+    const failed = this.sql<{ id: number }>(
+      `UPDATE jobs SET state = 'failed', output = '${OFFLINE_OUTPUT}' WHERE machine_id = ? AND state = 'sent' RETURNING id`,
       attachment.machineId,
     );
-    this.setPresence(attachment.machineId, false);
+    this.jobsEnded(failed.map((row) => row.id));
+    // K-1107, K-1910: the last contact is the last ping, so a socket that kitshn finds dead late counts from it.
+    const lastPing = this.ctx.getWebSocketAutoResponseTimestamp(socket)?.getTime() ?? attachment.since;
+    this.setPresence(attachment.machineId, false, Math.min(Date.now(), Math.max(attachment.since, lastPing)));
   }
 
-  /** K-605: presence rows change only when a machine goes online or offline (K-1302). */
-  private setPresence(machineId: string, online: boolean) {
-    const now = Date.now();
+  /**
+   * K-605: presence rows change only when a machine goes online or offline (K-1302). `at` is the last contact, which
+   * "seen <time> ago" and the 15 minutes of K-1910 count from.
+   */
+  private setPresence(machineId: string, online: boolean, at = Date.now()) {
     const before = this.presence.get(machineId);
     if (before?.online === online) return;
     const os = before?.os ?? null;
-    this.presence.set(machineId, { online, lastSeen: now, os });
+    this.presence.set(machineId, { online, lastSeen: at, os });
     this.sql(
       "INSERT OR REPLACE INTO presence (id, online, last_seen, os) VALUES (?, ?, ?, ?)",
       machineId,
       online ? 1 : 0,
-      now,
+      at,
       os,
     );
     this.broadcast();
@@ -4893,6 +5568,209 @@ export class Kitshn extends DurableObject<Env> {
         return attachment?.kind === "machine" && attachment.check === "signed";
       }),
     );
+  }
+
+  /**
+   * K-823, K-825: each machine as placement sees it, for a Compose app with these `runsOn` labels. Only a machine
+   * online with a key (K-1708) fits now. An offline one is "unknown" while its owner labels and K-819 still hold,
+   * because its fact labels are gone while it is offline (K-635).
+   */
+  private placementCandidates(runsOn: ReadonlyArray<string>, agent: string | null): Array<Candidate> {
+    const ready = this.jobMachines();
+    const now = Date.now();
+    const needed = deployLabels(runsOn);
+    return [...this.state.machines.values()].map((machine) => {
+      const socket = this.openSocket(machine.id);
+      const attachment = socket ? attachmentOf(socket) : null;
+      const live = attachment?.kind === "machine" ? attachment : null;
+      const capabilities = live?.status?.capabilities ?? [];
+      const allowed = mayDeployOn(this.state, agent, machine.id, now);
+      const fits =
+        allowed &&
+        capabilities.includes("compose-guard") &&
+        hasLabels(machine.labels, machineFacts(live?.status ?? null), needed);
+      const ownerLabels = needed.filter((label) => !isReservedLabel(label));
+      // A connection without its first status has no facts and no capabilities yet.
+      const fit: Candidate["fit"] =
+        ready.has(machine.id) && live?.status
+          ? fits
+            ? "yes"
+            : "no"
+          : allowed && ownerLabels.every((label) => machine.labels.includes(label))
+            ? "unknown"
+            : "no";
+      return {
+        id: machine.id,
+        order: machine.order,
+        fit,
+        spreadReady: capabilities.includes("compose-spread"),
+        load: live?.sample ? Math.max(live.sample.cpu, live.sample.memory) : null,
+      };
+    });
+  }
+
+  /**
+   * K-825: drops the instances of `"every"` and spread cards whose machine no longer qualifies, and starts a build of
+   * the push branch when a machine has room for one. A card with a running deploy waits for its end.
+   */
+  private async reconcilePlacement() {
+    const actor: Author = { _tag: "kitshn", reason: "placement (K-825)" };
+    const builds: Array<{ card: string; repoId: string; branch: string; workflow: string }> = [];
+    for (const card of this.state.resources.values()) {
+      if (card.kind !== "site.compose" || card.machine === null || this.deployRuns(card.id)) continue;
+      const done = this.lastDone(card.id);
+      if (!done?.repo_id || isPreview(done.environment) || this.closedPreview(card.id)) continue;
+      const placement: Placement = placementOf(composeOf(done));
+      if (placement === "one" && (card.instances ?? []).length === 0) continue;
+      const candidates = this.placementCandidates(
+        composeOf(done)?.runsOn ?? [],
+        this.allowingAgent(done.repo_id)?.clientId ?? null,
+      );
+      const current = [card.machine, ...otherInstances(card).map((instance) => instance.machine)];
+      const drift = placementDrift(placement, candidates, current);
+      if (drift.drop.length > 0) {
+        const { notes } = this.ctx.storage.transactionSync(() => {
+          const result = this.dropInstances(card, drift.drop, actor);
+          this.insertRevision(actor, result.notes.join(" "), [], null);
+          return result;
+        });
+        console.log(notes.join(" "));
+        this.load();
+      }
+      const askedAt = this.placementBuilds.get(card.id) ?? 0;
+      if (drift.build && Date.now() - askedAt >= PLACEMENT_BUILD_GAP_MS && !this.state.paused)
+        builds.push({
+          card: card.id,
+          repoId: done.repo_id,
+          branch: done.branch,
+          workflow: done.workflow ?? AGENT_WORKFLOW,
+        });
+    }
+    this.deliverJobs();
+    this.broadcast();
+    for (const build of builds) {
+      this.placementBuilds.set(build.card, Date.now());
+      // Known limit: without the GitHub App, the next push adds the instance (K-825).
+      await this.dispatchBuild(build.repoId, build.branch, build.workflow).catch((error: unknown) =>
+        console.warn(`kitshn could not start a build for the placement of ${build.card}: ${String(error)}`),
+      );
+    }
+  }
+
+  /** K-827: the instances of a Compose card, the home one first, as `/agent/state` shows them. */
+  private instanceViews(card: Resource) {
+    // K-827: the newest run of each repository: the card's own is the home instance's.
+    const newest = new Map(
+      this.sql<{ repository: string; at: number; state: string; error: string | null }>(
+        `SELECT COALESCE(repository, '') AS repository, at, state, error FROM backups WHERE card = ? AND
+         (COALESCE(repository, ''), at) IN
+         (SELECT COALESCE(repository, ''), MAX(at) FROM backups WHERE card = ? GROUP BY COALESCE(repository, ''))`,
+        card.id,
+        card.id,
+      ).map((row) => [row.repository, { at: row.at, state: row.state, error: row.error }]),
+    );
+    const instances = cardInstances(card);
+    const primary = this.primaryOf(card);
+    return instances.map((instance) => ({
+      ...instance,
+      primary: instance.machine === primary,
+      machineName: this.state.machines.get(instance.machine)?.name ?? instance.machine,
+      backup: newest.get(instance.home ? "" : instanceRepository(card.id, instance.machine)) ?? null,
+    }));
+  }
+
+  /**
+   * K-827: whether a job of a deploy, of any instance, still waits or runs. A job that failed only because its
+   * connection dropped still counts until it would expire, because its real result can still come.
+   */
+  private deployJobsLeft(deployId: string) {
+    const [row] = this.sql<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM jobs WHERE (state IN ('queued', 'sent')
+         OR (state = 'failed' AND output = '${OFFLINE_OUTPUT}' AND expires_at > ?)) AND id IN (
+         SELECT job_id FROM deploys WHERE id = ? UNION SELECT job_id FROM deploy_instances WHERE deploy_id = ?)`,
+      Date.now(),
+      deployId,
+      deployId,
+    );
+    return (row?.n ?? 0) > 0;
+  }
+
+  /** K-821, K-827: a run rollback step waits while a job of another instance of its deploy can still end. */
+  private rollbackStepWaits(jobId: number | null) {
+    if (jobId === null) return false;
+    const [deploy] = this.sql<{ id: string }>("SELECT id FROM deploys WHERE job_id = ?", jobId);
+    return deploy !== undefined && this.deployJobsLeft(deploy.id);
+  }
+
+  /**
+   * K-827: the end of a Compose job of an instance that is not the home one. A failed or expired job makes it stale, so
+   * it may run an old build and is never the primary (K-828); a job that came up clears that. Its live site sets the
+   * status otherwise (updateLiveSites).
+   */
+  private settleInstance(cardId: string, machineId: string, ok: boolean) {
+    const card = this.state.resources.get(cardId);
+    if (!card || card.machine === machineId || !runsOnMachine(card, machineId)) return;
+    this.putResource({
+      ...card,
+      instances: (card.instances ?? []).map((instance) => {
+        if (instance.machine !== machineId) return instance;
+        const { stale: _stale, ...fresh } = instance;
+        return ok ? fresh : { ...instance, status: "failed" as const, stale: true as const };
+      }),
+    });
+    this.load();
+  }
+
+  /** K-827: the instance rows of a deploy beyond the home one. */
+  private deployInstances(deployId: string) {
+    return this.sql<DeployInstanceRow>("SELECT * FROM deploy_instances WHERE deploy_id = ?", deployId);
+  }
+
+  /**
+   * K-827: the state of a Compose deploy from its jobs: failed when one failed, done when every job that it waits
+   * for is done, else running. A deferred instance (its machine was offline at plan time) does not count.
+   */
+  private composeJobsState(row: DeployRow): {
+    readonly state: "running" | "done" | "failed" | "expired";
+    readonly output: string;
+    readonly exitCode: number | null;
+  } {
+    type JobState = { state: string; output: string; exit_code: number | null; expires_at: number };
+    const jobOf = (id: number | null) =>
+      id === null
+        ? undefined
+        : this.sql<JobState>("SELECT state, output, exit_code, expires_at FROM jobs WHERE id = ?", id)[0];
+    const now = Date.now();
+    // A dropped connection fails the job only for now: kitshn still takes its real result (OFFLINE_OUTPUT),
+    // until the job would have expired; a daemon that restarted never sends it.
+    const stateOf = (job: JobState | undefined): "running" | "done" | "failed" | "expired" => {
+      const waiting = job?.state === "failed" && job.output === OFFLINE_OUTPUT && job.expires_at > now;
+      if (job?.state === "done") return "done";
+      if (job?.state === "expired") return "expired";
+      return job?.state === "failed" && !waiting ? "failed" : "running";
+    };
+    const machineName = (id: string | null) => this.state.machines.get(id ?? "")?.name ?? id ?? "?";
+    const jobs = [
+      { machine: row.machine_id, job: jobOf(row.job_id) },
+      ...this.deployInstances(row.id)
+        .filter((instance) => instance.deferred === 0 && instance.machine_id !== row.machine_id)
+        .map((instance) => ({ machine: instance.machine_id, job: jobOf(instance.job_id) })),
+    ].map((item) => ({ ...item, state: stateOf(item.job) }));
+    const [home] = jobs;
+    if (jobs.length === 1 && home)
+      return {
+        state: home.state,
+        output: home.state === "running" ? "" : (home.job?.output ?? ""),
+        exitCode: home.job?.exit_code ?? null,
+      };
+    const ended = jobs.filter((item) => item.state !== "running");
+    const output = ended
+      .map((item) => `--- ${machineName(item.machine)}: ${item.state}\n${item.job?.output ?? ""}`)
+      .join("\n");
+    const bad = jobs.find((item) => item.state === "failed" || item.state === "expired");
+    if (bad) return { state: bad.state, output, exitCode: bad.job?.exit_code ?? null };
+    if (ended.length < jobs.length) return { state: "running", output: "", exitCode: null };
+    return { state: "done", output, exitCode: home?.job?.exit_code ?? null };
   }
 
   /** K-524: the system of a machine; its presence row changes only when the system does (K-1302). */
@@ -4965,15 +5843,20 @@ export class Kitshn extends DurableObject<Env> {
     if (attachment.check === "signed") {
       this.keyFailures.delete(machine.id);
       if (machine.key?.kind !== "public") throw new Error(`${machine.name} signed without a key.`);
-      send(socket, { type: "accepted", fingerprint: machine.key.fingerprint } satisfies ServerToDaemon);
+      send(socket, {
+        type: "accepted",
+        fingerprint: machine.key.fingerprint,
+        protocol: KITSHN_PROTOCOL,
+      } satisfies ServerToDaemon);
       // K-704: the daemon gives this name in its answer to register.
       send(socket, { type: "name", name: machine.name } satisfies ServerToDaemon);
       // K-706: a new connection gets every grant table again, from the registrations that kitshn keeps.
       for (const key of this.sentGrants.keys())
         if (key.startsWith(`${machine.id}/`)) this.sentGrants.delete(key);
-      this.pushGrants();
+      this.pushGrants(Date.now(), machine.id);
       this.sendForgotten(machine.id);
     }
+    this.sendWatch(this.mapsWatching(), [socket]);
     // K-909: after a fast reconnect the old socket's close finds this one and requeues nothing, and a removal
     // down never expires, so its result that may never come must not keep it sent.
     requeueDowns(this.query, machine.id);
@@ -5021,7 +5904,13 @@ export class Kitshn extends DurableObject<Env> {
         machine,
         `The answer does not carry a signature of ${plan.fingerprint}.`,
       );
-    this.acceptMachine(socket, { ...attachment, answered: true, check: "signed" });
+    // K-724: the protocol is known before `accepted`, so the first pushes and jobs already follow it.
+    this.acceptMachine(socket, {
+      ...attachment,
+      answered: true,
+      check: "signed",
+      protocol: namedProtocol(message["protocol"]),
+    });
   }
 
   /**
@@ -5073,7 +5962,7 @@ export class Kitshn extends DurableObject<Env> {
    * K-1702: the one place that changes the key of a machine; each change is a History revision. `also` runs in
    * the same transaction.
    */
-  private setKey(machine: Machine, key: MachineKey, actor: Actor, summary: string, also = () => {}) {
+  private setKey(machine: Machine, key: MachineKey, actor: Author, summary: string, also = () => {}) {
     const updated: Machine = { ...machine, key };
     this.ctx.storage.transactionSync(() => {
       this.sql("UPDATE machines SET body = ? WHERE id = ?", JSON.stringify(updated), machine.id);
@@ -5110,63 +5999,86 @@ export class Kitshn extends DurableObject<Env> {
     // K-1708: a connection on the token alone only reports; it changes no site, volume or job.
     if (attachment.check === "token" && message.type !== "status" && message.type !== "sample") return;
     if (message.type === "rotate") return this.rotateKey(socket, attachment, machine, message);
+    // K-724: from a daemon of another protocol major, kitshn reads only what its update needs.
+    const refusal = this.protocolRefusal(machine.id);
+    if (refusal !== null && !PROTOCOL_CARE_MESSAGES.has(String(message.type)))
+      return this.refuseByProtocol(socket, message, refusal);
     // K-1710: an ask of a local agent, only on a signed connection.
     if (message.type === "ask" && attachment.check === "signed")
       return this.answerAsk(socket, machine, message);
     if (message.type === "status" && isRecord(message.status)) {
       const status: MachineStatus = {
         version: String(message.status.version).slice(0, 40),
+        ...(message.status.protocol === undefined
+          ? {}
+          : { protocol: namedProtocol(message.status.protocol) }),
         os: String(message.status.os).slice(0, 80),
         arch: String(message.status.arch).slice(0, 20),
         hostname: String(message.status.hostname).slice(0, 80),
         capabilities: Array.isArray(message.status.capabilities)
           ? message.status.capabilities
               .filter((item): item is string => typeof item === "string")
-              .slice(0, 20)
+              .slice(0, 32)
           : [],
         tunnel: ["starting", "running", "stopped"].includes(String(message.status.tunnel))
           ? message.status.tunnel
           : "stopped",
+        ...(typeof message.status.tunnelReady === "boolean"
+          ? { tunnelReady: message.status.tunnelReady }
+          : {}),
+        ...(typeof message.status.tunnelLocations === "string"
+          ? { tunnelLocations: message.status.tunnelLocations.slice(0, 120) }
+          : {}),
         ...(typeof message.status.keptBytes === "number" &&
         Number.isSafeInteger(message.status.keptBytes) &&
         message.status.keptBytes >= 0
           ? { keptBytes: message.status.keptBytes }
           : {}),
-        // K-1751: the attesters that the daemon reports; their prefixes are the only labels that rights check.
-        ...(Array.isArray(message.status.attesters)
-          ? {
-              attesters: message.status.attesters
-                .filter(
-                  (item): item is { prefix: string; address: string } =>
-                    isRecord(item) &&
-                    typeof item["prefix"] === "string" &&
-                    typeof item["address"] === "string",
-                )
-                .slice(0, 10)
-                .map((item) => ({ prefix: item.prefix.slice(0, 32), address: item.address.slice(0, 200) })),
-            }
-          : {}),
-        ...gameStatus(message.status),
+        ...portStatus(message.status),
         // K-1708: a connection on the token alone opens no notification.
         ...(attachment.check === "signed"
           ? {
               refusedProviders: providerRefusals(message.status.refusedProviders),
               // The same shape as a refusal: the provider, since when, and why.
               offlineProviders: providerRefusals(message.status.offlineProviders),
+              providerProblems: providerRefusals(message.status.providerProblems),
+              execPaths: execPathsOf(message.status.execPaths),
             }
           : {}),
       };
       saveMachine(socket, { ...attachment, status });
+      // K-724: one log line when a daemon connects or changes its protocol; the machine card shows a refusal.
+      const protocol = daemonProtocolMatch(daemonProtocol(status), machine.name);
+      if (protocol.outcome !== "same" && attachment.status?.protocol !== status.protocol)
+        console.warn(protocol.outcome === "refuse" ? protocol.reason : protocol.warning);
       if (status.refusedProviders) this.notifyRefusals(machine, status.refusedProviders);
       if (status.offlineProviders) this.notifyOfflineProviders(machine, status.offlineProviders, Date.now());
+      // K-704: a provider that went offline now opens its notification on time, so the alarm plans it.
+      const offlineBefore = new Set(
+        (attachment.status?.offlineProviders ?? []).map((entry) => `${entry.provider} ${entry.at}`),
+      );
+      if (
+        (status.offlineProviders ?? []).some((entry) => !offlineBefore.has(`${entry.provider} ${entry.at}`))
+      )
+        void this.scheduleAlarm();
       // K-627: a daemon that connects, or that runs another release now, can start or end an update.
       if (attachment.status === null || attachment.status.version !== status.version) this.autoUpdate();
-      this.updateGameAddresses(machine.id, status.publicAddresses);
-      // K-2005: a daemon that connects gets its door plan, also an empty one: the last card may have gone while it was
+      this.updatePortAddresses(machine.id, status.publicAddresses);
+      // K-2006: a daemon that connects gets its door plan, also an empty one: the last card may have gone while it was
       // offline for longer than a plan job waits, and only an empty plan removes its table and its boot ports.
-      if (attachment.status === null && status.capabilities?.includes("doors"))
-        this.queueDoors(machine.id, { _tag: "kitshn", reason: "door plan on connect (K-2005)" }, Date.now());
+      // A first status can come before the machine has `doors`, so the plan goes out when it gets them.
+      if (!attachment.status?.capabilities?.includes("doors") && status.capabilities?.includes("doors"))
+        this.queueDoors(machine.id, { _tag: "kitshn", reason: "door plan on connect (K-2006)" }, Date.now());
       this.setMachineOs(machine.id, machineOs(status.os));
+      // K-825: a first status, or new facts or capabilities, can change where Compose instances belong.
+      if (
+        attachment.check === "signed" &&
+        (attachment.status === null ||
+          attachment.status.os !== status.os ||
+          attachment.status.arch !== status.arch ||
+          JSON.stringify(attachment.status.capabilities) !== JSON.stringify(status.capabilities))
+      )
+        void this.reconcilePlacement();
       // An update job waits for the status; it can go now.
       if (this.deliverJobs() > 0) this.broadcast();
       else this.sendMachine(machine);
@@ -5180,8 +6092,6 @@ export class Kitshn extends DurableObject<Env> {
       };
       saveMachine(socket, { ...attachment, sample });
       this.sendMachine(machine);
-      // K-1107: the sample woke the Durable Object anyway, so it checks the pings of every machine now.
-      this.checkLiveness(Date.now());
     } else if (message.type === "sites") {
       this.updateLiveSites(machine, message.sites);
     } else if (message.type === "providers") {
@@ -5197,8 +6107,6 @@ export class Kitshn extends DurableObject<Env> {
         requestId: message.requestId.slice(0, 64),
         error,
       } satisfies ServerToDaemon);
-    } else if (message.type === "audit") {
-      this.recordLinkEvent(machine, message.audit);
     } else if (message.type === "health" && attachment.check === "signed") {
       let report: HealthReport;
       try {
@@ -5209,6 +6117,7 @@ export class Kitshn extends DurableObject<Env> {
         return;
       }
       saveMachine(socket, { ...attachment, health: report });
+      this.restartSilentTunnels(machine, report);
       this.notifyHealth(machine, report);
       // K-631: "Check now" ends with this report.
       if (this.progressRows().get(machine.id)?.source._tag === "health")
@@ -5216,12 +6125,42 @@ export class Kitshn extends DurableObject<Env> {
           progress.outcome.state === "running" ? finishProgress(progress, Date.now()) : progress,
         );
       this.broadcast();
-    } else if (message.type === "desiredSet" && typeof message.kind === "string") {
+    } else if (message.type === "execStart" && attachment.check === "signed") {
+      await this.execStart(socket, machine, message);
+    } else if (message.type === "linkCall" && attachment.check === "signed") {
+      this.recordLinkCall(machine, message);
+    } else if (message.type === "execFrame" && attachment.check === "signed") {
+      this.execRelay(socket, machine, message);
+    } else if (
+      (message.type === "desiredSet" || message.type === "desiredInit") &&
+      typeof message.kind === "string"
+    ) {
       // K-709: the provider gets kitshn's own answer, also a refusal.
       // A failed write is an answer too, so the provider never waits for one that does not come.
       let error: string | null;
+      let initialized: boolean | undefined;
       try {
-        error = this.setDesiredFromMachine(machine, message);
+        if (message.type === "desiredInit") {
+          // K-709: a single storage step arbitrates with owner edits. Empty
+          // objects and disabled values are present too; never replace them.
+          const result = this.ctx.storage.transactionSync(() => {
+            const kinds =
+              this.providerRegs.get(machine.id)?.find((item) => item.name === message.provider)?.kinds ?? [];
+            const problem = desiredProblem(kinds, message.kind, message.value);
+            if (problem) return { error: problem, initialized: false };
+            const exists =
+              this.sql(
+                "SELECT 1 FROM desired_state WHERE kind = ? AND machine_id = ?",
+                message.kind,
+                message.part === "shared" ? "" : machine.id,
+              ).length > 0;
+            if (exists) return { error: null, initialized: false };
+            const error = this.setDesiredFromMachine(machine, message);
+            return { error, initialized: error === null };
+          });
+          error = result.error;
+          initialized = result.initialized;
+        } else error = this.setDesiredFromMachine(machine, message);
       } catch (thrown) {
         console.error(`kitshn could not store the desired state of ${machine.name}: ${String(thrown)}`);
         error = `kitshn could not store the state: ${thrown instanceof Error ? thrown.message : String(thrown)}`;
@@ -5231,6 +6170,7 @@ export class Kitshn extends DurableObject<Env> {
           type: "requestAnswer",
           requestId: message.requestId.slice(0, 64),
           error,
+          ...(initialized === undefined ? {} : { initialized }),
         } satisfies ServerToDaemon);
     } else if (
       message.type === "applied" &&
@@ -5252,6 +6192,13 @@ export class Kitshn extends DurableObject<Env> {
         this.sendMachine(machine);
         // K-411: a taken address waits for this push, so its next step runs now, not at the next cycle.
         if (this.sitesOf(machine.id).some((site) => site.state === "handover")) await this.scheduleAlarm();
+      }
+      // K-1608: the daemon applied a push that is no longer current, for example one that an Undo replaced while it
+      // was on the way. `pushGrants` skips a hash that `applied` holds, so the current push goes again here.
+      const current = this.hashesOf(machine.id).get(message.key);
+      if (current !== undefined && current !== message.hash) {
+        this.sentGrants.delete(id);
+        this.pushGrants();
       }
     } else if (message.type === "icon") {
       await this.liveIcon(machine, message.site, message.icon);
@@ -5304,6 +6251,7 @@ export class Kitshn extends DurableObject<Env> {
       );
       // Only a result that this machine's job took counts; a stray or late one changes no deploy.
       const [{ taken } = { taken: 0 }] = this.sql<{ taken: number }>("SELECT changes() AS taken");
+      if (taken) this.jobsEnded([message.id]);
       // K-1131: the asker of a wizard site counts only when its job made the site.
       const asker = taken ? this.siteAskers.get(message.id) : undefined;
       if (asker && result.ok === true) asker.done = true;
@@ -5330,12 +6278,14 @@ export class Kitshn extends DurableObject<Env> {
         command?.kind === "compose" ||
         command?.kind === "compose-redeploy" ||
         command?.kind === "compose-rollback"
-      )
+      ) {
         this.settleNotifyToken(`job:${message.id}`, result.ok === true);
+        this.settleInstance(command.project, machine.id, result.ok === true);
+      }
       // K-909: undo never brings a deleted volume back, so History records the delete as an action once it ran.
       if (job && command?.kind === "compose-volume-remove" && result.ok === true) {
         this.insertRevision(
-          JSON.parse(job.actor) as Actor,
+          JSON.parse(job.actor) as Author,
           `Deleted the volume ${command.volume} on ${machine.name} (K-909)`,
           [],
           null,
@@ -5345,22 +6295,45 @@ export class Kitshn extends DurableObject<Env> {
       if (command?.kind === "compose" || command?.kind === "compose-rollback") {
         // K-820: a build that came up clears the give-up note of the CLI; a failed one keeps the machine's error.
         const error = jobError(String(result.output ?? ""));
-        this.sql(
-          "UPDATE deploys SET state = ?, reason = ?, images = ? WHERE job_id = ? AND state = 'running'",
-          result.ok === true ? "done" : "failed",
-          result.ok === true ? null : error,
-          result.ok === true ? keptImages(result["images"]) : null,
+        // K-827: the deploy settles once every job that it waits for ended; the home job keeps the image tags.
+        const [home] = this.sql<DeployRow>(
+          "SELECT * FROM deploys WHERE job_id = ? AND state = 'running'",
           message.id,
         );
-        if (command.kind === "compose-rollback" && command.group)
-          this.continueRollback(command.group, result.ok === true ? null : error);
+        const [instance] = home
+          ? []
+          : this.sql<{ deploy_id: string }>(
+              "SELECT deploy_id FROM deploy_instances WHERE job_id = ?",
+              message.id,
+            );
+        if (home && result.ok === true)
+          this.sql("UPDATE deploys SET images = ? WHERE id = ?", keptImages(result["images"]), home.id);
+        const [row] = home
+          ? [home]
+          : instance
+            ? this.sql<DeployRow>(
+                "SELECT * FROM deploys WHERE id = ? AND state = 'running'",
+                instance.deploy_id,
+              )
+            : [];
+        const settled = row ? this.composeJobsState(row).state : "running";
+        if (row && settled !== "running")
+          this.sql(
+            "UPDATE deploys SET state = ?, reason = ? WHERE id = ?",
+            settled === "done" ? "done" : "failed",
+            settled === "done" ? null : error,
+            row.id,
+          );
+        // K-821, K-827: a rollback of a run goes on once this card settled on every instance.
+        if (command.kind === "compose-rollback" && command.group && row && settled !== "running")
+          this.continueRollback(command.group, settled === "done" ? null : error);
         // K-817: a failed build gives up the DNS record that its plan made.
         if (result.ok !== true) void this.scheduleAlarm();
       }
       // K-628: History shows each update of a daemon, and the next automatic update can go.
       if (job && command?.kind === "update") {
         this.insertRevision(
-          JSON.parse(job.actor) as Actor,
+          JSON.parse(job.actor) as Author,
           result.ok === true
             ? `Updated the daemon of ${machine.name} to edge-${command.version} (K-628)`
             : `The daemon of ${machine.name} did not update to edge-${command.version}: ${
@@ -5377,8 +6350,9 @@ export class Kitshn extends DurableObject<Env> {
         this.autoUpdate();
       }
       if (job && (command?.kind === "backup" || command?.kind === "backup-restore"))
-        this.backupResult(command, JSON.parse(job.actor) as Actor, result);
-      if (command?.kind === "compose" && this.env.BUCKET) {
+        this.backupResult(command, JSON.parse(job.actor) as Author, result);
+      // K-827: the files stay while another instance of the deploy still waits for them.
+      if (command?.kind === "compose" && this.env.BUCKET && !this.deployJobsLeft(command.deployId)) {
         void this.env.BUCKET.delete([
           deployObject(command.deployId, "source.tgz"),
           deployObject(command.deployId, "params.env"),
@@ -5396,7 +6370,7 @@ export class Kitshn extends DurableObject<Env> {
     const name = typeof input["name"] === "string" ? input["name"].trim() : "";
     if (!name || name.length > 60)
       return Response.json({ error: "Give the machine a name of 1 to 60 characters." }, { status: 400 });
-    const labels = parseLabels(input["labels"] ?? []);
+    const labels = parseOwnerLabels(input["labels"] ?? []);
     if (typeof labels === "string") return Response.json({ error: labels }, { status: 400 });
     const id = machineIdFor(name);
     const account = `/accounts/${this.env.CLOUDFLARE_ACCOUNT_ID}`;
@@ -5450,6 +6424,13 @@ export class Kitshn extends DurableObject<Env> {
       };
       this.ctx.storage.transactionSync(() => {
         this.sql("INSERT INTO machines (id, body) VALUES (?, ?)", id, JSON.stringify(machine));
+        // K-1778: the machine actor comes with the machine; "Add machine" is an action, so its actor is no revision.
+        const actor: Actor = {
+          id: machineActorId(id),
+          name,
+          credentials: [{ _tag: "machine", machineId: id }],
+        };
+        this.sql("INSERT OR REPLACE INTO actors (id, body) VALUES (?, ?)", actor.id, JSON.stringify(actor));
         this.putResource(resource);
         this.sql(
           "INSERT INTO join_codes (lookup, machine_id, iv, sealed, expires_at) VALUES (?, ?, ?, ?, ?)",
@@ -5686,13 +6667,13 @@ export class Kitshn extends DurableObject<Env> {
       for (const card of this.state.resources.values())
         if (card.machine === id && card.provider && !this.sitesOf(id).some((site) => site.id === card.id))
           forgotten.push(this.forgetCard(card.id));
-      // K-2001: the game cards of the machine, or that it relays, go too, with their doors; the alarm removes their
+      // K-2001: the port cards of the machine, or that it relays, go too, with their doors; the alarm removes their
       // records, so no name keeps pointing at an address that the provider may give to someone else.
-      for (const row of this.gameRows("machine_id = ? OR relay_id = ?", id, id)) {
-        this.sql("DELETE FROM games WHERE card_id = ?", row.card_id);
+      for (const row of this.portRows("machine_id = ? OR relay_id = ?", id, id)) {
+        this.sql("DELETE FROM port_cards WHERE card_id = ?", row.card_id);
         this.sql("DELETE FROM doors WHERE card_id = ?", row.card_id);
         forgotten.push(this.forgetCard(row.card_id));
-        const other = doorMachine(gameOf(row));
+        const other = doorMachine(portOf(row));
         if (other !== id) relaysLeft.add(other);
       }
       const key = machine.key?.kind === "public" ? ` and its key ${machine.key.fingerprint}` : "";
@@ -5701,8 +6682,10 @@ export class Kitshn extends DurableObject<Env> {
     this.presence.delete(id);
     this.keyFailures.delete(id);
     this.load();
-    // A relay machine that stays drops the ports of the removed machine's games.
+    // A relay machine that stays drops the ports of the removed machine's port cards.
     for (const relay of relaysLeft) this.queueDoors(relay, caller.actor, Date.now());
+    // K-825: an instance on the removed machine leaves its card.
+    void this.reconcilePlacement();
     this.broadcast();
     void this.scheduleAlarm();
     return Response.json({ removed: id });
@@ -5718,14 +6701,44 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /** K-1776: why an approved job may no longer go out, because the machine that asked lost its access; or null. */
-  private approvalGone(approval: OwnerApproval, now: number) {
-    const asker = this.state.machines.get(approval.machineId);
-    if (!asker) return `${NO_LONGER_ALLOWED} the machine that asked is gone.`;
-    if (keyMark(asker) !== approval.key)
-      return `${NO_LONGER_ALLOWED} the key of the machine that asked changed.`;
-    return machineRightOff(this.state, asker.id, approval.right, now)
-      ? `${NO_LONGER_ALLOWED} the owner set the right "${MACHINE_RIGHT_NAMES[approval.right]}" to off.`
-      : null;
+  private approvalGone(
+    approval: JobApproval,
+    visitor: Visitor,
+    machineId: string | null,
+    kind: Command["kind"],
+    now: number,
+  ) {
+    // K-1778: the verified labels of the call go with the approval, so its agent actors count again at delivery.
+    let attested: Attested | null = null;
+    if ("credential" in approval) {
+      // K-1778: a token or a login asked; it ends when no actor holds the credential, or when its effect is off.
+      const held = [...this.state.actors.values()].some((actor) =>
+        actor.credentials.some((credential) => credentialKey(credential) === approval.credential),
+      );
+      if (!held) return `${NO_LONGER_ALLOWED} no actor holds the credential that asked.`;
+    } else {
+      const asker = this.state.machines.get(approval.machineId);
+      if (!asker) return `${NO_LONGER_ALLOWED} the machine that asked is gone.`;
+      if (keyMark(asker) !== approval.key)
+        return `${NO_LONGER_ALLOWED} the key of the machine that asked changed.`;
+      attested = this.attestedOf(asker.id, approval.labels ?? {});
+    }
+    if (approval.right !== null && rightOff(this.state, visitor, approval.right, now, attested))
+      return `${NO_LONGER_ALLOWED} the owner set the effect "${approval.right}" to off.`;
+    // K-1777: only the gate let it in, so the effect that let it in must still be automatic, not only "not off".
+    if (
+      approval.automatic !== undefined &&
+      effectiveMode(this.state, visitor, approval.automatic, now, attested).mode !== "automatic"
+    )
+      return `${NO_LONGER_ALLOWED} the effect "${approval.automatic}" of the caller is no longer automatic.`;
+    // K-718: only the gate let this job in, so a command that gives a shell needs the whole machine again now.
+    if (
+      !approval.person &&
+      !CLOSED_COMMANDS.has(kind) &&
+      (machineId === null || !agentMayRunOn(this.state, visitor, machineId, now))
+    )
+      return `${NO_LONGER_ALLOWED} the machine that asked no longer manages every card of the target machine (K-718).`;
+    return null;
   }
 
   /** K-622: why an agent may not update this daemon now, or null. The status is unknown while it is offline. */
@@ -5788,7 +6801,7 @@ export class Kitshn extends DurableObject<Env> {
    * portal keep their own paths (`tunnelConfig`).
    */
   private async takeAddress(caller: Caller, id: string, api: Api) {
-    if (!this.isOwner(caller.visitor))
+    if (!this.callerIsOwner(caller))
       return Response.json({ error: "Only the owner takes an address over." }, { status: 403 });
     const refused = () => {
       const card = this.state.resources.get(id);
@@ -5878,7 +6891,7 @@ export class Kitshn extends DurableObject<Env> {
    * while the portal still holds the exact host, so the host never stays without an application.
    */
   private async giveAddressBack(caller: Caller, id: string, api: Api) {
-    if (!this.isOwner(caller.visitor))
+    if (!this.callerIsOwner(caller))
       return Response.json({ error: "Only the owner gives an address back." }, { status: 403 });
     const card = this.state.resources.get(id);
     const site = this.liveSites.get(id);
@@ -5955,7 +6968,7 @@ export class Kitshn extends DurableObject<Env> {
 
   /** K-538: a failed action stays on its card until someone with control dismisses it. */
   private dismissProgress(caller: Caller, id: string) {
-    if (!this.canControl(caller.visitor, id))
+    if (!this.callerControls(caller, id))
       return Response.json({ error: "Dismiss needs control on the card." }, { status: 403 });
     if (this.progressRows().get(id)?.progress.outcome.state !== "failed")
       return Response.json({ error: "This card has no failed action." }, { status: 409 });
@@ -5998,7 +7011,7 @@ export class Kitshn extends DurableObject<Env> {
   private forgetProvider(caller: Caller, machineId: string, name: string, card: string | null) {
     const machine = this.state.machines.get(machineId);
     if (!machine) return Response.json({ error: `No machine "${machineId}" exists.` }, { status: 404 });
-    if (!this.canControl(caller.visitor, machineId))
+    if (!this.callerControls(caller, machineId))
       return Response.json({ error: "Forgetting a provider needs control on its machine." }, { status: 403 });
     // The status that the daemon last reported: an offline machine whose daemon still has the provider brings it back.
     const running = [...this.state.resources.values()].some(
@@ -6044,11 +7057,9 @@ export class Kitshn extends DurableObject<Env> {
 
   /** K-704: tells a signed connection of the machine about each provider that the owner forgot. */
   private sendForgotten(machineId: string) {
-    const socket = this.ctx.getWebSockets(machineId).find((item) => {
-      const attachment = attachmentOf(item);
-      return attachment?.kind === "machine" && attachment.check === "signed";
-    });
-    if (!socket) return;
+    const socket = this.signedSocket(machineId);
+    // K-724: a daemon of another protocol major gets no push, and this is one.
+    if (!socket || this.protocolRefusal(machineId) !== null) return;
     for (const { name } of this.sql<{ name: string }>(
       "SELECT name FROM forgotten_providers WHERE machine_id = ?",
       machineId,
@@ -6078,6 +7089,8 @@ export class Kitshn extends DurableObject<Env> {
                 card: card.id,
                 kind: card.kind,
                 level: levelName(card, level),
+                // K-1617: from the open socket, no row read, so a desktop skips an offline machine.
+                online: this.openSocket(machine.id) !== null,
               },
             ];
       }),
@@ -6091,7 +7104,7 @@ export class Kitshn extends DurableObject<Env> {
   private cancelJob(
     id: number,
     who: { readonly machine: Machine } | { readonly caller: Caller },
-    actor: Actor,
+    actor: Author,
   ): string | null {
     const [job] = Number.isSafeInteger(id)
       ? this.sql<{ machine_id: string | null; state: string; actor: string }>(
@@ -6102,10 +7115,10 @@ export class Kitshn extends DurableObject<Env> {
     if (!job) return `No job ${id} exists.`;
     if ("machine" in who) {
       // A local user cancels only what its machine queued; a job that someone else queued needs control, on the map.
-      const queuedBy = JSON.parse(job.actor) as Actor;
+      const queuedBy = JSON.parse(job.actor) as Author;
       if (queuedBy._tag !== "machine" || queuedBy.machineId !== who.machine.id)
         return `Job ${id} was not queued by ${who.machine.name}; cancel it on the map, with control on its machine (K-1612).`;
-    } else if (job.machine_id !== null && !this.canControl(who.caller.visitor, job.machine_id))
+    } else if (job.machine_id !== null && !this.callerControls(who.caller, job.machine_id))
       return "Cancelling a job needs control on its machine.";
     if (job.state !== "queued") return `Job ${id} is ${job.state}, so it cannot be cancelled.`;
     const name = actorName(actor);
@@ -6133,7 +7146,7 @@ export class Kitshn extends DurableObject<Env> {
     const checking: Array<string> = [];
     const skipped: Array<{ readonly machine: string; readonly reason: string }> = [];
     for (const machine of this.state.machines.values()) {
-      if (!this.canControl(caller.visitor, machine.id)) continue;
+      if (!this.callerControls(caller, machine.id)) continue;
       const socket = this.openSocket(machine.id);
       const attachment = socket ? attachmentOf(socket) : null;
       if (!socket || attachment?.kind !== "machine" || attachment.check !== "signed") {
@@ -6215,7 +7228,9 @@ export class Kitshn extends DurableObject<Env> {
     return queued;
   }
 
-  private addJob(caller: Caller, body: unknown, ownerApproved: OwnerApproval | null = null) {
+  private addJob(caller: Caller, body: unknown, approvedBy: JobApproval | null = null) {
+    // K-1777: a job of a gated call carries the gate's approval; its delivery checks K-718 again only without a person.
+    const ownerApproved = approvedBy ?? caller.gated?.approval ?? null;
     const input = (typeof body === "object" && body !== null ? body : {}) as Record<string, unknown>;
     const parsed = parseCommand(input["command"]);
     if (typeof parsed === "string") return Response.json({ error: parsed }, { status: 400 });
@@ -6256,7 +7271,7 @@ export class Kitshn extends DurableObject<Env> {
         : parsed.kind === "compose-volume-remove" && orphan
           ? { ...parsed, project: orphan.project }
           : (providerCommand ?? parsed);
-    if (machineId !== null && !ownerApproved && !this.canControl(caller.visitor, machineId)) {
+    if (machineId !== null && !ownerApproved && !this.callerControls(caller, machineId)) {
       return Response.json(
         {
           error:
@@ -6279,7 +7294,8 @@ export class Kitshn extends DurableObject<Env> {
         now,
         // K-613: an approval covers what its person saw, for a short time. Limit: a private card that lands within this
         // hour is still in reach of the job. Revisit if owners need longer, then fail the job when the cards changed.
-        now + (ownerApproved ? DEPLOY_MS : JOB_EXPIRY_MS),
+        // K-1777: a gated job that no person approved has its checks again at delivery, so it keeps the normal expiry.
+        now + (ownerApproved?.person === true ? DEPLOY_MS : JOB_EXPIRY_MS),
         JSON.stringify(caller.actor),
         JSON.stringify(ownerApproved ? { ...caller.visitor, ownerApproved } : caller.visitor),
         // K-613: "when online and idle" waits until no provider of the machine reports busy (K-1608).
@@ -6336,11 +7352,16 @@ export class Kitshn extends DurableObject<Env> {
     for (const job of queued) {
       const visitor = JSON.parse(job.visitor) as Visitor & {
         readonly kitshn?: true;
-        readonly ownerApproved?: OwnerApproval | null;
+        readonly ownerApproved?: JobApproval | null;
       };
       const queuedCommand = JSON.parse(job.command) as Command;
       // K-1776: an approval holds only while the machine that asked keeps its access.
-      const gone = visitor.ownerApproved ? this.approvalGone(visitor.ownerApproved, Date.now()) : null;
+      // K-1504: the pause ends the queued jobs of agents, also an approved job that a race queued after the pause.
+      const gone = !visitor.ownerApproved
+        ? null
+        : this.state.paused
+          ? PAUSE_ENDED_JOB
+          : this.approvalGone(visitor.ownerApproved, visitor, job.machine_id, queuedCommand.kind, Date.now());
       if (gone !== null) {
         this.sql("UPDATE jobs SET state = 'failed', output = ? WHERE id = ?", gone, job.id);
         this.endStep(job.id);
@@ -6389,16 +7410,22 @@ export class Kitshn extends DurableObject<Env> {
       }
       // A job that kitshn makes itself (a deploy) needs no member with control (K-614).
       const allowed = new Set(
-        visitor.kitshn || visitor.ownerApproved
-          ? online
-          : [...online].filter((id) => this.mayRunOn(visitor, id, queuedCommand.kind)),
+        (visitor.kitshn || visitor.ownerApproved
+          ? [...online]
+          : [...online].filter((id) => this.mayRunOn(visitor, id, queuedCommand.kind))
+        ).filter((id) => PROTOCOL_CARE_JOBS.has(queuedCommand.kind) || this.protocolRefusal(id) === null),
       );
       const machine =
         job.machine_id !== null
           ? allowed.has(job.machine_id)
             ? (this.state.machines.get(job.machine_id) ?? null)
             : null
-          : pickMachine(this.state.machines.values(), allowed, JSON.parse(job.labels) as Array<string>);
+          : pickMachine(
+              this.state.machines.values(),
+              allowed,
+              JSON.parse(job.labels) as Array<string>,
+              (each) => this.liveFacts(each.id),
+            );
       if (!machine) continue;
       if (job.when_idle === 1 && this.busy(machine.id)) continue;
       const socket = this.openSocket(machine.id);
@@ -6411,6 +7438,20 @@ export class Kitshn extends DurableObject<Env> {
           job.id,
         );
         continue;
+      }
+      // K-634: an older daemon runs a job kind that it does not know as a shell command with no script.
+      if (command.kind === "tunnel-restart") {
+        const status = this.machineView(machine).status;
+        // The daemon sends its status just after it connects; the job waits for it.
+        if (!status) continue;
+        if (!status.capabilities?.includes("tunnel-restart")) {
+          this.sql(
+            "UPDATE jobs SET state = 'failed', output = ? WHERE id = ?",
+            `The daemon of ${machine.name} cannot restart its tunnel yet. Update daemon first.`,
+            job.id,
+          );
+          continue;
+        }
       }
       if (command.kind === "update") {
         // K-617: the version at delivery, so a job that waited never installs an older release.
@@ -6507,6 +7548,52 @@ export class Kitshn extends DurableObject<Env> {
       : null;
   }
 
+  /** K-636: the rollout of the Worker's release, for the rollout operation. */
+  private currentRollout() {
+    return rolloutView(
+      this.env.KITSHN_VERSION,
+      KITSHN_PROTOCOL,
+      this.rollout(),
+      [...this.state.machines.values()].map((machine) => ({
+        id: machine.id,
+        name: machine.name,
+        order: machine.order,
+        autoUpdate: machine.autoUpdate !== false,
+        hasKey: machine.key?.kind === "public",
+        status: this.liveStatus(machine.id),
+        busy: this.busy(machine.id),
+      })),
+      this.state.paused !== null,
+    );
+  }
+
+  /**
+   * K-636: starts or goes on with the rollout of the Worker's release, and answers where it stands. A person also ends
+   * a stopped rollout, so the failed machine gets its update again; an agent only reads it (K-627).
+   */
+  private startRollout(caller: Caller, body: unknown) {
+    const version = isRecord(body) && typeof body["version"] === "string" ? body["version"] : null;
+    if (version !== null && version !== this.env.KITSHN_VERSION)
+      return Response.json(
+        {
+          error: `kitshn runs edge-${this.env.KITSHN_VERSION}, not edge-${version}. Deploy the Worker first: kitshn rollout ${version} on a machine with CLOUDFLARE_API_TOKEN (K-636).`,
+        },
+        { status: 409 },
+      );
+    // K-636: a person, or a call that a person approved, ends a stopped rollout; the gate asks the Owner for it.
+    const person = !this.isAgentSender(caller.visitor) || caller.gated?.approval.person === true;
+    if (person && this.rolloutStopped()) this.saveRollout({ ...this.rollout(), failed: null });
+    this.autoUpdate();
+    this.broadcast();
+    return Response.json(this.currentRollout());
+  }
+
+  /** K-627: a step of the Worker's release failed, so no daemon updates until a person ends it. */
+  private rolloutStopped() {
+    const rollout = this.rollout();
+    return rollout.version === this.env.KITSHN_VERSION && rollout.failed !== null && rollout.step === null;
+  }
+
   /** K-627: the rollout step is over without a failure: its job was cancelled or dropped. */
   private endStep(jobId: number) {
     const rollout = this.rollout();
@@ -6590,6 +7677,21 @@ export class Kitshn extends DurableObject<Env> {
     return delivered + this.deliverJobs() > 0 || next !== null;
   }
 
+  /** K-627: one release check at wake; a failed check is retried on the next wake. */
+  private resumeAutoUpdatesAfterWake() {
+    try {
+      const version = this.env.KITSHN_VERSION;
+      if (!isRelease(version) || this.meta("daemon_rollout_seen_version") === version) return;
+      this.autoUpdate();
+      // Map sockets can survive the deployment too. Show the new release and any rollout it started (K-628).
+      this.broadcast();
+      this.setMeta("daemon_rollout_seen_version", version);
+    } catch (error) {
+      // A rollout error must not stop the rest of kitshn from waking; no marker means a later wake retries.
+      console.error(`kitshn could not check daemon updates at wake: ${String(error)}`);
+    }
+  }
+
   /** K-609: the owner sets the labels and the order of a machine. K-626: and "Update daemon automatically". */
   private updateMachine(caller: Caller, id: string, body: unknown) {
     const input = (typeof body === "object" && body !== null ? body : {}) as Record<string, unknown>;
@@ -6605,7 +7707,7 @@ export class Kitshn extends DurableObject<Env> {
     const machine = this.state.machines.get(id) ?? before;
     if (input["labels"] === undefined && input["order"] === undefined && input["allow"] === undefined)
       return Response.json(machine);
-    const labels = input["labels"] === undefined ? machine.labels : parseLabels(input["labels"]);
+    const labels = input["labels"] === undefined ? machine.labels : parseOwnerLabels(input["labels"]);
     if (typeof labels === "string") return Response.json({ error: labels }, { status: 400 });
     const order = input["order"] === undefined ? machine.order : Number(input["order"]);
     if (!Number.isInteger(order) || order < 0 || order > 10_000) {
@@ -6625,6 +7727,8 @@ export class Kitshn extends DurableObject<Env> {
       );
     });
     this.load();
+    // K-825: a label change can add or drop Compose instances.
+    void this.reconcilePlacement();
     this.deliverJobs();
     this.broadcast();
     return Response.json(updated);
@@ -6680,11 +7784,49 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /** Returns how many jobs expired. */
+  /** K-1612: a machine that queued a job with an ask hears of its end, so its agent needs no polling. */
+  private jobsEnded(ids: ReadonlyArray<number>) {
+    for (const id of ids) {
+      const [job] = this.sql<{ state: string; exit_code: number | null; output: string; actor: string }>(
+        "SELECT state, exit_code, output, actor FROM jobs WHERE id = ?",
+        id,
+      );
+      if (!job || (job.state !== "done" && job.state !== "failed" && job.state !== "expired")) continue;
+      const actor = JSON.parse(job.actor) as Author;
+      const socket = actor._tag === "machine" ? this.openSocket(actor.machineId) : null;
+      if (socket)
+        send(socket, {
+          type: "jobEnded",
+          jobId: id,
+          state: job.state,
+          exitCode: job.exit_code,
+          output: job.output.slice(-16_000),
+        } satisfies ServerToDaemon);
+    }
+  }
+
   private expireJobs(now: number) {
-    const expired = this.sql(
+    const rows = this.sql<{ id: number }>(
       "UPDATE jobs SET state = 'expired' WHERE state IN ('queued', 'sent') AND expires_at <= ? RETURNING id",
       now,
-    ).length;
+    );
+    this.jobsEnded(rows.map((row) => row.id));
+    // K-827: an instance whose Compose job expired keeps its old build, so it is stale.
+    for (const { id } of rows) {
+      const [job] = this.sql<{ command: string; machine_id: string | null }>(
+        "SELECT command, machine_id FROM jobs WHERE id = ?",
+        id,
+      );
+      const command = job ? (JSON.parse(job.command) as Command) : null;
+      if (
+        job?.machine_id &&
+        (command?.kind === "compose" ||
+          command?.kind === "compose-redeploy" ||
+          command?.kind === "compose-rollback")
+      )
+        this.settleInstance(command.project, job.machine_id, false);
+    }
+    const expired = rows.length;
     // K-627: an expired step ends without a failure, and the next machine can go.
     if (expired > 0) this.autoUpdate();
     return expired;
@@ -6789,7 +7931,7 @@ export class Kitshn extends DurableObject<Env> {
       checking ||
       (ready("DNS") && this.dnsWork().length > 0) ||
       (ready("routes") && this.routeWork().length > 0) ||
-      (ready("game DNS") && this.gameDnsWork(now))
+      (ready("port card DNS") && this.portDnsWork(now))
     );
   }
 
@@ -6818,24 +7960,81 @@ export class Kitshn extends DurableObject<Env> {
     return { _tag: "forget", id, before: null, after: null };
   }
 
+  /**
+   * K-828: the machine of the primary instance of a card, or its home machine for a card without instances. Only a
+   * spread app fails over; the current primary is the machine whose tunnel the record of the main address names.
+   */
+  private primaryOf(card: Resource) {
+    const done = this.lastDone(card.id);
+    const failover = typeof placementOf(done ? composeOf(done) : null) !== "string";
+    const [record] = this.sql<{ content: string }>(
+      "SELECT content FROM dns_objects WHERE address = ? AND error IS NULL",
+      card.addresses[0] ?? "",
+    );
+    const current =
+      [...this.state.machines.values()].find(
+        (machine) => `${machine.tunnelId}.cfargotunnel.com` === record?.content,
+      )?.id ?? null;
+    const online = this.onlineMachines();
+    const primary = primaryInstance(
+      cardInstances(card),
+      (machineId) => this.state.machines.get(machineId)?.order ?? Number.MAX_SAFE_INTEGER,
+      (machineId) => online.has(machineId),
+      { failover, current },
+    );
+    return primary?.machine ?? card.machine;
+  }
+
+  /**
+   * K-828: the site entries that DNS records and offline routes follow: an address that several instances serve keeps
+   * only the entry of the primary; an instance address keeps its own.
+   */
+  private recordSites(sites: ReadonlyArray<LiveSite>): Array<LiveSite> {
+    const primaries = new Map<string, string | null>();
+    return sites.filter((site) => {
+      const card = this.state.resources.get(site.id);
+      if (card?.kind !== "site.compose" || (card.instances ?? []).length === 0) return true;
+      if (card.instances?.some((instance) => instance.address === site.address)) return true;
+      if (!primaries.has(card.id)) primaries.set(card.id, this.primaryOf(card));
+      return primaries.get(card.id) === site.machineId;
+    });
+  }
+
+  /** K-824: the Compose card whose instance on this machine serves this address, if any. */
+  private instanceOwner(site: Pick<LiveSite, "machineId" | "address">): Resource | undefined {
+    return [...this.state.resources.values()].find(
+      (resource) =>
+        resource.kind === "site.compose" &&
+        (resource.instances ?? []).some(
+          (instance) => instance.machine === site.machineId && instance.address === site.address,
+        ),
+    );
+  }
+
+  /** K-824, K-410: the card whose Access application guards a live site: its instance card, or the site's own. */
+  private siteCard(site: Pick<LiveSite, "id" | "machineId" | "address">) {
+    return this.instanceOwner(site)?.id ?? site.id;
+  }
+
   private sitesOf(machineId: string) {
     return [...this.liveSites.values()].filter((site) => site.machineId === machineId);
   }
 
   /** K-603: the Access check of each ingress rule, from the Access objects that Cloudflare accepted. */
   private ingressAccessOf() {
-    return (site: LiveSite) => ingressAccess(site, this.access, this.env.ACCESS_TEAM_DOMAIN);
+    return (site: LiveSite) =>
+      ingressAccess({ ...site, id: this.siteCard(site) }, this.access, this.env.ACCESS_TEAM_DOMAIN);
   }
 
   /** Live sites whose address is checked and whose Access application exists in Cloudflare. */
   /**
-   * K-2008: the relay host of each game behind NAT, as a live site of the game's machine. So it gets its tunnel
+   * K-2009: the relay host of each port card behind NAT, as a live site of the port card's machine. So it gets its tunnel
    * ingress, its proxied record and its Access check from the site path; `tcp://` makes cloudflared carry raw TCP.
    */
   private relaySites(): Array<LiveSite> {
-    return this.gameRows("relay_id IS NOT NULL").flatMap((row) => {
+    return this.portRows("relay_id IS NOT NULL").flatMap((row) => {
       const address = this.state.resources.get(row.card_id)?.addresses[1];
-      const port = gameOf(row).ports[0];
+      const port = portOf(row).ports[0];
       if (!address || !port) return [];
       return [
         {
@@ -6889,9 +8088,9 @@ export class Kitshn extends DurableObject<Env> {
       [...this.liveSites.values(), ...this.relaySites()].filter(
         (site) => machineId === undefined || site.machineId === machineId,
       ),
-      (id) => this.state.resources.get(id),
+      (site) => this.state.resources.get(site.id) ?? this.instanceOwner(site),
       // The application exists in Cloudflare; a later failed update of it does not take the site down.
-      (site) => Boolean(this.access.get(`app:${site.id}:${site.address}`)?.cfId),
+      (site) => Boolean(this.access.get(`app:${this.siteCard(site)}:${site.address}`)?.cfId),
     );
   }
 
@@ -6917,6 +8116,8 @@ export class Kitshn extends DurableObject<Env> {
               ? resource.provider.site === report.name && resource.provider.droppedAt === undefined
               : resource.kind === "site.compose" && resource.addresses.includes(address)),
         );
+        // K-824: the socket of another instance of a Compose card serves the address of that instance.
+        const owner = app ? undefined : this.instanceOwner({ machineId: machine.id, address });
         // K-909: a removed Compose app keeps its row until its compose-down ends, so it never turns into a
         // live site card meanwhile.
         const id =
@@ -6924,7 +8125,8 @@ export class Kitshn extends DurableObject<Env> {
           this.sitesOf(machine.id).find((site) => site.address === address)?.id ??
           liveSiteId(machine.id, report.name);
         const other = [...this.state.resources.values()].find(
-          (resource) => resource.id !== id && resource.addresses.includes(address),
+          (resource) =>
+            resource.id !== id && resource.id !== owner?.id && resource.addresses.includes(address),
         );
         const otherSite = [...this.liveSites.values()].find(
           (site) => site.id !== id && site.address === address,
@@ -6961,6 +8163,16 @@ export class Kitshn extends DurableObject<Env> {
         // K-705: a provider reports the status of its own cards.
         if (resource && !resource.provider)
           this.putResource({ ...resource, status: report.up ? "running" : "stopped" });
+        // K-827: the instance has its own status on the card.
+        if (owner)
+          this.putResource({
+            ...owner,
+            instances: (owner.instances ?? []).map((instance) =>
+              instance.machine === machine.id
+                ? { ...instance, status: report.up ? "running" : "stopped" }
+                : instance,
+            ),
+          });
       }
       for (const site of this.sitesOf(machine.id)) {
         if (keep.has(site.id)) continue;
@@ -6969,6 +8181,17 @@ export class Kitshn extends DurableObject<Env> {
         this.setHandover(site.id, null);
         // K-705: a provider card stays when its site goes; the provider removes the card itself.
         if (this.state.resources.get(site.id)?.provider) continue;
+        // K-827: an instance site is no card; its instance stays on the card until placement drops it (K-825).
+        const owner = this.instanceOwner(site);
+        if (owner) {
+          this.putResource({
+            ...owner,
+            instances: (owner.instances ?? []).map((instance) =>
+              instance.machine === machine.id ? { ...instance, status: "stopped" as const } : instance,
+            ),
+          });
+          continue;
+        }
         // A removed app has its History entry already (K-909).
         const hadCard = this.state.resources.has(site.id);
         const forgotten = this.forgetCard(site.id);
@@ -6999,6 +8222,22 @@ export class Kitshn extends DurableObject<Env> {
       this.sql<{ record_id: string }>("SELECT record_id FROM dns_objects").map((row) => row.record_id),
     );
     for (const site of [...this.liveSites.values()].filter((item) => item.state === "checking")) {
+      // K-824: the plan checked an instance address as an address of its card (K-1111), and it makes no card.
+      if (this.instanceOwner(site)) {
+        this.sql("UPDATE live_sites SET state = 'ok' WHERE id = ?", site.id);
+        changed = true;
+        continue;
+      }
+      // K-825: the site of a dropped instance waits for its stop and never becomes a card of its own.
+      const dropped =
+        this.sql("SELECT 1 FROM old_addresses WHERE address = ?", site.address).length > 0 ||
+        this.sql(
+          `SELECT 1 FROM jobs WHERE machine_id = ? AND state IN ('queued', 'sent')
+           AND json_extract(command, '$.kind') = 'compose-down' AND json_extract(command, '$.name') = ?`,
+          site.machineId,
+          site.name,
+        ).length > 0;
+      if (dropped) continue;
       if ((this.checkRetryAt.get(site.id) ?? 0) > Date.now()) continue;
       if (calls + 2 > budget) break;
       calls += 2;
@@ -7045,7 +8284,7 @@ export class Kitshn extends DurableObject<Env> {
         // The person whose wizard job made this site, else the machine of `kitshn expose --time`.
         const asked = [...this.siteAskers].find(([, each]) => each.done && each.siteId === site.id);
         if (asked) this.siteAskers.delete(asked[0]);
-        const by: Actor = asked?.[1].by ?? {
+        const by: Author = asked?.[1].by ?? {
           _tag: "machine",
           machineId: site.machineId,
           name: machine?.name ?? site.machineId,
@@ -7118,7 +8357,7 @@ export class Kitshn extends DurableObject<Env> {
    */
   private livePlace(machine: Machine, id: string, circle: string, base: State): Array<Change> {
     const visitor = { email: null, clientId: machine.clientId, ip: null };
-    const spot = agentUploadPlace(this.state, visitor, circle, false, Date.now());
+    const spot = agentUploadPlace(this.state, visitor, circle, false, Date.now(), null);
     if (spot === null || typeof spot === "string") {
       console.warn(`kitshn left ${id} in the tray: ${spot ?? "no circle"}`);
       return [];
@@ -7194,8 +8433,9 @@ export class Kitshn extends DurableObject<Env> {
     };
     // K-817, K-901: a Compose deploy gets its records at plan time (wantedRecords).
     const wanted = wantedRecords(
-      this.deploys().composeRuns,
-      this.protectedSites(),
+      this.composeRuns(now),
+      // K-828: an address that several instances serve points to the primary.
+      this.recordSites(this.protectedSites()),
       (machineId) => this.state.machines.get(machineId)?.tunnelId,
       now,
     );
@@ -7249,8 +8489,11 @@ export class Kitshn extends DurableObject<Env> {
         now,
       ).map((row) => row.address),
     );
+    // K-828: the main address needs its offline route only when its primary does, which means no instance is healthy.
     const wanted = new Set(
-      sitesNeedingRoutes(this.protectedSites(), this.onlineMachines()).map((site) => site.address),
+      sitesNeedingRoutes(this.recordSites(this.protectedSites()), this.onlineMachines()).map(
+        (site) => site.address,
+      ),
     );
     return [
       ...[...wanted]
@@ -7397,7 +8640,7 @@ export class Kitshn extends DurableObject<Env> {
   private offlineInfo(address: string) {
     // K-817: an extra address of a Compose app shows the offline page of its site too.
     const site = [...this.liveSites.values()]
-      .flatMap((item) => servedSites(item, this.state.resources.get(item.id)))
+      .flatMap((item) => servedSites(item, this.state.resources.get(item.id) ?? this.instanceOwner(item)))
       .find((item) => item.address === address);
     if (!site) return Response.json({ error: "No live site has this address." }, { status: 404 });
     const machine = this.state.machines.get(site.machineId);
@@ -7496,6 +8739,7 @@ export class Kitshn extends DurableObject<Env> {
         ) ||
           this.loginWork())) ||
         (!waits("launcher") && !waits("launcher after Access") && this.launcherWork()) ||
+        (!waits("browser check") && this.bicWork()) ||
         this.redirectWork())
     )
       next = now;
@@ -7513,15 +8757,31 @@ export class Kitshn extends DurableObject<Env> {
       if (row.error !== null && row.retryAt !== undefined && row.retryAt > now)
         next = Math.min(next, row.retryAt);
     // K-817: an expired Compose deploy gives up the DNS record that its plan made.
-    for (const run of this.deploys().composeRuns)
-      if (run.expiresAt > now) next = Math.min(next, run.expiresAt);
+    for (const run of this.composeRuns(now)) next = Math.min(next, run.expiresAt);
     // K-1124: the redirect step that waits tries again at its time; a finished step stores 0.
     const redirectRetry = Number(this.meta("redirects_retry_at") ?? 0);
     if (this.env.CLOUDFLARE_API_TOKEN && redirectRetry > now) next = Math.min(next, redirectRetry);
-    // K-631: a "Check now" that gets no report fails at its time.
-    for (const row of this.progressRows().values())
-      if (row.source._tag === "health" && row.progress.outcome.state === "running")
-        next = Math.min(next, Math.max(now, row.source.until));
+    // K-631: a "Check now" that gets no report fails at its time. K-538: a deploy that does not finish fails when it
+    // expires. Only a future time counts: a time that passed must never plan the alarm for now again, and the sticker
+    // of a removed card is not reconciled until the next periodic run (reconcileProgress).
+    for (const [cardId, row] of this.progressRows()) {
+      if (row.progress.outcome.state !== "running" || !this.state.resources.has(cardId)) continue;
+      if (row.source._tag === "health" && row.source.until > now) next = Math.min(next, row.source.until);
+      if (row.source._tag === "deploy") {
+        const [deploy] = this.sql<{ expires_at: number }>(
+          "SELECT expires_at FROM deploys WHERE id = ?",
+          row.source.deployId,
+        );
+        if (deploy && deploy.expires_at > now) next = Math.min(next, deploy.expires_at);
+      }
+    }
+    // K-704: a provider that stays without a connection opens its notification at its time.
+    for (const socket of this.watchingSockets()) {
+      const attachment = attachmentOf(socket);
+      const offline = attachment?.kind === "machine" ? (attachment.status?.offlineProviders ?? []) : [];
+      for (const entry of offline)
+        if (entry.at + PROVIDER_OFFLINE_MS > now) next = Math.min(next, entry.at + PROVIDER_OFFLINE_MS);
+    }
     // K-406: a step of the alarm that threw tries again at its time.
     for (const failure of this.alarmSteps().values())
       if (failure.retryAt > now) next = Math.min(next, failure.retryAt);
@@ -7539,8 +8799,11 @@ export class Kitshn extends DurableObject<Env> {
       (this.expiredShares(now).length > 0 || this.expiredCards(now).length > 0)
     )
       next = now;
-    // K-1126: a connected daemon keeps the 2-minute alarm going; without one, uptime wakes at most every 10 minutes.
-    if (this.uptimeTargets().length > 0) next = Math.min(next, now + UPTIME_IDLE_MS);
+    // K-1126: uptime runs at least every 5 minutes, and each 2-minute turn while a card fails but is not down yet.
+    if (this.uptimeTargets().length > 0) {
+      const failing = [...this.uptime.values()].some((uptime) => uptime.failingSince !== null);
+      next = Math.min(next, now + (failing ? UPTIME_RUN_MS : UPTIME_TURN_MS));
+    }
     // K-1907: pushes that wait go out in the next second.
     if (this.pushQueue.length > 0) next = Math.min(next, now + 1000);
     // K-1910: the next machine that reaches 15 minutes offline, and the next hourly check of the limits.
@@ -7581,7 +8844,7 @@ export class Kitshn extends DurableObject<Env> {
    * K-212: the end of a timed card, from the alarm or from "End now": one revision that moves it to the tray, out
    * of every circle and its stack, with no end time left. History names the end.
    */
-  private endCard(actor: Actor, id: string): number | null {
+  private endCard(actor: Author, id: string): number | null {
     const resource = this.state.resources.get(id);
     if (!resource) throw new RuleError(`No card "${id}" exists.`);
     const changes = resolveEdits(this.state, [
@@ -7600,8 +8863,8 @@ export class Kitshn extends DurableObject<Env> {
       const name = this.state.resources.get(id)?.name ?? id;
       // The end runs as the actor who set the time, so that actor can undo it (K-1506).
       const [row] = this.sql<{ set_by: string | null }>("SELECT set_by FROM card_ends WHERE id = ?", id);
-      const actor: Actor = row?.set_by
-        ? (JSON.parse(row.set_by) as Actor)
+      const actor: Author = row?.set_by
+        ? (JSON.parse(row.set_by) as Author)
         : { _tag: "kitshn", reason: `time of ${name} ended` };
       try {
         this.endCard(actor, id);
@@ -7651,11 +8914,14 @@ export class Kitshn extends DurableObject<Env> {
         now - REVISION_DAYS * DAY,
         REVISION_COUNT,
       );
+      this.revisionCache = null;
       // K-408: retry what failed once a day.
       this.sql("UPDATE access_objects SET error = NULL WHERE error IS NOT NULL");
       this.sql("DELETE FROM meta WHERE key = 'launcher_failed'");
       this.sql("DELETE FROM meta WHERE key = 'login_failed'");
       this.sql("INSERT OR REPLACE INTO meta (key, value) VALUES ('login_check', 'due')");
+      // K-412: the Browser Integrity Check step reads each zone's rule again and repairs it.
+      this.sql("DELETE FROM meta WHERE key = 'bic_applied'");
       // A refused address may be free now, for example after the other machine let it go.
       this.sql("UPDATE live_sites SET state = 'checking' WHERE state = 'refused'");
       // K-1503 style clean-up: keep the newest 1,000 finished jobs.
@@ -7664,6 +8930,12 @@ export class Kitshn extends DurableObject<Env> {
       );
       this.sql("DELETE FROM join_codes WHERE expires_at < ?", now);
       this.sql("DELETE FROM device_invites WHERE expires_at < ?", now);
+      // K-722: a run lasts at most 3,600 s and an approval 24 hours, so a row that a restart left with no socket goes.
+      this.sql(
+        "DELETE FROM exec_runs WHERE (state = 'running' AND started_at < ?) OR started_at < ?",
+        now - 70 * 60_000,
+        now - 25 * 60 * 60_000,
+      );
       // K-1610: link events stay 30 days, at most 2,000.
       this.sql(
         "DELETE FROM link_events WHERE at < ? OR id <= (SELECT id FROM link_events ORDER BY id DESC LIMIT 1 OFFSET 2000)",
@@ -7825,7 +9097,7 @@ export class Kitshn extends DurableObject<Env> {
    * A revision without changes, also into the in-memory History list. It never calls `load()`, which would
    * swap the Access map under a sync that awaits Cloudflare.
    */
-  private recordRevision(actor: Actor, summary: string) {
+  private recordRevision(actor: Author, summary: string) {
     const id = this.insertRevision(actor, summary, [], null);
     this.showRevision({
       id,
@@ -7842,11 +9114,14 @@ export class Kitshn extends DurableObject<Env> {
 
   /** Puts a new revision at the top of the in-memory History (K-519), marks what it undoes, and tells everyone. */
   private showRevision(revision: RevisionView) {
+    // A stale History reads its newer rows first, or the next read would start above them and skip them.
+    if (this.revisionsStale) void this.revisions;
     this.revisionCache &&= [
       revision,
-      ...this.revisionCache.map((old) =>
-        old.id === revision.undoes ? { ...old, undoneBy: revision.id } : old,
-      ),
+      ...this.revisionCache
+        // A read after a load can hold it already.
+        .filter((old) => old.id !== revision.id)
+        .map((old) => (old.id === revision.undoes ? { ...old, undoneBy: revision.id } : old)),
     ].slice(0, RECENT_REVISIONS);
     this.broadcast();
   }
@@ -7910,7 +9185,7 @@ export class Kitshn extends DurableObject<Env> {
    * a new device token drops its secret, and the exchange rotates it. A cancel never touches a token.
    */
   private async inviteRequest(path: string, request: Request, caller: Caller): Promise<Response> {
-    if (!this.isOwner(caller.visitor))
+    if (!this.callerIsOwner(caller))
       return Response.json(
         { error: "Only the owner makes or cancels a device invite (K-1601)." },
         { status: 403 },
@@ -7932,11 +9207,21 @@ export class Kitshn extends DurableObject<Env> {
     return new Response("Not found.", { status: 404 });
   }
 
-  /** K-1601: a new device token and its invite (`name`), or a new invite of a kitshn device token (`tokenId`). */
+  /**
+   * K-1601, K-1778: a new device token and its invite (`name`), or a new invite of a kitshn device token (`tokenId`). The
+   * token joins the actor `actor`, else the person actor of the caller, else a new actor of its own. A token that is a
+   * credential already keeps its actor.
+   */
   private async addInvite(caller: Caller, body: unknown) {
     const api = this.api();
     if (!api) return Response.json({ error: "kitshn has no Cloudflare API token here." }, { status: 503 });
     const fields = isRecord(body) ? body : {};
+    const named = typeof fields.actor === "string" && fields.actor !== "" ? fields.actor : null;
+    if (named !== null && !this.state.actors.has(named))
+      return Response.json({ error: `There is no such actor: "${named}".` }, { status: 404 });
+    const own =
+      caller.visitor.email === null ? null : actorIdOf({ _tag: "login", email: caller.visitor.email });
+    const joins = named ?? (own !== null && this.state.actors.has(own) ? own : null);
     const account = `/accounts/${this.env.CLOUDFLARE_ACCOUNT_ID}/access/service_tokens`;
     let token: { id: string; client_id: string; name: string };
     let name: string;
@@ -7970,14 +9255,21 @@ export class Kitshn extends DurableObject<Env> {
       // One invite per token: a new one ends the one that waits.
       this.sql("DELETE FROM device_invites WHERE token_id = ?", token.id);
       this.sql(
-        "INSERT INTO device_invites (lookup, token_id, client_id, name, expires_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO device_invites (lookup, token_id, client_id, name, expires_at, actor_id) VALUES (?, ?, ?, ?, ?, ?)",
         lookup,
         token.id,
         token.client_id,
         name,
         expiresAt,
+        joins,
       );
-      this.insertRevision(caller.actor, `Invited an app as ${name}`, [], null);
+      const actorName = joins === null ? null : (this.state.actors.get(joins)?.name ?? joins);
+      this.insertRevision(
+        caller.actor,
+        `Invited an app as ${name}${actorName ? ` for ${actorName}` : ""}`,
+        [],
+        null,
+      );
     });
     this.load();
     this.broadcast();
@@ -7991,6 +9283,42 @@ export class Kitshn extends DurableObject<Env> {
       clients,
       agree,
     });
+  }
+
+  /**
+   * K-1601, K-1778: the actor that the token of an invite acts as, and the change that gets it there: a token that is a
+   * credential already keeps its actor; else it joins the actor of the invite, or a new actor of its own. A change that a
+   * rule refuses (the actor went, or a pause) leaves the token in a new actor of its own.
+   */
+  private tokenJoins(row: InviteRow): { readonly actor: Actor; readonly changes: ReadonlyArray<Change> } {
+    const token: Credential = {
+      _tag: "token",
+      tokenId: row.token_id,
+      clientId: row.client_id,
+      name: row.name,
+    };
+    const owner = [...this.state.actors.values()].find((actor) =>
+      actor.credentials.some(
+        (credential) => credential._tag === "token" && credential.tokenId === row.token_id,
+      ),
+    );
+    if (owner) return { actor: owner, changes: [] };
+    const target = row.actor_id === null ? undefined : this.state.actors.get(row.actor_id);
+    const joined = target ? { ...target, credentials: [...target.credentials, token] } : undefined;
+    const fresh: Actor = { id: actorIdOf(token), name: row.name, credentials: [token] };
+    for (const [actor, before] of [
+      ...(joined && target ? [[joined, target] as const] : []),
+      [fresh, this.state.actors.get(fresh.id) ?? null] as const,
+    ]) {
+      const changes: ReadonlyArray<Change> = [{ _tag: "actor", id: actor.id, before, after: actor }];
+      try {
+        this.checked(changes);
+        return { actor, changes };
+      } catch (error) {
+        if (!(error instanceof RuleError)) throw error;
+      }
+    }
+    return { actor: fresh, changes: [] };
   }
 
   /** K-720: the client apps that the providers of all machines declare, each with its machines (`inviteClients`). */
@@ -8053,12 +9381,13 @@ export class Kitshn extends DurableObject<Env> {
     } catch (error) {
       // The code stays good, unless a newer invite of the device took its place meanwhile.
       this.sql(
-        "INSERT OR IGNORE INTO device_invites (lookup, token_id, client_id, name, expires_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO device_invites (lookup, token_id, client_id, name, expires_at, actor_id) VALUES (?, ?, ?, ?, ?, ?)",
         row.lookup,
         row.token_id,
         row.client_id,
         row.name,
         row.expires_at,
+        row.actor_id,
       );
       return Response.json({ error: `Cloudflare made no new secret: ${String(error)}` }, { status: 502 });
     }
@@ -8074,24 +9403,154 @@ export class Kitshn extends DurableObject<Env> {
       refreshed = false;
       console.error(`K-1601: the refresh of the device token ${row.token_id} failed: ${String(error)}`);
     }
-    const actor: Actor = { _tag: "device", clientId: row.client_id, name: row.name };
+    const author: Author = { _tag: "device", clientId: row.client_id, name: row.name };
+    const joined = this.tokenJoins(row);
     // `device` comes from the anonymous caller, so History marks it as the app's own words.
     this.insertRevision(
-      actor,
-      `${row.name} joined with an invite${device ? ` (the app says: ${device})` : ""}${refreshed ? "" : "; the token expiry did not refresh"}`,
-      [],
+      author,
+      `${row.name} joined ${joined.actor.name} with an invite${device ? ` (the app says: ${device})` : ""}${refreshed ? "" : "; the token expiry did not refresh"}`,
+      joined.changes,
       null,
     );
+    this.persist(joined.changes);
     this.load();
     this.broadcast();
     const visitor: Visitor = { email: null, clientId: row.client_id, ip: null };
     return Response.json({
       clientId: row.client_id,
       name: row.name,
+      actor: { id: joined.actor.id, name: joined.actor.name },
       serviceToken: { clientId: row.client_id, clientSecret: secret },
       machines: this.deviceMachines(visitor).machines,
       machinesUrl: `https://${this.env.KITSHN_HOST}/device/machines`,
     });
+  }
+
+  /**
+   * K-1778: the code step of migration 44. Each circle member becomes an actor and its chip (`migrateMembers`), as one
+   * History entry with no Undo, because the revisions before it hold members of before.
+   */
+  private migrateActors() {
+    const circles = this.sql<{ body: string }>("SELECT body FROM circles").map(
+      (row) => JSON.parse(row.body) as LegacyCircle,
+    );
+    const machines = new Map(
+      this.sql<{ id: string; body: string }>("SELECT id, body FROM machines").map((row) => [
+        row.id,
+        JSON.parse(row.body) as Machine,
+      ]),
+    );
+    const [admin] = this.sql<{ x: number; y: number }>(
+      "SELECT x, y FROM places WHERE id = ?",
+      ADMIN_RESOURCE_ID,
+    );
+    const shareSettings = new Map(
+      this.sql<{ id: string; body: string }>("SELECT id, body FROM share_settings").map((row) => [
+        row.id,
+        JSON.parse(row.body) as ShareSetting,
+      ]),
+    );
+    const migrated = migrateMembers(
+      circles,
+      machines,
+      admin ? { x: admin.x, y: admin.y } : null,
+      shareSettings,
+    );
+    for (const actor of migrated.actors)
+      this.sql("INSERT OR REPLACE INTO actors (id, body) VALUES (?, ?)", actor.id, JSON.stringify(actor));
+    for (const circle of migrated.circles)
+      this.sql("INSERT OR REPLACE INTO circles (id, body) VALUES (?, ?)", circle.id, JSON.stringify(circle));
+    for (const [id, setting] of migrated.shareSettings)
+      this.sql("INSERT OR REPLACE INTO share_settings (id, body) VALUES (?, ?)", id, JSON.stringify(setting));
+    if (circles.length === 0) return;
+    // A state that breaks a rule throws, so the transaction rolls back and the database stays at migration 43.
+    this.load();
+    const problem = ruleViolation(this.state);
+    if (problem !== null)
+      throw new Error(`Migration 44 (K-1778) stops, because the moved map breaks a rule: ${problem}`);
+    const floor = this.insertRevision(
+      { _tag: "kitshn", reason: "actors (K-1778)" },
+      `Moved the circle members to actors (K-1778)${migrated.notes.length > 0 ? `. ${migrated.notes.join(" ")}` : ""}`.slice(
+        0,
+        4000,
+      ),
+      [],
+      null,
+    );
+    this.setMeta(ACTORS_UNDO_FLOOR, String(floor));
+  }
+
+  /**
+   * K-1730: the code step of migration 46. The rights of each chip move to effects (`migrateRights`), and so do the
+   * rights of the proposals and of the approvals of deploys and handovers, as one History entry with no Undo, because
+   * the revisions before it hold rights of before.
+   */
+  private migrateEffects() {
+    const effectOf = (right: string) => {
+      const legacy = LEGACY_RIGHTS.find((each) => each === right);
+      return legacy === undefined ? right : EFFECT_OF[legacy];
+    };
+    for (const row of this.sql<{ id: string; right_name: string }>("SELECT id, right_name FROM proposals"))
+      this.sql("UPDATE proposals SET right_name = ? WHERE id = ?", effectOf(row.right_name), row.id);
+    for (const [table, key] of [
+      ["deploys", "id"],
+      ["handovers", "repo_id"],
+    ] as const)
+      for (const row of this.sql<{ key: string; approved: string }>(
+        `SELECT ${key} AS key, approved FROM ${table} WHERE approved != '[]'`,
+      )) {
+        const parsed: unknown = JSON.parse(row.approved);
+        const approved = Array.isArray(parsed)
+          ? [...new Set(parsed.map((right) => effectOf(String(right))))]
+          : [];
+        this.sql(`UPDATE ${table} SET approved = ? WHERE ${key} = ?`, JSON.stringify(approved), row.key);
+      }
+    const circles = this.sql<{ body: string }>("SELECT body FROM circles").map(
+      (row) => JSON.parse(row.body) as LegacyRightsCircle,
+    );
+    if (circles.length === 0) return;
+    this.load();
+    const repoCircles = new Set(
+      [...this.state.resources.values()]
+        .filter((resource) => resource.kind === "repo" || resource.kind === "repo.group")
+        .flatMap((resource) => circlesHolding(this.state, resource.id).map((circle) => circle.id)),
+    );
+    const migrated = migrateRights(circles, this.state.actors, (id) => repoCircles.has(id), Date.now());
+    for (const circle of migrated.circles)
+      this.sql("UPDATE circles SET body = ? WHERE id = ?", JSON.stringify(circle), circle.id);
+    this.load();
+    const floor = this.insertRevision(
+      { _tag: "kitshn", reason: "effects (K-1730)" },
+      `Moved the rights to effects (K-1730)${migrated.notes.length > 0 ? `. ${migrated.notes.join(" ")}` : ""}`.slice(
+        0,
+        4000,
+      ),
+      [],
+      null,
+    );
+    this.setMeta(ACTORS_UNDO_FLOOR, String(floor));
+  }
+
+  /**
+   * K-722: the code step of migration 42. Each `t3.agents` share moves to the `t3.app` card of its machine, and an
+   * exec share turns on "runs" (`migrateAgentShares`), as one History revision that the owner can undo. A
+   * share that it cannot move goes to the log and into the revision text, for the owner.
+   */
+  private migrateAgents() {
+    // Its own mark, not the schema version, keeps it to one run: a second run would undo an owner's Undo.
+    if (this.meta(AGENTS_MIGRATED) !== null) return;
+    this.load();
+    const { changes, unmet } = migrateAgentShares(this.state);
+    this.setMeta(AGENTS_MIGRATED, String(Date.now()));
+    if (changes.length === 0 && unmet.length === 0) return;
+    this.persist(changes);
+    for (const line of unmet) console.error(`K-722 migration 42: ${line}`);
+    this.insertRevision(
+      { _tag: "kitshn", reason: "provider protocol 2 (K-722)" },
+      `Moved the T3 agents shares to the T3 app cards (K-722)${unmet.length > 0 ? `. ${unmet.join(" ")}` : ""}`,
+      changes,
+      null,
+    );
   }
 
   /**
@@ -8232,7 +9691,7 @@ export class Kitshn extends DurableObject<Env> {
   /**
    * K-819: the owner allows, blocks or forgets one repo. Allow starts the first refused push through the
    * GitHub App, except during the pause. Block fails the repo's deploys and jobs that have not finished.
-   * An agent key with "adds apps" allows a waiting repo too (K-718); `allowedBy` then names it.
+   * An agent with "runs" allows a waiting repo too (K-718); `allowedBy` then names it.
    */
   private async setRepoState(
     caller: Caller,
@@ -8777,8 +10236,11 @@ export class Kitshn extends DurableObject<Env> {
     const agentLimit = allowedBy
       ? ` The agent ${allowedBy.name} allowed this repo, so it deploys only to a machine whose card, and every card on it, that agent manages (K-819).`
       : "";
-    // K-610, K-611: a new Compose app goes to the first online machine with all labels; a running one stays.
+    // K-610, K-611, K-823: a new Compose app goes where its placement says; a running instance stays.
     let machineId: string | null = null;
+    // K-823: a preview has one instance.
+    const placement = result.kind === "deploy" && !result.ephemeral ? placementOf(compose) : "one";
+    let instances: Array<{ machine: string; address: string; deferred: boolean }> = [];
     if (compose) {
       if (existing?.machine) {
         // K-611: a running app stays on its machine, but only while the owner still offers it (K-610).
@@ -8817,27 +10279,51 @@ export class Kitshn extends DurableObject<Env> {
             },
             { status: 409 },
           );
-      } else if (result.kind === "deploy") {
+      }
+      if (result.kind === "deploy") {
         const labels = compose.runsOn ?? [];
-        // K-1708: a machine without a key is online for status only and gets no job.
-        const ready = this.jobMachines();
-        const pick = [...this.state.machines.values()]
-          // Only a machine that the owner labels "deploy" runs the apps of repos (K-610).
-          .filter((machine) => ["deploy", ...labels].every((label) => machine.labels.includes(label)))
-          // K-818: only a daemon that checks Compose settings runs the apps of repos.
-          .filter((machine) => this.machineView(machine).status?.capabilities?.includes("compose-guard"))
-          .filter((machine) => mayDeployOn(this.state, allowedBy?.clientId ?? null, machine.id, Date.now()))
-          .sort((a, b) => a.order - b.order)
-          .find((machine) => ready.has(machine.id));
-        if (!pick) {
+        const candidates = this.placementCandidates(labels, allowedBy?.clientId ?? null);
+        const current = existing?.machine
+          ? [existing.machine, ...otherInstances(existing).map((instance) => instance.machine)]
+          : [];
+        const [home, ...others] = placeMachines(placement, candidates, current);
+        if (home === undefined) {
+          const spread = typeof placement === "string" ? "" : ' and the capability "compose-spread" (K-826)';
           return Response.json(
             {
-              error: `No online machine with a Compose-ready daemon has the labels ${["deploy", ...labels].join(", ")}. Label a machine "deploy", update its daemon, start it, or give it a key (K-1708).${agentLimit}`,
+              error: `No online machine with a Compose-ready daemon${spread} has the labels ${deployLabels(labels).join(", ")}. Label a machine "deploy", update its daemon, start it, or give it a key (K-1708).${agentLimit}`,
             },
             { status: 409 },
           );
         }
-        machineId = pick.id;
+        // K-823, K-406: each new instance address costs Cloudflare calls in this request, as K-817 counts them.
+        if (others.length + 1 > MAX_SPREAD)
+          return Response.json(
+            {
+              error: `This placement wants ${others.length + 1} instances; kitshn runs at most ${MAX_SPREAD} of one app. Narrow it with runsOn labels (K-823).`,
+            },
+            { status: 409 },
+          );
+        const spreadOld = spreadRefusal(
+          placement,
+          candidates,
+          [home, ...others],
+          (id) => this.state.machines.get(id)?.name ?? id,
+        );
+        if (spreadOld) return Response.json({ error: spreadOld }, { status: 409 });
+        machineId = home;
+        // K-824: an instance keeps its address; a new one takes a name that no address of the card has.
+        const taken = [...result.addresses, ...(existing?.addresses ?? [])];
+        const ready = this.jobMachines();
+        // K-824: a "one" app has no instance addresses; otherwise each instance, the home one too, has its own.
+        instances = (placement === "one" ? [] : [home, ...others]).map((id) => {
+          const kept = existing?.instances?.find((instance) => instance.machine === id)?.address;
+          const machine = this.state.machines.get(id);
+          if (!machine) throw new Error(`placeMachines named the unknown machine ${id}.`);
+          const address = kept ?? instanceAddress(result.address, machine, this.env.KITSHN_ZONE, taken);
+          taken.push(address);
+          return { machine: id, address, deferred: !ready.has(id) };
+        });
       }
     }
     // K-1124: a static site or a Worker app moves, and its old address sends visitors on. A Compose app keeps its main
@@ -8854,9 +10340,13 @@ export class Kitshn extends DurableObject<Env> {
     const adminHost = result.addresses.find((address) => adminHosts(this.env).includes(address));
     if (adminHost)
       return Response.json({ error: `${adminHost} is the kitshn admin host (K-817).` }, { status: 409 });
+    // K-824, K-1111: a new instance address passes the same checks; a kept one is the card's already.
+    const newInstanceAddresses = instances
+      .map((instance) => instance.address)
+      .filter((address) => !existing?.addresses.includes(address));
     const addressRefused = await this.addressRefusal(
       api,
-      result.addresses,
+      [...result.addresses, ...newInstanceAddresses],
       resourceId,
       script,
       existing,
@@ -8907,8 +10397,8 @@ export class Kitshn extends DurableObject<Env> {
     this.ctx.storage.transactionSync(() => {
       if (handover) this.takeOver(handover, deployer, key, result.environment);
       this.sql(
-        `INSERT INTO deploys (id, repo, repo_id, environment, resource_id, address, script, starts_in, kind, sha, state, expires_at, branch, app, machine_id, compose_file, addresses, worker, app_key, run_id, run_attempt, needs, workflow)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO deploys (id, repo, repo_id, environment, resource_id, address, script, starts_in, kind, sha, state, expires_at, branch, app, machine_id, compose_file, addresses, worker, app_key, run_id, run_attempt, needs, workflow, compose)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         deployId,
         deployer.repo,
         deployer.repoId,
@@ -8932,7 +10422,16 @@ export class Kitshn extends DurableObject<Env> {
         deployer.runAttempt,
         JSON.stringify(recipe.needs?.apps ?? []),
         deployer.workflow,
+        compose ? JSON.stringify(compose) : null,
       );
+      for (const instance of instances)
+        this.sql(
+          "INSERT INTO deploy_instances (deploy_id, machine_id, address, deferred) VALUES (?, ?, ?, ?)",
+          deployId,
+          instance.machine,
+          instance.address,
+          instance.deferred ? 1 : 0,
+        );
     });
     if (handover) this.load();
     // K-817, K-901: the alarm makes the DNS records of a Compose deploy now, before its build (dnsWork).
@@ -8972,11 +10471,32 @@ export class Kitshn extends DurableObject<Env> {
     deployer: Deployer,
     kind: "site.static" | "site.worker" | "site.compose",
     machine: string | null,
+    planned: ReadonlyArray<DeployInstanceRow> = [],
   ) {
-    const actor: Actor = { _tag: "kitshn", reason: `deploy of ${row.repo} ${deployer.sha.slice(0, 7)}` };
-    const addresses = rowAddresses(row);
-    const existing = this.state.resources.get(row.resource_id);
+    const actor: Author = { _tag: "kitshn", reason: `deploy of ${row.repo} ${deployer.sha.slice(0, 7)}` };
+    let existing = this.state.resources.get(row.resource_id);
+    // K-824: the other instances of a Compose card, each with its own address after the addresses of the home one.
+    const instances: Array<Instance> = planned.map((instance) => ({
+      machine: instance.machine_id,
+      address: instance.address,
+      status:
+        existing?.instances?.find((item) => item.machine === instance.machine_id)?.status ??
+        (instance.deferred === 1 ? "offline" : "deploying"),
+    }));
+    const addresses = [...rowAddresses(row), ...instances.map((instance) => instance.address)];
+    const withInstances = instances.length > 0 ? { instances } : {};
     if (existing) {
+      // K-825: an instance that the placement no longer wants stops, and its address leaves first.
+      if (kind === "site.compose") {
+        const kept = new Set(instances.map((instance) => instance.machine));
+        existing = this.dropInstances(
+          existing,
+          otherInstances(existing)
+            .map((instance) => instance.machine)
+            .filter((id) => !kept.has(id)),
+          actor,
+        ).card;
+      }
       // K-817, K-410: a Compose card takes the new list at once; the tunnel sync drops an old address in order. A
       // static card keeps its old addresses until finishDeploy has taken their custom domains off.
       const next = nextCardAddresses(kind, addresses, existing.addresses);
@@ -8988,10 +10508,15 @@ export class Kitshn extends DurableObject<Env> {
           existing.addresses.filter((address) => !next.includes(address)),
           next,
         );
-      if (JSON.stringify(next) !== JSON.stringify(existing.addresses)) {
-        this.putResource({ ...existing, addresses: next });
-        this.load();
+      const { instances: _old, ...card } = existing;
+      const updated: Resource = kind === "site.compose" ? { ...card, ...withInstances } : existing;
+      if (
+        JSON.stringify(next) !== JSON.stringify(existing.addresses) ||
+        JSON.stringify(updated.instances) !== JSON.stringify(existing.instances)
+      ) {
+        this.putResource({ ...updated, addresses: next });
       }
+      this.load();
       return "The card keeps its place; the map decides who opens it (K-807).";
     }
     const slug = repoSlug(row.repo);
@@ -9006,6 +10531,7 @@ export class Kitshn extends DurableObject<Env> {
       status: "deploying",
       group: slug,
       machine,
+      ...withInstances,
     });
     this.load();
     // K-819: the card of a repo that an agent key allowed starts in that key's circle, never in `startsIn`.
@@ -9089,19 +10615,19 @@ export class Kitshn extends DurableObject<Env> {
       (item) => item.clientId === caller.visitor.clientId,
     );
     const [row] = this.sql<DeployRow>("SELECT * FROM deploys WHERE id = ?", deployId);
-    const [job] = row?.job_id
-      ? this.sql<{ state: string; machine_id: string }>(
-          "SELECT state, machine_id FROM jobs WHERE id = ?",
-          row.job_id,
-        )
+    // K-827: the job of the home instance or of another instance of this deploy.
+    const jobIds = row
+      ? [row.job_id, ...this.deployInstances(row.id).map((instance) => instance.job_id)]
       : [];
-    if (
-      !machine ||
-      !row ||
-      job?.machine_id !== machine.id ||
-      job.state !== "sent" ||
-      !["source.tgz", "params.env"].includes(file)
-    )
+    const sent = jobIds.some((id) => {
+      if (id === null) return false;
+      const [job] = this.sql<{ state: string; machine_id: string }>(
+        "SELECT state, machine_id FROM jobs WHERE id = ?",
+        id,
+      );
+      return job?.machine_id === machine?.id && job?.state === "sent";
+    });
+    if (!machine || !row || !sent || !["source.tgz", "params.env"].includes(file))
       return new Response("This machine runs no such deploy now.", { status: 404 });
     const refusal = this.repoRefusal(row.repo_id);
     if (refusal) return new Response(refusal, { status: 403 });
@@ -9123,35 +10649,107 @@ export class Kitshn extends DurableObject<Env> {
         },
         { status: 409 },
       );
-    const card = this.ensureCard(row, deployer, "site.compose", machine.id);
+    // K-823, K-819: an instance whose machine left or that the key lost since the plan does not start.
+    const instances = this.deployInstances(row.id).filter((instance) => {
+      const keep =
+        this.state.machines.has(instance.machine_id) &&
+        mayDeployOn(this.state, allowedBy?.clientId ?? null, instance.machine_id, Date.now());
+      if (!keep)
+        this.sql(
+          "DELETE FROM deploy_instances WHERE deploy_id = ? AND machine_id = ?",
+          row.id,
+          instance.machine_id,
+        );
+      return keep;
+    });
+    const card = this.ensureCard(row, deployer, "site.compose", machine.id, instances);
+    const extra = instances.filter((instance) => instance.machine_id !== row.machine_id);
     // Fail closed: the Access application exists before the tunnel sends the address to the app (K-410, K-817).
     await this.syncAccessLocked(api, 20);
     const notReady = this.accessNotReady(row);
     if (notReady) return notReady;
     const ended = this.endedRefusal(row.id);
     if (ended) return ended;
-    const command: Command = {
+    const commandFor = (target: Machine, address: string): Command => ({
       kind: "compose",
       deployId: row.id,
-      allowed: allowedFor(machine, row.repo),
+      allowed: allowedFor(target, row.repo),
       project: row.resource_id,
-      name: row.address.slice(0, -this.env.KITSHN_ZONE.length - 1),
+      name: address.slice(0, -this.env.KITSHN_ZONE.length - 1),
       environment: row.environment,
       repo: row.repo,
       file: row.compose_file,
-    };
+      ...(typeof placementOf(composeOf(row)) === "string" ? {} : { spread: true }),
+    });
+    const actor: Author = { _tag: "kitshn", reason: `deploy of ${row.repo}` };
     this.ctx.storage.transactionSync(() => {
       const jobId = this.queueKitshnJob(
         machine.id,
-        command,
-        { _tag: "kitshn", reason: `deploy of ${row.repo}` },
+        commandFor(machine, row.address),
+        actor,
         Date.now() + DEPLOY_MS,
       );
       this.sql("UPDATE deploys SET state = 'running', job_id = ? WHERE id = ?", jobId, row.id);
+      for (const instance of extra) {
+        const target = this.state.machines.get(instance.machine_id)!;
+        // K-613, K-827: the job of an offline machine waits a day; the deploy does not wait for it.
+        const expires = Date.now() + (instance.deferred === 1 ? DAY : DEPLOY_MS);
+        const instanceJob = this.queueKitshnJob(
+          target.id,
+          commandFor(target, instance.address),
+          actor,
+          expires,
+        );
+        this.sql(
+          "UPDATE deploy_instances SET job_id = ? WHERE deploy_id = ? AND machine_id = ?",
+          instanceJob,
+          row.id,
+          target.id,
+        );
+      }
     });
     this.deliverJobs();
     this.broadcast();
-    return Response.json({ machine: machine.name, card });
+    const others = extra.map((instance) => this.state.machines.get(instance.machine_id)?.name ?? "?");
+    return Response.json({ machine: [machine.name, ...others].join(", "), card });
+  }
+
+  /**
+   * K-825, K-909: stops the instances of a card on these machines and keeps their volumes. Each instance address
+   * leaves the card and sends its visitors on (K-1124). Returns a line for each instance.
+   */
+  private dropInstances(
+    card: Resource,
+    machineIds: ReadonlyArray<string>,
+    actor: Author,
+  ): { readonly card: Resource; readonly notes: ReadonlyArray<string> } {
+    const dropped = (card.instances ?? []).filter((instance) => machineIds.includes(instance.machine));
+    if (dropped.length === 0) return { card, notes: [] };
+    const gone = dropped.map((instance) => instance.address);
+    const addresses = card.addresses.filter((address) => !gone.includes(address));
+    this.rememberOld(card.id, gone, addresses);
+    for (const instance of dropped) {
+      const machine = this.state.machines.get(instance.machine);
+      if (!machine) continue;
+      const name = instance.address.slice(0, -this.env.KITSHN_ZONE.length - 1);
+      this.queueKitshnJob(
+        machine.id,
+        { kind: "compose-down", project: card.id, name, removeData: false },
+        actor,
+        NEVER,
+      );
+    }
+    const next: Resource = {
+      ...card,
+      addresses,
+      instances: (card.instances ?? []).filter((instance) => !machineIds.includes(instance.machine)),
+    };
+    this.putResource(next);
+    const notes = dropped.map(
+      (instance) =>
+        `${card.name} stops on ${this.state.machines.get(instance.machine)?.name ?? instance.machine}; its volumes stay (K-825).`,
+    );
+    return { card: next, notes };
   }
 
   /** K-813: the state and output of a Compose deploy, for the Actions step that waits on it. */
@@ -9159,26 +10757,10 @@ export class Kitshn extends DurableObject<Env> {
     const [row] = this.sql<DeployRow>("SELECT * FROM deploys WHERE id = ?", deployId);
     if (!row || row.repo_id !== deployer.repoId || row.job_id === null)
       return Response.json({ error: "kitshn knows no such running deploy of this repo." }, { status: 404 });
-    const [job] = this.sql<{ state: string; output: string; exit_code: number | null; expires_at: number }>(
-      "SELECT state, output, exit_code, expires_at FROM jobs WHERE id = ?",
-      row.job_id,
-    );
-    // A dropped connection fails the job only for now: kitshn still takes its real result (OFFLINE_OUTPUT),
-    // until the job would have expired; a daemon that restarted never sends it.
-    const waiting = job?.state === "failed" && job.output === OFFLINE_OUTPUT && job.expires_at > Date.now();
-    const state =
-      job?.state === "done"
-        ? "done"
-        : (job?.state === "failed" && !waiting) || job?.state === "expired"
-          ? job.state
-          : "running";
+    const { state, output, exitCode } = this.composeJobsState(row);
     if (state !== "running" && row.state === "running")
       this.sql("UPDATE deploys SET state = ? WHERE id = ?", state === "done" ? "done" : "failed", row.id);
-    return Response.json({
-      state,
-      output: waiting ? "" : (job?.output ?? ""),
-      exitCode: job?.exit_code ?? null,
-    });
+    return Response.json({ state, output, exitCode });
   }
 
   /** K-904: a closed pull request stops its Compose preview; its card goes once the machine stops exposing it. */
@@ -9773,7 +11355,7 @@ export class Kitshn extends DurableObject<Env> {
   private queueKitshnJob(
     machineId: string,
     command: Command,
-    actor: Actor,
+    actor: Author,
     expiresAt: number,
     whenIdle = false,
   ) {
@@ -9783,7 +11365,7 @@ export class Kitshn extends DurableObject<Env> {
       command.kind === "compose-redeploy" ||
       command.kind === "compose-rollback"
     )
-      failQueuedDowns(this.query, command.project, REPLACED);
+      failQueuedDowns(this.query, command.project, REPLACED, machineId);
     const [row] = this.sql<{ id: number }>(
       `INSERT INTO jobs (machine_id, labels, command, state, created_at, expires_at, actor, visitor, exit_code, output, when_idle)
        VALUES (?, '[]', ?, 'queued', ?, ?, ?, '${KITSHN_JOB}', NULL, '', ?) RETURNING id`,
@@ -9811,31 +11393,33 @@ export class Kitshn extends DurableObject<Env> {
    * and signs it with the machine key. kitshn checks the signature, the right of the path with its mode and
    * conditions, the pause, and writes one ask event.
    */
-  private async forwardedRequest(path: string, request: Request, caller: Caller, machine: Machine) {
-    const now = Date.now();
+  /**
+   * K-1714: the attested labels of a call that the daemon of this machine forwarded and signed, or why kitshn refuses
+   * it. Each nonce counts once, also after a restart.
+   */
+  private async verifiedForward(
+    request: Request,
+    machine: Machine,
+    now: number,
+  ): Promise<Readonly<Record<string, string>> | string> {
     const url = new URL(request.url);
     const call = { method: request.method, path: `${url.pathname}${url.search}` };
     const header = (name: string) => request.headers.get(name) ?? "";
     const at = Number(header(FORWARD_HEADERS.at));
     const nonce = header(FORWARD_HEADERS.nonce);
     const labelsText = header(FORWARD_HEADERS.labels) || "{}";
-    // A refusal drops the body that it does not read, so the connection does not wait on it.
-    const refuse = async (status: number, error: string, need?: MachineRight) => {
-      if (!request.bodyUsed) await request.body?.cancel().catch(() => undefined);
-      return Response.json({ error, ...(need ? { need } : {}) }, { status });
-    };
     const pathProblem = forwardPathProblem(url.pathname);
-    if (pathProblem !== null || forwardRight(url.pathname, request.method) === undefined)
-      return refuse(403, `A machine forwards no call to ${request.method} ${url.pathname} (K-1714).`);
+    if (pathProblem !== null)
+      return `A machine forwards no call to ${request.method} ${url.pathname} (K-1714).`;
     if (machine.key?.kind !== "public")
-      return refuse(403, "This machine has no key, so it cannot forward a call (K-1714).");
+      return "This machine has no key, so it cannot forward a call (K-1714).";
     if (
       !Number.isFinite(at) ||
       Math.abs(now - at) > FORWARD_WINDOW_MS ||
       nonce.length < 16 ||
       nonce.length > 64
     )
-      return refuse(403, "The forwarded call is too old, or its nonce is not one (K-1714).");
+      return "The forwarded call is too old, or its nonce is not one (K-1714).";
     const labelsHash = await sha256Hex(labelsText);
     const valid = await verifyForHosts(
       machine.key.publicKey,
@@ -9843,8 +11427,7 @@ export class Kitshn extends DurableObject<Env> {
       (host) => forwardText(host, machine.id, { ...call, at, nonce, labelsHash }),
       header(FORWARD_HEADERS.signature),
     );
-    if (!valid)
-      return refuse(403, "The signature of the forwarded call does not fit the machine key (K-1714).");
+    if (!valid) return "The signature of the forwarded call does not fit the machine key (K-1714).";
     // K-1714: one use per nonce, also after a restart; a nonce older than the window fails the time check above.
     this.sql("DELETE FROM forward_nonces WHERE at < ?", now - FORWARD_WINDOW_MS);
     const [fresh] = this.sql<{ nonce: string }>(
@@ -9852,20 +11435,37 @@ export class Kitshn extends DurableObject<Env> {
       nonce,
       at,
     );
-    if (!fresh) return refuse(403, "The nonce of this forwarded call was used (K-1714).");
-    const prefixes = this.attesterPrefixesOf(machine.id);
+    if (!fresh) return "The nonce of this forwarded call was used (K-1714).";
+    const prefixes = this.labelPrefixesOf(machine.id);
     let parsed: unknown = null;
     try {
       parsed = JSON.parse(labelsText);
     } catch {
       parsed = null;
     }
-    const labels = Object.fromEntries(
+    return Object.fromEntries(
       Object.entries(isRecord(parsed) ? parsed : {}).filter(
         (entry): entry is [string, string] =>
           typeof entry[1] === "string" && prefixes.some((prefix) => entry[0].startsWith(prefix)),
       ),
     );
+  }
+
+  private async forwardedRequest(path: string, request: Request, caller: Caller, machine: Machine) {
+    const now = Date.now();
+    const url = new URL(request.url);
+    const call = { method: request.method, path: `${url.pathname}${url.search}` };
+    // A refusal drops the body that it does not read, so the connection does not wait on it.
+    const refuse = async (status: number, error: string, need?: Effect) => {
+      if (!request.bodyUsed) await request.body?.cancel().catch(() => undefined);
+      return Response.json({ error, ...(need ? { need } : {}) }, { status });
+    };
+    if (forwardRight(url.pathname, request.method) === undefined)
+      return refuse(403, `A machine forwards no call to ${request.method} ${url.pathname} (K-1714).`);
+    const verified = await this.verifiedForward(request, machine, now);
+    if (typeof verified === "string") return refuse(403, verified);
+    const labels = verified;
+    const attested = { labels, prefixes: this.labelPrefixesOf(machine.id) };
     const target = `${call.method} ${call.path}`.slice(0, 512);
     let waiting: string | null = null;
     const answer = await (async (): Promise<Response> => {
@@ -9894,7 +11494,7 @@ export class Kitshn extends DurableObject<Env> {
           machine.clientId,
           isRecord(input) ? String(input["deployId"] ?? "") : "",
         )[0]?.public === 1;
-      // A page or a folder site into Everyone also needs "publishes", as `apply` does (K-1754).
+      // A page or a folder site into Everyone also needs "shares", as `apply` does (K-1754).
       const publishes =
         (path === "/agent/library" && request.headers.get("x-kitshn-public") === "true") ||
         (path === "/agent/sites/plan" && isRecord(input) && input["public"] === true) ||
@@ -9912,66 +11512,65 @@ export class Kitshn extends DurableObject<Env> {
               )[0]?.approved ?? "[]",
             )
           : [];
-      // A new folder site also needs "adds apps" (K-1123); its finish uses what the plan was approved for.
+      // A new folder site also needs "creates" (K-1123); its finish uses what the plan was approved for.
       const newSite =
         path === "/agent/sites/plan" &&
         isRecord(input) &&
         !this.folderSiteKnown(machine.clientId, String(input["folder"] ?? "").trim(), now);
-      const game =
-        request.method === "DELETE" &&
-        path.startsWith("/agent/cards/") &&
-        this.gameRows("card_id = ?", decodeURIComponent(path.slice("/agent/cards/".length))).length > 0;
       const needed = [
-        ...new Set<MachineRight>([
-          ...(right === null ? [] : [right]),
-          ...(game ? (["addsApps"] as const) : []),
-          ...(newSite ? (["addsApps"] as const) : []),
-          ...(publishes ? (["publishes"] as const) : []),
+        ...new Set<Effect>([
+          right,
+          ...(newSite ? (["creates"] as const) : []),
+          ...(publishes ? (["shares"] as const) : []),
         ]),
       ];
       const { shown, body: shownBody } = await forwardShown(target, request.headers, bytes);
       const hash = await shownHash(shown);
-      const approved: Array<MachineRight> = [];
+      const approved: Array<Effect> = [];
       // K-1714: an approval binds the machine and the thread that asked (an attested label), and runs one call.
       const thread = labels["t3.thread.id"] ?? null;
       const used = new Set<string>();
-      let wait: { readonly right: MachineRight; readonly circleId: string } | null = null;
+      let wait: { readonly right: Effect; readonly circleId: string } | null = null;
       for (const need of needed) {
-        const mode = machineRightMode(this.state, machine.id, need, now);
-        if (mode === null && machineRightOff(this.state, machine.id, need, now))
+        const mode = machineEffectiveMode(this.state, machine.id, need, now, attested);
+        if (mode.mode === "off")
           return refuse(
             403,
-            `The right "${MACHINE_RIGHT_NAMES[need]}" is off for this machine (K-1720). Ask the owner to turn it on.`,
+            `The effect "${need}" is off for this machine (K-1720). Ask the owner to turn it on.`,
             need,
           );
-        const failed = conditionProblem(mode?.conditions, labels, prefixes);
-        if (failed) return refuse(403, failed);
-        if (mode?.mode === "automatic") continue;
+        if (mode.mode === "automatic") continue;
         if (planned.includes(need)) {
           approved.push(need);
           continue;
         }
-        // K-1776: an unset right asks the Owner; "ask <circle>" asks that circle.
-        const circleId = mode?.circleId ?? OWNER_CIRCLE_ID;
-        const approval = this.forwardApproval(machine.id, hash, circleId, thread, now);
+        // K-1776: "ask <circle>" asks that circle; an unset effect takes its default (K-1730).
+        const circleId = mode.circleId;
+        const approval = this.forwardApproval(
+          machineAsker(machine).credential,
+          hash,
+          circleId,
+          need,
+          thread,
+          now,
+        );
         if (approval === null) wait ??= { right: need, circleId };
         else {
           approved.push(need);
-          used.add(approval);
+          used.add(approval.id);
         }
       }
       // An approval of a call that cannot run would only cost the approver a click.
-      if (wait !== null && circlesOf(this.state, caller.visitor, now).size === 0)
+      if (wait !== null && circlesOf(this.state, caller.visitor, now, attested).size === 0)
         return refuse(403, "This agent is in no agent circle, so it manages nothing (K-718).");
       if (wait !== null) {
         const proposal = await this.forwardProposal(
-          machine,
+          machineAsker(machine),
           target,
           shownBody,
           labels,
           wait,
           hash,
-          thread,
           now,
         );
         if (proposal.outcome === "refused") return refuse(409, proposal.reason);
@@ -9993,7 +11592,7 @@ export class Kitshn extends DurableObject<Env> {
       return this.agentRequest(
         path,
         request,
-        { ...caller, actor: { _tag: "machine", machineId: machine.id, name: machine.name } },
+        { ...caller, actor: { _tag: "machine", machineId: machine.id, name: machine.name }, attested },
         approved,
       );
     })();
@@ -10020,6 +11619,379 @@ export class Kitshn extends DurableObject<Env> {
     return answer;
   }
 
+  /**
+   * K-1777, K-1778: one operation: `POST /op/<id>` with `{ target, body, reason }`, or the read `GET /op/state`. Every
+   * caller takes this path and this gate; only the proof differs. A login with a passkey that holds the admin runs as
+   * from the map. Any other proof goes through `decide`: a machine through its daemon (K-1714), a token of an actor, a
+   * login without the passkey of the admin. An approval runs nothing: the same call again within 1 hour runs, so no
+   * proposal holds a secret (K-1723).
+   */
+  private async opRequest(id: string, request: Request, caller: Caller): Promise<Response> {
+    const now = Date.now();
+    const answer = (status: number, body: Record<string, unknown>) => Response.json(body, { status });
+    const refused = (status: number, reason: string) =>
+      answer(status, { outcome: "refused", reason, error: reason });
+    const machine = machineOf(this.state, caller.visitor);
+    let labels: Readonly<Record<string, string>> = {};
+    if (machine) {
+      const verified = await this.verifiedForward(request, machine, now);
+      if (typeof verified === "string") return refused(403, verified);
+      labels = verified;
+    }
+    const attested = machine ? { labels, prefixes: this.labelPrefixesOf(machine.id) } : null;
+    // K-1778: the admin runs as the owner: a login with the passkey of the admin, or another proof of the admin with
+    // "shares" and "secrets" automatic. A login without that passkey goes through the gate.
+    const admin =
+      this.hasAdmin(caller.visitor, attested) &&
+      (caller.visitor.email === null || adminPasskey(this.state, caller.visitor, now));
+    const asker = this.askerOf(caller.visitor);
+    if (!admin && asker === null)
+      return refused(
+        403,
+        "This proof is no credential of an actor. Ask the owner for a token of an actor, or call through the daemon of a joined machine (K-1778).",
+      );
+    const as: Caller =
+      machine && attested
+        ? {
+            visitor: caller.visitor,
+            actor: { _tag: "machine", machineId: machine.id, name: machine.name },
+            attested,
+          }
+        : asker?.author === undefined
+          ? caller
+          : { ...caller, actor: asker.author };
+    const read = id === "state" && request.method === "GET";
+    if (!isOpId(id)) return refused(404, `kitshn has no operation "${id}"; kitshn ops lists them.`);
+    if (request.method !== "POST" && !read) return refused(405, "Send an operation with POST.");
+    const op: Operation = OPERATIONS[id];
+    if (op.shortOnly === true)
+      return refused(400, `This operation has its own path: use ${op.short ?? "the map"}.`);
+    const input: unknown = read ? {} : await request.json().catch(() => null);
+    if (!isRecord(input))
+      return refused(400, 'Send {"target": "...", "body": {...}, "reason": "..."} as JSON.');
+    const target = typeof input["target"] === "string" ? input["target"] : "";
+    const body = input["body"] ?? {};
+    const reason = typeof input["reason"] === "string" ? input["reason"].slice(0, 500) : null;
+    const built = opRequest(op, target, body);
+    if (typeof built === "string") return refused(400, built);
+    let decision: Decision;
+    let used: { readonly id: string; readonly person: boolean } | null = null;
+    let gated: Caller["gated"] = undefined;
+    if (!admin && asker !== null) {
+      const right = op.effect;
+      const setMode = (effect: Effect) =>
+        rightMode(this.state, caller.visitor, effect, now, attested) ??
+        (rightOff(this.state, caller.visitor, effect, now, attested) ? ({ mode: "off" } as const) : null);
+      const missing = this.opMissing(op, target, built.body);
+      if (missing !== null) return refused(404, missing);
+      const gate = {
+        admin: false,
+        paused: this.state.paused !== null,
+        mode: setMode(right),
+        shares: setMode("shares"),
+        inAgentCircle: circlesOf(this.state, caller.visitor, now, attested).size > 0,
+        scope: this.opScope(op, target, built.body, caller.visitor, now, attested),
+      };
+      const event = (outcome: AskOutcome) => {
+        if (machine)
+          this.askEvent(now, machine, "forward", `op ${id} ${target}`.slice(0, 512), reason, labels, outcome);
+      };
+      decision = decide(op, { ...gate, approved: false }, OWNER_CIRCLE_ID);
+      if (decision.outcome === "ask") {
+        const opTarget = `op ${id} ${target}`.slice(0, 512);
+        // K-1777: the approver reads what the answer gives, not only the fields of the call.
+        const gives = isSecretOp(id) ? this.secretEffect(id, target, built.body) : (op.gives ?? null);
+        const shownBody = {
+          headers: gives === null ? {} : { gives },
+          body: JSON.stringify({ target, body, reason }),
+        };
+        const hash = await shownHash(shownAsk("forward", opTarget, shownBody));
+        const thread = labels["t3.thread.id"] ?? null;
+        // K-1778: a call beyond its scope or its rule waits by "shares", whatever the mode of the row's effect.
+        const askRight: Effect = gate.scope === "holds" ? right : "shares";
+        used = this.forwardApproval(asker.credential, hash, decision.circleId, askRight, thread, now);
+        if (used !== null) decision = decide(op, { ...gate, approved: true }, OWNER_CIRCLE_ID);
+        else {
+          const proposal = await this.forwardProposal(
+            asker,
+            opTarget,
+            shownBody,
+            labels,
+            { right: askRight, circleId: decision.circleId },
+            hash,
+            now,
+          );
+          event(
+            proposal.outcome === "waiting"
+              ? { outcome: "waiting", proposalId: proposal.proposalId }
+              : { outcome: "refused", reason: proposal.reason },
+          );
+          if (proposal.outcome === "refused") return refused(409, proposal.reason);
+          return answer(409, {
+            outcome: "waiting",
+            error: proposal.line,
+            proposalId: proposal.proposalId,
+            circle: proposal.circle,
+            expiresAt: proposal.expiresAt,
+            ask: { id: proposal.proposalId, circle: proposal.circle, expiresAt: proposal.expiresAt },
+          });
+        }
+      }
+      if (decision.outcome === "refuse") {
+        event({ outcome: "refused", reason: decision.reason });
+        return refused(403, decision.reason);
+      }
+      const passed = {
+        right,
+        labels,
+        person: used?.person === true,
+        ...(used === null ? { automatic: gate.scope === "holds" ? right : ("shares" as const) } : {}),
+      };
+      gated = {
+        op: id,
+        approval: machine
+          ? { machineId: machine.id, key: keyMark(machine), ...passed }
+          : { credential: asker.credential, ...passed },
+      };
+    } else {
+      // K-1777: the admin runs as from the map; `decide` refuses only a person gate, whose path is not `/op`.
+      decision = decide(
+        op,
+        {
+          admin: true,
+          paused: this.state.paused !== null,
+          mode: null,
+          shares: null,
+          inAgentCircle: false,
+          scope: "holds",
+          approved: false,
+        },
+        OWNER_CIRCLE_ID,
+      );
+      if (decision.outcome === "refuse") return refused(403, decision.reason);
+    }
+    if (decision.outcome !== "run") return refused(403, "kitshn decided nothing for this call (K-006).");
+    if (used !== null)
+      this.sql("UPDATE proposals SET used_at = ? WHERE id = ? AND used_at IS NULL", now, used.id);
+    const owner = new Request(new URL(built.path + built.search, request.url), {
+      method: built.method,
+      headers: { "content-type": "application/json" },
+      ...(built.body === null ? {} : { body: JSON.stringify(built.body) }),
+    });
+    const ran = await this.ownerRoute(built.path, owner, gated === undefined ? as : { ...as, gated });
+    if (machine)
+      this.askEvent(
+        now,
+        machine,
+        "forward",
+        `op ${id} ${target}`.slice(0, 512),
+        reason,
+        labels,
+        ran.ok ? { outcome: "done", result: null } : { outcome: "refused", reason: `answered ${ran.status}` },
+      );
+    const result: unknown = await ran.json().catch(() => null);
+    if (!ran.ok) {
+      const error =
+        isRecord(result) && typeof result["error"] === "string" ? result["error"] : `answered ${ran.status}`;
+      return refused(ran.status, error);
+    }
+    // K-1777, K-208: the read of the map always goes out through AGENT_READ, also to the owner.
+    return answer(200, { outcome: "done", result: read ? agentRead(result as Snapshot) : result });
+  }
+
+  /**
+   * K-1778: the credential of a proof that names an actor, with the History name of a token: `machine/<id>`, `token/<id>`
+   * or `login/<email>`. Null when no actor holds the credential.
+   */
+  private askerOf(visitor: Visitor): Asker | null {
+    const machine = machineOf(this.state, visitor);
+    if (machine)
+      return { credential: credentialKey({ _tag: "machine", machineId: machine.id }), machineId: machine.id };
+    for (const actor of this.state.actors.values())
+      for (const credential of actor.credentials) {
+        if (credential._tag === "token" && visitor.email === null && credential.clientId === visitor.clientId)
+          return {
+            credential: credentialKey(credential),
+            machineId: null,
+            name: actor.name,
+            author: { _tag: "device", clientId: credential.clientId, name: actor.name },
+          };
+        if (credential._tag === "login" && visitor.email?.toLowerCase() === credential.email.toLowerCase())
+          return { credential: credentialKey(credential), machineId: null, name: actor.name };
+      }
+    return null;
+  }
+
+  /**
+   * K-1777: why the target that the scope checks does not exist, or null. A missing target refuses, because an approval
+   * could not run the call either; only a target out of scope asks the Owner.
+   */
+  private opMissing(op: Operation, target: string, body: unknown): string | null {
+    if (isPersonGate(op.gate)) return null;
+    const card = (id: string) =>
+      this.state.resources.has(id) || this.sql("SELECT 1 FROM library WHERE id = ?", id).length > 0;
+    switch (op.gate.scope) {
+      case "card":
+      case "own":
+        return card(target) ? null : `There is no such card: "${target}".`;
+      case "machine":
+      case "self":
+        return this.state.machines.has(target) ? null : `There is no such machine: "${target}".`;
+      case "job": {
+        const jobId = Number(target);
+        const found =
+          target !== "" &&
+          Number.isSafeInteger(jobId) &&
+          this.sql("SELECT 1 FROM jobs WHERE id = ?", jobId).length > 0;
+        return found ? null : `There is no such job: "${target}".`;
+      }
+      case "ports": {
+        const missing = ["machine", "relay"]
+          .map((name) => (isRecord(body) && typeof body[name] === "string" ? (body[name] as string) : ""))
+          .filter((id) => id !== "" && !card(id));
+        return missing.length === 0 ? null : `There is no such card: "${missing.join('", "')}".`;
+      }
+      case "any":
+      case "rule":
+      case "rollout":
+      case "owner":
+        return null;
+    }
+  }
+
+  /** K-1777: whether the target of a call fits the scope of its operation for this caller. */
+  private opScope(
+    op: Operation,
+    target: string,
+    body: unknown,
+    visitor: Visitor,
+    now: number,
+    attested: Attested | null,
+  ): ScopeResult {
+    if (isPersonGate(op.gate)) return "fails";
+    if (op.gate.scope === "rule") return this.ruleScope(body, visitor, now, attested);
+    return this.targetInScope(op.gate.scope, target, body, visitor, now, attested) ? "holds" : "fails";
+  }
+
+  /**
+   * K-715, K-718, K-1778: edits that pass the rule hold. Edits beyond it that only move cards that the caller manages
+   * follow "shares". Any other edit, or one that does not resolve, is out of scope, so the Owner decides.
+   */
+  private ruleScope(body: unknown, visitor: Visitor, now: number, attested: Attested | null): ScopeResult {
+    const edits =
+      isRecord(body) && Array.isArray(body["edits"]) ? (body["edits"] as ReadonlyArray<Edit>) : [];
+    try {
+      const changes = resolveEdits(this.state, edits);
+      const refusal = agentRefusal(
+        this.state,
+        applyChanges(this.state, changes),
+        visitor,
+        changes,
+        now,
+        this.addedBy(visitor.clientId),
+        attested,
+      );
+      if (refusal === null) return "holds";
+      return sharesReach(this.state, visitor, changes, now, attested) ? "shares" : "fails";
+    } catch {
+      return "fails";
+    }
+  }
+
+  private targetInScope(
+    scope: Exclude<Scope, "rule">,
+    target: string,
+    body: unknown,
+    visitor: Visitor,
+    now: number,
+    attested: Attested | null,
+  ): boolean {
+    switch (scope) {
+      case "any":
+        return true;
+      // K-1777: settings of the whole kitshn and actions with no target that a caller controls; "shares" decides.
+      case "owner":
+        return false;
+      // K-636: ending a stopped rollout updates the machine that failed again, so the Owner decides it.
+      case "rollout":
+        return !this.rolloutStopped();
+      case "card":
+        return cardsControlledBy(this.state, visitor, now, attested).has(target);
+      case "machine":
+        return agentMayRunOn(this.state, visitor, target, now, attested);
+      case "self":
+        return machineOf(this.state, visitor)?.id === target;
+      case "own":
+        return this.addedBy(visitor.clientId).has(target);
+      case "job": {
+        const jobId = Number(target);
+        const [job] =
+          target !== "" && Number.isSafeInteger(jobId)
+            ? this.sql<{ machine_id: string | null; actor: string }>(
+                "SELECT machine_id, actor FROM jobs WHERE id = ?",
+                jobId,
+              )
+            : [];
+        if (!job) return false;
+        const queuedBy = JSON.parse(job.actor) as Author;
+        const machine = machineOf(this.state, visitor);
+        const own =
+          (queuedBy._tag === "machine" && queuedBy.machineId === machine?.id) ||
+          (machine === undefined && queuedBy._tag === "device" && queuedBy.clientId === visitor.clientId);
+        return (
+          own ||
+          (job.machine_id !== null &&
+            cardsControlledBy(this.state, visitor, now, attested).has(job.machine_id))
+        );
+      }
+      case "ports": {
+        // K-2007: the port machine and its relay are cards that the caller controls.
+        const field = (name: string) =>
+          isRecord(body) && typeof body[name] === "string" ? (body[name] as string) : "";
+        const managed = cardsControlledBy(this.state, visitor, now, attested);
+        return managed.has(field("machine")) && (field("relay") === "" || managed.has(field("relay")));
+      }
+    }
+  }
+
+  /** K-1777: what the answer of a secret row gives, for the approver to read. */
+  private secretEffect(id: SecretOpId, target: string, body: unknown): string {
+    const field = (name: string) =>
+      isRecord(body) && typeof body[name] === "string" ? (body[name] as string) : "";
+    switch (id) {
+      case "machine-reset-key":
+        return `a key code that can act as the machine ${this.state.machines.get(target)?.name ?? target}`;
+      case "machine-add":
+        return `the join code of a new machine ${field("name")}`;
+      case "device-token-add":
+        return `the secret of a new device token ${field("name")}, in no circle yet`;
+      case "device-invite": {
+        const tokenId = field("tokenId");
+        if (tokenId === "")
+          return `a code for the secret of a new device token ${field("name")}, in no circle yet`;
+        const owner = [...this.state.actors.values()].find((actor) =>
+          actor.credentials.some(
+            (credential) => credential._tag === "token" && credential.tokenId === tokenId,
+          ),
+        );
+        return `a code for the secret of the token ${tokenId}, which acts as ${owner?.name ?? "no actor yet"}`;
+      }
+    }
+  }
+
+  /** K-718: the cards of repos that this caller allowed (K-819), and the pages and files that it published. */
+  private addedBy(clientId: string | null) {
+    return new Set(
+      this.sql<{ resource_id: string }>(
+        `SELECT DISTINCT deploys.resource_id FROM deploys JOIN repos ON repos.repo_id = deploys.repo_id AND deploys.kind = 'deploy'
+         WHERE repos.allowed_by_client = ?
+         UNION SELECT id FROM library WHERE added_by = ?`,
+        clientId,
+        clientId,
+      ).map((row) => row.resource_id),
+    );
+  }
+
   /** K-1123: true when this agent has a live folder site of this folder, so a plan updates it. */
   private folderSiteKnown(clientId: string, folder: string, now: number) {
     const [stored] = this.sql<AgentSiteRow>(
@@ -10032,26 +12004,31 @@ export class Kitshn extends DurableObject<Env> {
 
   /**
    * K-1714, K-1776: the unused approval of exactly this forwarded call (its shown hash) of this machine and thread, from
-   * this circle, within the hour; null when there is none.
+   * this circle, within the hour, and whether a person gave it; null when there is none. An ask of "shares" or "secrets"
+   * takes only an approval of the same effect, because only that one passed the passkey check (K-1723).
    */
   private forwardApproval(
-    machineId: string,
+    credential: string,
     hash: string,
     circleId: string,
+    right: Effect,
     thread: string | null,
     now: number,
-  ): string | null {
-    const [row] = this.sql<{ id: string }>(
-      `SELECT id FROM proposals WHERE machine_id = ? AND action = 'forward' AND shown_hash = ? AND circle_id = ?
+  ): { readonly id: string; readonly person: boolean } | null {
+    const [row] = this.sql<{ id: string; person: number }>(
+      `SELECT id, json_extract(decided_by, '$.actor._tag') = 'person' AS person FROM proposals
+       WHERE credential = ? AND action = 'forward' AND shown_hash = ? AND circle_id = ? AND (? = 0 OR right_name = ?)
        AND state = 'approved' AND used_at IS NULL AND decided_at > ? AND json_extract(labels, '$."t3.thread.id"') IS ?
        LIMIT 1`,
-      machineId,
+      credential,
       hash,
       circleId,
+      PASSKEY_EFFECTS.has(right) ? 1 : 0,
+      right,
       now - APPROVED_WINDOW_MS,
       thread,
     );
-    return row?.id ?? null;
+    return row ? { id: row.id, person: row.person === 1 } : null;
   }
 
   /**
@@ -10059,13 +12036,12 @@ export class Kitshn extends DurableObject<Env> {
    * so an agent that runs its command again does not fill the Inbox.
    */
   private async forwardProposal(
-    machine: Machine,
+    asker: Asker,
     target: string,
     body: unknown,
     labels: Readonly<Record<string, string>>,
-    wait: { readonly right: MachineRight; readonly circleId: string },
+    wait: { readonly right: Effect; readonly circleId: string },
     hash: string,
-    thread: string | null,
     now: number,
   ): Promise<
     | { readonly outcome: "refused"; readonly reason: string }
@@ -10077,18 +12053,20 @@ export class Kitshn extends DurableObject<Env> {
         readonly line: string;
       }
   > {
-    const [open] = this.sql<{ id: string; expires_at: number }>(
-      `SELECT id, expires_at FROM proposals WHERE machine_id = ? AND action = 'forward' AND shown_hash = ? AND circle_id = ?
-       AND state = 'pending' AND expires_at > ? AND json_extract(labels, '$."t3.thread.id"') IS ? LIMIT 1`,
-      machine.id,
+    // propose finds the same open call too; this read only gives its expiry.
+    const open = this.openTwin(
+      asker.credential,
+      "forward",
       hash,
       wait.circleId,
+      wait.right,
+      body,
+      labels,
       now,
-      thread,
     );
     const made = open
       ? { outcome: "waiting" as const, proposalId: open.id }
-      : await this.propose(machine, "forward", target, body, null, labels, wait.right, wait.circleId, now);
+      : await this.propose(asker, "forward", target, body, null, labels, wait.right, wait.circleId, now);
     if (made.outcome !== "waiting")
       return {
         outcome: "refused",
@@ -10102,7 +12080,7 @@ export class Kitshn extends DurableObject<Env> {
       proposalId: made.proposalId,
       circle,
       expiresAt,
-      line: `waiting: ${circle} must approve this call (right "${MACHINE_RIGHT_NAMES[wait.right]}", proposal ${made.proposalId}, expires in ${hours} h). After the approval, run the same command once more within 1 hour, from the same thread; a changed call asks again (K-1776).`,
+      line: `waiting: ${circle} must approve this call (right "${wait.right}", proposal ${made.proposalId}, expires in ${hours} h). After the approval, run the same command once more within 1 hour, from the same thread; a changed call asks again (K-1776).`,
     };
   }
 
@@ -10110,21 +12088,23 @@ export class Kitshn extends DurableObject<Env> {
     path: string,
     request: Request,
     caller: Caller,
-    approved: ReadonlyArray<MachineRight> = [],
+    approved: ReadonlyArray<Effect> = [],
     /** K-1776: a person of the Owner circle approved this one job or deploy, so K-718 does not refuse it. */
-    ownerApproved: OwnerApproval | null = null,
+    ownerApproved: JobApproval | null = null,
   ) {
     const now = Date.now();
     // K-1714: a machine's token over HTTP is a call that its daemon forwarded and signed; asks use the connection.
     const machine = machineOf(this.state, caller.visitor);
     if (machine && caller.actor._tag !== "machine")
       return this.forwardedRequest(path, request, caller, machine);
-    // K-1712: a machine's job and deploy need their right now: automatic, or the approval of this ask.
-    const machineMay = (right: MachineRight) => {
+    const attested = caller.attested ?? null;
+    // K-1712: a machine's job and deploy need their effect now: automatic, or the approval of this ask.
+    const machineMay = (right: Effect) => {
       if (!machine) return true;
       // An approval of this call (K-1723, K-1776) counts also when the right is off.
       return (
-        approved.includes(right) || machineRightMode(this.state, machine.id, right, now)?.mode === "automatic"
+        approved.includes(right) ||
+        machineEffectiveMode(this.state, machine.id, right, now, attested).mode === "automatic"
       );
     };
     const machinePaths = ["/agent/state", "/agent/apply", "/agent/organize", "/agent/jobs", "/agent/deploy"];
@@ -10136,32 +12116,37 @@ export class Kitshn extends DurableObject<Env> {
       forwardRight(path, request.method) === undefined
     )
       return Response.json({ error: `A machine has no ask for ${path} yet (K-1711).` }, { status: 403 });
-    const own = circlesOf(this.state, caller.visitor, now);
+    const own = circlesOf(this.state, caller.visitor, now, attested);
     // A machine in the tray reads its own approved job.
     if (own.size === 0 && !ownerApproved && !(machine && path.startsWith("/agent/jobs/")))
       return Response.json(
         { error: "This agent is in no agent circle, so it manages nothing (K-718)." },
         { status: 403 },
       );
-    const managed = cardsControlledBy(this.state, caller.visitor, now);
-    // K-614: the history names the device by its member name in its agent circle, not by its token id.
-    const device = [...own]
-      .flatMap((id) => this.state.circles.get(id)?.members ?? [])
-      .find((member) => member._tag === "device" && member.clientId === caller.visitor.clientId);
+    const managed = cardsControlledBy(this.state, caller.visitor, now, attested);
+    // K-614, K-1778: the history names a token by the name of its actor, not by its token id.
+    const tokenActor = [...this.state.actors.values()].find((actor) =>
+      actor.credentials.some(
+        (credential) => credential._tag === "token" && credential.clientId === caller.visitor.clientId,
+      ),
+    );
     // K-1730: a machine acts under its own name.
-    const agentName =
-      device?._tag === "device" ? device.name : caller.actor._tag === "machine" ? caller.actor.name : null;
+    const agentName = tokenActor
+      ? tokenActor.name
+      : caller.actor._tag === "machine"
+        ? caller.actor.name
+        : null;
     const agent: Caller =
-      caller.actor._tag === "device" && device?._tag === "device"
-        ? { ...caller, actor: { ...caller.actor, name: device.name } }
+      caller.actor._tag === "device" && tokenActor
+        ? { ...caller, actor: { ...caller.actor, name: tokenActor.name } }
         : caller;
-    const rights = AGENT_RIGHTS.filter((right) => agentHas(this.state, caller.visitor, right, now, approved));
-    // A key that publishes also sees the Everyone circle, where its published cards sit.
+    const rights = EFFECTS.filter((right) =>
+      agentHas(this.state, caller.visitor, right, now, attested, approved),
+    );
+    // A key that shares also sees the Everyone circle, where its published cards sit.
     const visible = (id: string) => {
       const circle = this.state.circles.get(id);
-      return (
-        own.has(id) || (rights.includes("publishes") && circle !== undefined && isEveryoneCircle(circle))
-      );
+      return own.has(id) || (rights.includes("shares") && circle !== undefined && isEveryoneCircle(circle));
     };
     // K-718: the cards of repos that this key allowed (K-819); only these may become public.
     const added = new Set(
@@ -10176,16 +12161,24 @@ export class Kitshn extends DurableObject<Env> {
     const move = (edits: ReadonlyArray<Edit>, named: string | null = null) => {
       try {
         const changes = resolveEdits(this.state, edits);
-        const refusal = agentRefusal(
-          this.state,
-          applyChanges(this.state, changes),
-          caller.visitor,
-          changes,
-          now,
-          added,
-          approved,
-        );
-        if (refusal) return Response.json({ error: refusal }, { status: 403 });
+        // K-1778: an approval of "shares" lets any edit run. "shares" automatic reaches past the rule only for moves of
+        // cards that the agent manages. The rules of K-105 still hold.
+        const refusal = approved.includes("shares")
+          ? null
+          : agentRefusal(
+              this.state,
+              applyChanges(this.state, changes),
+              caller.visitor,
+              changes,
+              now,
+              added,
+              attested,
+              approved,
+            );
+        const reached =
+          agentHas(this.state, caller.visitor, "shares", now, attested) &&
+          sharesReach(this.state, caller.visitor, changes, now, attested);
+        if (refusal && !reached) return Response.json({ error: refusal }, { status: 403 });
         return Response.json({ revision: this.commit(agent.actor, changes, null, named) });
       } catch (error) {
         if (error instanceof RuleError) return Response.json({ error: error.message }, { status: 409 });
@@ -10196,28 +12189,20 @@ export class Kitshn extends DurableObject<Env> {
       const deploys = this.deploys();
       const checked = new Set(this.uptimeTargets().map((card) => card.id));
       // K-1726: a machine sees the open asks of the circles that it is a member of, so its agent can answer them.
-      const answerable = machine ? this.answerableProposals(caller.visitor) : [];
+      const answerable = machine ? this.answerableProposals(caller.visitor, attested) : [];
       // The servers and the link events are most of the answer, so they come only with `?all=1`.
       const all = new URL(request.url).searchParams.get("all") === "1";
       const circleRef = (id: string) => ({ id, name: this.state.circles.get(id)?.name ?? id });
       return Response.json({
-        // The names of the map, with the mode of each right (K-1720) for a machine, and its circle for "ask".
-        rights: machine
-          ? // "reads code" and "writes code" hold per repo (K-1733), so they are not one mode of the machine.
-            MACHINE_RIGHTS.filter((right) => right !== "readsCode" && right !== "writesCode").map((right) => {
-              const mode = machineRightMode(this.state, machine.id, right, now);
-              const base = { id: right, name: MACHINE_RIGHT_NAMES[right] };
-              if (mode?.mode === "automatic") return { ...base, mode: "automatic" as const };
-              // K-1776: a right that no circle sets asks the Owner; only "off" refuses.
-              if (mode === null && machineRightOff(this.state, machine.id, right, now))
-                return { ...base, mode: "off" as const };
-              return { ...base, mode: "ask" as const, circle: circleRef(mode?.circleId ?? OWNER_CIRCLE_ID) };
-            })
-          : AGENT_RIGHTS.map((right) => ({
-              id: right,
-              name: AGENT_RIGHT_NAMES[right],
-              mode: rights.includes(right) ? "automatic" : "off",
-            })),
+        // The mode of each effect (K-1720, K-1730), with its default, and its circle for "ask". On a repo, "reads" and
+        // "changes" count the chips of the circles that hold it (K-1733).
+        rights: EFFECTS.map((right) => {
+          const mode = effectiveMode(this.state, caller.visitor, right, now, attested);
+          const base = { id: right, name: right };
+          return mode.mode === "ask"
+            ? { ...base, mode: "ask" as const, circle: circleRef(mode.circleId) }
+            : { ...base, mode: mode.mode };
+        }),
         ...(machine ? { proposals: answerable } : {}),
         // K-619: a machine sees its own listening ports, the list of the site wizard.
         ...(machine && all ? { servers: this.machineView(machine).servers } : {}),
@@ -10225,8 +12210,8 @@ export class Kitshn extends DurableObject<Env> {
         ...(machine && all ? { linkEvents: this.recentLinkEvents(machine.id) } : {}),
         // K-631: the health cells from and to this machine, from the reports in the socket attachments.
         ...(machine ? { health: this.healthOf(machine.id) } : {}),
-        // K-819: with "may add apps", the waiting repos that the key may allow.
-        repos: rights.includes("addsApps")
+        // K-819: with "creates", the waiting repos that the key may allow.
+        repos: rights.includes("creates")
           ? this.sql<RepoRow>(
               "SELECT * FROM repos WHERE state = 'waiting' AND gone_at IS NULL ORDER BY first_seen DESC",
             ).map((row) => ({
@@ -10245,6 +12230,8 @@ export class Kitshn extends DurableObject<Env> {
           // A machine card has no status of its own; its connection is the live one.
           const known = kind === "machine" ? this.state.machines.get(id) : undefined;
           const status = known ? (this.openSocket(known.id) ? "online" : "offline") : resource.status;
+          // K-724: the daemon release and protocol of an online machine, as the owner map shows them; null offline.
+          const live = known ? this.machineStatus(known.id) : null;
           const backup = this.latestBackups().get(id);
           const uptime = checked.has(id) ? (this.uptime.get(id) ?? UP) : null;
           return [
@@ -10254,6 +12241,9 @@ export class Kitshn extends DurableObject<Env> {
               name,
               addresses,
               status,
+              ...(known
+                ? { daemon: live ? { version: live.version, protocol: daemonProtocol(live) } : null }
+                : {}),
               place: this.state.places.get(id) ?? null,
               // K-212: when the card leaves every circle for the tray, or null.
               endsAt: this.state.ends.get(id) ?? null,
@@ -10265,6 +12255,8 @@ export class Kitshn extends DurableObject<Env> {
               deploy: deploys.newest.get(id) ?? null,
               backup: backup ? { at: backup.at, state: backup.state, error: backup.error } : null,
               uptime: uptime ? { up: uptime.up, since: uptime.since } : null,
+              // K-827: each instance of a Compose card with its machine, address, status and newest backup.
+              ...(kind === "site.compose" ? { instances: this.instanceViews(resource) } : {}),
             },
           ];
         }),
@@ -10292,9 +12284,9 @@ export class Kitshn extends DurableObject<Env> {
         const place = this.state.places.get(id);
         if (!managed.has(id) || !place) return false;
         const probe: Change = { _tag: "place", id, before: place, after: place };
-        // A separate after state, so a published card in Everyone needs "publishes" now, as the real move does.
+        // A separate after state, so a published card in Everyone needs "shares" now, as the real move does.
         const after = applyChanges(this.state, [probe]);
-        return agentRefusal(this.state, after, caller.visitor, [probe], now, added) === null;
+        return agentRefusal(this.state, after, caller.visitor, [probe], now, added, attested) === null;
       };
       const plan = organize(this.state, this.drawn ?? NO_SIZES, mayMove);
       if ("refused" in plan) return Response.json({ error: plan.refused }, { status: 409 });
@@ -10315,33 +12307,45 @@ export class Kitshn extends DurableObject<Env> {
     // K-1116: an agent key publishes a page or a file, the same upload as a drop on the map.
     if (path === "/agent/library" && request.method === "POST")
       return this.agentPublish(agent, request, now, approved);
-    // K-2006: an agent adds a game on a machine that it controls and closes its doors; it never opens one.
-    if (path === "/agent/games" && request.method === "POST") {
+    // K-2007: an agent adds a port card on a machine that it controls and closes its doors; it never opens one.
+    if (path === "/agent/ports" && request.method === "POST") {
       const body: unknown = await request.json().catch(() => null);
       const machineId = isRecord(body) && typeof body["machine"] === "string" ? body["machine"] : "";
       const relay = isRecord(body) && typeof body["relay"] === "string" ? body["relay"] : "";
-      if (!agentHas(this.state, caller.visitor, "addsApps", now, approved))
+      if (!agentHas(this.state, caller.visitor, "creates", now, caller.attested ?? null, approved))
         return Response.json(
           {
-            error: 'The right "adds apps" is off for this agent. Ask the owner to turn it on.',
-            need: "addsApps",
+            error: 'The effect "creates" is not automatic for this agent. Ask the owner to set it.',
+            need: "creates",
           },
           { status: 403 },
         );
       if (!managed.has(machineId) || (relay !== "" && !managed.has(relay)))
         return Response.json(
-          { error: "An agent adds a game only on machines that it controls (K-2006)." },
+          { error: "An agent adds a port card only on machines that it controls (K-2007)." },
           { status: 403 },
         );
-      return this.createGame(agent.actor, body);
+      return this.createPortCard(agent.actor, body);
     }
-    // K-1117, K-1123: an agent takes down a page, a file or a folder site that it published, and needs no right,
-    // because that lowers access (K-715). A game card goes on below, with "adds apps".
+    // K-1117, K-1123: an agent takes down a page, a file or a folder site that it published. It has no Undo, so it
+    // needs "destroys" (K-1730). A port card goes on below.
     const removed =
       path.startsWith("/agent/cards/") && request.method === "DELETE"
         ? decodeURIComponent(path.slice("/agent/cards/".length))
         : null;
-    if (removed !== null && !removed.includes("/") && this.gameRows("card_id = ?", removed).length === 0) {
+    if (
+      removed !== null &&
+      !removed.includes("/") &&
+      !agentHas(this.state, caller.visitor, "destroys", now, caller.attested ?? null, approved)
+    )
+      return Response.json(
+        {
+          error: 'The effect "destroys" is not automatic for this agent. Ask the owner to set it.',
+          need: "destroys",
+        },
+        { status: 403 },
+      );
+    if (removed !== null && !removed.includes("/") && this.portRows("card_id = ?", removed).length === 0) {
       const card = this.agentCard(agent, removed, now);
       if (card === null)
         return Response.json(
@@ -10368,43 +12372,35 @@ export class Kitshn extends DurableObject<Env> {
         );
       return this.rollbackResponse(agent, card, back.deployId);
     }
-    // K-2006: an agent removes a game card on a machine that it controls, with "adds apps", as it adds one.
+    // K-2007: an agent removes a port card on a machine that it controls, with "destroys" (checked above).
     if (
       path.startsWith("/agent/cards/") &&
       request.method === "DELETE" &&
       !path.slice("/agent/cards/".length).includes("/")
     ) {
       const card = path.slice("/agent/cards/".length);
-      const [row] = this.gameRows("card_id = ?", card);
+      const [row] = this.portRows("card_id = ?", card);
       if (!row)
         return Response.json(
-          { error: `An agent removes only game cards; ${card} is none.` },
+          { error: `An agent removes only port cards; ${card} is none.` },
           { status: 404 },
-        );
-      if (!agentHas(this.state, caller.visitor, "addsApps", now, approved))
-        return Response.json(
-          {
-            error: 'The right "adds apps" is off for this agent. Ask the owner to turn it on.',
-            need: "addsApps",
-          },
-          { status: 403 },
         );
       if (!managed.has(row.machine_id) || (row.relay_id !== null && !managed.has(row.relay_id)))
         return Response.json(
-          { error: "An agent removes a game only on machines that it controls (K-2006)." },
+          { error: "An agent removes a port card only on machines that it controls (K-2007)." },
           { status: 403 },
         );
-      return this.deleteGame(agent.actor, card);
+      return this.deletePortCard(agent.actor, card);
     }
     if (path.startsWith("/agent/cards/") && path.includes("/doors")) {
       const [card = "", address] = path.slice("/agent/cards/".length).split("/doors");
-      const [row] = this.gameRows("card_id = ?", card);
-      if (!row || !managed.has(doorMachine(gameOf(row))))
+      const [row] = this.portRows("card_id = ?", card);
+      if (!row || !managed.has(doorMachine(portOf(row))))
         return Response.json(
-          { error: "An agent sees the doors only of games on machines that it controls (K-2006)." },
+          { error: "An agent sees the doors only of port cards on machines that it controls (K-2007)." },
           { status: 403 },
         );
-      if (request.method === "GET" && !address) return Response.json(this.gameView(row, now));
+      if (request.method === "GET" && !address) return Response.json(this.portView(row, now));
       if (request.method === "DELETE" && address?.startsWith("/"))
         return this.closeDoorBy(agent.actor, card, decodeURIComponent(address.slice(1)));
     }
@@ -10448,18 +12444,19 @@ export class Kitshn extends DurableObject<Env> {
     if (path.startsWith("/agent/library/") && path.endsWith("/previous") && request.method === "POST")
       return this.restorePrevious(agent, path.slice("/agent/library/".length, -"/previous".length), "agent");
     if (path === "/agent/jobs" && request.method === "POST") {
-      if (!machineMay("runsCommands"))
-        return Response.json(
-          { error: 'The right "runs commands" is off for this machine (K-1720).' },
-          { status: 403 },
-        );
       const body: unknown = await request.json().catch(() => null);
       const machineId =
         typeof body === "object" && body !== null && "machineId" in body ? body.machineId : undefined;
-      // K-718, K-909: an agent key removes nothing, also no orphaned volume.
       const command = isRecord(body) && isRecord(body["command"]) ? body["command"] : null;
-      if (command?.["kind"] === "compose-volume-remove")
-        return Response.json({ error: NO_VOLUME_JOBS }, { status: 403 });
+      const volume = command?.["kind"] === "compose-volume-remove";
+      // K-718, K-909: an agent key removes nothing, also no orphaned volume. A machine removes one by "destroys".
+      if (volume && !machine) return Response.json({ error: NO_VOLUME_JOBS }, { status: 403 });
+      const effect = volume ? "destroys" : "runs";
+      if (!machineMay(effect))
+        return Response.json(
+          { error: `The effect "${effect}" is not automatic for this machine (K-1720).` },
+          { status: 403 },
+        );
       const noUpdate =
         command?.["kind"] === "update" && typeof machineId === "string"
           ? this.agentUpdateRefusal(machineId)
@@ -10468,7 +12465,13 @@ export class Kitshn extends DurableObject<Env> {
       // Only the machines whose cards it manages; a label job could land on any machine.
       const outside = ownerApproved
         ? null
-        : this.outsideAgentLimit(caller.visitor, "job", typeof machineId === "string" ? machineId : "", body);
+        : this.outsideAgentLimit(
+            caller.visitor,
+            "job",
+            typeof machineId === "string" ? machineId : "",
+            body,
+            caller.attested ?? null,
+          );
       if (outside !== null) return Response.json({ error: outside }, { status: 403 });
       return this.addJob(agent, body, ownerApproved);
     }
@@ -10507,7 +12510,7 @@ export class Kitshn extends DurableObject<Env> {
       const refusal = agentAllowRefusal(
         row ? repoGateOf(row) : undefined,
         isRecord(body) ? body["state"] : null,
-        agentHas(this.state, caller.visitor, "addsApps", Date.now(), approved),
+        agentHas(this.state, caller.visitor, "runs", Date.now(), caller.attested ?? null, approved),
         row?.gone_at !== null && row?.gone_at !== undefined,
       );
       if (refusal) return Response.json({ error: refusal.error }, { status: refusal.status });
@@ -10543,9 +12546,9 @@ export class Kitshn extends DurableObject<Env> {
       return await this.logsResponse(card, body);
     }
     if (path === "/agent/deploy" && request.method === "POST") {
-      if (!machineMay("deploys"))
+      if (!machineMay("changes"))
         return Response.json(
-          { error: 'The right "deploys" is off for this machine (K-1720).' },
+          { error: 'The effect "changes" is not automatic for this machine (K-1720).' },
           { status: 403 },
         );
       const body: unknown = await request.json().catch(() => null);
@@ -10556,7 +12559,7 @@ export class Kitshn extends DurableObject<Env> {
           { error: 'Send {"card": <id>, "mode": "redeploy" | "build"}.' },
           { status: 400 },
         );
-      const outside = this.outsideAgentLimit(caller.visitor, "deploy", card, null);
+      const outside = this.outsideAgentLimit(caller.visitor, "deploy", card, null, caller.attested ?? null);
       if (outside !== null && !ownerApproved) return Response.json({ error: outside }, { status: 403 });
       const row = this.lastDone(card);
       const machine = row?.machine_id ? this.state.machines.get(row.machine_id) : undefined;
@@ -10579,21 +12582,37 @@ export class Kitshn extends DurableObject<Env> {
         return started.ok && outside !== null ? Response.json({ dispatched: true }) : started;
       }
       if (!machine) return Response.json({ error: "The machine of this app is gone." }, { status: 409 });
-      return this.agentRedeploy(agent, machine.id, plan.command, ownerApproved);
+      const resource = this.state.resources.get(card);
+      const others = resource ? this.instanceRedeploys(resource, plan.command) : [];
+      return this.agentRedeploy(
+        agent,
+        [{ machine, command: plan.command }, ...others].map((target) => ({
+          machineId: target.machine.id,
+          command: target.command,
+        })),
+        ownerApproved,
+      );
     }
     return Response.json({ error: `The agent path has no ${request.method} ${path}.` }, { status: 404 });
   }
 
   /** K-718: why this sender may not run this job or deploy without a person, or null. `addJob` refuses a bad command. */
-  private outsideAgentLimit(visitor: Visitor, action: ProposalAction, target: string, body: unknown) {
+  private outsideAgentLimit(
+    visitor: Visitor,
+    action: ProposalAction,
+    target: string,
+    body: unknown,
+    attested: Attested | null,
+  ) {
     const now = Date.now();
     if (action === "deploy")
-      return cardsControlledBy(this.state, visitor, now).has(target)
+      return cardsControlledBy(this.state, visitor, now, attested).has(target)
         ? null
         : `This agent has no control on the card "${target}".`;
     if (action !== "job") return null;
     const command = parseCommand(isRecord(body) ? body["command"] : null);
-    return typeof command === "string" || agentMayCommand(this.state, visitor, target, command.kind, now)
+    return typeof command === "string" ||
+      agentMayCommand(this.state, visitor, target, command.kind, now, attested)
       ? null
       : "An agent runs jobs only on a machine whose card, and every card that runs on it, it manages (K-718).";
   }
@@ -10607,21 +12626,28 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /** K-1710 to K-1722: checks one ask, runs it, makes a proposal, or refuses it with the reason. */
-  private async ask(machine: Machine, raw: Record<string, unknown>): Promise<AskOutcome> {
+  private async ask(
+    machine: Machine,
+    raw: Record<string, unknown>,
+    /** K-722: only `execStart` asks for `exec`, after its own checks. */
+    exec = false,
+  ): Promise<AskOutcome> {
     const now = Date.now();
     const action = raw["action"];
+    if ((action === "exec") !== exec)
+      return { outcome: "refused", reason: "An exec starts with the exec request of the daemon (K-722)." };
     const target = typeof raw["target"] === "string" ? raw["target"].slice(0, 512) : "";
     const reason = typeof raw["reason"] === "string" ? raw["reason"].slice(0, 500) : null;
     const problem = labelProblem(raw["labels"]);
-    // K-1752, K-1753: labels of an attester prefix count only from the daemon's `attested`; a caller's own are dropped.
-    const prefixes = this.attesterPrefixesOf(machine.id);
-    const reserved = [...prefixes, "t3."];
+    // K-1752, K-1753: labels of a provider prefix count only from the daemon's `attested`; a caller's own are dropped.
+    const prefixes = this.labelPrefixesOf(machine.id);
+    const reserved = prefixes;
     const claimed = Object.fromEntries(
       Object.entries(
         problem === null && isRecord(raw["labels"]) ? (raw["labels"] as Record<string, string>) : {},
       ).filter(([key]) => !reserved.some((prefix) => key.startsWith(prefix))),
     );
-    const attested = Object.fromEntries(
+    const vouched = Object.fromEntries(
       Object.entries(isRecord(raw["attested"]) ? raw["attested"] : {})
         .filter(
           (entry): entry is [string, string] =>
@@ -10632,7 +12658,9 @@ export class Kitshn extends DurableObject<Env> {
         )
         .slice(0, 20),
     );
-    const labels: Record<string, string> = { ...claimed, ...attested };
+    const labels: Record<string, string> = { ...claimed, ...vouched };
+    // K-1754, K-1778: only the vouched labels select agent actors; a claimed label never meets a condition.
+    const attested: Attested = { labels: vouched, prefixes };
     const event = (outcome: AskOutcome) => {
       if (isAskAction(action)) this.askEvent(now, machine, action, target, reason, labels, outcome);
       return outcome;
@@ -10652,6 +12680,7 @@ export class Kitshn extends DurableObject<Env> {
         visitor,
         machineId: machine.id,
         reason,
+        attested,
       });
       return event(
         decided.ok
@@ -10708,121 +12737,122 @@ export class Kitshn extends DurableObject<Env> {
     // K-1819, K-1820: a card that the machine does not manage refuses at once, so the Owner gets no ask that cannot run.
     if (
       (action === "backup" || action === "restore") &&
-      !cardsControlledBy(this.state, { email: null, clientId: machine.clientId, ip: null }, now).has(target)
+      !cardsControlledBy(
+        this.state,
+        { email: null, clientId: machine.clientId, ip: null },
+        now,
+        attested,
+      ).has(target)
     )
       return event({
         outcome: "refused",
         reason: `This machine does not manage the card ${target} (K-718).`,
       });
     // K-718, K-909: a job that no approval can run refuses at once, so the Owner gets no ask that cannot run.
+    let volume = false;
     if (action === "job") {
       const command = parseCommand(isRecord(raw["body"]) ? raw["body"]["command"] : null);
       if (typeof command === "string") return event({ outcome: "refused", reason: command });
-      if (command.kind === "compose-volume-remove")
-        return event({ outcome: "refused", reason: NO_VOLUME_JOBS });
+      volume = command.kind === "compose-volume-remove";
       const noUpdate = command.kind === "update" ? this.agentUpdateRefusal(target) : null;
       if (noUpdate !== null) return event({ outcome: "refused", reason: noUpdate });
     }
-    const needs = ASK_RIGHT[action];
+    // K-909: a volume removal has no Undo, so it follows "destroys", as the row machine-volume-remove does (K-1777).
+    const needs = volume ? "destroys" : ASK_RIGHT[action];
     if (needs === "member")
       throw new Error(`The action ${action} needs membership, and only approve and deny do.`);
     if (needs !== "none" && needs !== "apply") {
-      const mode = machineRightMode(this.state, machine.id, needs, now);
-      // K-1776: a right that no circle sets asks the Owner for this one call; a right set to "off" refuses.
-      if (mode === null) {
-        if (machineRightOff(this.state, machine.id, needs, now)) return event(offRight(needs));
-        const owned =
-          WINDOW_ACTIONS.has(action) &&
-          this.inApprovedWindow(machine.id, action, target, needs, OWNER_CIRCLE_ID, now);
-        if (!owned)
-          return event(
-            await this.propose(
-              machine,
-              action,
-              target,
-              raw["body"],
-              reason,
-              labels,
-              needs,
-              OWNER_CIRCLE_ID,
-              now,
-            ),
-          );
-        return event(await this.runAsk(machine, action, target, raw["body"], [needs], labels));
-      }
-      const failed = conditionProblem(mode.conditions, labels, prefixes);
-      if (failed) return event({ outcome: "refused", reason: failed });
-      // K-718: a call outside the limit of the machine asks the Owner, whatever the mode of its right.
+      const mode = machineEffectiveMode(this.state, machine.id, needs, now, attested);
+      if (mode.mode === "off") return event(offRight(needs));
+      // K-718: a call outside the limit of the machine asks the Owner, whatever the mode of its effect.
       const visitor = { email: null, clientId: machine.clientId, ip: null };
-      if (this.outsideAgentLimit(visitor, action, target, raw["body"]) !== null)
+      const asked = mode.mode === "ask" ? mode.circleId : null;
+      const circleId =
+        asked !== OWNER_CIRCLE_ID &&
+        this.outsideAgentLimit(visitor, action, target, raw["body"], attested) !== null
+          ? OWNER_CIRCLE_ID
+          : asked;
+      if (circleId !== null) {
+        if (
+          WINDOW_ACTIONS.has(action) &&
+          this.inApprovedWindow(machine.id, action, target, needs, circleId, now)
+        )
+          return event(await this.runAsk(machine, action, target, raw["body"], [needs], labels, attested));
         return event(
           await this.propose(
-            machine,
+            machineAsker(machine),
             action,
             target,
             raw["body"],
             reason,
             labels,
             needs,
-            OWNER_CIRCLE_ID,
+            circleId,
             now,
           ),
         );
-      if (
-        mode.mode === "ask" &&
-        !(
-          WINDOW_ACTIONS.has(action) &&
-          this.inApprovedWindow(machine.id, action, target, needs, mode.circleId, now)
-        )
-      )
-        return event(
-          await this.propose(machine, action, target, raw["body"], reason, labels, needs, mode.circleId, now),
-        );
-    }
-    // K-532: Organize keeps every share, so it never moves a card into Everyone and needs no "publishes".
-    if (needs === "apply" && action !== "organize") {
-      const edits = this.askEdits(machine, action, target, raw["body"], now, []);
-      if (typeof edits === "string") {
-        // K-1720: a move into Everyone needs "publishes"; with "ask <circle>" it waits for an approval.
-        const mode = machineRightMode(this.state, machine.id, "publishes", now);
-        const failed = conditionProblem(mode?.conditions, labels, prefixes);
-        if (failed) return event({ outcome: "refused", reason: failed });
-        const withApproval = this.askEdits(machine, action, target, raw["body"], now, ["publishes"]);
-        if (mode?.mode === "ask" && typeof withApproval !== "string")
-          return event(
-            await this.propose(
-              machine,
-              action,
-              target,
-              raw["body"],
-              reason,
-              labels,
-              "publishes",
-              mode.circleId,
-              now,
-            ),
-          );
-        // K-1776: only "publishes" stands in the way, and no circle sets it.
-        if (mode === null && typeof withApproval !== "string")
-          return event(
-            !machineRightOff(this.state, machine.id, "publishes", now)
-              ? await this.propose(
-                  machine,
-                  action,
-                  target,
-                  raw["body"],
-                  reason,
-                  labels,
-                  "publishes",
-                  OWNER_CIRCLE_ID,
-                  now,
-                )
-              : offRight("publishes"),
-          );
-        return event({ outcome: "refused", reason: edits });
       }
     }
-    return event(await this.runAsk(machine, action, target, raw["body"], [], labels));
+    // K-1777: apply and organize are the rows of effect "changes" on /op, so the mode of "changes" decides them here
+    // too. Publish only moves a card into or out of Everyone, so "shares" alone decides it.
+    const changes =
+      action === "apply" || action === "organize"
+        ? machineEffectiveMode(this.state, machine.id, "changes", now, attested)
+        : null;
+    if (changes?.mode === "off") return event(offRight("changes"));
+    // K-532: Organize keeps every share, so it never moves a card into Everyone and needs no "shares".
+    let raises = false;
+    if (needs === "apply" && action !== "organize") {
+      const edits = this.askEdits(machine, action, target, raw["body"], now, attested, []);
+      // "shares" automatic took an edit beyond the rule, so "shares" decided it and "changes" does not ask.
+      raises = typeof edits !== "string" && this.askRuleRefusal(machine, edits, now, attested, []) !== null;
+      if (typeof edits === "string") {
+        // K-1778: an edit beyond the rule of K-718 raises access. "shares" decides a move of cards that the machine
+        // manages; at "automatic" askEdits already took it. Any other edit asks the Owner, whatever "shares" says. A
+        // rule that binds the owner too (K-105) refuses also with "shares".
+        const withShares = this.askEdits(machine, action, target, raw["body"], now, attested, ["shares"]);
+        if (typeof withShares === "string") return event({ outcome: "refused", reason: edits });
+        const shares = machineEffectiveMode(this.state, machine.id, "shares", now, attested);
+        if (shares.mode === "off") return event(offRight("shares"));
+        const reach =
+          shares.mode === "ask" &&
+          sharesReach(
+            this.state,
+            { email: null, clientId: machine.clientId, ip: null },
+            resolveEdits(this.state, withShares),
+            now,
+            attested,
+          );
+        return event(
+          await this.propose(
+            machineAsker(machine),
+            action,
+            target,
+            raw["body"],
+            reason,
+            labels,
+            "shares",
+            reach && shares.mode === "ask" ? shares.circleId : OWNER_CIRCLE_ID,
+            now,
+          ),
+        );
+      }
+    }
+    if (changes?.mode === "ask" && !raises)
+      return event(
+        await this.propose(
+          machineAsker(machine),
+          action,
+          target,
+          raw["body"],
+          reason,
+          labels,
+          "changes",
+          changes.circleId,
+          now,
+        ),
+      );
+    return event(await this.runAsk(machine, action, target, raw["body"], [], labels, attested));
   }
 
   /**
@@ -10835,7 +12865,8 @@ export class Kitshn extends DurableObject<Env> {
     target: string,
     body: unknown,
     now: number,
-    approved: ReadonlyArray<MachineRight>,
+    attested: Attested | null,
+    approved: ReadonlyArray<Effect>,
   ): ReadonlyArray<Edit> | string {
     const visitor = { email: null, clientId: machine.clientId, ip: null };
     let edits: ReadonlyArray<Edit>;
@@ -10845,8 +12876,8 @@ export class Kitshn extends DurableObject<Env> {
       const holding = circlesHolding(this.state, target);
       const home = wantsPublic
         ? null
-        : (agentHomeCircle(this.state, machine.clientId, now, holding)?.id ?? null);
-      const to = agentUploadPlace(this.state, visitor, home, wantsPublic, now, approved);
+        : (agentHomeCircle(this.state, machine.clientId, now, holding, attested)?.id ?? null);
+      const to = agentUploadPlace(this.state, visitor, home, wantsPublic, now, attested, approved);
       if (to === null || typeof to === "string")
         return to ?? "This machine has no agent circle with control (K-718).";
       edits = [{ _tag: "place", id: target, after: to }];
@@ -10864,21 +12895,40 @@ export class Kitshn extends DurableObject<Env> {
       }
     }
     try {
+      // K-1778: an approval of "shares" lets any edit raise access. "shares" automatic reaches past the rule only for
+      // moves of cards that the machine manages. The rules of K-105 still hold.
       const changes = resolveEdits(this.state, edits);
-      const refusal = agentRefusal(
-        this.state,
-        applyChanges(this.state, changes),
-        visitor,
-        changes,
-        now,
-        this.agentAdded(machine.clientId),
-        approved,
-      );
-      return refusal ?? edits;
+      if (approved.includes("shares")) return edits;
+      const refusal = this.askRuleRefusal(machine, edits, now, attested, approved);
+      const reached =
+        agentHas(this.state, visitor, "shares", now, attested) &&
+        sharesReach(this.state, visitor, changes, now, attested);
+      return refusal === null || reached ? edits : refusal;
     } catch (error) {
       if (error instanceof RuleError) return error.message;
       throw error;
     }
+  }
+
+  /** K-718: why these edits of a machine break the rule before "shares" counts, or null. Throws RuleError (K-105). */
+  private askRuleRefusal(
+    machine: Machine,
+    edits: ReadonlyArray<Edit>,
+    now: number,
+    attested: Attested | null,
+    approved: ReadonlyArray<Effect>,
+  ): string | null {
+    const changes = resolveEdits(this.state, edits);
+    return agentRefusal(
+      this.state,
+      applyChanges(this.state, changes),
+      { email: null, clientId: machine.clientId, ip: null },
+      changes,
+      now,
+      this.agentAdded(machine.clientId),
+      attested,
+      approved,
+    );
   }
 
   /** K-718: the cards of repos that this agent allowed (K-819), and the pages and files that it published. */
@@ -10900,17 +12950,19 @@ export class Kitshn extends DurableObject<Env> {
     action: AskAction,
     target: string,
     body: unknown,
-    approved: ReadonlyArray<MachineRight>,
-    labels: Readonly<Record<string, string>> = {},
-    ownerApproved: OwnerApproval | null = null,
+    approved: ReadonlyArray<Effect>,
+    labels: Readonly<Record<string, string>>,
+    attested: Attested | null,
+    ownerApproved: JobApproval | null = null,
   ): Promise<AskOutcome> {
     if (action === "pass") return this.issuePass(machine, target, labels);
+    if (action === "exec") return this.startExecRun(machine, target, body);
     // K-1819, K-1820: a backup now or a restore of a Compose card that the machine manages.
     if (action === "backup" || action === "restore") {
       const visitor = { email: null, clientId: machine.clientId, ip: null };
-      if (!cardsControlledBy(this.state, visitor, Date.now()).has(target))
+      if (!cardsControlledBy(this.state, visitor, Date.now(), attested).has(target))
         return { outcome: "refused", reason: `This machine does not manage the card ${target} (K-718).` };
-      const actor: Actor = { _tag: "machine", machineId: machine.id, name: machine.name };
+      const actor: Author = { _tag: "machine", machineId: machine.id, name: machine.name };
       const run = isRecord(body) && typeof body["run"] === "string" ? body["run"] : "";
       const response =
         action === "backup" ? this.backUpNow(actor, target) : this.restoreBackup(actor, target, run);
@@ -10933,7 +12985,7 @@ export class Kitshn extends DurableObject<Env> {
     }
     let mapped = askRequest(action, target, body);
     if (action === "publish") {
-      const edits = this.askEdits(machine, action, target, body, Date.now(), approved);
+      const edits = this.askEdits(machine, action, target, body, Date.now(), attested, approved);
       if (typeof edits === "string") return { outcome: "refused", reason: edits };
       mapped = { method: "POST", path: "/agent/apply", body: { edits } };
     }
@@ -10942,6 +12994,7 @@ export class Kitshn extends DurableObject<Env> {
     const caller: Caller = {
       visitor: { email: null, clientId: machine.clientId, ip: null },
       actor: { _tag: "machine", machineId: machine.id, name: machine.name },
+      ...(attested ? { attested } : {}),
     };
     const url = new URL(mapped.path, "https://kitshn.internal");
     const request = new Request(url, {
@@ -11039,13 +13092,20 @@ export class Kitshn extends DurableObject<Env> {
     return login ?? "unknown";
   }
 
-  /** K-1751: the label prefixes of the attesters that the machine reports now; none while it is offline. */
-  private attesterPrefixesOf(machineId: string): Array<string> {
-    const socket = this.openSocket(machineId);
-    const attachment = socket ? attachmentOf(socket) : null;
-    return attachment?.kind === "machine"
-      ? (attachment.status?.attesters ?? []).map((item) => item.prefix)
-      : [];
+  /**
+   * K-1752, K-1753: the label prefix of each provider of the machine and `t3.`; only the daemon sets labels of these,
+   * from the attestation of that provider.
+   */
+  /**
+   * K-1754, K-1778: the stored labels of an ask as a proof. A label with the prefix of a provider of the machine came only
+   * from that provider (K-1753), so it is a vouched label; `conditionsHold` reads no other.
+   */
+  private attestedOf(machineId: string, labels: Readonly<Record<string, string>>): Attested {
+    return { labels, prefixes: this.labelPrefixesOf(machineId) };
+  }
+
+  private labelPrefixesOf(machineId: string): Array<string> {
+    return [...new Set(["t3.", ...(this.providerRegs.get(machineId) ?? []).map((reg) => `${reg.name}.`)])];
   }
 
   /** K-1771: the pass keys, newest first; the first is current. One read of a small table. */
@@ -11069,7 +13129,7 @@ export class Kitshn extends DurableObject<Env> {
    * K-1771, K-1822: "Rotate pass key", and the last step of kitshn's own restore to a time. A new key becomes current;
    * the old one stays in the JWKS for 6 minutes, and keys past that, or past 5, go.
    */
-  private async rotatePassKey(actor: Actor): Promise<void> {
+  private async rotatePassKey(actor: Author): Promise<void> {
     const now = Date.now();
     const key = await newPassKey(now);
     this.ctx.storage.transactionSync(() => {
@@ -11169,7 +13229,7 @@ export class Kitshn extends DurableObject<Env> {
     const [count] = this.sql<{ count: number }>("SELECT COUNT(*) AS count FROM pass_audiences");
     if ((count?.count ?? 0) >= 50)
       return { outcome: "refused", reason: "kitshn keeps at most 50 pass audiences." };
-    const actor: Actor = by.machineId
+    const actor: Author = by.machineId
       ? { _tag: "machine", machineId: by.machineId, name: by.name }
       : { _tag: "kitshn", reason: by.name };
     this.ctx.storage.transactionSync(() => {
@@ -11192,7 +13252,7 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-1762: a token for one repo. The owner's way decides first (K-1760); then "writes code" or "reads code" on a card
+   * K-1762: a token for one repo. The owner's way decides first (K-1760); then "changes" or "reads" on a card
    * that covers the repo, with its mode. `permission` "auto" (kitshn gh) asks for write when the machine may write (K-1764).
    */
   private async askGitHubToken(
@@ -11213,32 +13273,35 @@ export class Kitshn extends DurableObject<Env> {
       };
     const wanted = isRecord(body) ? body["permission"] : "auto";
     // K-1764, K-1776: gh cannot say whether it writes, so "auto" asks for write when the machine may write, when an Owner
-    // approval of write is open, and when no code right is set at all (the Owner then approves write).
+    // approval of write is open, and when neither effect is set at all (the Owner then approves write).
+    const attested = this.attestedOf(machine.id, labels);
     const unset =
-      codeRightMode(this.state, machine.id, "readsCode", fullName, now) === null &&
-      !codeRightOff(this.state, machine.id, "readsCode", fullName, now) &&
-      !codeRightOff(this.state, machine.id, "writesCode", fullName, now);
+      codeRightMode(this.state, machine.id, "reads", fullName, now, attested) === null &&
+      !codeRightOff(this.state, machine.id, "reads", fullName, now, attested) &&
+      !codeRightOff(this.state, machine.id, "changes", fullName, now, attested);
     const write =
       wanted === "write" ||
       (wanted !== "read" &&
-        (codeRightMode(this.state, machine.id, "writesCode", fullName, now) !== null ||
-          this.inApprovedWindow(machine.id, "github-token", fullName, "writesCode", OWNER_CIRCLE_ID, now) ||
+        (codeRightMode(this.state, machine.id, "changes", fullName, now, attested) !== null ||
+          this.inApprovedWindow(machine.id, "github-token", fullName, "changes", OWNER_CIRCLE_ID, now) ||
           unset));
-    const right: MachineRight = write ? "writesCode" : "readsCode";
-    const mode = codeRightMode(this.state, machine.id, right, fullName, now);
-    const failed = mode
-      ? conditionProblem(mode.conditions, labels, this.attesterPrefixesOf(machine.id))
-      : null;
-    if (failed) return { outcome: "refused", reason: failed };
-    // K-1776: a code right that no card sets asks the Owner for this token; one set to "off" refuses.
+    const right: Effect = write ? "changes" : "reads";
+    const mode = codeRightMode(this.state, machine.id, right, fullName, now, attested);
+    // K-1776: an effect that no card sets takes its default for a repo in scope, else asks the Owner for this token;
+    // one set to "off" refuses.
     if (mode === null) {
       const permission = write ? "write" : "read";
-      if (codeRightOff(this.state, machine.id, right, fullName, now))
+      if (codeRightOff(this.state, machine.id, right, fullName, now, attested))
         return offRight(right, `for ${fullName} (K-1733)`);
+      if (
+        effectDefault(right, true) === "automatic" &&
+        codeInScope(this.state, machine.id, fullName, now, attested)
+      )
+        return this.mintToken(machine, fullName, permission);
       if (this.inApprovedWindow(machine.id, "github-token", fullName, right, OWNER_CIRCLE_ID, now))
         return this.mintToken(machine, fullName, permission);
       return this.propose(
-        machine,
+        machineAsker(machine),
         "github-token",
         fullName,
         { permission },
@@ -11254,7 +13317,7 @@ export class Kitshn extends DurableObject<Env> {
       !this.inApprovedWindow(machine.id, "github-token", fullName, right, mode.circleId, now)
     )
       return this.propose(
-        machine,
+        machineAsker(machine),
         "github-token",
         fullName,
         { permission: write ? "write" : "read" },
@@ -11275,7 +13338,7 @@ export class Kitshn extends DurableObject<Env> {
     machineId: string,
     action: AskAction,
     target: string,
-    right: MachineRight,
+    right: Effect,
     circleId: string,
     now: number,
   ) {
@@ -11330,7 +13393,7 @@ export class Kitshn extends DurableObject<Env> {
         crypto.randomUUID(),
         machine.id,
         fullName,
-        permission === "write" ? "writesCode" : "readsCode",
+        permission === "write" ? "changes" : "reads",
         Date.parse(minted.expiresAt),
         await sealToken(key, minted.token),
       );
@@ -11362,8 +13425,14 @@ export class Kitshn extends DurableObject<Env> {
     const key = this.env.GITHUB_APP_KEY;
     for (const row of rows) {
       if (machineId !== null && row.machine_id !== machineId) continue;
-      const right = row.right_name === "writesCode" ? "writesCode" : "readsCode";
-      if (onlyLost && codeRightMode(this.state, row.machine_id, right, row.repo, now) !== null) continue;
+      const right = row.right_name === "changes" ? "changes" : "reads";
+      // The token row keeps no labels, so an effect that only an agent actor gives counts as lost (K-1778).
+      if (
+        onlyLost &&
+        (codeRightMode(this.state, row.machine_id, right, row.repo, now, null) !== null ||
+          (right === "reads" && codeInScope(this.state, row.machine_id, row.repo, now, null)))
+      )
+        continue;
       this.sql("DELETE FROM github_tokens WHERE id = ?", row.id);
       const socket = this.openSocket(row.machine_id);
       if (socket) send(socket, { type: "dropTokens", repo: row.repo });
@@ -11378,27 +13447,32 @@ export class Kitshn extends DurableObject<Env> {
 
   /** K-1722: an ask that waits for one member of its approver circle. */
   private async propose(
-    machine: Machine,
+    asker: Asker,
     action: ProposalAction,
     target: string,
     body: unknown,
     reason: string | null,
     labels: Readonly<Record<string, string>>,
-    right: MachineRight,
+    right: Effect,
     circleId: string,
     now: number,
   ): Promise<AskOutcome> {
-    // K-1722: a loop of asks cannot fill the Inbox or each snapshot.
+    const shown = shownAsk(action, target, body);
+    const hash = await shownHash(shown);
+    // K-1722: the same ask again, for example after the CLI stopped waiting, waits on the open proposal, so the
+    // approvers get one notification and one answer runs it.
+    const twin = this.openTwin(asker.credential, action, hash, circleId, right, body, labels, now);
+    if (twin) return { outcome: "waiting", proposalId: twin.id };
+    // K-1722, K-1778: a loop of asks cannot fill the Inbox or each snapshot; the cap holds for each credential.
     const [open] = this.sql<{ count: number }>(
-      "SELECT COUNT(*) AS count FROM proposals WHERE machine_id = ? AND state = 'pending'",
-      machine.id,
+      "SELECT COUNT(*) AS count FROM proposals WHERE credential = ? AND state = 'pending'",
+      asker.credential,
     );
     if ((open?.count ?? 0) >= MAX_OPEN_PROPOSALS)
       return {
         outcome: "refused",
-        reason: `This machine has ${MAX_OPEN_PROPOSALS} open asks already. Wait for their answers (K-1722).`,
+        reason: `This actor has ${MAX_OPEN_PROPOSALS} open asks already. Wait for their answers (K-1722).`,
       };
-    const shown = shownAsk(action, target, body);
     if (shown.length > MAX_SHOWN)
       return {
         outcome: "refused",
@@ -11406,10 +13480,11 @@ export class Kitshn extends DurableObject<Env> {
       };
     const id = crypto.randomUUID();
     this.sql(
-      `INSERT INTO proposals (id, machine_id, action, target, body, reason, labels, right_name, circle_id, shown, shown_hash, state, created_at, expires_at, verified)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+      `INSERT INTO proposals (id, machine_id, credential, action, target, body, reason, labels, right_name, circle_id, shown, shown_hash, state, created_at, expires_at, verified)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
       id,
-      machine.id,
+      asker.machineId ?? "",
+      asker.credential,
       action,
       target,
       JSON.stringify(body ?? null),
@@ -11418,14 +13493,63 @@ export class Kitshn extends DurableObject<Env> {
       right,
       circleId,
       shown,
-      await shownHash(shown),
+      hash,
       now,
       now + PROPOSAL_MS,
-      JSON.stringify(this.verifiedKeys(machine.id, labels)),
+      JSON.stringify(asker.machineId === null ? [] : this.verifiedKeys(asker.machineId, labels)),
     );
     this.broadcast();
     void this.scheduleAlarm();
     return { outcome: "waiting", proposalId: id };
+  }
+
+  /**
+   * K-1722, K-1714: the open proposal of the same call, read by the index on the credential.
+   * - A forwarded call runs only when it is sent again, and `forwardApproval` lets one approval run any copy of it.
+   *   So a copy joins on that key: the credential, the hash, the circle, the thread (also none) and, for "shares" and
+   *   "secrets", the effect. One approval then runs the call once.
+   * - Any other approval runs the stored body, so only exactly the same call joins: the same stored body (an exec
+   *   carries its own execId, so it never joins) and the same labels, with a vouched thread. A call with no thread
+   *   never joins, because two agents of one machine key could send it.
+   */
+  private openTwin(
+    credential: string,
+    action: ProposalAction,
+    hash: string,
+    circleId: string,
+    right: Effect,
+    body: unknown,
+    labels: Readonly<Record<string, string>>,
+    now: number,
+  ) {
+    if (action === "forward") {
+      const [open] = this.sql<{ id: string; expires_at: number }>(
+        `SELECT id, expires_at FROM proposals WHERE credential = ? AND state = 'pending' AND action = 'forward'
+         AND shown_hash = ? AND circle_id = ? AND (? = 0 OR right_name = ?) AND expires_at > ?
+         AND json_extract(labels, '$."t3.thread.id"') IS ? LIMIT 1`,
+        credential,
+        hash,
+        circleId,
+        PASSKEY_EFFECTS.has(right) ? 1 : 0,
+        right,
+        now,
+        labels["t3.thread.id"] ?? null,
+      );
+      return open;
+    }
+    if (!labels["t3.thread.id"]) return undefined;
+    const [open] = this.sql<{ id: string; expires_at: number }>(
+      `SELECT id, expires_at FROM proposals WHERE credential = ? AND state = 'pending' AND action = ? AND shown_hash = ?
+       AND circle_id = ? AND expires_at > ? AND body = ? AND labels = ? LIMIT 1`,
+      credential,
+      action,
+      hash,
+      circleId,
+      now,
+      JSON.stringify(body ?? null),
+      JSON.stringify(labels),
+    );
+    return open;
   }
 
   /**
@@ -11436,10 +13560,12 @@ export class Kitshn extends DurableObject<Env> {
     proposalId: string,
     decision: "approved" | "denied",
     by: {
-      readonly actor: Actor;
+      readonly actor: Author;
       readonly visitor: Visitor;
       readonly machineId: string | null;
       readonly reason: string | null;
+      /** K-1778: the vouched labels of a machine that answers, which select its agent actors. */
+      readonly attested?: Attested;
     },
     /** K-1722: the hash of the text that the approver read; a different one refuses, so nothing else runs. */
     seenHash: string | null = null,
@@ -11451,13 +13577,21 @@ export class Kitshn extends DurableObject<Env> {
     const [row] = this.sql<ProposalRow>("SELECT * FROM proposals WHERE id = ?", proposalId);
     if (!row) return { ok: false, error: `kitshn has no proposal ${proposalId}.` };
     const proposal = proposalOf(row);
+    // K-1778: the credential that asked never approves its own ask; another member of the circle does.
+    if (decision === "approved" && this.askerOf(by.visitor)?.credential === proposal.credential)
+      return {
+        ok: false,
+        error:
+          "The credential that asked never approves its own ask; another member of the circle approves it (K-1778).",
+      };
     const circle = this.state.circles.get(proposal.circleId);
     const refusal = answerRefusal(
       circle,
       proposal.circleId,
       by.visitor,
-      this.state.machines,
-      by.machineId !== null,
+      this.state,
+      by.attested ?? null,
+      by.visitor.email === null,
     );
     if (refusal !== null || !circle) return { ok: false, error: refusal ?? "kitshn has no approver circle." };
     // K-1723: a passkey circle approves only through the passkey application, whose token proves a fresh passkey.
@@ -11465,6 +13599,13 @@ export class Kitshn extends DurableObject<Env> {
       return {
         ok: false,
         error: `${circle.name} needs a passkey: approve through the passkey check (K-1723).`,
+      };
+    // K-1723, K-1778: an ask of "shares" or "secrets" needs a person's passkey, also where the circle lets a token or a
+    // machine approve. An actor whose effect is automatic never asks.
+    if (decision === "approved" && PASSKEY_EFFECTS.has(proposal.right) && via !== "passkey")
+      return {
+        ok: false,
+        error: `This ask is for "${proposal.right}", so only a person approves it, through the passkey check (K-1723).`,
       };
     if (proposal.state !== "pending")
       return { ok: false, error: `This ask is already decided (${proposal.state}).` };
@@ -11502,6 +13643,7 @@ export class Kitshn extends DurableObject<Env> {
         proposal.action,
         proposal.target,
         proposal.body,
+        this.attestedOf(proposal.machineId, proposal.labels),
       );
       if (outside !== null) return { ok: false, error: `Only a person approves this ask: ${outside}` };
     }
@@ -11518,7 +13660,7 @@ export class Kitshn extends DurableObject<Env> {
     const what = `${proposal.action} ${proposal.target}`.trim();
     this.insertRevision(
       by.actor,
-      `${decision === "approved" ? "Approved" : "Denied"} the ask of ${machine?.name ?? proposal.machineId}: ${what}${by.reason ? ` (${by.reason})` : ""}`,
+      `${decision === "approved" ? "Approved" : "Denied"} the ask of ${this.askerName(proposal)}: ${what}${by.reason ? ` (${by.reason})` : ""}`,
       [],
       null,
     );
@@ -11546,10 +13688,12 @@ export class Kitshn extends DurableObject<Env> {
           proposal.body,
           [proposal.right],
           proposal.labels,
+          this.attestedOf(machine.id, proposal.labels),
           proposal.circleId === OWNER_CIRCLE_ID &&
             by.machineId === null &&
-            (proposal.action === "job" || proposal.action === "deploy")
-            ? { machineId: machine.id, key: keyMark(machine), right: proposal.right }
+            (proposal.action === "job" || proposal.action === "deploy") &&
+            proposal.right !== "shares"
+            ? { machineId: machine.id, key: keyMark(machine), right: proposal.right, person: true }
             : null,
         )
       : ({ outcome: "refused", reason: "The machine that asked is gone." } as const);
@@ -11589,33 +13733,53 @@ export class Kitshn extends DurableObject<Env> {
       : Response.json({ error: decided.error }, { status: 409 });
   }
 
+  /** K-1778: the proof of the credential that asked, as a visitor; null when no actor holds it any more. */
+  private proposalVisitor(proposal: Proposal): Visitor | null {
+    const machine = this.state.machines.get(proposal.machineId);
+    if (machine) return { email: null, clientId: machine.clientId, ip: null };
+    for (const actor of this.state.actors.values())
+      for (const credential of actor.credentials)
+        if (credentialKey(credential) === proposal.credential)
+          return credential._tag === "token"
+            ? { email: null, clientId: credential.clientId, ip: null }
+            : credential._tag === "login"
+              ? { email: credential.email, clientId: null, ip: null }
+              : null;
+    return null;
+  }
+
   /** K-1712: why an approved ask may no longer run, or null. */
   private proposalGone(proposal: Proposal, now: number): string | null {
-    const mode =
-      proposal.right === "readsCode" || proposal.right === "writesCode"
-        ? codeRightMode(this.state, proposal.machineId, proposal.right, proposal.target, now)
-        : machineRightMode(this.state, proposal.machineId, proposal.right, now);
-    // K-1776: "off" wins also over an Owner ask that waits; an unset right keeps its Owner ask.
-    const off =
-      proposal.right === "readsCode" || proposal.right === "writesCode"
-        ? codeRightOff(this.state, proposal.machineId, proposal.right, proposal.target, now)
-        : machineRightOff(this.state, proposal.machineId, proposal.right, now);
-    if (off) return `the owner set the right "${MACHINE_RIGHT_NAMES[proposal.right]}" to off.`;
-    // K-718: a job or a deploy outside the limit of the machine waits for the Owner, whatever the mode of its right.
+    if (
+      proposal.action === "exec" &&
+      this.sql("SELECT 1 AS one FROM exec_runs WHERE proposal_id = ? AND state = 'waiting'", proposal.id)
+        .length === 0
+    )
+      return "the caller of this run is gone.";
+    const attested = proposal.machineId === "" ? null : this.attestedOf(proposal.machineId, proposal.labels);
+    // K-1778: a token or a login asked, so its rights come from the chips of its actor.
+    const asker = this.proposalVisitor(proposal);
+    if (asker === null) return "no actor holds the credential that asked.";
+    const code =
+      proposal.action === "github-token" && (proposal.right === "reads" || proposal.right === "changes");
+    const mode = code
+      ? codeRightMode(this.state, proposal.machineId, proposal.right, proposal.target, now, attested)
+      : rightMode(this.state, asker, proposal.right, now, attested);
+    // K-1776: "off" wins also over an Owner ask that waits; an unset effect keeps its Owner ask.
+    const off = code
+      ? codeRightOff(this.state, proposal.machineId, proposal.right, proposal.target, now, attested)
+      : rightOff(this.state, asker, proposal.right, now, attested);
+    if (off) return `the owner set the effect "${proposal.right}" to off.`;
+    // K-718: a job or a deploy outside the limit of the machine waits for the Owner, whatever the mode of its effect.
     const ownerAsk =
       proposal.circleId === OWNER_CIRCLE_ID &&
       (mode === null || proposal.action === "job" || proposal.action === "deploy");
     if (!ownerAsk && (mode?.mode !== "ask" || mode.circleId !== proposal.circleId))
-      return `the right "${MACHINE_RIGHT_NAMES[proposal.right]}" no longer asks this circle.`;
-    const failed = conditionProblem(
-      mode?.conditions,
-      proposal.labels,
-      this.attesterPrefixesOf(proposal.machineId),
-    );
-    if (failed) return failed;
+      return `the effect "${proposal.right}" no longer asks this circle.`;
     const circle = this.state.circles.get(proposal.circleId);
     if (!circle || (circle.endsAt !== null && circle.endsAt <= now)) return "the approver circle ended.";
-    if (!this.state.machines.has(proposal.machineId)) return "the machine that asked is gone.";
+    if (proposal.machineId !== "" && !this.state.machines.has(proposal.machineId))
+      return "the machine that asked is gone.";
     if (
       (proposal.action === "deploy" ||
         proposal.action === "publish" ||
@@ -11624,26 +13788,26 @@ export class Kitshn extends DurableObject<Env> {
       !this.state.resources.has(proposal.target)
     )
       return `the card ${proposal.target} is gone.`;
-    if (proposal.action === "job" && !this.state.machines.has(proposal.target))
+    if (
+      (proposal.action === "job" || proposal.action === "exec") &&
+      !this.state.machines.has(proposal.target)
+    )
       return `the machine ${proposal.target} is gone.`;
     if (
       proposal.action === "allow" &&
       this.sql("SELECT 1 AS one FROM repos WHERE repo_id = ?", proposal.target).length === 0
     )
       return `kitshn no longer knows the repo ${proposal.target}.`;
-    // K-718: another circle approves only inside the limit of the machine, so the limit counts at this moment.
+    // K-718: another circle approves only inside the limit of the asker, so the limit counts at this moment.
     if (proposal.circleId === OWNER_CIRCLE_ID) return null;
-    const asker = this.state.machines.get(proposal.machineId);
-    return this.outsideAgentLimit(
-      { email: null, clientId: asker?.clientId ?? null, ip: null },
-      proposal.action,
-      proposal.target,
-      proposal.body,
-    );
+    return this.outsideAgentLimit(asker, proposal.action, proposal.target, proposal.body, attested);
   }
 
   /** K-1722 to K-1724: the answer goes to the machine's open connection; an offline machine misses it. */
   private sendAskResult(machineId: string, result: AskResult) {
+    // K-722: an exec run that waited ends with the proposal; the daemon of A ends it for its caller.
+    if (result.outcome !== "approved")
+      this.sql("DELETE FROM exec_runs WHERE proposal_id = ? AND state = 'waiting'", result.proposalId);
     const socket = this.openSocket(machineId);
     if (socket) send(socket, { type: "askResult", ...result });
   }
@@ -11687,125 +13851,412 @@ export class Kitshn extends DurableObject<Env> {
     labels: Readonly<Record<string, string>>,
     outcome: AskOutcome,
   ) {
-    this.sql(
-      `INSERT INTO ask_events (at, machine_id, action, target, reason, labels, outcome, detail, verified)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    const recent = this.recentAskRows;
+    const values = {
       at,
-      machine.id,
+      machine_id: machine.id,
       action,
       target,
       reason,
-      JSON.stringify(labels),
-      outcome.outcome,
-      outcome.outcome === "refused"
-        ? outcome.reason
-        : outcome.outcome === "waiting"
-          ? outcome.proposalId
-          : "",
-      JSON.stringify(this.verifiedKeys(machine.id, labels)),
+      labels: JSON.stringify(labels),
+      outcome: outcome.outcome,
+      detail:
+        outcome.outcome === "refused"
+          ? outcome.reason
+          : outcome.outcome === "waiting"
+            ? outcome.proposalId
+            : "",
+      verified: JSON.stringify(this.verifiedKeys(machine.id, labels)),
+    };
+    // No RETURNING: the row is in `values`, and a refused ask reads only what this write reads (K-1715).
+    this.sql(
+      `INSERT INTO ask_events (at, machine_id, action, target, reason, labels, outcome, detail, verified)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      values.at,
+      values.machine_id,
+      values.action,
+      values.target,
+      values.reason,
+      values.labels,
+      values.outcome,
+      values.detail,
+      values.verified,
     );
-    // K-1717: at most 5,000 events, trimmed on insert by id, so a burst of asks cannot grow the table within a day.
     const [last] = this.sql<{ id: number }>("SELECT last_insert_rowid() AS id");
-    if (!last) return;
+    if (!last) throw new Error("The ask event insert has no row id.");
+    const event: AskEventRow = { id: last.id, ...values };
     // K-1756: the label index of this event, for the search of History.
     for (const [key, value] of Object.entries(labels))
-      this.sql("INSERT INTO ask_labels (event_id, key, value) VALUES (?, ?, ?)", last.id, key, value);
-    this.sql("DELETE FROM ask_events WHERE id <= ?", last.id - ASK_EVENT_COUNT);
-    this.sql("DELETE FROM ask_labels WHERE event_id <= ?", last.id - ASK_EVENT_COUNT);
+      this.sql("INSERT INTO ask_labels (event_id, key, value) VALUES (?, ?, ?)", event.id, key, value);
+    // K-1717: at most 5,000 events, trimmed on insert by id, so a burst of asks cannot grow the table within a day.
+    this.sql("DELETE FROM ask_events WHERE id <= ?", event.id - ASK_EVENT_COUNT);
+    this.sql("DELETE FROM ask_labels WHERE event_id <= ?", event.id - ASK_EVENT_COUNT);
+    this.recentAskRows = recent && [event, ...recent].slice(0, RECENT_EVENTS);
   }
 
   /**
-   * K-1610: one call that a source machine reports. The source is always the machine of the connection, so a machine
-   * cannot report for another one. A report that does not decode is dropped and logged. Known limit: only the source
-   * reports (see `LinkAudit`).
+   * K-722: the exec start of machine A. kitshn checks that A controls a card of the target, then the effect "runs"
+   * decides like an ask: the run starts, waits for an approval, or ends at once with an `exit` frame.
    */
-  private recordLinkEvent(machine: Machine, value: unknown) {
-    let audit: LinkAudit;
+  private async execStart(
+    socket: WebSocket,
+    machine: Machine,
+    message: Extract<DaemonMessage, { type: "execStart" }>,
+  ) {
+    const execId = typeof message.execId === "string" ? message.execId.slice(0, 64) : "";
+    const end = (reason: string) =>
+      send(socket, {
+        type: "execFrame",
+        execId,
+        frame: { type: "exit", exitCode: null, signal: null, durationMs: 0, reason },
+      } satisfies ServerToDaemon);
+    if (execId === "") return;
+    let run: ExecRun;
     try {
-      audit = decodeLinkAudit(value);
+      run = decodeExecRun(message.run);
     } catch (error) {
-      console.warn(`kitshn dropped an audit report of ${machine.name}: ${String(error)}`);
-      return;
+      return end(`refused: the run does not decode: ${String(error)}`);
     }
-    // A machine reports only calls on machines that it reaches now, so it cannot put calls on another machine's record.
-    const reached = (this.providerRegs.get(machine.id) ?? []).some((reg) =>
-      reachOf(this.state, machine.id, reg.name, Date.now()).some((card) => card.machineId === audit.target),
-    );
-    if (!reached) {
-      console.warn(
-        `kitshn dropped an audit report of ${machine.name}: it reaches no machine ${audit.target}.`,
+    if (run.execId !== execId) return end("refused: the run names another exec id.");
+    if (this.sql("SELECT 1 AS one FROM exec_runs WHERE exec_id = ?", execId).length > 0)
+      return end("refused: this exec id is in use.");
+    const target = typeof message.target === "string" ? message.target : "";
+    if (!this.state.machines.has(target)) return end(`refused: kitshn has no machine ${target}.`);
+    const targetSocket = this.openSocket(target);
+    if (targetSocket === null) return end("the target is offline");
+    // A daemon of provider protocol 1 ignores `execRun`, so the caller would wait forever for a run that never starts.
+    const targetAttachment = attachmentOf(targetSocket);
+    if (
+      targetAttachment?.kind !== "machine" ||
+      !targetAttachment.status?.capabilities?.includes("protocol-2")
+    )
+      return end(
+        `refused: the daemon of ${this.state.machines.get(target)?.name ?? target} is too old to run commands from other machines; update it (K-722).`,
       );
+    const targetRefusal = this.protocolRefusal(target);
+    if (targetRefusal !== null) return end(`refused: ${targetRefusal}`);
+    const now = Date.now();
+    const wanted =
+      typeof message.targetProvider === "string" && message.targetProvider.length <= 32
+        ? message.targetProvider
+        : null;
+    const via = execProviderOn(this.state, machine.id, target, now, wanted);
+    if ("refused" in via)
+      return end(
+        via.refused === "no card"
+          ? `refused: ${machine.name} controls no card on ${this.state.machines.get(target)?.name ?? target}; share its machine card or a provider card to an agent circle of ${machine.name} at control (K-722).`
+          : `refused: ${via.refused}`,
+      );
+    // B's provider comes from the card that A controls; A's own provider names only the label of its thread.
+    const { provider } = via;
+    const sourceProvider =
+      typeof message.provider === "string" && message.provider.length <= 32 ? message.provider : null;
+    const thread = this.execThread(message.attested, sourceProvider);
+    // The row stands for the caller until the run ends, so an approval starts only a run whose caller still waits.
+    this.sql(
+      `INSERT INTO exec_runs (exec_id, source, target, provider, command, cwd, thread, proposal_id, state, started_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'waiting', ?)`,
+      execId,
+      machine.id,
+      target,
+      provider,
+      run.command,
+      run.cwd ?? null,
+      thread,
+      now,
+    );
+    const outcome = await this.ask(
+      machine,
+      {
+        action: "exec",
+        target,
+        body: { ...run, provider, thread },
+        ...(isRecord(message.attested) ? { attested: message.attested } : {}),
+      },
+      true,
+    );
+    if (outcome.outcome === "refused") {
+      this.sql("DELETE FROM exec_runs WHERE exec_id = ?", execId);
+      return end(`refused: ${outcome.reason}`);
+    }
+    if (outcome.outcome === "waiting") {
+      const kept = this.sql(
+        "UPDATE exec_runs SET proposal_id = ? WHERE exec_id = ? RETURNING exec_id",
+        outcome.proposalId,
+        execId,
+      );
+      // The caller dropped while kitshn made the proposal: the row is gone, so the proposal closes now.
+      if (kept.length === 0)
+        return this.closeExecProposal(outcome.proposalId, "the caller of this run is gone");
+      return send(socket, {
+        type: "execState",
+        execId,
+        state: "waiting",
+        proposalId: outcome.proposalId,
+      } satisfies ServerToDaemon);
+    }
+    // `runAsk` started the run, or ended it at once with its `exit` frame.
+    if (outcome.outcome === "done" && isRecord(outcome.result) && outcome.result["state"] === "running")
+      send(socket, { type: "execState", execId, state: "running" } satisfies ServerToDaemon);
+  }
+
+  /** K-722: the thread of an attested run, for History: the `<provider>.thread.id` label. */
+  private execThread(attested: unknown, provider: string | null) {
+    const value = provider && isRecord(attested) ? attested[`${provider}.thread.id`] : undefined;
+    return typeof value === "string" ? value.slice(0, 200) : null;
+  }
+
+  /** K-722: starts a run on its target, now or after its approval; an offline target ends it. */
+  private startExecRun(machine: Machine, target: string, body: unknown): AskOutcome {
+    let run: ExecRun;
+    try {
+      run = decodeExecRun(body);
+    } catch {
+      return { outcome: "refused", reason: "the stored run does not decode." };
+    }
+    const [row] = this.sql<ExecRow>(
+      "SELECT * FROM exec_runs WHERE exec_id = ? AND source = ? AND state = 'waiting'",
+      run.execId,
+      machine.id,
+    );
+    const source = this.openSocket(machine.id);
+    // A run whose caller gave up, or whose machine went away, never starts, also after an approval.
+    if (!row || !source) {
+      this.sql("DELETE FROM exec_runs WHERE exec_id = ?", run.execId);
+      return { outcome: "refused", reason: "the caller of this run is gone, so it does not start (K-722)." };
+    }
+    const targetSocket = this.openSocket(target);
+    if (!targetSocket) {
+      this.sql("DELETE FROM exec_runs WHERE exec_id = ?", run.execId);
+      if (source)
+        send(source, {
+          type: "execFrame",
+          execId: run.execId,
+          frame: {
+            type: "exit",
+            exitCode: null,
+            signal: null,
+            durationMs: 0,
+            reason: "the target is offline",
+          },
+        } satisfies ServerToDaemon);
+      return { outcome: "done", result: { execId: run.execId, state: "ended" } };
+    }
+    this.sql("UPDATE exec_runs SET state = 'running' WHERE exec_id = ?", run.execId);
+    send(targetSocket, { type: "execRun", provider: row.provider, run } satisfies ServerToDaemon);
+    return { outcome: "done", result: { execId: run.execId, state: "running" } };
+  }
+
+  /**
+   * K-722: passes one frame to the other machine of its run: from A its credit, stdin and close, from B its output,
+   * stdin credit and exit. A frame of an unknown run, or one whose other side is gone, ends it on the sender's side.
+   */
+  private execRelay(
+    socket: WebSocket,
+    machine: Machine,
+    message: Extract<DaemonMessage, { type: "execFrame" }>,
+  ) {
+    const execId = typeof message.execId === "string" ? message.execId.slice(0, 64) : "";
+    let frame: ExecFrame;
+    try {
+      frame = decodeExecFrame(message.frame);
+    } catch (error) {
+      console.warn(`kitshn dropped an exec frame of ${machine.name}: ${String(error)}`);
       return;
     }
-    // At most LINK_AUDITS_PER_MINUTE reports of one machine a minute; the rest are counted and dropped.
-    const minute = Math.floor(Date.now() / 60_000);
+    const fromB = frame.type === "output" || frame.type === "stdin-credit" || frame.type === "exit";
+    const [row] = this.sql<ExecRow>("SELECT * FROM exec_runs WHERE exec_id = ?", execId);
+    const lost = () =>
+      send(socket, {
+        type: "execFrame",
+        execId,
+        frame: fromB
+          ? { type: "close", what: "kill" }
+          : { type: "exit", exitCode: null, signal: null, durationMs: 0, reason: "the relay was lost" },
+      } satisfies ServerToDaemon);
+    if (!row || (fromB ? row.target : row.source) !== machine.id)
+      return frame.type === "exit" ? undefined : lost();
+    if (row.state === "waiting") {
+      // Only a kill of A means something before the approval: the run ends, and so does its proposal.
+      if (frame.type === "close" && frame.what === "kill") {
+        this.sql("DELETE FROM exec_runs WHERE exec_id = ?", execId);
+        this.closeExecProposal(row.proposal_id, "the caller ended the run before the approval");
+        send(socket, {
+          type: "execFrame",
+          execId,
+          frame: {
+            type: "exit",
+            exitCode: null,
+            signal: null,
+            durationMs: 0,
+            reason: "killed by the caller",
+          },
+        } satisfies ServerToDaemon);
+      }
+      return;
+    }
+    const other = this.openSocket(fromB ? row.source : row.target);
+    if (frame.type === "exit") {
+      this.sql("DELETE FROM exec_runs WHERE exec_id = ?", execId);
+      this.recordExec(row, frame);
+    }
+    if (!other) {
+      if (frame.type !== "exit") lost();
+      if (!fromB) this.sql("DELETE FROM exec_runs WHERE exec_id = ?", execId);
+      return;
+    }
+    send(other, { type: "execFrame", execId, frame } satisfies ServerToDaemon);
+  }
+
+  /** K-722: a machine's connection closed: each of its runs ends on the other machine. */
+  private endExecRuns(machineId: string) {
+    const rows = this.sql<ExecRow>(
+      "DELETE FROM exec_runs WHERE source = ? OR target = ? RETURNING *",
+      machineId,
+      machineId,
+    );
+    for (const row of rows) {
+      if (row.state === "waiting")
+        this.closeExecProposal(row.proposal_id, "a machine of the run went offline");
+      const toSource = row.target === machineId;
+      const socket = this.openSocket(toSource ? row.source : row.target);
+      if (!socket) continue;
+      send(socket, {
+        type: "execFrame",
+        execId: row.exec_id,
+        frame: toSource
+          ? { type: "exit", exitCode: null, signal: null, durationMs: 0, reason: "the relay was lost" }
+          : { type: "close", what: "kill" },
+      } satisfies ServerToDaemon);
+      if (toSource && row.state === "running")
+        this.recordExec(row, { exitCode: null, reason: "the relay was lost" });
+    }
+  }
+
+  /**
+   * K-722: a run that ends before its approval closes its proposal, so no later approval starts it. The approvers'
+   * Inbox drops it with the next map update.
+   */
+  private closeExecProposal(proposalId: string | null, why: string) {
+    if (proposalId === null) return;
+    const closed = this.sql(
+      "UPDATE proposals SET state = 'denied', decided_at = ?, decided_by = ? WHERE id = ? AND state = 'pending' RETURNING id",
+      Date.now(),
+      JSON.stringify({ actor: { _tag: "kitshn", reason: why }, reason: why }),
+      proposalId,
+    );
+    if (closed.length > 0) this.broadcast();
+  }
+
+  /**
+   * K-1610: one forwarded tool call of a machine's link proxy (MM-1922), with the tool name only. kitshn records it
+   * only for a machine that the caller reaches now, so a machine cannot put calls on another machine's record, and
+   * at most LINK_CALLS_PER_MINUTE of one machine a minute.
+   */
+  private recordLinkCall(machine: Machine, message: Extract<DaemonMessage, { type: "linkCall" }>) {
+    const name = typeof message.name === "string" ? message.name.slice(0, 100) : "";
+    const target = typeof message.target === "string" ? message.target : "";
+    const status = Number.isSafeInteger(message.status) ? message.status : 0;
+    if (name === "" || name.includes(" ")) return;
+    const now = Date.now();
+    const reached = (this.providerRegs.get(machine.id) ?? []).some((reg) =>
+      reachOf(this.state, machine.id, reg.name, now).some((card) => card.machineId === target),
+    );
+    if (!reached)
+      return console.warn(`kitshn dropped a link call of ${machine.name}: it reaches no machine ${target}.`);
+    const minute = Math.floor(now / 60_000);
     const rate = this.linkRates.get(machine.id);
     const counted = rate?.minute === minute ? rate : { minute, count: 0, dropped: 0 };
     this.linkRates.set(machine.id, counted);
-    if (counted.count >= LINK_AUDITS_PER_MINUTE) {
+    if (counted.count >= LINK_CALLS_PER_MINUTE) {
       counted.dropped += 1;
       if (counted.dropped === 1)
-        console.warn(`kitshn drops audit reports of ${machine.name} for the rest of this minute.`);
+        console.warn(`kitshn drops link calls of ${machine.name} for the rest of this minute.`);
       return;
     }
     counted.count += 1;
-    this.sql(
+    this.addLinkEvent(
       `INSERT INTO link_events (at, source, target, kind, thread, name, cwd, outcome, exit_code)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      // The time of the report, not the claim of the machine, orders History.
-      Date.now(),
+       VALUES (?, ?, ?, 'tool', NULL, ?, NULL, ?, NULL)`,
+      now,
       machine.id,
-      audit.target,
-      audit.kind,
-      audit.thread,
-      audit.name,
-      audit.cwd,
-      audit.outcome,
-      audit.exitCode,
+      target,
+      name,
+      status >= 200 && status < 400 ? "succeeded" : status === 401 || status === 403 ? "refused" : "failed",
     );
-    this.sql(
-      "DELETE FROM link_events WHERE id <= (SELECT id FROM link_events ORDER BY id DESC LIMIT 1 OFFSET 2000)",
+  }
+
+  /**
+   * K-1610, K-722: History keeps one event per run: the command name, never its arguments or output, the folder, the
+   * outcome and the exit code. kitshn writes it at the end of the run, so no machine reports for another one.
+   */
+  private recordExec(
+    row: ExecRow,
+    exit: { readonly exitCode: number | null; readonly reason: string | null },
+  ) {
+    this.addLinkEvent(
+      `INSERT INTO link_events (at, source, target, kind, thread, name, cwd, outcome, exit_code)
+       VALUES (?, ?, ?, 'exec', ?, ?, ?, ?, ?)`,
+      Date.now(),
+      row.source,
+      row.target,
+      row.thread,
+      commandName(row.command),
+      row.cwd ? row.cwd.slice(0, 500) : null,
+      execOutcome(exit),
+      exit.exitCode,
     );
-    // A burst of calls must not rebuild every map's snapshot per call: an audit broadcasts at most every 10 seconds.
-    // Known limit: the last events of a burst show with the next change of the map; revisit if History must be live.
-    if (Date.now() - this.linkBroadcastAt >= LINK_BROADCAST_MS) {
-      this.linkBroadcastAt = Date.now();
-      this.broadcast();
+  }
+
+  /**
+   * K-1610: one link event, and the trim; the newest events in memory take it too (K-1302). A link event changes only
+   * History, so a watching map gets the one event and no snapshot; the others get the current state on `watching`.
+   */
+  private addLinkEvent(insert: string, ...bindings: Array<SqlStorageValue>) {
+    const recent = this.recentLinkRows;
+    const [event] = this.sql<LinkEventRow>(`${insert} RETURNING *`, ...bindings);
+    if (!event) throw new Error("The link event insert returned no row.");
+    this.sql("DELETE FROM link_events WHERE id <= ?", event.id - LINK_EVENTS_KEPT);
+    this.recentLinkRows = recent && [event, ...recent].slice(0, RECENT_EVENTS);
+    const message: ServerMessage = { type: "linkEvent", event: this.linkEventView(event) };
+    const now = Date.now();
+    for (const socket of this.ctx.getWebSockets("map")) {
+      const attachment = attachmentOf(socket);
+      if (attachment?.kind !== "map" || !this.authorized(attachment.caller)) continue;
+      if (watches(socket, attachment, now)) send(socket, message);
+      else if (!attachment.missed)
+        socket.serializeAttachment({ ...attachment, missed: true } satisfies Attachment);
     }
+  }
+
+  private linkEventView({ exit_code, ...row }: LinkEventRow): LinkEventView {
+    const name = (id: string) => this.state.machines.get(id)?.name ?? id;
+    return { ...row, source: name(row.source), target: name(row.target), exitCode: exit_code };
   }
 
   /** K-1610: the newest 50 link events, of one machine or of all, with machine names. */
   private recentLinkEvents(machineId: string | null = null): Array<LinkEventView> {
-    const name = (id: string) => this.state.machines.get(id)?.name ?? id;
-    return this.sql<{
-      id: number;
-      at: number;
-      source: string;
-      target: string;
-      kind: "exec" | "tool";
-      thread: string | null;
-      name: string;
-      cwd: string | null;
-      outcome: LinkEventView["outcome"];
-      exit_code: number | null;
-    }>(
+    const rows =
       machineId === null
-        ? "SELECT * FROM link_events ORDER BY id DESC LIMIT 50"
-        : "SELECT * FROM link_events WHERE source = ? OR target = ? ORDER BY id DESC LIMIT 50",
-      ...(machineId === null ? [] : [machineId, machineId]),
-    ).map(({ exit_code, ...row }) => ({
-      ...row,
-      source: name(row.source),
-      target: name(row.target),
-      exitCode: exit_code,
-    }));
+        ? (this.recentLinkRows ??= this.sql<LinkEventRow>(
+            "SELECT * FROM link_events ORDER BY id DESC LIMIT ?",
+            RECENT_EVENTS,
+          ))
+        : this.sql<LinkEventRow>(
+            "SELECT * FROM link_events WHERE source = ? OR target = ? ORDER BY id DESC LIMIT 50",
+            machineId,
+            machineId,
+          );
+    return rows.map((row) => this.linkEventView(row));
   }
 
   /** K-1717: the newest 50 ask events, for History; a snapshot reads at most 50 rows for them. */
   private recentAskEvents(): Array<AskEventView> {
-    return this.sql<AskEventRow>("SELECT * FROM ask_events ORDER BY id DESC LIMIT 50").map((row) =>
-      this.askEventView(row),
+    this.recentAskRows ??= this.sql<AskEventRow>(
+      "SELECT * FROM ask_events ORDER BY id DESC LIMIT ?",
+      RECENT_EVENTS,
     );
+    return this.recentAskRows.map((row) => this.askEventView(row));
   }
 
   /** K-1756: the newest 50 ask events with one label, of one machine or of all; it reads at most 50 index rows. */
@@ -11836,30 +14287,38 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-1752: the labels of an attester prefix are attested, because the daemon drops a caller's own of them. Asks store
-   * the result, because the attesters that a machine reports change later.
+   * K-1752: the labels of a provider prefix are attested, because the daemon drops a caller's own of them. Asks store
+   * the result, because the providers of a machine change later.
    */
   private verifiedKeys(machineId: string, labels: Readonly<Record<string, string>>): Array<string> {
-    const prefixes = [...this.attesterPrefixesOf(machineId), "t3."];
+    const prefixes = this.labelPrefixesOf(machineId);
     return Object.keys(labels).filter((key) => prefixes.some((prefix) => key.startsWith(prefix)));
   }
 
   /** K-1722: the open proposals, for the Asks list of the map. */
   /** K-1723, K-1902: the open asks that this visitor may answer, with the answer check of `decide`. */
-  private answerableProposals(visitor: Visitor): Array<ProposalView> {
-    const machine =
-      visitor.clientId !== null &&
-      [...this.state.machines.values()].some((item) => item.clientId === visitor.clientId);
+  private answerableProposals(visitor: Visitor, attested: Attested | null): Array<ProposalView> {
     return this.openProposals().filter(
       (proposal) =>
         answerRefusal(
           this.state.circles.get(proposal.circleId),
           proposal.circleId,
           visitor,
-          this.state.machines,
-          machine,
+          this.state,
+          attested,
+          visitor.email === null,
         ) === null,
     );
+  }
+
+  /** K-1778: the name of who asked: the machine, else the actor of the credential. */
+  private askerName(proposal: Proposal): string {
+    const machine = this.state.machines.get(proposal.machineId);
+    if (machine) return machine.name;
+    const actor = [...this.state.actors.values()].find((each) =>
+      each.credentials.some((credential) => credentialKey(credential) === proposal.credential),
+    );
+    return actor?.name ?? proposal.credential;
   }
 
   private openProposals(): Array<ProposalView> {
@@ -11868,7 +14327,7 @@ export class Kitshn extends DurableObject<Env> {
         const proposal = proposalOf(row);
         return {
           ...proposal,
-          machineName: this.state.machines.get(proposal.machineId)?.name ?? proposal.machineId,
+          machineName: this.askerName(proposal),
           verified: JSON.parse(row.verified) as Array<string>,
         };
       },
@@ -11876,9 +14335,35 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /** K-718: why a machine may not start the last good build of a card now, or null. */
+  /**
+   * K-827: the start of the last good build on each other instance of a card, from the command of the home one. An
+   * instance whose machine cannot redeploy or no longer takes deploys is left out; placement handles it (K-825).
+   */
+  private instanceRedeploys(
+    card: Pick<Resource, "id" | "machine" | "instances">,
+    command: Extract<Command, { kind: "compose-redeploy" }>,
+  ) {
+    return otherInstances(card).flatMap((instance) => {
+      const machine = this.state.machines.get(instance.machine);
+      if (!machine) return [];
+      const facts = this.redeployFacts(machine, card.id, command.repo);
+      if (!facts.canRedeploy || !facts.takesDeploys) return [];
+      return [
+        {
+          machine,
+          command: {
+            ...command,
+            allowed: facts.allowed,
+            name: instance.address.slice(0, -this.env.KITSHN_ZONE.length - 1),
+          },
+        },
+      ];
+    });
+  }
+
   private redeployRefusal(machineId: string | null, card: string) {
     const machine = machineId === null ? undefined : this.state.machines.get(machineId);
-    if (!machine || this.state.resources.get(card)?.machine !== machine.id)
+    if (!machine || !runsOnMachine(this.state.resources.get(card), machine.id))
       return "This app no longer runs on the machine of its last deploy.";
     return machine.labels.includes("deploy")
       ? null
@@ -11888,31 +14373,41 @@ export class Kitshn extends DurableObject<Env> {
   /** K-718: queues the start of the last build that came up; kitshn makes the job, the key reads it. */
   private agentRedeploy(
     caller: Caller,
-    machineId: string,
-    command: Extract<Command, { kind: "compose-redeploy" }>,
-    ownerApproved: OwnerApproval | null,
+    targets: ReadonlyArray<{
+      readonly machineId: string;
+      readonly command: Extract<Command, { kind: "compose-redeploy" }>;
+    }>,
+    ownerApproved: JobApproval | null,
   ) {
     const now = Date.now();
-    const id = this.ctx.storage.transactionSync(() => {
-      failQueuedDowns(this.query, command.project, REPLACED);
-      const [inserted] = this.sql<{ id: number }>(
-        `INSERT INTO jobs (machine_id, labels, command, state, created_at, expires_at, actor, visitor, exit_code, output)
-         VALUES (?, '[]', ?, 'queued', ?, ?, ?, ?, NULL, '') RETURNING id`,
-        machineId,
-        JSON.stringify(command),
-        now,
-        now + DEPLOY_MS,
-        JSON.stringify(caller.actor),
-        JSON.stringify({ ...caller.visitor, kitshn: true, ownerApproved }),
-      );
-      this.insertRevision(caller.actor, `Redeployed the last good build of ${command.name}`, [], null);
-      return inserted?.id ?? null;
+    const [home] = targets;
+    if (!home) throw new Error("agentRedeploy needs the home instance.");
+    // K-827: one job per instance; the answer names the job of the home instance.
+    const ids = this.ctx.storage.transactionSync(() => {
+      const queued = targets.map((target) => {
+        // K-825: only the stop on this machine; the stop of a dropped instance elsewhere stays.
+        failQueuedDowns(this.query, target.command.project, REPLACED, target.machineId);
+        const [inserted] = this.sql<{ id: number }>(
+          `INSERT INTO jobs (machine_id, labels, command, state, created_at, expires_at, actor, visitor, exit_code, output)
+           VALUES (?, '[]', ?, 'queued', ?, ?, ?, ?, NULL, '') RETURNING id`,
+          target.machineId,
+          JSON.stringify(target.command),
+          now,
+          now + DEPLOY_MS,
+          JSON.stringify(caller.actor),
+          JSON.stringify({ ...caller.visitor, kitshn: true, ownerApproved }),
+        );
+        return inserted?.id ?? null;
+      });
+      this.insertRevision(caller.actor, `Redeployed the last good build of ${home.command.name}`, [], null);
+      return queued;
     });
+    const id = ids[0] ?? null;
     this.load();
     this.deliverJobs();
     this.broadcast();
     void this.scheduleAlarm();
-    return Response.json({ job: id });
+    return Response.json({ job: id, ...(ids.length > 1 ? { jobs: ids } : {}) });
   }
 
   /** K-718, K-812, K-819: a new build runs the kitshn workflow of the repo with this id on one branch. */
@@ -12143,7 +14638,7 @@ export class Kitshn extends DurableObject<Env> {
     agent: Caller,
     request: Request,
     now: number,
-    approved: ReadonlyArray<MachineRight> = [],
+    approved: ReadonlyArray<Effect> = [],
   ) {
     const clientId = agent.visitor.clientId;
     if (!clientId) return Response.json({ error: "Only an agent publishes here (K-1116)." }, { status: 403 });
@@ -12182,7 +14677,16 @@ export class Kitshn extends DurableObject<Env> {
     const kind = uploadKind(name);
     const dot = name.lastIndexOf(".");
     const title = header("x-kitshn-title") || (kind === "page" && dot > 0 ? name.slice(0, dot) : name);
-    const place = () => agentUploadPlace(this.state, agent.visitor, circle, publish, Date.now(), approved);
+    const place = () =>
+      agentUploadPlace(
+        this.state,
+        agent.visitor,
+        circle,
+        publish,
+        Date.now(),
+        agent.attested ?? null,
+        approved,
+      );
     return this.upload(agent, request, kind, { clientId, source, title, place });
   }
 
@@ -12370,7 +14874,7 @@ export class Kitshn extends DurableObject<Env> {
     step: string,
     input: Record<string, unknown>,
     now: number,
-    approved: ReadonlyArray<MachineRight> = [],
+    approved: ReadonlyArray<Effect> = [],
   ) {
     const fail = (status: number, error: string) => Response.json({ error }, { status });
     const api = this.api();
@@ -12427,10 +14931,18 @@ export class Kitshn extends DurableObject<Env> {
     } else {
       // The right can go between the plan and the files; an approval of the plan counts for its finish (K-1776).
       const planned = approvedRights(row.approved);
-      if (!agentHas(this.state, agent.visitor, "addsApps", now, planned))
-        return fail(403, 'A folder site needs the right "may add apps" (K-718, K-1123).');
+      if (!agentHas(this.state, agent.visitor, "creates", now, agent.attested ?? null, planned))
+        return fail(403, 'A folder site needs "creates" (K-718, K-1123).');
       // The rights and the circles can change between the plan and the files, so the spot counts now.
-      const spot = agentUploadPlace(this.state, agent.visitor, site.circle, site.public === 1, now, planned);
+      const spot = agentUploadPlace(
+        this.state,
+        agent.visitor,
+        site.circle,
+        site.public === 1,
+        now,
+        agent.attested ?? null,
+        planned,
+      );
       if (typeof spot === "string") return fail(403, spot);
       this.addFolderCard(agent.actor, site, spot, !spot);
     }
@@ -12451,7 +14963,7 @@ export class Kitshn extends DurableObject<Env> {
     clientId: string,
     input: Record<string, unknown>,
     now: number,
-    approved: ReadonlyArray<MachineRight>,
+    approved: ReadonlyArray<Effect>,
   ) {
     const fail = (status: number, error: string) => Response.json({ error }, { status });
     const text = (key: string) => (typeof input[key] === "string" ? (input[key] as string).trim() : "");
@@ -12489,9 +15001,17 @@ export class Kitshn extends DurableObject<Env> {
         updated: true,
       });
     }
-    if (!agentHas(this.state, agent.visitor, "addsApps", now, approved))
-      return fail(403, 'A folder site needs the right "may add apps" (K-718, K-1123).');
-    const spot = agentUploadPlace(this.state, agent.visitor, circle, open, now, approved);
+    if (!agentHas(this.state, agent.visitor, "creates", now, agent.attested ?? null, approved))
+      return fail(403, 'A folder site needs "creates" (K-718, K-1123).');
+    const spot = agentUploadPlace(
+      this.state,
+      agent.visitor,
+      circle,
+      open,
+      now,
+      agent.attested ?? null,
+      approved,
+    );
     if (typeof spot === "string") return fail(403, spot);
     if (!zonesOf(this.env).some((zone) => zone.name === zoneName))
       return fail(409, `kitshn does not publish on ${zoneName} (K-1111).`);
@@ -12524,7 +15044,7 @@ export class Kitshn extends DurableObject<Env> {
     site: Pick<AgentSiteRow, "card_id" | "folder">,
     address: string,
     now: number,
-    approved: ReadonlyArray<MachineRight> = [],
+    approved: ReadonlyArray<Effect> = [],
   ) {
     const deployId = crypto.randomUUID();
     this.sql(
@@ -12557,7 +15077,7 @@ export class Kitshn extends DurableObject<Env> {
     site: AgentSiteRow,
     now: number,
     replaces?: string,
-    approved: ReadonlyArray<MachineRight> = [],
+    approved: ReadonlyArray<Effect> = [],
   ) {
     const deployId = this.ctx.storage.transactionSync(() => {
       if (replaces) this.sql("DELETE FROM agent_sites WHERE card_id = ?", replaces);
@@ -12610,7 +15130,7 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /** K-1123: the card of a folder site at its first finish; a card that took its address since stops it. */
-  private addFolderCard(actor: Actor, site: AgentSiteRow, spot: Point | null, agentTray: boolean) {
+  private addFolderCard(actor: Author, site: AgentSiteRow, spot: Point | null, agentTray: boolean) {
     const resource: Resource = {
       id: site.card_id,
       kind: "site.static",
@@ -12806,7 +15326,7 @@ export class Kitshn extends DurableObject<Env> {
     named: string,
     input: Record<string, unknown>,
     now: number,
-    approved: ReadonlyArray<MachineRight> = [],
+    approved: ReadonlyArray<Effect> = [],
   ) {
     const fail = (status: number, error: string) => Response.json({ error }, { status });
     const repo = typeof input["repo"] === "string" ? input["repo"].trim() : "";
@@ -12827,8 +15347,8 @@ export class Kitshn extends DurableObject<Env> {
         409,
         "Only a page or a folder site becomes a repo; put a file into a folder site first (K-1127).",
       );
-    if (!agentHas(this.state, agent.visitor, "addsApps", now, approved))
-      return fail(403, 'A repo adds an app, so it needs the right "may add apps" (K-718, K-1127).');
+    if (!agentHas(this.state, agent.visitor, "creates", now, agent.attested ?? null, approved))
+      return fail(403, 'A repo adds an app, so it needs "creates" (K-718, K-1127).');
     if (this.sql("SELECT 1 FROM repos WHERE repo_id = ?", repoId).length > 0)
       return fail(409, `kitshn knows ${repo} already; a handover is for a new repo (K-1127).`);
     // K-817: a repo's main address is under the kitshn zone. A folder site on another zone keeps that address as
@@ -12912,7 +15432,7 @@ export class Kitshn extends DurableObject<Env> {
 
   /**
    * K-1127: the handover of this repo, by its GitHub ids, while it lasts and while it still fits: the card exists and
-   * is still a page or a folder site, and the key still may change it and still may add apps. A handover that no
+   * is still a page or a folder site, and the key still may change it and still creates. A handover that no
    * longer fits ends unused, and History says why.
    */
   private usableHandover(deployer: Deployer): Handover | null {
@@ -12932,7 +15452,7 @@ export class Kitshn extends DurableObject<Env> {
     const fits =
       card !== undefined &&
       (card.kind === "page" || this.isFolderSite(card.id)) &&
-      agentHas(this.state, key.visitor, "addsApps", now, approvedRights(row.approved)) &&
+      agentHas(this.state, key.visitor, "creates", now, key.attested ?? null, approvedRights(row.approved)) &&
       (this.agentMayChange(key, row.card_id, now) === null ||
         this.agentSiteMayChange(key, row.card_id, now) === null);
     if (!fits) {
@@ -13547,8 +16067,8 @@ export class Kitshn extends DurableObject<Env> {
       : sent;
   }
 
-  private gameRows(where = "1 = 1", ...values: Array<SqlStorageValue>) {
-    return this.sql<GameRow>(`SELECT * FROM games WHERE ${where}`, ...values);
+  private portRows(where = "1 = 1", ...values: Array<SqlStorageValue>) {
+    return this.sql<PortRow>(`SELECT * FROM port_cards WHERE ${where}`, ...values);
   }
 
   private openDoors(now: number, card?: string) {
@@ -13559,7 +16079,7 @@ export class Kitshn extends DurableObject<Env> {
     ).map(doorOf);
   }
 
-  /** K-2002: why a machine cannot hold doors now, or null. */
+  /** K-2003: why a machine cannot hold doors now, or null. */
   private doorsProblem(machineId: string): string | null {
     const machine = this.state.machines.get(machineId);
     if (!machine) return `No machine "${machineId}" exists.`;
@@ -13570,10 +16090,10 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-2005: the full door plan of one machine as a job. The plan replaces the whole table, so a newer job makes the
+   * K-2006: the full door plan of one machine as a job. The plan replaces the whole table, so a newer job makes the
    * queued ones useless; they fail with a note.
    */
-  private queueDoors(machineId: string, actor: Actor, now: number) {
+  private queueDoors(machineId: string, actor: Author, now: number) {
     this.sql(
       `UPDATE jobs SET state = 'failed', output = 'A newer door plan replaced this job.'
        WHERE machine_id = ? AND state = 'queued' AND json_extract(command, '$.kind') = 'doors'`,
@@ -13588,8 +16108,8 @@ export class Kitshn extends DurableObject<Env> {
     this.deliverJobs();
   }
 
-  /** K-2001: a new game card in the tray. The owner or an agent puts it into circles later. */
-  private createGame(actor: Actor, body: unknown) {
+  /** K-2001: a new port card in the tray. The owner or an agent puts it into circles later. */
+  private createPortCard(actor: Author, body: unknown) {
     const refuse = (error: string, status = 400) => Response.json({ error }, { status });
     if (!isRecord(body)) return refuse("Send a JSON object.");
     const name = typeof body["name"] === "string" ? body["name"].trim().toLowerCase() : "";
@@ -13600,42 +16120,64 @@ export class Kitshn extends DurableObject<Env> {
     const hours = body["doorHours"] ?? DEFAULT_DOOR_MS / HOUR_MS;
     const srv = typeof body["srv"] === "string" && body["srv"] !== "" ? body["srv"] : null;
     const relay = typeof body["relay"] === "string" && body["relay"] !== "" ? body["relay"] : null;
-    const game = {
+    const portCard = {
       name,
       ports: ports.filter((port) => port !== null),
       doorMs: typeof hours === "number" ? hours * HOUR_MS : Number.NaN,
       srv,
       relay,
     };
-    const error = gameError(game);
+    const error = portCardError(portCard);
     if (error) return refuse(error);
     if (!this.state.machines.has(machineId)) return refuse(`No machine "${machineId}" exists.`, 404);
-    if (relay === machineId) return refuse("A machine does not relay its own game.");
+    if (relay === machineId) return refuse("A machine does not relay its own port card.");
     const problem = this.doorsProblem(relay ?? machineId);
     if (problem) return refuse(problem, 409);
-    // K-2001: a door must not close a port that a kitshn site of the door machine serves.
+    // K-2009: two relay listeners cannot share a port, and a door of one card would open the other.
+    const doorHost = relay ?? machineId;
+    const holder = this.portRows().find((row) => {
+      const other = portOf(row);
+      return (
+        doorMachine(other) === doorHost &&
+        (relay !== null || other.relay !== null) &&
+        other.ports.some((port) => portCard.ports.some((mine) => portKey(mine) === portKey(port)))
+      );
+    });
+    if (holder)
+      return refuse(
+        `The port card ${holder.name} already holds this port on ${this.state.machines.get(doorHost)?.name ?? doorHost}, and a relayed port has one card. Pick another port or another relay machine.`,
+        409,
+      );
+    // K-2001: a door must not open or close a port that a kitshn site of a machine on the route serves. A relay reaches
+    // the port machine past the site's Access check, and its listener binds on the relay machine.
+    const routeMachines = relay ? [machineId, relay] : [machineId];
     const site = [...this.liveSites.values()].find(
       (item) =>
-        item.machineId === (relay ?? machineId) &&
-        game.ports.some((port) => port.proto === "tcp" && item.target === `http://localhost:${port.port}`),
+        routeMachines.includes(item.machineId) &&
+        portCard.ports.some(
+          (port) => port.proto === "tcp" && item.target === `http://localhost:${port.port}`,
+        ),
     );
     if (site)
       return refuse(
-        `${site.address} serves from ${site.target} on this machine, so a game card cannot close it.`,
+        `${site.address} serves from ${site.target} on ${this.state.machines.get(site.machineId)?.name ?? site.machineId}, so a port card cannot close it.`,
         409,
       );
-    // K-2001, K-619: a port that another service of the door machine listens on.
-    const busy = busyPort(game.ports, this.machineView(this.state.machines.get(relay ?? machineId)!).servers);
+    // K-2001, K-619: a port that another service of a machine on the route listens on.
+    const busy = busyPort(
+      portCard.ports,
+      routeMachines.flatMap((id) => this.machineView(this.state.machines.get(id)!).servers),
+    );
     if (busy)
       return refuse(
-        `${busy.port}/tcp on this machine is ${busy.title ? `"${busy.title}"` : (busy.process ?? "another service")}, which is no game, so a game card cannot close it.`,
+        `${busy.port}/tcp on a machine of this route is ${busy.title ? `"${busy.title}"` : (busy.process ?? "another service")}, which is not the service, so a port card cannot close it.`,
         409,
       );
     const host = `${name}.${this.env.KITSHN_ZONE}`;
     const addresses = relay ? [host, relayHost(name, this.env.KITSHN_ZONE)] : [host];
     const taken = (address: string) =>
       RESERVED_SITE_NAMES.has(address.split(".")[0] ?? "") ||
-      this.gameRows("name = ?", name).length > 0 ||
+      this.portRows("name = ?", name).length > 0 ||
       [...this.state.resources.values()].some((resource) => resource.addresses.includes(address)) ||
       [...this.liveSites.values()].some((site) => site.address === address) ||
       this.sql("SELECT address FROM dns_objects WHERE address = ?", address).length > 0;
@@ -13645,7 +16187,7 @@ export class Kitshn extends DurableObject<Env> {
     const id = newLibraryId();
     const resource: Resource = {
       id,
-      kind: "game",
+      kind: "port",
       name,
       addresses,
       status: "unknown",
@@ -13655,47 +16197,49 @@ export class Kitshn extends DurableObject<Env> {
     };
     const revision = this.ctx.storage.transactionSync(() => {
       this.sql(
-        "INSERT INTO games (card_id, machine_id, name, ports, door_ms, srv, relay_id, v4, v6) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO port_cards (card_id, machine_id, name, ports, door_ms, srv, relay_id, v4, v6) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         id,
         machineId,
         name,
-        JSON.stringify(game.ports),
-        game.doorMs,
+        JSON.stringify(portCard.ports),
+        portCard.doorMs,
         srv,
         relay,
         status?.publicAddresses?.v4 ?? null,
         status?.publicAddresses?.v6 ?? null,
       );
-      return this.addCard(actor, resource, null, `the game server ${name}`);
+      const added = this.addCard(actor, resource, null, `the port card ${name}`);
+      if (relay) this.startAction(id, { _tag: "relay" }, "Set up the relay", RELAY_STEPS);
+      return added;
     });
     this.queueDoors(relay ?? machineId, actor, Date.now());
     this.load();
     this.broadcast();
     void this.scheduleAlarm();
     return Response.json(
-      { id, address: host, join: `https://pages.${this.env.KITSHN_ZONE}/join/${name}`, revision },
+      { id, address: host, connect: `https://pages.${this.env.KITSHN_ZONE}/connect/${name}`, revision },
       { status: 201 },
     );
   }
 
-  /** K-2001: removes a game card, its doors and, through the alarm, its records. */
-  private deleteGame(actor: Actor, id: string) {
-    const [row] = this.gameRows("card_id = ?", id);
-    if (!row) return Response.json({ error: `No game card "${id}" exists.` }, { status: 404 });
+  /** K-2001: removes a port card, its doors and, through the alarm, its records. */
+  private deletePortCard(actor: Author, id: string) {
+    const [row] = this.portRows("card_id = ?", id);
+    if (!row) return Response.json({ error: `No port card "${id}" exists.` }, { status: 404 });
     this.ctx.storage.transactionSync(() => {
-      this.sql("DELETE FROM games WHERE card_id = ?", id);
+      this.sql("DELETE FROM port_cards WHERE card_id = ?", id);
       this.sql("DELETE FROM doors WHERE card_id = ?", id);
-      this.insertRevision(actor, `Removed the game server ${row.name}`, [this.forgetCard(id)], null);
+      this.insertRevision(actor, `Removed the port card ${row.name}`, [this.forgetCard(id)], null);
     });
-    this.queueDoors(doorMachine(gameOf(row)), actor, Date.now());
+    this.queueDoors(doorMachine(portOf(row)), actor, Date.now());
     this.load();
     this.broadcast();
     void this.scheduleAlarm();
     return Response.json({ deleted: id });
   }
 
-  /** K-2004: closes doors in one transaction, each with a History line, then sends the new plans. */
-  private closeDoors(actor: Actor, doors: ReadonlyArray<Door>, why: string, now: number) {
+  /** K-2005: closes doors in one transaction, each with a History line, then sends the new plans. */
+  private closeDoors(actor: Author, doors: ReadonlyArray<Door>, why: string, now: number) {
     if (doors.length === 0) return;
     const machines = new Set<string>();
     this.ctx.storage.transactionSync(() => {
@@ -13706,8 +16250,8 @@ export class Kitshn extends DurableObject<Env> {
           door.person,
           door.address,
         );
-        const [row] = this.gameRows("card_id = ?", door.card);
-        if (row) machines.add(doorMachine(gameOf(row)));
+        const [row] = this.portRows("card_id = ?", door.card);
+        if (row) machines.add(doorMachine(portOf(row)));
         this.insertRevision(
           actor,
           `Closed the door of ${door.person} on ${row?.name ?? door.card} for ${door.address} (${why})`,
@@ -13722,18 +16266,18 @@ export class Kitshn extends DurableObject<Env> {
   private doorPlanOf(machineId: string, now: number) {
     return doorPlan(
       machineId,
-      this.gameRows().map(gameOf),
+      this.portRows().map(portOf),
       this.openDoors(now),
       now,
       this.env.KITSHN_ZONE,
-      this.openGames(now),
+      this.openPortCards(now),
     );
   }
 
-  /** K-2004: the game cards with an active share in Everyone, whose ports are open to every address. */
-  private openGames(now: number) {
+  /** K-2005: the port cards with an active share in Everyone, whose ports are open to every address. */
+  private openPortCards(now: number) {
     return new Set(
-      this.gameRows()
+      this.portRows()
         .map((row) => row.card_id)
         .filter((card) => {
           const resource = this.state.resources.get(card);
@@ -13742,14 +16286,14 @@ export class Kitshn extends DurableObject<Env> {
     );
   }
 
-  /** K-2005: a share in Everyone that starts or ends sends new plans, so the ports open or close for all. */
-  private syncOpenGames(now: number) {
-    const open = [...this.openGames(now)].sort().join(" ");
-    if (open === this.openGamesSent) return;
-    const restarted = this.openGamesSent === null;
-    this.openGamesSent = open;
-    const actor: Actor = { _tag: "kitshn", reason: "Everyone share of a game (K-2004)" };
-    for (const machine of new Set(this.gameRows().map(gameOf).map(doorMachine))) {
+  /** K-2006: a share in Everyone that starts or ends sends new plans, so the ports open or close for all. */
+  private syncOpenPorts(now: number) {
+    const open = [...this.openPortCards(now)].sort().join(" ");
+    if (open === this.openPortsSent) return;
+    const restarted = this.openPortsSent === null;
+    this.openPortsSent = open;
+    const actor: Author = { _tag: "kitshn", reason: "Everyone share of a port card (K-2005)" };
+    for (const machine of new Set(this.portRows().map(portOf).map(doorMachine))) {
       // After a restart the last change is not known, so a machine gets a plan only when its gated ports differ from
       // its last plan that did not fail.
       if (restarted && JSON.stringify(this.doorPlanOf(machine, now).ports) === this.lastDoorPorts(machine))
@@ -13767,7 +16311,7 @@ export class Kitshn extends DurableObject<Env> {
     return last?.ports ?? null;
   }
 
-  /** K-2005: a door whose person lost the card's share closes at once; a door of a removed card goes too. */
+  /** K-2006: a door whose person lost the card's share closes at once; a door of a removed card goes too. */
   private closeLostDoors(now: number) {
     // The check uses the address that opened the door, so a circle with an address condition keeps it open.
     const lost = this.sql<DoorRow>("SELECT * FROM doors WHERE ends_at > ?", now)
@@ -13779,39 +16323,39 @@ export class Kitshn extends DurableObject<Env> {
       })
       .map(doorOf);
     if (lost.length === 0) return false;
-    this.closeDoors({ _tag: "kitshn", reason: "share lost (K-2005)" }, lost, "the share ended", now);
+    this.closeDoors({ _tag: "kitshn", reason: "share lost (K-2006)" }, lost, "the share ended", now);
     this.load();
     return true;
   }
 
-  /** K-2003: the join page asks here; `open` and `close` change the doors of the visitor alone. */
-  private gameDecision(input: GameRequest) {
+  /** K-2004: the connect page asks here; `open` and `close` change the doors of the visitor alone. */
+  private connectDecision(input: ConnectRequest) {
     const now = Date.now();
     const visitor = this.freshVisitor(input.visitor);
     const stale = visitor !== input.visitor;
-    const [row] = this.gameRows("name = ?", input.name);
+    const [row] = this.portRows("name = ?", input.name);
     const resource = row ? this.state.resources.get(row.card_id) : undefined;
     if (!row || !resource) return Response.json({ decision: "missing", stale });
-    // A door belongs to a person, so the join page needs a login, also on a card in Everyone.
-    const game = gameOf(row);
-    const machine = doorMachine(game);
+    // A door belongs to a person, so the connect page needs a login, also on a card in Everyone.
+    const portCard = portOf(row);
+    const machine = doorMachine(portCard);
     const status = this.state.machines.get(machine);
-    const gameView = {
-      name: game.name,
-      address: joinAddress(game, resource.addresses[0] ?? ""),
-      ports: game.ports.map(portKey),
-      doorHours: game.doorMs / HOUR_MS,
+    const portView = {
+      name: portCard.name,
+      address: connectAddress(portCard, resource.addresses[0] ?? ""),
+      ports: portCard.ports.map(portKey),
+      doorHours: portCard.doorMs / HOUR_MS,
       reachable: row.v4 !== null || row.v6 !== null,
       machineOnline: status ? this.machineView(status).online : false,
-      needsIpv4: game.relay !== null,
+      needsIpv4: portCard.relay !== null,
     };
-    // K-2004: a game in Everyone has no doors, so its page needs no login.
+    // K-2005: a port card in Everyone has no doors, so its page needs no login.
     if (openToAll(this.state, resource, now))
       return Response.json({
         decision: "allow",
         stale,
-        error: input.action === "view" ? null : "This game is open to everyone, so it needs no door.",
-        game: gameView,
+        error: input.action === "view" ? null : "This port card is open to everyone, so it needs no door.",
+        portCard: portView,
         openToAll: true,
         doors: [],
         seen: visitor.ip,
@@ -13819,11 +16363,11 @@ export class Kitshn extends DurableObject<Env> {
     const decision = visitor.email === null ? "login" : contentAccess(this.state, resource, visitor, now);
     if (decision !== "allow" || visitor.email === null) return Response.json({ decision, stale });
     const person = visitor.email;
-    const actor: Actor = { _tag: "person", email: person };
+    const actor: Author = { _tag: "person", email: person };
     let error: string | null = null;
-    // K-2004: one open or close per person and card in 10 s, so a loop cannot fill History or the machine's jobs.
+    // K-2005: one open or close per person and card in 10 s, so a loop cannot fill History or the machine's jobs.
     // In memory, as the limits of K-1908: a restart of the Durable Object only resets the wait.
-    const turn = `${game.card} ${person}`;
+    const turn = `${portCard.card} ${person}`;
     const waiting =
       (input.action === "open" || input.action === "close") && (this.doorTurns.get(turn) ?? 0) > now - 10_000;
     if (waiting) error = "You changed a door a few seconds ago. Wait a moment.";
@@ -13833,7 +16377,7 @@ export class Kitshn extends DurableObject<Env> {
         for (const [key, at] of this.doorTurns) if (at <= now - 10_000) this.doorTurns.delete(key);
     };
     if (input.action === "open" && !waiting) {
-      // K-2004: the address that kitshn sees is always a door; the browser adds the other addresses that it found,
+      // K-2005: the address that kitshn sees is always a door; the browser adds the other addresses that it found,
       // within the limits of openDoors. Each browser address passes the share check, so an address condition of a
       // circle still holds; a refused one is left out.
       const seen = doorAddress(visitor.ip ?? "");
@@ -13847,7 +16391,7 @@ export class Kitshn extends DurableObject<Env> {
       error =
         ("error" in seen ? `kitshn sees your address as ${visitor.ip ?? "none"}: ${seen.error}` : null) ??
         // K-2004: a relay listens on IPv4 only, so an IPv6-only open would open nothing that works.
-        (game.relay !== null && !addresses.some((address) => doorFamily(address) === 4)
+        (portCard.relay !== null && !addresses.some((address) => doorFamily(address) === 4)
           ? "This server needs IPv4, and no IPv4 address answered."
           : null) ??
         // An offline machine gets the plan when it connects; an online one must hold doors now.
@@ -13855,13 +16399,19 @@ export class Kitshn extends DurableObject<Env> {
           ? null
           : this.doorsProblem(machine));
       if (error === null) {
-        const { open, close } = openDoors(this.openDoors(now, game.card), game, person, addresses, now);
-        const ends = new Date(now + game.doorMs).toISOString().slice(0, 16).replace("T", " ");
+        const { open, close } = openDoors(
+          this.openDoors(now, portCard.card),
+          portCard,
+          person,
+          addresses,
+          now,
+        );
+        const ends = new Date(now + portCard.doorMs).toISOString().slice(0, 16).replace("T", " ");
         this.ctx.storage.transactionSync(() => {
           for (const address of close)
             this.sql(
               "DELETE FROM doors WHERE card_id = ? AND person = ? AND address = ?",
-              game.card,
+              portCard.card,
               person,
               address,
             );
@@ -13877,7 +16427,7 @@ export class Kitshn extends DurableObject<Env> {
             );
           this.insertRevision(
             actor,
-            `${person} opened ${game.name} for ${open.map((door) => door.address).join(", ")} until ${ends} UTC`,
+            `${person} opened ${portCard.name} for ${open.map((door) => door.address).join(", ")} until ${ends} UTC`,
             [],
             null,
           );
@@ -13889,39 +16439,80 @@ export class Kitshn extends DurableObject<Env> {
       }
     }
     if (input.action === "close" && !waiting) {
-      // K-2004: End now closes every door of this person on the card.
-      const doors = this.openDoors(now, game.card).filter((item) => item.person === person);
+      // K-2005: End now closes every door of this person on the card.
+      const doors = this.openDoors(now, portCard.card).filter((item) => item.person === person);
       if (doors.length > 0) {
         this.closeDoors(actor, doors, "End now", now);
         tookTurn();
         this.load();
         this.broadcast();
-      } else error = "You have no open door on this game.";
+      } else error = "You have no open door on this port card.";
     }
     return Response.json({
       decision,
       stale,
       error,
-      game: gameView,
+      portCard: portView,
       openToAll: false,
-      doors: this.openDoors(now, game.card).filter((door) => door.person === person),
+      doors: this.openDoors(now, portCard.card).filter((door) => door.person === person),
       seen: visitor.ip,
     });
   }
 
-  /** K-2006: a game card as the owner and agents see it: its doors, records and what listens. */
-  private gameView(row: GameRow, now: number) {
-    const game = gameOf(row);
-    const machine = this.state.machines.get(doorMachine(game));
+  /** K-2007: a port card as the owner and agents see it: its doors, records and what listens. */
+  private portView(row: PortRow, now: number) {
+    const portCard = portOf(row);
+    const machine = this.state.machines.get(doorMachine(portCard));
     const listening = new Set(machine ? (this.machineView(machine).status?.listening ?? []) : []);
+    const named = (id: string) => this.state.machines.get(id)?.name ?? id;
+    const portMachine = this.state.machines.get(portCard.machine);
+    const portStatus = portMachine ? this.machineView(portMachine).status : null;
+    const doorStatus = machine ? this.machineView(machine).status : null;
+    // K-2010: the route of the card, as the players' packets take it.
+    const route =
+      portCard.relay === null
+        ? `Players → ${named(portCard.machine)}`
+        : `Players → ${named(portCard.relay)} → Cloudflare ${portStatus?.tunnelLocations ?? "(no data center reported)"} → ${named(portCard.machine)}`;
+    const problems = [
+      this.doorsProblem(doorMachine(portCard)),
+      doorStatus?.hostFirewall ? `${named(doorMachine(portCard))}: ${doorStatus.hostFirewall}` : null,
+      portCard.relay === null
+        ? null
+        : !portStatus
+          ? `${named(portCard.machine)} is offline`
+          : portStatus.tunnelReady === false
+            ? `${named(portCard.machine)}: its tunnel has no connection`
+            : null,
+    ].filter((problem) => problem !== null);
+    // K-2010: a share whose members a door cannot let in: doors open for people and addresses, not devices or machines.
+    const resource = this.state.resources.get(portCard.card);
+    const unchecked = resource
+      ? activeShares(this.state, resource, now)
+          .filter(({ circle }) =>
+            circle.members.some((member) => {
+              const actor = memberActor(member, this.state);
+              return (
+                actor !== undefined && actor.credentials.some((credential) => credential._tag !== "login")
+              );
+            }),
+          )
+          .map(
+            ({ circle }) =>
+              `${circle.name}: its tokens and machines do not get in on this route, because a door opens for a person`,
+          )
+      : [];
     return {
-      ...game,
-      join: `https://pages.${this.env.KITSHN_ZONE}/join/${game.name}`,
-      address: joinAddress(game, `${game.name}.${this.env.KITSHN_ZONE}`),
-      listening: game.ports.map(portKey).filter((port) => listening.has(port)),
-      problem: this.doorsProblem(doorMachine(game)),
-      doors: this.openDoors(now, game.card),
-      records: this.sql<GameRecordRow>("SELECT * FROM game_records WHERE card_id = ?", game.card).map(
+      ...portCard,
+      route,
+      problems,
+      unchecked,
+      connect: `https://pages.${this.env.KITSHN_ZONE}/connect/${portCard.name}`,
+      address: connectAddress(portCard, `${portCard.name}.${this.env.KITSHN_ZONE}`),
+      // K-2007: a relay's own listener always answers, so it says nothing about the service behind it.
+      listening:
+        portCard.relay === null ? portCard.ports.map(portKey).filter((port) => listening.has(port)) : null,
+      doors: this.openDoors(now, portCard.card),
+      records: this.sql<PortRecordRow>("SELECT * FROM port_records WHERE card_id = ?", portCard.card).map(
         (record) => ({
           type: record.type,
           name: record.name,
@@ -13932,8 +16523,8 @@ export class Kitshn extends DurableObject<Env> {
     };
   }
 
-  /** K-2006: the owner and agents close any door of a card. */
-  private closeDoorBy(actor: Actor, card: string, address: string) {
+  /** K-2007: the owner and agents close any door of a card. */
+  private closeDoorBy(actor: Author, card: string, address: string) {
     const now = Date.now();
     const doors = this.openDoors(now, card).filter((door) => door.address === address);
     if (doors.length === 0)
@@ -13944,11 +16535,11 @@ export class Kitshn extends DurableObject<Env> {
     return Response.json({ closed: doors.length });
   }
 
-  /** K-2002: a new public address of a machine moves the records of its games. */
-  private updateGameAddresses(machineId: string, found: MachineStatus["publicAddresses"]) {
+  /** K-2003: a new public address of a machine moves the records of its port cards. */
+  private updatePortAddresses(machineId: string, found: MachineStatus["publicAddresses"]) {
     if (!found) return;
     const moved = this.sql(
-      `UPDATE games SET v4 = ?, v6 = ? WHERE COALESCE(relay_id, machine_id) = ?
+      `UPDATE port_cards SET v4 = ?, v6 = ? WHERE COALESCE(relay_id, machine_id) = ?
        AND (v4 IS NOT ? OR v6 IS NOT ?) RETURNING card_id`,
       found.v4,
       found.v6,
@@ -13959,12 +16550,12 @@ export class Kitshn extends DurableObject<Env> {
     if (moved.length > 0) void this.scheduleAlarm();
   }
 
-  /** K-2007: true when a game record waits for the alarm. */
-  private gameDnsWork(now: number) {
+  /** K-2008: true when a port card record waits for the alarm. */
+  private portDnsWork(now: number) {
     const want = new Map(
-      gameRecords(this.gameRows(), this.env.KITSHN_ZONE).map((r) => [`${r.type} ${r.name}`, r]),
+      portRecords(this.portRows(), this.env.KITSHN_ZONE).map((r) => [`${r.type} ${r.name}`, r]),
     );
-    const rows = this.sql<GameRecordRow>("SELECT * FROM game_records");
+    const rows = this.sql<PortRecordRow>("SELECT * FROM port_records");
     const keys = new Set(rows.map((row) => `${row.type} ${row.name}`));
     return (
       rows.some(
@@ -13976,24 +16567,24 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-2007: makes, moves and removes the A, AAAA and SRV records of game cards; returns the Cloudflare calls. A new
+   * K-2008: makes, moves and removes the A, AAAA and SRV records of port cards; returns the Cloudflare calls. A new
    * record first checks that no record of that type and name exists, so kitshn never adds to one it did not make.
    */
-  private async syncGameDns(api: Api, budget: number) {
+  private async syncPortDns(api: Api, budget: number) {
     const now = Date.now();
     let calls = 0;
     const want = new Map(
-      gameRecords(this.gameRows(), this.env.KITSHN_ZONE).map((r) => [`${r.type} ${r.name}`, r]),
+      portRecords(this.portRows(), this.env.KITSHN_ZONE).map((r) => [`${r.type} ${r.name}`, r]),
     );
-    // Every game record is on the kitshn zone. zonePath takes one label only, so an SRV name like _x._tcp.<name> fails it.
+    // Every port card record is on the kitshn zone. zonePath takes one label only, so an SRV name like _x._tcp.<name> fails it.
     const zone = `${this.zonePath(this.env.KITSHN_ZONE)}/dns_records`;
-    const rows = this.sql<GameRecordRow>("SELECT * FROM game_records");
+    const rows = this.sql<PortRecordRow>("SELECT * FROM port_records");
     const failed = (
       row: { type: string; name: string; card_id: string; content: string; record_id: string },
       error: unknown,
     ) =>
       this.sql(
-        "INSERT OR REPLACE INTO game_records (type, name, card_id, content, record_id, error, retry_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO port_records (type, name, card_id, content, record_id, error, retry_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         row.type,
         row.name,
         row.card_id,
@@ -14012,7 +16603,7 @@ export class Kitshn extends DurableObject<Env> {
             error instanceof CloudflareError && error.status === 404 ? undefined : Promise.reject(error),
           );
         }
-        this.sql("DELETE FROM game_records WHERE type = ? AND name = ?", row.type, row.name);
+        this.sql("DELETE FROM port_records WHERE type = ? AND name = ?", row.type, row.name);
       } catch (error) {
         failed(row, error);
       }
@@ -14033,7 +16624,7 @@ export class Kitshn extends DurableObject<Env> {
           );
           if (found.length > 0)
             throw new Error(
-              `A ${record.type} record for ${record.name} exists that kitshn did not make. Remove it, or give the game another name.`,
+              `A ${record.type} record for ${record.name} exists that kitshn did not make. Remove it, or give the port card another name.`,
             );
         }
         calls++;
@@ -14042,7 +16633,7 @@ export class Kitshn extends DurableObject<Env> {
           : await api<{ id: string }>("POST", zone, recordBody(record));
         recordId = made.id;
         this.sql(
-          "INSERT OR REPLACE INTO game_records (type, name, card_id, content, record_id, error, retry_at) VALUES (?, ?, ?, ?, ?, NULL, 0)",
+          "INSERT OR REPLACE INTO port_records (type, name, card_id, content, record_id, error, retry_at) VALUES (?, ?, ?, ?, ?, NULL, 0)",
           record.type,
           record.name,
           record.card,
@@ -14099,6 +16690,29 @@ export class Kitshn extends DurableObject<Env> {
   private launcherWork() {
     const want = this.launcherWant();
     return want !== (this.meta("launcher_policy") ?? "") && this.meta("launcher_failed") !== `failed:${want}`;
+  }
+
+  /** K-412: the private hosts of each zone that the kitshn rule should hold now. */
+  private bicWanted() {
+    return privateHosts(this.access, zonesOrMain(this.env));
+  }
+
+  /** K-412: what Cloudflare held after the last sync; the daily run (K-408) forgets it, so the step compares again. */
+  private bicApplied(): BicHosts {
+    return JSON.parse(this.meta("bic_applied") ?? "{}") as BicHosts;
+  }
+
+  /** K-412: some zone's rule differs from the private hosts. */
+  private bicWork() {
+    return JSON.stringify(this.bicWanted()) !== JSON.stringify(this.bicApplied());
+  }
+
+  /** K-412: returns the Cloudflare calls it made. A missing token permission throws, so the owner gets a notification. */
+  private async syncBic(api: Api) {
+    if (!this.bicWork()) return 0;
+    const result = await syncBic(api, this.bicWanted(), this.bicApplied(), BIC_CALLS);
+    this.setMeta("bic_applied", JSON.stringify(result.applied));
+    return result.calls;
   }
 
   /** K-1004: returns the Cloudflare calls it made. The daily run (K-408) asks it to write everything again. */
@@ -14221,7 +16835,7 @@ export class Kitshn extends DurableObject<Env> {
   private api() {
     const token = this.env.CLOUDFLARE_API_TOKEN;
     if (!token) return null;
-    return <T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown) =>
+    return <T>(method: Parameters<Api>[0], path: string, body?: unknown) =>
       cloudflare<T>(token, method, path, body);
   }
 
@@ -14237,8 +16851,9 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-1125, K-1126: one uptime run, once per turn of 2 minutes. `fetchBudget` is the share of the 40 calls of this
-   * run (K-406). Writes a row only when a card changes, and keeps rows only for cards that are down or failing.
+   * K-1125, K-1126: one uptime run, at most once per turn of 2 minutes. `fetchBudget` is the share of the 40 calls of
+   * this run (K-406). Writes a row only when a card changes, and keeps rows only for cards that are down or failing.
+   * The group to fetch comes from a run counter in `meta`, because runs come at any spacing and a wake forgets memory.
    */
   private async checkUptime(
     now: number,
@@ -14249,19 +16864,25 @@ export class Kitshn extends DurableObject<Env> {
     if (targets.length === 0 || slot === this.uptimeSlot) return { fetches: 0, changed: false };
     this.uptimeSlot = slot;
     const online = this.onlineMachines();
-    const probes = new Map<string, { up: boolean; failingFor: number }>();
+    const probes = new Map<string, boolean>();
     for (const card of targets) {
       const site = this.liveSites.get(card.id);
-      if (site) probes.set(card.id, { up: site.up && online.has(site.machineId), failingFor: 0 });
+      if (site) probes.set(card.id, site.up && online.has(site.machineId));
     }
-    const fetched =
-      fetchBudget === 0
-        ? []
-        : cardsOfRun(
-            targets.filter((card) => !this.liveSites.has(card.id)),
-            slot,
-            Math.min(fetchBudget, UPTIME_FETCHES_PER_RUN),
+    const run = Number(this.meta("uptime_run") ?? 0);
+    if (!Number.isSafeInteger(run) || run < 0)
+      throw new Error(`The uptime run counter is ${run}, not a count.`);
+    const fetchable = targets.filter((card) => !this.liveSites.has(card.id));
+    const perRun = Math.min(fetchBudget, UPTIME_FETCHES_PER_RUN);
+    const { cards: fetched, whole } =
+      perRun === 0
+        ? { cards: [], whole: false }
+        : cardsToFetch(
+            fetchable.filter((card) => (this.uptime.get(card.id)?.failingSince ?? null) !== null),
+            cardsOfRun(fetchable, run, perRun),
+            perRun,
           );
+    if (whole && fetched.length > 0) this.setMeta("uptime_run", String(run + 1));
     const answers = await Promise.all(
       fetched.map(async (card) => {
         const ups = await Promise.all(
@@ -14280,12 +16901,12 @@ export class Kitshn extends DurableObject<Env> {
         return { card: card.id, up: ups.every(Boolean), fetches: card.addresses.length };
       }),
     );
-    for (const { card, up } of answers) probes.set(card, { up, failingFor: FAILING_FOR_MS });
+    for (const { card, up } of answers) probes.set(card, up);
     let changed = false;
     this.ctx.storage.transactionSync(() => {
       for (const [card, probe] of probes) {
         const before = this.uptime.get(card) ?? UP;
-        const after = nextUptime(before, probe.up, now, probe.failingFor);
+        const after = nextUptime(before, probe, now);
         if (after === before) continue;
         if (stored(after)) {
           this.uptime.set(card, after);
@@ -14305,7 +16926,7 @@ export class Kitshn extends DurableObject<Env> {
         this.sql(
           "INSERT OR REPLACE INTO uptime_changes (card_id, at, up) VALUES (?, ?, ?)",
           card,
-          now,
+          after.since,
           after.up ? 1 : 0,
         );
       }
@@ -14625,6 +17246,38 @@ export class Kitshn extends DurableObject<Env> {
       }
   }
 
+  /** K-634: when kitshn last restarted the tunnel of a machine by itself; a point read of `meta`, not a scan of `jobs`. */
+  private tunnelRestartedAt(machineId: string): number | null {
+    const value = this.meta(`tunnel-restart:${machineId}`);
+    return value === null ? null : Number(value);
+  }
+
+  /** K-634: restarts the tunnel of each online machine that the links of this report reach with no answer. */
+  private restartSilentTunnels(reporter: Machine, report: HealthReport) {
+    const now = Date.now();
+    const online = this.jobMachines();
+    const restartable = (id: string) =>
+      online.has(id) && (this.liveStatus(id)?.capabilities?.includes("tunnel-restart") ?? false);
+    const due = tunnelRestarts(reporter.id, report, restartable, (id) => this.tunnelRestartedAt(id), now);
+    for (const id of due) {
+      const target = this.state.machines.get(id);
+      if (!target) continue;
+      const actor: Author = { _tag: "kitshn", reason: "links with no answer (K-634)" };
+      this.ctx.storage.transactionSync(() => {
+        // The job is worth nothing later, so it waits no longer than the gap until the next restart.
+        this.queueKitshnJob(id, { kind: "tunnel-restart" }, actor, now + TUNNEL_RESTART_GAP_MS);
+        this.setMeta(`tunnel-restart:${id}`, String(now));
+        this.insertRevision(
+          actor,
+          `Restarted the tunnel of ${target.name}: links of ${reporter.name} got no answer from it ${HEALTH_NOTIFY_AFTER} times in a row`,
+          [],
+          null,
+        );
+      });
+    }
+    if (due.length > 0) this.deliverJobs();
+  }
+
   /** K-704: one `provider` notification per refused provider of the machine; it closes when a registration passes. */
   /** K-631: opens the notification of each check that failed twice in a row, and closes the rest of this machine. */
   private notifyHealth(machine: Machine, report: HealthReport) {
@@ -14635,7 +17288,7 @@ export class Kitshn extends DurableObject<Env> {
       ]),
     );
     const keys = new Set<string>();
-    for (const input of healthNotices(machine, report, others)) {
+    for (const input of healthNotices(machine, report, others, (id) => this.tunnelRestartedAt(id))) {
       keys.add(input.key);
       this.notify(input);
     }
@@ -14945,7 +17598,7 @@ export class Kitshn extends DurableObject<Env> {
     const asks = new Set<string>();
     for (const proposal of this.openProposals()) {
       asks.add(proposal.id);
-      const kind = this.state.circles.get(proposal.circleId)?.needsPasskey ? "passkey" : "login";
+      const kind = approveVia(this.state.circles.get(proposal.circleId), proposal.right);
       this.notify({
         source: "kitshn.ask",
         key: proposal.id,
@@ -14954,8 +17607,12 @@ export class Kitshn extends DurableObject<Env> {
         recipients: { _tag: "approvers", circle: proposal.circleId },
         level: "warn",
         priority: "high",
-        title: clip(`${proposal.machineName} asks: ${MACHINE_RIGHT_NAMES[proposal.right]}`, TITLE_MAX),
-        text: clip(`${proposal.shown}${proposal.reason ? ` · ${proposal.reason}` : ""}`, TEXT_MAX),
+        title: clip(`${proposal.machineName} asks: ${proposal.right}`, TITLE_MAX),
+        // K-1722: no request headers in a notification, because a header can hold a token.
+        text: clip(
+          `${askNotificationText(proposal.action, proposal.target, proposal.body)}${proposal.reason ? ` · ${proposal.reason}` : ""}`,
+          TEXT_MAX,
+        ),
         actions: [
           {
             id: "approve",
@@ -14967,9 +17624,15 @@ export class Kitshn extends DurableObject<Env> {
         ],
       });
     }
+    // The notification closes with the answer, so every device and the list say what happened (K-1722).
     for (const notification of this.openNotifications.values())
-      if (notification.source === "kitshn.ask" && !asks.has(notification.key))
-        this.setNotificationState("kitshn.ask", notification.key, "closed");
+      if (notification.source === "kitshn.ask" && !asks.has(notification.key)) {
+        const [row] = this.sql<{ state: string }>(
+          "SELECT state FROM proposals WHERE id = ?",
+          notification.key,
+        );
+        this.setNotificationState("kitshn.ask", notification.key, row?.state ?? "closed");
+      }
   }
 
   /** K-1902: the owner gets every notification; a circle adds its people. */
@@ -14980,7 +17643,8 @@ export class Kitshn extends DurableObject<Env> {
       return (
         circle !== undefined &&
         (circle.endsAt === null || circle.endsAt > now) &&
-        circleMatches(circle, visitor, this.state.machines)
+        passkeyHolds(circle, visitor) &&
+        circleMatches(circle, visitor, this.state)
       );
     };
     const recipients = notification.recipients;
@@ -14991,13 +17655,13 @@ export class Kitshn extends DurableObject<Env> {
   /** K-1902: a member of the Owner circle. */
   private isOwner(visitor: Visitor) {
     const owner = this.state.circles.get(OWNER_CIRCLE_ID);
-    return owner !== undefined && circleMatches(owner, visitor, this.state.machines);
+    return owner !== undefined && passkeyHolds(owner, visitor) && circleMatches(owner, visitor, this.state);
   }
 
   /** K-1905: the Notifications view and its ways out, for the owner only in this version (K-1902). */
   private async notificationRequest(path: string, request: Request, caller: Caller): Promise<Response> {
     const now = Date.now();
-    if (!this.isOwner(caller.visitor))
+    if (!this.callerIsOwner(caller))
       return Response.json(
         { error: "Notifications are for the Owner circle in this version (K-1902)." },
         { status: 403 },
@@ -15052,6 +17716,33 @@ export class Kitshn extends DurableObject<Env> {
     const notification = [...this.openNotifications.values()].find((each) => String(each.id) === id);
     if (!notification || !this.receives(caller.visitor, notification))
       return Response.json({ error: "No such open notification for you." }, { status: 404 });
+    // K-1907: a push carries ids only, so the service worker reads the text here, over the browser's own login. An
+    // ask also gives what its Approve needs: the full text, its hash and the approve path (K-1722).
+    if (verb === "" && request.method === "GET") {
+      const [row] =
+        notification.source === "kitshn.ask"
+          ? this.sql<ProposalRow>(
+              "SELECT * FROM proposals WHERE id = ? AND state = 'pending'",
+              notification.key,
+            )
+          : [];
+      const proposal = row ? proposalOf(row) : null;
+      return Response.json({
+        notification,
+        ask: proposal && {
+          id: proposal.id,
+          machineName: this.askerName(proposal),
+          right: proposal.right,
+          text: askNotificationText(proposal.action, proposal.target, proposal.body),
+          shownHash: proposal.shownHash,
+          // K-1722: Approve only when the push shows the whole text that its hash covers; else Deny only.
+          approveOnPush: approvesOnPush(proposal.action, proposal.shown),
+          reason: proposal.reason,
+          expiresAt: proposal.expiresAt,
+          via: approveVia(this.state.circles.get(proposal.circleId), proposal.right),
+        },
+      });
+    }
     if (verb === "snooze" && request.method === "POST") {
       const until = isRecord(body) ? body["until"] : undefined;
       if (until !== null && (typeof until !== "number" || until <= now))
@@ -15119,13 +17810,36 @@ export class Kitshn extends DurableObject<Env> {
 
   /**
    * K-1907: pushes wait until the change commits. Each entry is one notification for every device (`device` null),
-   * or one send that waits or failed once. Only the alarm sends, once at its end, so one invocation sends at most
-   * PUSH_SENDS_PER_RUN (K-406). Known limit: the queue lives in memory, so a wake drops what waits; the alarm runs
-   * within a second while it holds anything. Revisit if pushes get lost.
+   * or one send that waits or failed once. The alarm sends once at its end, priority high first; a new open
+   * notification of priority high also goes out at once, outside the alarm. Either way one invocation sends at most
+   * PUSH_SENDS_PER_RUN (K-406). Known limit: the
+   * queue lives in memory, so a wake drops what waits; the alarm runs within a second while it holds anything.
+   * Revisit if pushes get lost.
    */
   private pushQueue: Array<{ notification: Notification; device: number | null; tries: number }> = [];
+  /** The send of priority high pushes outside the alarm, while it runs; tests await it. */
+  private pushNow: Promise<void> | null = null;
+  /** K-406: true while the alarm runs, so its own flush at the end sends what its steps queue. */
+  private alarmRunning = false;
   private queuePush(notification: Notification) {
     this.pushQueue.push({ notification, device: null, tries: 0 });
+    // K-1722: an agent waits on a new ask, so its push does not wait for the alarm. An answer push waits: the agent
+    // hears the answer on its socket, and the request that answered may have spent calls on the ask. The microtask runs
+    // after the change of this invocation, and the output gate holds the send until that change is stored.
+    if (
+      notification.priority === "high" &&
+      notification.state === "open" &&
+      !this.alarmRunning &&
+      this.pushNow === null
+    ) {
+      this.pushNow = Promise.resolve()
+        .then(() => this.flushPushes())
+        .catch((error: unknown) => console.error(`kitshn could not send pushes: ${String(error)}`))
+        .finally(() => {
+          this.pushNow = null;
+        });
+      return;
+    }
     if (this.pushQueue.length === 1) void this.scheduleAlarm();
   }
 
@@ -15154,6 +17868,9 @@ export class Kitshn extends DurableObject<Env> {
             )
             .map((row) => ({ row, notification, tries })),
     );
+    // K-1907: priority high goes first, so older waiting pushes never take the slots of an ask. The sort is stable.
+    const high = (send: (typeof sends)[number]) => (send.notification.priority === "high" ? 0 : 1);
+    sends.sort((a, b) => high(a) - high(b));
     const batch = sends.slice(0, PUSH_SENDS_PER_RUN);
     for (const { row, notification, tries } of sends.slice(PUSH_SENDS_PER_RUN))
       this.pushQueue.push({ notification, device: row.id, tries });
@@ -15197,7 +17914,7 @@ export class Kitshn extends DurableObject<Env> {
 
   /** K-1907: the devices of push, for the Owner circle only in this version (K-1902). */
   private async pushRequest(path: string, request: Request, caller: Caller): Promise<Response> {
-    if (!this.isOwner(caller.visitor))
+    if (!this.callerIsOwner(caller))
       return Response.json(
         { error: "Push is for the Owner circle in this version (K-1902)." },
         { status: 403 },
@@ -15284,13 +18001,22 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   override async alarm() {
+    this.alarmRunning = true;
+    try {
+      await this.alarmRun();
+    } finally {
+      this.alarmRunning = false;
+    }
+  }
+
+  private async alarmRun() {
     const now = Date.now();
     const failedBefore = this.failedAlarmSteps();
     await this.finishPendingRestore().catch((error: unknown) =>
       console.error(`kitshn could not finish a restore to a time: ${String(error)}`),
     );
     await this.alarmStep("liveness", undefined, () => this.checkLiveness(now));
-    // The alarm runs every 2 minutes while a daemon is connected, so it tells the maps only about real changes.
+    // The alarm runs every few minutes, so it tells the maps only about real changes.
     let changed = (await this.alarmStep("jobs", 0, () => this.expireJobs(now))) > 0;
     // K-627: a busy machine whose wait reached the cap gets its update now.
     if (Object.values(this.rollout().busySince ?? {}).some((since) => since + BUSY_CAP_MS <= now))
@@ -15301,7 +18027,7 @@ export class Kitshn extends DurableObject<Env> {
     const before = JSON.stringify(accessStates(this.desired(now), this.access));
     await this.alarmStep("share ends", undefined, () => this.endShares(now));
     if (await this.alarmStep("doors", false, () => this.closeLostDoors(now))) changed = true;
-    await this.alarmStep("open games", undefined, () => this.syncOpenGames(now));
+    await this.alarmStep("open port cards", undefined, () => this.syncOpenPorts(now));
     // A daily run that threw or waits for its retry is no daily run, so the compare below waits with it.
     const daily =
       this.dailyAt() <= now &&
@@ -15375,7 +18101,7 @@ export class Kitshn extends DurableObject<Env> {
       await this.alarmStep("tunnels", undefined, () => this.syncTunnels(api, 6));
       spent += await this.alarmStep("site checks", 6, () => this.checkSites(api, 6), 0);
       await this.alarmStep("DNS", undefined, () => this.syncDns(api, 5));
-      spent += await this.alarmStep("game DNS", 4, () => this.syncGameDns(api, 4), 0);
+      spent += await this.alarmStep("port card DNS", 4, () => this.syncPortDns(api, 4), 0);
       await this.alarmStep("routes", undefined, () => this.syncRoutes(api, 5));
       // K-1124: after the tunnel and DNS steps, so an old Compose address has lost its record. The daily run spends
       // its calls on the compare; redirectWork asks for the next run at once.
@@ -15391,12 +18117,17 @@ export class Kitshn extends DurableObject<Env> {
       // K-113: take an unwanted enrollment policy off the App Launcher before the sync deletes it.
       spent += await this.alarmStep("launcher", 3, () => this.syncLauncher(api, daily), 0);
       // K-406: at most 40 calls. `spent` counts the daily compare (12), the site checks (6), the redirect step (5),
-      // the game records (4), the launcher step (3) and the path read of taken addresses (1); the tunnels, DNS records and offline routes above made at most 6 + 5 + 5, and the launcher
-      // step after the sync needs 3. The login step and the sync share what is left. A policy that the sync
-      // makes goes on the login applications in the next alarm, which runs at once (loginWork).
-      await this.alarmStep("Access", 0, () => this.syncAccessLocked(api, CALLS_PER_RUN - spent - 16 - 3));
+      // the port card records (4), the launcher step (3) and the path read of taken addresses (1); the tunnels, DNS records and offline routes above made at most 6 + 5 + 5, and the launcher
+      // step and the Browser Integrity Check step after the sync need 3 and 4. The login step and the sync share what
+      // is left. A policy that the sync makes goes on the login applications in the next alarm, which runs at once
+      // (loginWork).
+      await this.alarmStep("Access", 0, () =>
+        this.syncAccessLocked(api, CALLS_PER_RUN - spent - 16 - 3 - BIC_CALLS),
+      );
       // A policy that the sync just made goes on the App Launcher in the same run.
       await this.alarmStep("launcher after Access", 0, () => this.syncLauncher(api, false));
+      // K-412: after the sync, so an application that it just made gets its rule in the same run.
+      await this.alarmStep("browser check", 0, () => this.syncBic(api));
       // K-1623: an application that the sync made or made again changes the audiences of its provider.
       await this.alarmStep("grants", undefined, () => this.pushGrants());
 
@@ -15412,8 +18143,8 @@ export class Kitshn extends DurableObject<Env> {
   }
 }
 
-/** OWNER_DEVICES: a JSON list of `{ tokenId, clientId, name }` that join the Owner circle at setup (K-106). */
-function ownerDevices(text: string | undefined): Array<Extract<Member, { _tag: "device" }>> {
+/** OWNER_DEVICES: a JSON list of `{ tokenId, clientId, name }`, tokens of the first owner at setup (K-106, K-1778). */
+function ownerTokens(text: string | undefined): Array<Extract<Credential, { _tag: "token" }>> {
   if (!text) return [];
   const list = JSON.parse(text) as unknown;
   if (!Array.isArray(list)) throw new Error("OWNER_DEVICES is not a JSON list.");
@@ -15426,7 +18157,7 @@ function ownerDevices(text: string | undefined): Array<Extract<Member, { _tag: "
     ) {
       throw new Error("Each OWNER_DEVICES item needs tokenId, clientId and name.");
     }
-    return { _tag: "device", tokenId: device.tokenId, clientId: device.clientId, name: device.name };
+    return { _tag: "token", tokenId: device.tokenId, clientId: device.clientId, name: device.name };
   });
 }
 
@@ -15467,14 +18198,14 @@ const repoGateOf = (row: RepoRow): RepoGate => ({
 /** K-1833: the outcome of an import, which the bootstrap reads. */
 type ImportStatus = { readonly state: "done" } | { readonly state: "refused"; readonly code: ImportCode };
 
-const IMPORT_ACTOR: Actor = { _tag: "kitshn", reason: "the import of the bootstrap (K-1833)" };
+const IMPORT_ACTOR: Author = { _tag: "kitshn", reason: "the import of the bootstrap (K-1833)" };
 
 /** K-1822: what finishes a restore to a time after the restart. */
 interface RestoreFinish {
   readonly undo: string;
   readonly label: string;
   readonly jobsAfter: number;
-  readonly actor: Actor;
+  readonly actor: Author;
 }
 
 /** K-1822: the pending finish lives in R2, because the restore rewinds the storage of the object. */
@@ -15487,7 +18218,7 @@ function restoreFinishOf(value: unknown): RestoreFinish | null {
     typeof label === "string" &&
     typeof jobsAfter === "number" &&
     isRecord(actor)
-    ? { undo, label: label.slice(0, 80), jobsAfter, actor: actor as unknown as Actor }
+    ? { undo, label: label.slice(0, 80), jobsAfter, actor: actor as unknown as Author }
     : null;
 }
 
@@ -15504,6 +18235,8 @@ interface BackupRow extends Record<string, SqlStorageValue> {
   /** K-1820: the sources of the run, as JSON. */
   sources: string | null;
   pause_ms: number | null;
+  /** K-827: `<card>@<machine id>` for a run of an instance that is not the home one; null for the card's own. */
+  repository: string | null;
 }
 
 const backupRun = (row: BackupRow): BackupRun => ({
@@ -15559,6 +18292,18 @@ interface DeployRow extends Record<string, SqlStorageValue> {
   origin: string | null;
   /** K-1121: the workflow file of the run that made the deploy; null starts `kitshn.yml`. */
   workflow: string | null;
+  /** K-825: the `compose` part of the recipe as JSON; null on older rows and other kinds. */
+  compose: string | null;
+}
+
+/** K-827: the job of one instance of a deploy beyond the home one. */
+interface DeployInstanceRow extends Record<string, SqlStorageValue> {
+  deploy_id: string;
+  machine_id: string;
+  address: string;
+  job_id: number | null;
+  /** 1 when the machine was offline at plan time, so the deploy does not wait for this job. */
+  deferred: number;
 }
 
 /** K-821: one finished deploy of a card in the rollback list; `why` says why a rollback cannot go there. */
@@ -15591,6 +18336,20 @@ function workerOf(row: DeployRow): typeof WorkerApp.Type {
 }
 
 const decodeWorkerApp = Schema.decodeUnknownSync(WorkerApp);
+const decodeComposeApp = Schema.decodeUnknownSync(ComposeApp);
+
+/** K-824: whether a card runs on a machine, as its home instance or another one. */
+function runsOnMachine(card: Resource | undefined, machineId: string) {
+  return (
+    card !== undefined &&
+    (card.machine === machineId || (card.instances ?? []).some((instance) => instance.machine === machineId))
+  );
+}
+
+/** K-825: the `compose` part of the recipe of a Compose deploy; null on a row from before placement (K-823). */
+function composeOf(row: Pick<DeployRow, "compose">): typeof ComposeApp.Type | null {
+  return row.compose === null ? null : decodeComposeApp(JSON.parse(row.compose));
+}
 
 /** K-817: the addresses of a deploy row, the main one first. */
 function rowAddresses(row: Pick<DeployRow, "address" | "addresses">): Array<string> {
@@ -15615,7 +18374,7 @@ const ALARM_STEPS = [
   "provider offline",
   "share ends",
   "doors",
-  "open games",
+  "open port cards",
   "daily",
   "uptime",
   "bell",
@@ -15625,11 +18384,12 @@ const ALARM_STEPS = [
   "tunnels",
   "site checks",
   "DNS",
-  "game DNS",
+  "port card DNS",
   "routes",
   "launcher",
   "Access",
   "launcher after Access",
+  "browser check",
   "grants",
 ] as const;
 type AlarmStep = (typeof ALARM_STEPS)[number];
@@ -15662,6 +18422,8 @@ interface StoredProgress {
   readonly source:
     | { readonly _tag: "job"; readonly jobId: number }
     | { readonly _tag: "takeover" }
+    /** K-2009: a new relayed port card, until its relay listens. */
+    | { readonly _tag: "relay" }
     | { readonly _tag: "give-back" }
     | { readonly _tag: "deploy"; readonly deployId: string }
     | { readonly _tag: "rollback"; readonly id: string }
@@ -15706,6 +18468,15 @@ const RESTORE_STEPS: ReadonlyArray<PlannedStep> = [
 const HEALTH_CHECK_WAIT_MS = 60_000;
 const HEALTH_CHECK_STEPS: ReadonlyArray<PlannedStep> = [
   { label: "Check the providers and the links", expectedMs: 3_000 },
+];
+
+/** K-2009: the steps of a new relayed port card, which the alarm and the relay machine run. */
+const RELAY_STEPS: ReadonlyArray<PlannedStep> = [
+  { label: "Make the Access application", expectedMs: 4_000 },
+  { label: "Add the tunnel ingress", expectedMs: 4_000 },
+  { label: "Make the relay record", expectedMs: 4_000 },
+  { label: "Make the address record", expectedMs: 4_000 },
+  { label: "Start the relay listener", expectedMs: 30_000 },
 ];
 
 const TAKE_ADDRESS_STEPS: ReadonlyArray<PlannedStep> = [
@@ -15808,10 +18579,11 @@ type InviteRow = {
   client_id: string;
   name: string;
   expires_at: number;
+  actor_id: string | null;
 };
 
 /** A machine as the actor of what its daemon does, such as a key rotation (K-1705). */
-const deviceActor = (machine: Machine): Actor => ({
+const deviceActor = (machine: Machine): Author => ({
   _tag: "device",
   clientId: machine.clientId,
   name: machine.name,
@@ -15843,12 +18615,12 @@ const send = (socket: WebSocket, message: ServerMessage | ServerToDaemon) => {
   socket.send(JSON.stringify(message));
 };
 
-/** K-2003: a request of the join page. */
-interface GameRequest {
+/** K-2004: a request of the connect page. */
+interface ConnectRequest {
   readonly name: string;
   readonly visitor: ContentVisitor;
   readonly action: "view" | "open" | "close";
-  /** `open`: the addresses that the browser found (K-2004). */
+  /** `open`: the addresses that the browser found (K-2005). */
   readonly addresses?: ReadonlyArray<unknown>;
 }
 
@@ -15900,27 +18672,21 @@ const deployObject = (deployId: string, file: string) => `deploys/${deployId}/${
 function parsePausedBy(
   actor: string | null,
   at: string | null,
-): { readonly actor: Actor; readonly at: number } | null {
+): { readonly actor: Author; readonly at: number } | null {
   if (!actor || !at) return null;
-  return { actor: JSON.parse(actor) as Actor, at: Number(at) };
+  return { actor: JSON.parse(actor) as Author, at: Number(at) };
 }
 
 const NO_VOLUME_JOBS = "An agent does not delete volumes (K-718, K-909).";
 
-/** K-1776: the approval of a person in the Owner circle for one job or deploy, stored on the job. */
-interface OwnerApproval {
-  readonly machineId: string;
-  /** The key of the machine that asked at the approval, so a reset or a rotation ends the approval. */
-  readonly key: string | null;
-  readonly right: MachineRight;
-}
-
 const NO_LONGER_ALLOWED = "no longer allowed:";
+
+const PAUSE_ENDED_JOB = "The emergency pause ended this job.";
 
 const keyMark = (machine: Machine) =>
   machine.key?.kind === "public" ? `${machine.key.fingerprint} ${machine.key.since}` : null;
 
-const actorName = (actor: Actor) =>
+const actorName = (actor: Author) =>
   actor._tag === "person" ? actor.email : actor._tag === "kitshn" ? "kitshn" : actor.name;
 
 const noRestartAfterUpdate = (machine: string) =>
@@ -15930,6 +18696,8 @@ const KITSHN_JOB = JSON.stringify({ email: null, clientId: null, ip: null, kitsh
 
 /** K-718: the workflow file that an agent key starts in an app repo, the one that the map's recipe shows. */
 const AGENT_WORKFLOW = "kitshn.yml";
+/** K-825: kitshn starts at most one placement build per card in this time. */
+const PLACEMENT_BUILD_GAP_MS = 10 * 60_000;
 /** K-909: the expiry of a job that waits for its machine however long. */
 const NEVER = Number.MAX_SAFE_INTEGER;
 const NO_GITHUB_APP =
@@ -15971,14 +18739,12 @@ interface AgentSiteRow extends Record<string, SqlStorageValue> {
   created_at: number;
 }
 
-/** K-1776: the rights that a stored approval gave; anything else in the column counts for nothing. */
-const approvedRights = (text: string): ReadonlyArray<MachineRight> => {
+/** K-1776: the effects that a stored approval gave; anything else in the column counts for nothing. */
+const approvedRights = (text: string): ReadonlyArray<Effect> => {
   try {
     const parsed: unknown = JSON.parse(text);
     return Array.isArray(parsed)
-      ? parsed.filter(
-          (right): right is MachineRight => typeof right === "string" && right in MACHINE_RIGHT_NAMES,
-        )
+      ? parsed.filter((right): right is Effect => EFFECTS.some((effect) => effect === right))
       : [];
   } catch {
     return [];
@@ -16117,28 +18883,27 @@ async function readStart(stream: ReadableStream<Uint8Array>, limit: number): Pro
 
 /** K-1722: a row of the proposals table. */
 /**
- * K-1714: the right that a call forwarded by a daemon needs: a machine right, null for a call that needs only a card
- * that the machine manages (K-718 checks it), or undefined for a path that a machine never forwards.
+ * K-1714, K-1730: the effect of a call forwarded by a daemon, as the operation row of the same call has it, or undefined
+ * for a path that a machine never forwards. K-718 also checks that the machine manages the card.
  */
-export function forwardRight(path: string, method: string): MachineRight | null | undefined {
+export function forwardRight(path: string, method: string): Effect | undefined {
   const card = path.startsWith("/agent/cards/") ? path.slice("/agent/cards/".length) : null;
-  if (path === "/agent/library" && method === "POST") return "addsPages";
-  if (path.startsWith("/agent/library/") && path.endsWith("/previous") && method === "POST")
-    return "addsPages";
-  if (path.startsWith("/agent/library/") && path.endsWith("/content") && method === "GET") return null;
-  if (path.startsWith("/agent/sites/") && method === "POST") return "addsPages";
-  if (card !== null && card.endsWith("/address") && method === "POST") return "addsPages";
-  // K-212: the time of a card needs only a card that the machine manages.
-  if (card !== null && card.endsWith("/time") && method === "POST") return null;
-  if (card !== null && card.includes("/redirects") && (method === "POST" || method === "DELETE"))
-    return "addsPages";
-  if (card !== null && card.endsWith("/handover") && method === "POST") return "addsApps";
-  if (path === "/agent/games" && method === "POST") return "addsApps";
-  // A removal lowers access (K-715), so it needs only a card that the machine manages; a game also "adds apps".
-  if (card !== null && !card.includes("/") && method === "DELETE") return null;
-  if (card !== null && card.endsWith("/previous") && method === "POST") return "addsPages";
-  if (card !== null && card.includes("/doors") && (method === "GET" || method === "DELETE")) return null;
-  if (path === "/agent/logs" && method === "POST") return null;
+  if (path === "/agent/library" && method === "POST") return "creates";
+  // K-1777: one effect per operation, the same as the rows library-previous and card-address.
+  if (path.startsWith("/agent/library/") && path.endsWith("/previous") && method === "POST") return "changes";
+  if (path.startsWith("/agent/library/") && path.endsWith("/content") && method === "GET") return "reads";
+  if (path.startsWith("/agent/sites/") && method === "POST") return "creates";
+  if (card !== null && card.endsWith("/address") && method === "POST") return "changes";
+  if (card !== null && card.endsWith("/time") && method === "POST") return "changes";
+  if (card !== null && card.includes("/redirects") && method === "POST") return "creates";
+  if (card !== null && card.includes("/redirects") && method === "DELETE") return "changes";
+  if (card !== null && card.endsWith("/handover") && method === "POST") return "creates";
+  if (path === "/agent/ports" && method === "POST") return "creates";
+  if (card !== null && !card.includes("/") && method === "DELETE") return "destroys";
+  if (card !== null && card.endsWith("/previous") && method === "POST") return "changes";
+  if (card !== null && card.includes("/doors") && method === "GET") return "reads";
+  if (card !== null && card.includes("/doors") && method === "DELETE") return "maintains";
+  if (path === "/agent/logs" && method === "POST") return "reads";
   return undefined;
 }
 
@@ -16148,15 +18913,34 @@ const sha256Hex = async (text: string) =>
     .join("");
 
 /** K-1776: the refusal of a right that is off: one line that names the right, and the right for the CLI's offer. */
-const offRight = (right: MachineRight, scope = "for this machine (K-1720)"): AskOutcome => ({
+const offRight = (right: Effect, scope = "for this machine (K-1720)"): AskOutcome => ({
   outcome: "refused",
-  reason: `The right "${MACHINE_RIGHT_NAMES[right]}" is off ${scope}. Ask the owner to turn it on.`,
+  reason: `The effect "${right}" is off ${scope}. Ask the owner to turn it on.`,
   need: right,
+});
+
+/**
+ * K-1778: the credential that asks: `credential` is its key (`machine/<id>`, `token/<id>`, `login/<email>`); `machineId`
+ * is set for a machine call. `author` names a token by its actor in History.
+ */
+interface Asker {
+  readonly credential: string;
+  readonly machineId: string | null;
+  readonly name?: string;
+  readonly author?: Author;
+}
+
+const machineAsker = (machine: Machine): Asker => ({
+  credential: credentialKey({ _tag: "machine", machineId: machine.id }),
+  machineId: machine.id,
+  name: machine.name,
 });
 
 interface ProposalRow extends Record<string, SqlStorageValue> {
   readonly id: string;
   readonly machine_id: string;
+  /** K-1778: the credential that asked. */
+  readonly credential: string;
   readonly action: string;
   readonly target: string;
   readonly body: string;
@@ -16169,19 +18953,20 @@ interface ProposalRow extends Record<string, SqlStorageValue> {
   readonly state: string;
   readonly created_at: number;
   readonly expires_at: number;
-  /** K-1752: the label keys that an attester of the machine set, as JSON, fixed at ask time. */
+  /** K-1752: the label keys that a provider of the machine vouched for, as JSON, fixed at ask time. */
   readonly verified: string;
 }
 
 const proposalOf = (row: ProposalRow): Proposal => ({
   id: row.id,
   machineId: row.machine_id,
+  credential: row.credential,
   action: row.action as AskAction,
   target: row.target,
   body: JSON.parse(row.body) as unknown,
   reason: row.reason,
   labels: JSON.parse(row.labels) as Record<string, string>,
-  right: row.right_name as MachineRight,
+  right: row.right_name as Effect,
   circleId: row.circle_id,
   shown: row.shown,
   shownHash: row.shown_hash,
@@ -16191,6 +18976,19 @@ const proposalOf = (row: ProposalRow): Proposal => ({
 });
 
 /** K-1717: a row of the ask events table. */
+interface LinkEventRow extends Record<string, SqlStorageValue> {
+  id: number;
+  at: number;
+  source: string;
+  target: string;
+  kind: "exec" | "tool";
+  thread: string | null;
+  name: string;
+  cwd: string | null;
+  outcome: LinkEventView["outcome"];
+  exit_code: number | null;
+}
+
 interface AskEventRow extends Record<string, SqlStorageValue> {
   readonly id: number;
   readonly at: number;
@@ -16201,6 +18999,6 @@ interface AskEventRow extends Record<string, SqlStorageValue> {
   readonly labels: string;
   readonly outcome: string;
   readonly detail: string;
-  /** K-1752: the label keys that an attester of the machine set, as JSON, fixed at ask time. */
+  /** K-1752: the label keys that a provider of the machine vouched for, as JSON, fixed at ask time. */
   readonly verified: string;
 }

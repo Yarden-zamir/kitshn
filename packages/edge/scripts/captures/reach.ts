@@ -1,5 +1,6 @@
 // K-507 and K-537: share chips on cards, and the relationship lens of a selected machine and a site, with the Reach
 // list in the panel. The demo has no circle of machines, so the scenario adds one around Mac and VPS.
+import { machineActorId } from "../../src/core/model.ts";
 import { DESKTOP, PHONE, type Scenario } from "../capture-views.ts";
 
 export default {
@@ -11,8 +12,8 @@ export default {
       color: "#FFB347",
       level: "use",
       members: [
-        { _tag: "machine", machineId: "mac" },
-        { _tag: "machine", machineId: "vps" },
+        { _tag: "actor", actorId: machineActorId("mac") },
+        { _tag: "actor", actorId: machineActorId("vps") },
       ],
       match: "any",
       needsPasskey: false,

@@ -13,7 +13,9 @@
     "./media": "./src/media.ts",
     "./templates": "./src/templates.ts",
     "./agent": "./src/agent.ts",
-    "./cli-error": "./src/cli-error.ts"
+    "./cli-error": "./src/cli-error.ts",
+    "./ops": "./src/ops.ts",
+    "./operations": "./src/operations.ts"
   },
   "publishConfig": {
     "exports": {

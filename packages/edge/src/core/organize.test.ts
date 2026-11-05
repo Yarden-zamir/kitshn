@@ -3,10 +3,11 @@ import { applyChanges, resolveEdits, shareDiff } from "./changes.ts";
 import type { Circle, Member, Point, Resource, ResourceKind, State } from "./model.ts";
 import { type DrawnSizes, NO_SIZES, organize } from "./organize.ts";
 import { type Box, USER_STACK, boxesOverlap, cardBox, headAngle, stacksOf } from "./place.ts";
+import { actorOf, chip, login } from "./testkit.ts";
 
 /** K-532: Organize keeps every share, moves nothing on a second run, and leaves no overlap. */
 
-const owner: Member = { _tag: "email", email: "owner@example.com" };
+const owner: Member = chip(login("owner@example.com"));
 const circle = (id: string, x: number, y: number, r: number, members: Array<Member> = [owner]): Circle => ({
   id,
   name: id,
@@ -81,6 +82,7 @@ function world(): State {
     stacks: new Map([["s", { id: "s", name: "Notes", members: ["s1", "s2"] }]]),
     paused: null,
     machines: new Map(),
+    actors: new Map([actorOf(login("owner@example.com"))].map((actor) => [actor.id, actor])),
   };
 }
 

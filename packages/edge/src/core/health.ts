@@ -69,6 +69,8 @@ export function healthNotices(
   machine: { readonly id: string; readonly name: string },
   report: HealthReport,
   others: ReadonlyMap<string, { readonly name: string; readonly online: boolean }>,
+  /** K-634: when kitshn last restarted the tunnel of a machine, or null. */
+  tunnelRestartedAt: (machineId: string) => number | null,
 ): Array<NotificationInput> {
   const notice = (key: string, since: number | null, title: string, text: string): NotificationInput => ({
     source: "health",
@@ -86,14 +88,51 @@ export function healthNotices(
     const target = others.get(check.machineId);
     if (check.failures < HEALTH_NOTIFY_AFTER || target?.online === false) return [];
     const name = target?.name ?? check.machineId;
+    const restartedAt = tunnelRestartedAt(check.machineId);
+    const restarted =
+      restartedAt !== null && check.since !== null && restartedAt >= check.since
+        ? ` kitshn restarted the tunnel of ${name} at ${new Date(restartedAt).toISOString().slice(11, 16)} UTC.`
+        : "";
     return [
       notice(
         `link:${check.provider}:${check.machineId}`,
         check.since,
         `${machine.name} cannot reach ${name} (${check.provider})`,
-        `${check.failures} checks in a row failed. ${check.error ?? ""}`,
+        `${check.failures} checks in a row failed. ${check.error ?? ""}${restarted}`,
       ),
     ];
   });
   return links;
+}
+
+/** K-634: kitshn restarts the tunnel of one machine at most this often. */
+export const TUNNEL_RESTART_GAP_MS = 30 * 60_000;
+
+/**
+ * K-634: the machines whose tunnel kitshn restarts after this report: a link of the reporter to them gave no answer at
+ * all (status null) `HEALTH_NOTIFY_AFTER` times in a row, that streak began after their last restart, and that restart
+ * is at least 30 minutes old. So a restart that did not help is not repeated while the streak lasts, because a link
+ * that stays dead for another reason (a DNS record) would else restart the tunnel every 30 minutes.
+ * Known limits, revisit when one shows up:
+ * - One reporter is enough, so a reporter whose own network drops its links can restart a healthy tunnel. Revisit
+ *   with 3 or more machines per owner, then ask for 2 reporters.
+ * - A null status also comes from a link that the reporter could not start (no machine token), which is rare.
+ * - The daemon's `/ready` watcher (K-632) does not see this state, because cloudflared still counts its connections.
+ */
+export function tunnelRestarts(
+  reporterId: string,
+  report: HealthReport,
+  restartable: (machineId: string) => boolean,
+  lastRestart: (machineId: string) => number | null,
+  now: number,
+): Array<string> {
+  const due = report.links.filter((check) => {
+    if (check.status !== null || check.failures < HEALTH_NOTIFY_AFTER || check.machineId === reporterId)
+      return false;
+    const last = lastRestart(check.machineId);
+    return (
+      last === null || (now - last >= TUNNEL_RESTART_GAP_MS && check.since !== null && last < check.since)
+    );
+  });
+  return [...new Set(due.map((check) => check.machineId))].filter(restartable);
 }

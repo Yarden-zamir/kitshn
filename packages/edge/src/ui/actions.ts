@@ -122,8 +122,8 @@ export interface ActionHandlers {
   readonly toggleStack: (key: string) => void;
   readonly renameStack: (stackId: string) => void;
   readonly removeApp: (resource: Resource) => void;
-  /** K-534: removes a game card with its doors and records, after a confirm. */
-  readonly removeGame: (resource: Resource) => void;
+  /** K-534: removes a port card with its doors and records, after a confirm. */
+  readonly removePortCard: (resource: Resource) => void;
   /** K-1623: moves the address of a provider card from what serves it now to kitshn, after a confirm. */
   readonly takeAddress: (resource: Resource) => void;
   /** K-1623: gives a taken address back to what served it before, after a confirm. */
@@ -213,6 +213,8 @@ function undoItemAction(ctx: ActionContext, h: ActionHandlers, item: Item): Arra
 
 export const MACHINE_TIPS = {
   restart: "Restart the daemon. The tunnel keeps running, so apps and sites keep serving.",
+  tunnelRestart:
+    "Restart the tunnel. Apps and sites of this machine stop serving for a few seconds. kitshn does this by itself when other machines get no answer from this one (K-634).",
   update: (version: string) => `Update daemon: install the daemon of release ${version}.`,
   autoUpdate:
     "Update daemon automatically: kitshn installs each new release on this machine, one machine at a time, when no provider is busy (K-626).",
@@ -871,6 +873,12 @@ export function cardActions(ctx: ActionContext, h: ActionHandlers, resource: Res
             tip: MACHINE_TIPS.restart,
             run: () => h.runJob(machine, { kind: "restart" }),
           },
+          {
+            id: "tunnel-restart",
+            label: "Restart tunnel",
+            tip: MACHINE_TIPS.tunnelRestart,
+            run: () => h.runJob(machine, { kind: "tunnel-restart" }),
+          },
           ...(isRelease(ctx.version)
             ? [
                 {
@@ -989,14 +997,14 @@ export function cardActions(ctx: ActionContext, h: ActionHandlers, resource: Res
             },
           ]
         : []),
-      ...(resource.kind === "game"
+      ...(resource.kind === "port"
         ? [
             {
-              id: "remove-game",
-              label: "Remove game…",
-              tip: `Remove ${resource.name}: its doors close for everyone at once, its records go, and its ports stay closed. kitshn asks first; there is no Undo.`,
+              id: "remove-port card",
+              label: "Remove ports…",
+              tip: `Remove ${resource.name}: its doors close for everyone at once, its records and shares go, and its ports stay closed. kitshn asks first; there is no Undo.`,
               danger: true as const,
-              run: () => h.removeGame(resource),
+              run: () => h.removePortCard(resource),
             },
           ]
         : []),
