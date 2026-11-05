@@ -37,13 +37,37 @@ import { zoneFor, zonesOf, zonesOrMain } from "./zones.ts";
 export { Kitshn } from "./kitshn.ts";
 
 /**
+ * K-1109: while a Compose job switches the app, a request that finds the origin down tries again every 2 seconds, up to
+ * 30 times. With the first try, the Cache API, the Durable Object and the page, that is 35 subrequests, inside the 50 of
+ * the free plan (K-004).
+ */
+const HOLD_TRIES = 30;
+const HOLD_STEP_MS = 2_000;
+/**
+ * K-1109: a held request goes to the origin again, so the Worker keeps its body in memory. Known limit: a body over
+ * 1 MiB, or one with no Content-Length (a chunked upload), goes once and is not held. Revisit when an app needs that.
+ */
+const HOLD_BODY_MAX = 1_048_576;
+
+/** K-1109: a way to send the request again, or null for a body that the Worker does not keep. */
+async function resendable(request: Request): Promise<(() => Request) | null> {
+  // No body: the same request goes again, also a WebSocket upgrade, whose 101 answer passes through as it is.
+  if (request.body === null) return () => request;
+  const length = Number(request.headers.get("content-length") ?? Number.NaN);
+  if (!Number.isInteger(length) || length < 0 || length > HOLD_BODY_MAX) return null;
+  const body = await request.arrayBuffer();
+  return () => new Request(request, { method: request.method, body });
+}
+
+/**
  * K-1106 to K-1110: the Worker runs on a live site only while kitshn has an offline route on it. It asks
  * the origin first, so a site that came back works at once, and answers with the offline page only
- * when the origin is down.
+ * when the origin is down and no Compose job of the site switches it.
  */
 async function offline(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
-  const origin = await fetch(request).catch(() => null);
+  const resend = await resendable(request);
+  const origin = await fetch(resend?.() ?? request).catch(() => null);
   if (origin && !originDown(origin.status)) return origin;
   const cache = caches.default;
   const key = new Request(`https://kitshn-offline.internal/${url.hostname}`);
@@ -54,10 +78,20 @@ async function offline(request: Request, env: Env, ctx: ExecutionContext): Promi
     );
     if (!answer.ok) return origin ?? new Response("The site is not reachable.", { status: 502 });
     info = (await answer.json()) as OfflineInfo;
-    // K-1110: the name and the last seen time stay 60 seconds in the Cache API.
+    // K-1110: the name and the last seen time stay 60 seconds in the Cache API. Known limit: so does `hold`, and a
+    // switch that starts within 60 seconds of an earlier offline answer shows the page. Revisit when that happens.
     ctx.waitUntil(
       cache.put(key, new Response(JSON.stringify(info), { headers: { "cache-control": "max-age=60" } })),
     );
+  }
+  if (info.hold && resend) {
+    await origin?.body?.cancel();
+    for (let tries = 0; tries < HOLD_TRIES; tries++) {
+      await scheduler.wait(HOLD_STEP_MS);
+      const again = await fetch(resend()).catch(() => null);
+      if (again && !originDown(again.status)) return again;
+      await again?.body?.cancel();
+    }
   }
   const page = await env.ASSETS.fetch(new Request(new URL("/offline.html", `https://${env.KITSHN_HOST}`)));
   const html = (await page.text())
@@ -283,6 +317,8 @@ interface OfflineInfo {
   readonly site: string;
   readonly reason: string;
   readonly seen: number | null;
+  /** K-1109: a Compose job of the site runs, so a request waits for the new app instead of the page. */
+  readonly hold: boolean;
 }
 
 /** K-817: a host on a further zone of KITSHN_ZONES. A broken KITSHN_ZONES counts as none here. */

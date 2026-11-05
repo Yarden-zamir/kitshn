@@ -6362,6 +6362,9 @@ export class Kitshn extends DurableObject<Env> {
       ) {
         this.settleNotifyToken(`job:${message.id}`, result.ok === true);
         this.settleInstance(command.project, machine.id, result.ok === true);
+        // K-1108: the offline route of the job goes when the site is up. K-817: a failed build gives up the DNS
+        // record that its plan made.
+        void this.scheduleAlarm();
       }
       // K-909: undo never brings a deleted volume back, so History records the delete as an action once it ran.
       if (job && command?.kind === "compose-volume-remove" && result.ok === true) {
@@ -6408,8 +6411,6 @@ export class Kitshn extends DurableObject<Env> {
         // K-821, K-827: a rollback of a run goes on once this card settled on every instance.
         if (command.kind === "compose-rollback" && command.group && row && settled !== "running")
           this.continueRollback(command.group, settled === "done" ? null : error);
-        // K-817: a failed build gives up the DNS record that its plan made.
-        if (result.ok !== true) void this.scheduleAlarm();
       }
       // K-628: History shows each update of a daemon, and the next automatic update can go.
       if (job && command?.kind === "update") {
@@ -7599,6 +7600,9 @@ export class Kitshn extends DurableObject<Env> {
           : {};
       send(socket, { type: "job", id: job.id, command, ...app });
       this.sql("UPDATE jobs SET state = 'sent', machine_id = ? WHERE id = ?", machine.id, job.id);
+      // K-1108, K-411: the offline route of the card goes on now, while the build runs, so it is in place at the stop.
+      // Known limit: a rollback builds nothing, so its stop can come before the route works. Revisit if one shows errors.
+      if (actionCard(command) !== null) void this.scheduleAlarm();
       // K-627: the rollout step follows the release that went out, and only later connections show its outcome.
       if (queuedCommand.kind === "update" && this.rollout().step?.jobId === job.id)
         this.saveRollout(stepSent(this.rollout(), this.env.KITSHN_VERSION, Date.now()));
@@ -8585,9 +8589,11 @@ export class Kitshn extends DurableObject<Env> {
     );
     // K-828: the main address needs its offline route only when its primary does, which means no instance is healthy.
     const wanted = new Set(
-      sitesNeedingRoutes(this.recordSites(this.protectedSites()), this.onlineMachines()).map(
-        (site) => site.address,
-      ),
+      sitesNeedingRoutes(
+        this.recordSites(this.protectedSites()),
+        this.onlineMachines(),
+        this.composeJobRuns(),
+      ).map((site) => site.address),
     );
     return [
       ...[...wanted]
@@ -8682,11 +8688,32 @@ export class Kitshn extends DurableObject<Env> {
     }
   }
 
+  /**
+   * K-1108, K-1109: whether a Compose deploy, redeploy or rollback of the site's card runs on the site's machine. A job
+   * that ended, failed or expired (DEPLOY_MS) counts no more, so a hung job keeps no route and holds no request.
+   */
+  private composeJobRuns() {
+    const running = new Set(
+      this.sql<{ machine_id: string | null; command: string }>(
+        "SELECT machine_id, command FROM jobs WHERE state = 'sent' AND expires_at > ?",
+        Date.now(),
+      ).flatMap((row) => {
+        const card = actionCard(JSON.parse(row.command) as Command);
+        return card !== null && row.machine_id !== null ? [`${row.machine_id}/${card}`] : [];
+      }),
+    );
+    return (site: Pick<LiveSite, "id" | "machineId">) => running.has(`${site.machineId}/${site.id}`);
+  }
+
   /** K-1108: a Worker route on a live site only while its origin is down, so healthy visits cost nothing. */
   private async syncRoutes(api: Api, budget: number) {
     let calls = 0;
     // A route that failed to go but is wanted again simply stays; its old error no longer applies.
-    for (const site of sitesNeedingRoutes(this.protectedSites(), this.onlineMachines())) {
+    for (const site of sitesNeedingRoutes(
+      this.protectedSites(),
+      this.onlineMachines(),
+      this.composeJobRuns(),
+    )) {
       this.sql(
         "UPDATE route_objects SET error = NULL, retry_at = 0 WHERE address = ? AND route_id != '' AND error IS NOT NULL",
         site.address,
@@ -8745,6 +8772,7 @@ export class Kitshn extends DurableObject<Env> {
       machine: machine?.name ?? "the machine",
       reason: offlineReason(machine?.name ?? "the machine", online),
       seen,
+      hold: this.composeJobRuns()(site),
     });
   }
 

@@ -90,7 +90,7 @@ Reference setup (K-1301): 5 machines, about 15 apps with about 5 open previews, 
 
 | Budget | Free limit | Expected use | How it stays low |
 | --- | --- | --- | --- |
-| Worker requests | 100,000 per day | about 550 per day for kitshn, plus at most about 6,000 uptime fetches of Worker apps (K-1126) | Access and tunnels carry app traffic. Static assets are free. The offline route exists only while an origin is down. |
+| Worker requests | 100,000 per day | about 550 per day for kitshn, plus at most about 6,000 uptime fetches of Worker apps (K-1126) | Access and tunnels carry app traffic. Static assets are free. The offline route exists only while an origin is down or a Compose job runs (K-1108). |
 | Worker CPU | 10 ms per request | under 5 ms for a snapshot of about 500 rows | Waiting on the Cloudflare API does not count. |
 | Subrequests | 50 per request | at most 40 per alarm run, plus at most 5 pushes | Alarm queue (K-406). The daily run keeps 10 spare. |
 | Durable Object requests | 100,000 per day | about 10,400 billed per day with the traffic of 2026-11-02 (11,000 measured before the 5-minute samples and alarm) | Pings use the auto response. WebSocket messages count 20:1. A daemon sends a sample every 5 minutes, and each minute only while someone watches a map (K-605). The alarm runs every 5 minutes for uptime (K-1126), and at least every 10 minutes for liveness (K-1107). A pending alarm never moves later. A wake sends no push again that the daemon applied (K-1608). |
