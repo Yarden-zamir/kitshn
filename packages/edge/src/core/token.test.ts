@@ -27,9 +27,9 @@ describe("the token link (K-1202)", () => {
 
   it("is the link of the bootstrap and of the install page", () => {
     expect(linkAfter(install, "TOKEN_LINK='", "'")).toBe(TOKEN_LINK);
-    expect(linkAfter(site, 'href="https://dash.cloudflare.com/', '"').replaceAll("&amp;", "&")).toBe(
-      TOKEN_LINK.slice("https://dash.cloudflare.com/".length),
-    );
+    expect(
+      linkAfter(site, 'id="token-link" href="https://dash.cloudflare.com/', '"').replaceAll("&amp;", "&"),
+    ).toBe(TOKEN_LINK.slice("https://dash.cloudflare.com/".length));
   });
 
   it("covers every permission that the bootstrap names", () => {
