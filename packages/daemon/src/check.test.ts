@@ -156,4 +156,22 @@ describe("check (K-721)", () => {
       until: NOW + 5000,
     });
   });
+
+  it("names the circles that hold the subject and a card of the provider, the smallest radius first (K-726)", async () => {
+    const her = [{ email: "her@example.com" }];
+    const circles = {
+      app: [
+        grant(her, "admin", { id: "big", r: 900 }),
+        grant(her, "read", { id: "partner-b", r: 200 }),
+        grant([{ email: "someone@else.org" }], "admin", { id: "tiny", r: 10 }),
+        grant(her, "read", { id: "ended", r: 5, endsAt: NOW - 1 }),
+        // A Worker before K-726 sends no radius, so that circle sorts last.
+        grant(her, "read", { id: "old" }),
+      ],
+      "th-1": [grant(her, "view", { id: "partner-a", r: 200 }), grant(her, "view", { id: "big", r: 900 })],
+    };
+    expect(await check(await jwt({ email: "her@example.com" }), { grants: circles })).toMatchObject({
+      circles: ["partner-a", "partner-b", "big", "old"],
+    });
+  });
 });

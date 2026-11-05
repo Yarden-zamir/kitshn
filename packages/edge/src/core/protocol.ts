@@ -165,6 +165,8 @@ export interface Snapshot {
   readonly machines: ReadonlyArray<MachineView>;
   /** K-717: the stored card setting values, by card id; a missing value is the default of its setting. */
   readonly cardSettings: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  /** K-709, K-726: the kinds of desired state that providers registered, each with the circles that have a part. */
+  readonly stateKinds: ReadonlyArray<{ readonly kind: string; readonly circles: ReadonlyArray<string> }>;
   /** K-707: the commands of the providers of each machine, by machine id. */
   readonly providerCommands: Readonly<
     Record<

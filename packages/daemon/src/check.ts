@@ -142,6 +142,8 @@ export async function checkSession(
     typeof payload["exp"] === "number" ? payload["exp"] * 1000 : context.now,
     context.syncedAt + STALE_MS,
   );
+  // K-726: a grant without `r` comes from a Worker before K-726, so its circle sorts last.
+  const circles = new Map<string, number>();
   for (const [resourceId, table] of Object.entries(context.grants)) {
     const kind = kinds.get(kindOf.get(resourceId) ?? "");
     if (!kind) continue;
@@ -151,6 +153,7 @@ export async function checkSession(
     for (const grant of table) {
       if (grant.endsAt !== null && grant.endsAt <= context.now) continue;
       if (!grantMatches(grant, subject, ip)) continue;
+      circles.set(grant.circle.id, grant.circle.r ?? Number.POSITIVE_INFINITY);
       if (!best || order.indexOf(grant.level) > order.indexOf(best.level)) best = grant;
     }
     if (!best) continue;
@@ -160,5 +163,8 @@ export async function checkSession(
   if (Object.keys(levels).length === 0) return refused(key, "no-access", "the subject has no level here.");
   const rights =
     subject.type === "machine" && context.execMachines.has(subject.id) ? (["exec"] as const) : [];
-  return { key, subject, levels, rights: [...rights], until };
+  const smallestFirst = [...circles]
+    .sort(([a, ra], [b, rb]) => ra - rb || (a < b ? -1 : a > b ? 1 : 0))
+    .map(([id]) => id);
+  return { key, subject, levels, rights: [...rights], until, circles: smallestFirst };
 }

@@ -146,6 +146,7 @@ export const AGENT_READ: Record<keyof Snapshot, "same" | { readonly hidden: stri
   pausedBy: "same",
   machines: "same",
   cardSettings: "same",
+  stateKinds: "same",
   providerCommands: "same",
   proposals: "same",
   botRuns: "same",

@@ -849,6 +849,17 @@ export const OPERATIONS = {
     effect: "changes",
     gate: { scope: "owner" },
   },
+  // K-726: a circle part reaches every person of the circle, so it asks the Owner, like the shared part.
+  "desired-set-circle": {
+    group: "safety",
+    title: `replace the desired state of one circle: kitshn desired-set-circle <circle> --body '{"kind":"<kind>","value":{...}}'`,
+    method: "PUT",
+    route: "/api/desired/:kind",
+    targetField: "circleId",
+    pick: ["value"],
+    effect: "changes",
+    gate: { scope: "owner" },
+  },
   "sign-out": {
     group: "account",
     title: "sign out everywhere (K-110)",

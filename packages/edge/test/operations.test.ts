@@ -257,6 +257,7 @@ const BODIES: Partial<Record<OpId, unknown>> = {
   "port-door-close": { address: "p1.example.com" },
   "desired-set-machine": { kind: "t3.settings", value: {} },
   "desired-set-shared": { value: {} },
+  "desired-set-circle": { kind: "t3.settings", value: {} },
   "repo-group-add": { match: "acme" },
   "github-way": { githubWay: "not-kitshn" },
   "passes-set": { on: false },
@@ -308,6 +309,7 @@ const BOTH_FAIL: Partial<Record<OpId, string>> = {
   desired: "needs a provider that registered the state",
   "desired-set-machine": "needs a provider that registered the state",
   "desired-set-shared": "needs a provider that registered the state",
+  "desired-set-circle": "needs a provider that registered the state",
   "sign-out": "calls the Cloudflare API",
   "sign-out-retry": "needs a sign-out with sessions left",
 };
@@ -440,7 +442,8 @@ it("runs each gated row through the owner code: it fails only where the owner fa
 /**
  * The rows of scope "never" before effects (K-1730): each asked the Owner always. `desired-set` is now two rows. Each
  * has a real scope or the scope "owner", so a target out of scope still waits, whatever "shares" says (K-1778).
- * `desired` has the scope "any" now, because desired state holds no secret (K-709).
+ * `desired` has the scope "any" now, because desired state holds no secret (K-709). `desired-set-circle` came later
+ * and is owner-only like the shared part (K-726).
  */
 const FORMER_NEVER: ReadonlyArray<OpId> = [
   "organize",
@@ -474,6 +477,7 @@ const FORMER_NEVER: ReadonlyArray<OpId> = [
   "jobs",
   "desired-set-machine",
   "desired-set-shared",
+  "desired-set-circle",
   "sign-out",
 ];
 

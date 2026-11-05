@@ -87,9 +87,16 @@ const pushAccess = (daemon: Daemon, tables: Record<string, unknown>) => {
 const grant = (
   rules: ReadonlyArray<object>,
   level: string,
-  more: { match?: "all"; endsAt?: number } = {},
+  more: { match?: "all"; endsAt?: number; r?: number } = {},
 ) => ({
-  circle: { id: `c-${level}`, name: level, match: more.match ?? "any", needsPasskey: false, rules },
+  circle: {
+    id: `c-${level}`,
+    name: level,
+    match: more.match ?? "any",
+    needsPasskey: false,
+    rules,
+    ...(more.r === undefined ? {} : { r: more.r }),
+  },
   level,
   endsAt: more.endsAt ?? null,
 });
@@ -256,7 +263,7 @@ export const SCENARIOS: ReadonlyArray<Scenario> = [
   {
     id: "C-9",
     title:
-      "check gives person, device, machine, IP and everyone their levels; a machine token never matches a device rule",
+      "check gives person, device, machine, IP and everyone their levels and circles; a machine token never matches a device rule",
     run: async (daemon) => {
       const client = await provider(daemon);
       pushAccess(daemon, {
@@ -264,6 +271,7 @@ export const SCENARIOS: ReadonlyArray<Scenario> = [
           grant(
             [{ email: "owner@example.com" }, { machine: { machineId: "mac", clientId: "mac.access" } }],
             "control",
+            { r: 500 },
           ),
           grant(
             [
@@ -275,7 +283,7 @@ export const SCENARIOS: ReadonlyArray<Scenario> = [
           grant([{ ip: "10.0.0.0/8" }], "view"),
           grant([{ email: "her@example.com" }, { unknown: "future" }], "control", { match: "all" }),
         ],
-        "th-1": [grant([{ everyone: true }], "view")],
+        "th-1": [grant([{ everyone: true }], "view", { r: 100 })],
       });
       await pushed(daemon, `grants:${PROVIDER}`);
       const header = async (claims: Record<string, unknown>, more?: { aud?: string; exp?: number }) => ({
@@ -311,6 +319,8 @@ export const SCENARIOS: ReadonlyArray<Scenario> = [
         levels: { app: "control", "th-1": "view" },
         rights: [],
         until: (byKey["person"] as { until: number }).until,
+        // K-726: the smallest radius first, not the order of the ids.
+        circles: ["c-view", "c-control"],
       });
       assert.deepEqual((byKey["machine"] as { levels: object }).levels, { app: "control", "th-1": "view" });
       assert.deepEqual((byKey["device"] as { levels: object }).levels, { app: "use", "th-1": "view" });

@@ -366,7 +366,9 @@ export type DaemonMessage =
       readonly requestId: string;
       readonly provider: string;
       readonly kind: string;
-      readonly part: "shared" | "machine";
+      readonly part: "shared" | "machine" | "circle";
+      /** K-726: the circle of a `circle` part. */
+      readonly circle?: string;
       readonly value: unknown;
       /** K-709: the provider's mark of this set; the next `desired` push of the kind carries it. */
       readonly rev?: string;
@@ -462,7 +464,7 @@ export type ServerToDaemon =
       /** K-709: only a desiredInit answer; false means the existing part won. */
       readonly initialized?: boolean;
     }
-  /** K-709: the shared part and this machine's part of one desired state, with the `rev` of its last set. */
+  /** K-709, K-726: the shared part, this machine's part and its circles' parts of one desired state, with the `rev` of its last set. */
   | {
       readonly type: "desired";
       readonly provider: string;

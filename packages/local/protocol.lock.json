@@ -1,5 +1,5 @@
 {
-  "version": "2.2.0",
+  "version": "2.3.0",
   "wire": {
     "type": "object",
     "properties": {
@@ -558,8 +558,13 @@
                 "type": "string",
                 "enum": [
                   "shared",
-                  "machine"
+                  "machine",
+                  "circle"
                 ]
+              },
+              "circle": {
+                "type": "string",
+                "maxLength": 64
               },
               "value": {},
               "rev": {
@@ -602,8 +607,13 @@
                 "type": "string",
                 "enum": [
                   "shared",
-                  "machine"
+                  "machine",
+                  "circle"
                 ]
+              },
+              "circle": {
+                "type": "string",
+                "maxLength": 64
               },
               "value": {},
               "rev": {
@@ -1849,7 +1859,10 @@
                       "type": "object",
                       "properties": {
                         "shared": {},
-                        "machine": {}
+                        "machine": {},
+                        "circles": {
+                          "type": "object"
+                        }
                       },
                       "required": [
                         "shared",
@@ -2123,6 +2136,12 @@
                               ]
                             }
                           ]
+                        },
+                        "circles": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       },
                       "required": [
@@ -3158,7 +3177,10 @@
                 "type": "object",
                 "properties": {
                   "shared": {},
-                  "machine": {}
+                  "machine": {},
+                  "circles": {
+                    "type": "object"
+                  }
                 },
                 "required": [
                   "shared",
@@ -4383,6 +4405,21 @@
                   },
                   "rules": {
                     "type": "array"
+                  },
+                  "r": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
+                          "Infinity",
+                          "-Infinity",
+                          "NaN"
+                        ]
+                      }
+                    ]
                   }
                 },
                 "required": [

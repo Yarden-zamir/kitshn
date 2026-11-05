@@ -15,7 +15,7 @@ import {
 import type { AccessState, MachineView, Snapshot } from "../core/protocol.ts";
 import type { ActionProgress } from "../core/progress.ts";
 import { ProgressSticker } from "./Progress.tsx";
-import { LEVEL_TIPS, MATCH_TIPS, MEMBER_HELP, PASSKEY_TIP } from "./Circle.tsx";
+import { CIRCLE_SETTINGS_TIP, LEVEL_TIPS, MATCH_TIPS, MEMBER_HELP, PASSKEY_TIP } from "./Circle.tsx";
 import { RightStickers } from "./ActorRights.tsx";
 import { type KindInfo, LEVEL_COLORS, LEVEL_TILTS, MEMBER_ICONS, kindInfo } from "./kinds.ts";
 import { KeySticker, MachineLive, PresenceSticker, QueuedSticker } from "./Machines.tsx";
@@ -171,6 +171,8 @@ interface Props {
   /** K-538: the action of each card that runs, failed, or ended a moment ago. */
   readonly progress: Snapshot["progress"];
   readonly machines: ReadonlyMap<string, MachineView>;
+  /** K-726: the desired state kinds, each with the circles that have their own part. */
+  readonly stateKinds: Snapshot["stateKinds"];
   readonly selection: Selection;
   readonly onSelect: (selection: Selection) => void;
   /** A tap selects a card on a phone, where the sheet that opens covers the lower half of the map. */
@@ -830,6 +832,9 @@ export function MapView(props: Props) {
             headAngle={headAngles.get(circle.id) ?? 0}
             zoomedOut={zoomedOut}
             hidden={props.hidden}
+            settings={props.stateKinds.flatMap((item) =>
+              item.circles.includes(circle.id) ? [item.kind] : [],
+            )}
             onMenu={(anchor) => props.onMenu({ target: { _tag: "circle", id: circle.id }, anchor })}
           />
         ))}
@@ -993,6 +998,8 @@ export function CircleView(props: {
   headAngle: number;
   zoomedOut: boolean;
   hidden: ReadonlySet<CardKind>;
+  /** K-726: the desired state kinds that this circle has its own part of. */
+  settings: ReadonlyArray<string>;
   onMenu: (anchor: Rect) => void;
 }) {
   const { circle } = props;
@@ -1048,6 +1055,15 @@ export function CircleView(props: {
         {circle.match === "all" ? (
           <span role="img" aria-label="All must match" data-tip={MATCH_TIPS.all}>
             ∧
+          </span>
+        ) : null}
+        {props.settings.length > 0 ? (
+          <span
+            class="sticker info"
+            style={{ "--tilt": "2deg" }}
+            data-tip={`${CIRCLE_SETTINGS_TIP} Set here: ${props.settings.join(", ")}. A click edits them.`}
+          >
+            settings
           </span>
         ) : null}
         <MoreButton name={circle.name} onOpen={props.onMenu} />
