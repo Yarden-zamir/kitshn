@@ -235,9 +235,16 @@ export function tunnelConfig(sites: ReadonlyArray<LiveSite>, accessOf: (site: Li
   };
 }
 
-/** K-1108: the live sites that need the offline route: the site is down, or its machine is offline. */
-export function sitesNeedingRoutes(sites: Iterable<LiveSite>, online: ReadonlySet<string>): Array<LiveSite> {
-  return [...sites].filter((site) => !site.up || !online.has(site.machineId));
+/**
+ * K-1108: the live sites that need the offline route: the site is down, its machine is offline, or a Compose job of
+ * its card runs on its machine, because that job stops the app before the new socket opens (K-818).
+ */
+export function sitesNeedingRoutes(
+  sites: Iterable<LiveSite>,
+  online: ReadonlySet<string>,
+  switching: (site: LiveSite) => boolean,
+): Array<LiveSite> {
+  return [...sites].filter((site) => !site.up || !online.has(site.machineId) || switching(site));
 }
 
 /** K-1106: the sentence of the offline page. */

@@ -1,4 +1,10 @@
-import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import {
+  createExecutionContext,
+  evictDurableObject,
+  runDurableObjectAlarm,
+  runInDurableObject,
+  waitOnExecutionContext,
+} from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, expect, it, vi } from "vitest";
 import type { Machine } from "../src/core/machine.ts";
@@ -6,6 +12,7 @@ import { type Circle, OWNER_CIRCLE_ID, type Resource } from "../src/core/model.t
 import { accessToken, send, stubAccessCerts } from "./access.ts";
 import { machine as machineChip, person, withActors } from "./actors.ts";
 import { setup as agentSetup } from "./machine-http.ts";
+import worker from "../src/worker/index.ts";
 
 /** K-1131: the site wizard only makes new sites, through one service that queues `kitshn expose --new`. */
 
@@ -449,5 +456,104 @@ it("never turns the site of a dropped instance into a card of its own (K-825)", 
     sql.exec("DELETE FROM old_addresses WHERE card_id = 'gone-card'");
     sql.exec("DELETE FROM jobs WHERE json_extract(command, '$.project') = 'stop-card'");
     kitshn.load();
+  });
+});
+
+it("keeps the offline route and holds requests while a Compose job switches the app (K-1108, K-1109)", async () => {
+  await setup();
+  const stub = env.KITSHN.getByName("kitshn");
+  const card: Resource = {
+    id: "app-hold-prod",
+    kind: "site.compose",
+    name: "hold",
+    addresses: ["hold.example.com"],
+    status: "running",
+    group: null,
+    machine: "vps",
+  };
+  type Kitshn = {
+    load(): void;
+    routeWork(): Array<{ address: string; add: boolean }>;
+    onlineMachines(): Set<string>;
+  };
+  // The machine counts as online without a daemon socket, so only the job decides the route.
+  const jobState = (jobs: string) =>
+    runInDurableObject(stub, (instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE jobs SET state = ? WHERE json_extract(command, '$.project') = ?",
+        jobs,
+        card.id,
+      );
+      const kitshn = instance as unknown as Kitshn;
+      kitshn.onlineMachines = () => new Set(["vps"]);
+      kitshn.load();
+      return kitshn.routeWork();
+    });
+  const hold = async () =>
+    (
+      (await (
+        await stub.fetch("https://kitshn.internal/internal/offline?address=hold.example.com")
+      ).json()) as {
+        hold: boolean;
+      }
+    ).hold;
+  await runInDurableObject(stub, (instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec("INSERT INTO resources (id, body) VALUES (?, ?)", card.id, JSON.stringify(card));
+    sql.exec(
+      `INSERT INTO live_sites (id, machine_id, name, address, target, dev, up, last_up, state)
+       VALUES (?, 'vps', 'hold', 'hold.example.com', 'unix:/run/hold.sock', 0, 1, 0, 'ok')`,
+      card.id,
+    );
+    sql.exec(
+      "INSERT OR REPLACE INTO access_objects (key, cf_id, aud, body, tried, error) VALUES (?, 'cf-app', 'aud', '{}', '', NULL)",
+      `app:${card.id}:hold.example.com`,
+    );
+    sql.exec(
+      `INSERT INTO jobs (machine_id, labels, command, state, created_at, expires_at, actor, visitor, output)
+       VALUES ('vps', '[]', ?, 'sent', 0, ?, '{}', '{}', '')`,
+      JSON.stringify({ kind: "compose", project: card.id, name: "hold", deployId: "d1" }),
+      Number.MAX_SAFE_INTEGER,
+    );
+  });
+  // The site is still up: the route comes with the job, before the switch, not after the next site check.
+  expect(await jobState("sent")).toEqual([{ address: "hold.example.com", add: true }]);
+  expect(await hold()).toBe(true);
+
+  // The origin answers 502 twice while the containers switch; the held GET reaches it the third time.
+  vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+  const methods: Array<string> = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    methods.push((input as Request).method);
+    return new Response("ok", { status: methods.length < 3 ? 502 : 200 });
+  });
+  const send = async (method: string) => {
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://hold.example.com/api/game", { method }) as Request<
+        unknown,
+        IncomingRequestCfProperties
+      >,
+      { ...env, ASSETS: { fetch: async () => new Response("{{site}}") } as unknown as Fetcher },
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    return response.status;
+  };
+  expect(await send("GET")).toBe(200);
+  expect(methods).toEqual(["GET", "GET", "GET"]);
+  // A write goes once: the app can save it and still answer 502, so a second try could save it twice.
+  methods.length = 0;
+  expect(await send("POST")).toBe(503);
+  expect(methods).toEqual(["POST"]);
+
+  // A job that ended, failed or hung past its expiry holds nothing and keeps no route on an up site.
+  expect(await jobState("done")).toEqual([]);
+  expect(await hold()).toBe(false);
+  await runInDurableObject(stub, (instance, state) => {
+    state.storage.sql.exec("DELETE FROM jobs WHERE json_extract(command, '$.project') = ?", card.id);
+    state.storage.sql.exec("DELETE FROM live_sites WHERE id = ?", card.id);
+    state.storage.sql.exec("DELETE FROM resources WHERE id = ?", card.id);
+    (instance as unknown as Kitshn).load();
   });
 });

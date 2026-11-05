@@ -211,9 +211,19 @@ describe("live sites (K-1104 to K-1108)", () => {
     ]);
   });
 
-  it("needs an offline route when the site is down or its machine is offline", () => {
-    const sites = [site("up", "on", true), site("down", "on", false), site("away", "off", true)];
-    expect(sitesNeedingRoutes(sites, new Set(["on"])).map((item) => item.name)).toEqual(["down", "away"]);
+  it("needs an offline route when the site is down, its machine is offline, or a Compose job switches it", () => {
+    const sites = [
+      site("up", "on", true),
+      site("down", "on", false),
+      site("away", "off", true),
+      site("deploying", "on", true),
+    ];
+    const switching = (item: LiveSite) => item.name === "deploying";
+    expect(sitesNeedingRoutes(sites, new Set(["on"]), switching).map((item) => item.name)).toEqual([
+      "down",
+      "away",
+      "deploying",
+    ]);
   });
 
   it("refuses names and targets that are not valid", () => {

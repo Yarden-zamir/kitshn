@@ -37,9 +37,23 @@ import { zoneFor, zonesOf, zonesOrMain } from "./zones.ts";
 export { Kitshn } from "./kitshn.ts";
 
 /**
+ * K-1109: while a Compose job switches the app, a request that finds the origin down tries again every 2 seconds, up to
+ * 30 times. With the first try, the Cache API, the Durable Object and the page, that is 35 subrequests, inside the 50 of
+ * the free plan (K-004).
+ */
+const HOLD_TRIES = 30;
+const HOLD_STEP_MS = 2_000;
+/**
+ * K-1109: only a request that is safe to send twice waits; a WebSocket upgrade is a GET. Known limit: a POST or other
+ * write during the switch gets the page, because the app can save it and still answer 502. Revisit when an app marks
+ * its writes safe to repeat.
+ */
+const HOLD_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
  * K-1106 to K-1110: the Worker runs on a live site only while kitshn has an offline route on it. It asks
  * the origin first, so a site that came back works at once, and answers with the offline page only
- * when the origin is down.
+ * when the origin is down and no Compose job of the site switches it.
  */
 async function offline(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
@@ -54,10 +68,20 @@ async function offline(request: Request, env: Env, ctx: ExecutionContext): Promi
     );
     if (!answer.ok) return origin ?? new Response("The site is not reachable.", { status: 502 });
     info = (await answer.json()) as OfflineInfo;
-    // K-1110: the name and the last seen time stay 60 seconds in the Cache API.
+    // K-1110: the name and the last seen time stay 60 seconds in the Cache API. Known limit: so does `hold`, and a
+    // switch that starts within 60 seconds of an earlier offline answer shows the page. Revisit when that happens.
     ctx.waitUntil(
       cache.put(key, new Response(JSON.stringify(info), { headers: { "cache-control": "max-age=60" } })),
     );
+  }
+  if (info.hold && HOLD_METHODS.has(request.method)) {
+    await origin?.body?.cancel();
+    for (let tries = 0; tries < HOLD_TRIES; tries++) {
+      await scheduler.wait(HOLD_STEP_MS);
+      const again = await fetch(request).catch(() => null);
+      if (again && !originDown(again.status)) return again;
+      await again?.body?.cancel();
+    }
   }
   const page = await env.ASSETS.fetch(new Request(new URL("/offline.html", `https://${env.KITSHN_HOST}`)));
   const html = (await page.text())
@@ -283,6 +307,8 @@ interface OfflineInfo {
   readonly site: string;
   readonly reason: string;
   readonly seen: number | null;
+  /** K-1109: a Compose job of the site runs, so a request waits for the new app instead of the page. */
+  readonly hold: boolean;
 }
 
 /** K-817: a host on a further zone of KITSHN_ZONES. A broken KITSHN_ZONES counts as none here. */
