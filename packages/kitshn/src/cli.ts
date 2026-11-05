@@ -84,6 +84,19 @@ async function call<T>(server: string, path: string, body: object): Promise<T> {
   return data as T;
 }
 
+/** STATUS_MISSES polls in a row, 3 seconds apart, outlast a short network drop between the runner and Cloudflare. */
+const STATUS_MISSES = 10;
+
+/** An error with its cause, so "fetch failed" also names why (for example ECONNRESET). */
+function errorText(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const cause =
+    error.cause instanceof Error
+      ? ("code" in error.cause && String(error.cause.code)) || error.cause.message
+      : null;
+  return cause ? `${String(error)}: ${cause}` : String(error);
+}
+
 /**
  * K-804, K-820: deploys each app of the repo as its own deploy, after the apps that it needs. When an app does not
  * deploy, the apps that need it do not deploy either, and kitshn records why on their cards. A closed pull request
@@ -116,7 +129,7 @@ async function deploy(server: string, dir: string) {
       await deployApp(server, dir, key, label, recipe, event, env, artifacts.get(key) ?? null, run);
       results.set(key, "done");
     } catch (error) {
-      const reason = error instanceof CliError ? error.message : String(error);
+      const reason = error instanceof CliError ? error.message : errorText(error);
       console.error(`kitshn: ${label}${reason}`);
       results.set(key, "failed");
       if (run.deployId)
@@ -395,16 +408,26 @@ async function deployCompose(
   const started = await call<{ machine: string }>(server, "/deploy/start", { deployId });
   console.log(`kitshn: building and starting on ${started.machine}`);
   let shown = 0;
+  let misses = 0;
   // The workflow stops at 40 minutes; a deploy that has not ended by then failed somewhere.
   const until = Date.now() + 38 * 60_000;
   for (;;) {
     if (Date.now() > until) fail("the deploy did not end within 38 minutes.");
     await new Promise((done) => setTimeout(done, 3000));
+    // K-813: a status read changes nothing, so a dropped connection or a Cloudflare error only costs one poll. Known
+    // limit: a refusal also fails only after STATUS_MISSES polls. Revisit if that delay ever matters.
     const status = await call<{ state: string; output: string; exitCode: number | null }>(
       server,
       "/deploy/status",
       { deployId },
-    );
+    ).catch((error: unknown) => {
+      misses++;
+      if (misses >= STATUS_MISSES) throw error;
+      console.error(`kitshn: the status read failed (${errorText(error)}); kitshn tries again.`);
+      return null;
+    });
+    if (status === null) continue;
+    misses = 0;
     if (status.output.length > shown) {
       process.stdout.write(status.output.slice(shown));
       shown = status.output.length;
