@@ -358,7 +358,15 @@ import {
 } from "../core/library.ts";
 import { badgeState } from "../core/badge.ts";
 import { listedApps } from "../core/listing.ts";
-import { commandsFor, machineBusy, providerCards, providerPushes, reachOf } from "../core/providers.ts";
+import {
+  circlePartKey,
+  commandsFor,
+  machineBusy,
+  providerCards,
+  providerCircles,
+  providerPushes,
+  reachOf,
+} from "../core/providers.ts";
 import {
   HEALTH_NOTIFY_AFTER,
   TUNNEL_RESTART_GAP_MS,
@@ -615,6 +623,11 @@ type MapTail =
 const attachmentOf = (socket: WebSocket) => socket.deserializeAttachment() as Attachment | null;
 
 type MapAttachment = Extract<Attachment, { kind: "map" }>;
+/** K-709, K-726: a provider's write of one part of a desired state, as the daemon forwards it. */
+type DesiredMessage = Extract<
+  DaemonMessage,
+  { type: "desiredSet" | "desiredInit" | "desiredSetCircle" | "desiredInitCircle" }
+>;
 
 /**
  * K-605: a map that sent `watching` within WATCH_LEASE_MS and not `visible: false` since. The lease also ends a map
@@ -4235,6 +4248,20 @@ export class Kitshn extends DurableObject<Env> {
       machines: [...this.state.machines.values()].map((machine) => this.machineView(machine)),
       // K-717: only of cards that exist; an undoable removal keeps the rows, so Undo brings the settings back.
       cardSettings: Object.fromEntries([...this.cardSettings].filter(([id]) => this.state.resources.has(id))),
+      stateKinds: [
+        ...new Set(
+          [...this.providerRegs.values()].flatMap((regs) =>
+            regs.flatMap((reg) => reg.kinds.flatMap((kind) => (kind.state === undefined ? [] : [kind.id]))),
+          ),
+        ),
+      ]
+        .sort()
+        .map((kind) => ({
+          kind,
+          circles: [...this.state.circles.keys()].filter((id) =>
+            this.desiredState.get(kind)?.has(circlePartKey(id)),
+          ),
+        })),
       providerCommands: Object.fromEntries(
         [...this.providerRegs].map(([machineId, regs]) => [
           machineId,
@@ -4555,7 +4582,7 @@ export class Kitshn extends DurableObject<Env> {
     return null;
   }
 
-  /** K-709: every part of one desired state, for the editor of the map and for agents. */
+  /** K-709, K-726: every part of one desired state, for the editor of the map and for agents. */
   private readDesired(kind: string) {
     const found = this.stateKind(kind);
     if (!found)
@@ -4565,25 +4592,44 @@ export class Kitshn extends DurableObject<Env> {
       kind,
       schema: found.state?.schema ?? null,
       shared: parts.get("") ?? null,
-      machines: Object.fromEntries([...parts].filter(([machineId]) => machineId !== "")),
+      machines: Object.fromEntries([...parts].filter(([key]) => this.state.machines.has(key))),
+      // K-726: a deleted circle keeps its part, so Undo brings it back; only parts of existing circles show.
+      circles: Object.fromEntries(
+        [...this.state.circles.keys()].flatMap((id) => {
+          const part = parts.get(circlePartKey(id));
+          return part === undefined ? [] : [[id, part]];
+        }),
+      ),
     });
   }
 
-  /** K-709: the map sets the shared part (the admin) or the part of one machine (control on that machine). */
+  /**
+   * K-709, K-726: the map sets the shared part or the part of a circle (the admin), or the part of one machine
+   * (control on that machine).
+   */
   private putDesired(caller: Caller, kind: string, body: unknown) {
     if (!this.stateKind(kind))
       return Response.json({ error: `No provider registered the state ${kind} (K-709).` }, { status: 404 });
     if (!isRecord(body) || !("value" in body))
       return Response.json(
-        { error: "Send { machineId, value }; machineId null sets the shared part." },
+        {
+          error:
+            "Send { machineId, value } or { circleId, value }; machineId null without circleId sets the shared part.",
+        },
         { status: 400 },
       );
     const machineId = typeof body["machineId"] === "string" ? body["machineId"] : null;
+    const circleId = typeof body["circleId"] === "string" ? body["circleId"] : null;
+    if (machineId !== null && circleId !== null)
+      return Response.json({ error: "Send machineId or circleId, not both." }, { status: 400 });
+    if (circleId !== null && !this.state.circles.has(circleId))
+      return Response.json({ error: `No circle "${circleId}" exists.` }, { status: 404 });
     if (machineId !== null && !this.state.machines.has(machineId))
       return Response.json({ error: `No machine "${machineId}" exists.` }, { status: 404 });
     if (machineId !== null && !this.callerControls(caller, machineId))
       return Response.json({ error: "A part of a machine needs control on that machine." }, { status: 403 });
-    const refusal = this.writeDesired(kind, machineId ?? "", body["value"], caller.actor);
+    const key = circleId !== null ? circlePartKey(circleId) : (machineId ?? "");
+    const refusal = this.writeDesired(kind, key, body["value"], caller.actor);
     return refusal ? Response.json({ error: refusal }, { status: 413 }) : Response.json({ ok: true });
   }
 
@@ -4660,20 +4706,44 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-709: a provider of the machine sets its part of a desired state, or the shared part. kitshn stores it and pushes
-   * it to every machine of the provider; History records it without Undo.
+   * K-709, K-726: where a provider's part goes: "" for the shared part, the machine id, or a circle that holds a card
+   * of the provider on this machine. A machine writes only the circle parts that it gets.
    */
-  private setDesiredFromMachine(
+  private desiredPartKey(
     machine: Machine,
-    message: Extract<DaemonMessage, { type: "desiredSet" | "desiredInit" }>,
-  ): string | null {
+    message: DesiredMessage,
+  ): { readonly key: string } | { readonly error: string } {
+    const circleType = message.type === "desiredSetCircle" || message.type === "desiredInitCircle";
+    if (circleType !== (message.part === "circle"))
+      return {
+        error:
+          "a circle part comes as desiredSetCircle or desiredInitCircle, and only a circle part (K-726).",
+      };
+    if (message.part === "shared") return { key: "" };
+    if (message.part === "machine") return { key: machine.id };
+    if (message.part !== "circle")
+      return { error: `the part ${String(message.part)} is not shared, machine or circle.` };
+    const circle = typeof message.circle === "string" ? this.state.circles.get(message.circle) : undefined;
+    if (!circle) return { error: "a circle part names a circle that exists (K-726)." };
+    if (!providerCircles(this.state, machine.id, message.provider).has(circle.id))
+      return { error: `${circle.name} holds no card of ${message.provider} on ${machine.name} (K-726).` };
+    return { key: circlePartKey(circle.id) };
+  }
+
+  /**
+   * K-709, K-726: a provider of the machine sets its part of a desired state, a circle part or the shared part. kitshn
+   * stores it and pushes it to every machine of the provider; History records it without Undo.
+   */
+  private setDesiredFromMachine(machine: Machine, message: DesiredMessage): string | null {
     const kinds =
       this.providerRegs.get(machine.id)?.find((item) => item.name === message.provider)?.kinds ?? [];
+    const part = this.desiredPartKey(machine, message);
+    if ("error" in part) return part.error;
     return (
       desiredProblem(kinds, message.kind, message.value) ??
       this.writeDesired(
         message.kind,
-        message.part === "shared" ? "" : machine.id,
+        part.key,
         message.value,
         { _tag: "machine", machineId: machine.id, name: machine.name },
         typeof message.rev === "string" ? message.rev.slice(0, 64) : null,
@@ -4681,7 +4751,10 @@ export class Kitshn extends DurableObject<Env> {
     );
   }
 
-  /** K-709: stores one part of a desired state, or says why not. A part of null clears it. */
+  /**
+   * K-709, K-726: stores one part of a desired state, or says why not. A part of null clears it. `machineId` is "" for
+   * the shared part and `circlePartKey` for a circle part.
+   */
   private writeDesired(
     kind: string,
     machineId: string,
@@ -4702,10 +4775,13 @@ export class Kitshn extends DurableObject<Env> {
       this.pushGrants();
       return null;
     }
+    const circle = [...this.state.circles.values()].find((item) => circlePartKey(item.id) === machineId);
     const where =
       machineId === ""
         ? "the shared part"
-        : `the part of ${this.state.machines.get(machineId)?.name ?? machineId}`;
+        : circle
+          ? `the part of the circle ${circle.name}`
+          : `the part of ${this.state.machines.get(machineId)?.name ?? machineId}`;
     this.ctx.storage.transactionSync(() => {
       if (rev === null) this.sql("DELETE FROM desired_revs WHERE kind = ?", kind);
       else this.sql("INSERT OR REPLACE INTO desired_revs (kind, rev) VALUES (?, ?)", kind, rev);
@@ -6132,7 +6208,10 @@ export class Kitshn extends DurableObject<Env> {
     } else if (message.type === "execFrame" && attachment.check === "signed") {
       this.execRelay(socket, machine, message);
     } else if (
-      (message.type === "desiredSet" || message.type === "desiredInit") &&
+      (message.type === "desiredSet" ||
+        message.type === "desiredInit" ||
+        message.type === "desiredSetCircle" ||
+        message.type === "desiredInitCircle") &&
       typeof message.kind === "string"
     ) {
       // K-709: the provider gets kitshn's own answer, also a refusal.
@@ -6140,7 +6219,7 @@ export class Kitshn extends DurableObject<Env> {
       let error: string | null;
       let initialized: boolean | undefined;
       try {
-        if (message.type === "desiredInit") {
+        if (message.type === "desiredInit" || message.type === "desiredInitCircle") {
           // K-709: a single storage step arbitrates with owner edits. Empty
           // objects and disabled values are present too; never replace them.
           const result = this.ctx.storage.transactionSync(() => {
@@ -6148,11 +6227,13 @@ export class Kitshn extends DurableObject<Env> {
               this.providerRegs.get(machine.id)?.find((item) => item.name === message.provider)?.kinds ?? [];
             const problem = desiredProblem(kinds, message.kind, message.value);
             if (problem) return { error: problem, initialized: false };
+            const part = this.desiredPartKey(machine, message);
+            if ("error" in part) return { error: part.error, initialized: false };
             const exists =
               this.sql(
                 "SELECT 1 FROM desired_state WHERE kind = ? AND machine_id = ?",
                 message.kind,
-                message.part === "shared" ? "" : machine.id,
+                part.key,
               ).length > 0;
             if (exists) return { error: null, initialized: false };
             const error = this.setDesiredFromMachine(machine, message);
@@ -11828,6 +11909,9 @@ export class Kitshn extends DurableObject<Env> {
    */
   private opMissing(op: Operation, target: string, body: unknown): string | null {
     if (isPersonGate(op.gate)) return null;
+    // K-726: a target that names a circle refuses an unknown one, also in the scope "owner".
+    if (op.targetField === "circleId" && !this.state.circles.has(target))
+      return `There is no such circle: "${target}".`;
     const card = (id: string) =>
       this.state.resources.has(id) || this.sql("SELECT 1 FROM library WHERE id = ?", id).length > 0;
     switch (op.gate.scope) {

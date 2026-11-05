@@ -152,7 +152,9 @@ export type Ask = typeof Ask.Type;
 const DesiredChange = {
   provider: ProviderName,
   kind: Schema.String.check(Schema.isMaxLength(64)),
-  part: Schema.Literals(["shared", "machine"]),
+  part: Schema.Literals(["shared", "machine", "circle"]),
+  /** K-726: the circle of a `circle` part; the circle must hold a card of the provider on this machine. */
+  circle: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(64))),
   value: Schema.Unknown,
   /** K-709: the provider's mark of this set; the next `desired` event of the kind carries the last stored one. */
   rev: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(64))),
@@ -251,7 +253,7 @@ export const Request = Schema.Union([
     uid: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   }),
   /**
-   * K-709: a provider sets the part of a desired state of this machine, or the shared part. kitshn stores it and pushes
+   * K-709, K-726: a provider sets the part of a desired state of this machine, of a circle, or the shared part. kitshn stores it and pushes
    * it to every machine of the provider. `desired-init` writes only an absent part, including when another provider
    * or the owner writes between registration and this request. Only the registered connection sends either.
    */
@@ -510,6 +512,11 @@ export const Answer = Schema.Union([
           /** `exec` when the subject is a machine whose "runs" covers this machine at automatic. */
           rights: Schema.Array(Schema.Literal("exec")),
           until: Schema.Number,
+          /**
+           * K-726: the circles that hold the subject and a card of this provider on this machine, the smallest first.
+           * A daemon before K-726 omits it.
+           */
+          circles: Schema.optionalKey(Schema.Array(Schema.String)),
         }),
         /** The headers name no one: not a kitshn visitor. */
         Schema.Struct({ key: Schema.String, anonymous: Schema.Literal(true) }),

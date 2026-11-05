@@ -24,6 +24,7 @@ import {
   levelName,
   providerCardId,
   shareKey,
+  sharesOf,
 } from "./model.ts";
 
 /**
@@ -133,6 +134,7 @@ export function grantsOf(state: State, card: Resource, now: number): Array<Grant
         name: circle.name,
         match: circle.match,
         needsPasskey: circle.needsPasskey,
+        r: circle.r,
         rules,
       },
       level: levelName(card, share.level),
@@ -140,6 +142,25 @@ export function grantsOf(state: State, card: Resource, now: number): Array<Grant
     });
   }
   return grants;
+}
+
+/** K-726: the key of a circle part in a desired state's parts. A machine id never holds a colon (`machineIdFor`). */
+export const circlePartKey = (circleId: string) => `circle:${circleId}`;
+
+/**
+ * K-726: the circles that hold a card of one provider on a machine, so its circle parts go there. A pause or an end
+ * date closes access, not the part, so these count every share.
+ */
+export function providerCircles(state: State, machineId: string, provider: string): Set<string> {
+  const circles = new Set<string>();
+  for (const card of state.resources.values())
+    if (
+      card.machine === machineId &&
+      card.provider?.name === provider &&
+      card.provider.droppedAt === undefined
+    )
+      for (const share of sharesOf(state, card)) circles.add(share.circle.id);
+  return circles;
 }
 
 /** K-706: the grant table of each card of one provider of a machine, by the provider's own id of the resource. */
@@ -205,9 +226,9 @@ export type ProviderPush =
     };
 
 /**
- * K-706, K-709, K-717: everything that the providers of one machine get: the grant tables and card settings of each
- * provider, and the shared part and this machine's part of each desired state. `desired` holds the parts of each kind
- * by machine id, with "" for the shared part; `settings` the stored values by card id.
+ * K-706, K-709, K-717, K-726: everything that the providers of one machine get: the grant tables and card settings of each
+ * provider, and the shared part, this machine's part and its circles' parts of each desired state. `desired` holds the parts of each kind
+ * by machine id, with "" for the shared part and `circlePartKey` for a circle; `settings` the stored values by card id.
  */
 export function providerPushes(
   state: State,
@@ -226,6 +247,8 @@ export function providerPushes(
   },
 ): Array<ProviderPush> {
   return regs.flatMap(({ name, kinds }) => {
+    let heldCircles: Set<string> | null = null;
+    const held = () => (heldCircles ??= providerCircles(state, machineId, name));
     const values: Record<string, Record<string, string>> = {};
     for (const card of state.resources.values())
       if (card.machine === machineId && card.provider?.name === name && card.provider.settings.length > 0)
@@ -263,17 +286,28 @@ export function providerPushes(
       },
       ...kinds
         .filter((kind) => kind.state !== undefined)
-        .map((kind): ProviderPush => ({
-          key: pushKey.desired(name, kind.id),
-          type: "desired",
-          provider: name,
-          kind: kind.id,
-          state: {
-            shared: desired.get(kind.id)?.get("") ?? null,
-            machine: desired.get(kind.id)?.get(machineId) ?? null,
-          },
-          rev: access.revOf(kind.id),
-        })),
+        .map((kind): ProviderPush => {
+          const parts = desired.get(kind.id);
+          const circles = Object.fromEntries(
+            [...held()].sort().flatMap((id) => {
+              const part = parts?.get(circlePartKey(id));
+              return part === undefined ? [] : [[id, part]];
+            }),
+          );
+          return {
+            key: pushKey.desired(name, kind.id),
+            type: "desired",
+            provider: name,
+            kind: kind.id,
+            state: {
+              shared: parts?.get("") ?? null,
+              machine: parts?.get(machineId) ?? null,
+              // K-726: the push grows only when a circle part exists.
+              ...(Object.keys(circles).length > 0 ? { circles } : {}),
+            },
+            rev: access.revOf(kind.id),
+          };
+        }),
     ];
   });
 }

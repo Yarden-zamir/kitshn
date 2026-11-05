@@ -2728,6 +2728,7 @@ function connect(config: JoinSecrets) {
           });
       } else if (message.type === "accepted") {
         accepted(`with the key ${message.fingerprint}`);
+        kitshnProtocol = message.protocol ?? legacyProtocol(PROVIDER_PROTOCOL);
         // K-724: kitshn refuses or tolerates this daemon by the same rule; the daemon only names it in its log.
         const kitshn = matchProtocol(
           { name: "this daemon", version: KITSHN_PROTOCOL, update: ROLLOUT_FIX },
@@ -3404,6 +3405,9 @@ function execSudoFor(uid: number): string | null {
   return kept.name;
 }
 
+/** K-724, K-726: the protocol that kitshn named in its last `accepted`; a kitshn before K-724 names none. */
+let kitshnProtocol = legacyProtocol(PROVIDER_PROTOCOL);
+
 type Push = Extract<ServerToDaemon, { type: "grants" | "desired" | "settings" | "reach" | "access" }>;
 
 /** K-1608: where the daemon saves a push of kitshn. */
@@ -3659,21 +3663,28 @@ async function answerLocal(
     const problem = desiredProblem(kinds, request.kind, request.value);
     if (problem) throw new Error(problem);
     // kitshn checks again when it writes; the provider gets that answer, not only the daemon's.
-    return forwardDesired(request, providerReport.flush, (change) => {
-      const requestId = crypto.randomUUID();
-      return new Promise((resolve) => {
-        // Like an ask, a request waits at most 60 seconds for kitshn.
-        const timer = setTimeout(() => {
-          answerWaiters.delete(requestId);
-          resolve({ error: "kitshn did not answer within 60 seconds; the state may or may not be stored." });
-        }, 60_000);
-        answerWaiters.set(requestId, (error, initialized) => {
-          clearTimeout(timer);
-          resolve({ error, ...(initialized === undefined ? {} : { initialized }) });
+    return forwardDesired(
+      request,
+      providerReport.flush,
+      (change) => {
+        const requestId = crypto.randomUUID();
+        return new Promise((resolve) => {
+          // Like an ask, a request waits at most 60 seconds for kitshn.
+          const timer = setTimeout(() => {
+            answerWaiters.delete(requestId);
+            resolve({
+              error: "kitshn did not answer within 60 seconds; the state may or may not be stored.",
+            });
+          }, 60_000);
+          answerWaiters.set(requestId, (error, initialized) => {
+            clearTimeout(timer);
+            resolve({ error, ...(initialized === undefined ? {} : { initialized }) });
+          });
+          sendOn(ws, { requestId, ...change });
         });
-        sendOn(ws, { requestId, ...change });
-      });
-    });
+      },
+      kitshnProtocol,
+    );
   }
   if (request.type === "provider-rebind") return rebindProvider(request);
   if (request.type === "local-users") return editLocalUsers(request);

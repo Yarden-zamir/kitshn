@@ -40,6 +40,7 @@ import type { ComponentChildren } from "preact";
 import { levelEdit } from "./actions.ts";
 import { type DeviceInvite, InviteDialog } from "./Invite.tsx";
 import { whenText } from "./time.ts";
+import type { Snapshot } from "../core/protocol.ts";
 
 /** The sticker of each member kind: its name and a light sticker colour with black text. */
 const MEMBER_STICKERS: Record<MemberKind, { readonly label: string; readonly color: string }> = {
@@ -646,6 +647,147 @@ function AddMember(props: {
   );
 }
 
+/** K-726: the settings tip of a circle, on its head sticker and its editor section. */
+export const CIRCLE_SETTINGS_TIP =
+  "Settings: provider settings, such as T3 sidebar tabs, for the people of this circle on the machines of its cards. They win over the shared and machine values; in nested circles, the smallest circle wins (K-726).";
+
+/**
+ * K-726: the circle part of each desired state. Only the admin writes one, so an agent waits for the Owner, as for the
+ * shared part. Known limit: a JSON editor, not controls from the provider's schema; revisit when the map edits
+ * desired state with generic controls (K-709).
+ */
+function CircleSettings(props: { circle: Circle; stateKinds: Snapshot["stateKinds"] }) {
+  const { circle } = props;
+  const [open, setOpen] = useState<string | null>(null);
+  const [text, setText] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const opened = useRef<string | null>(null);
+  const errorId = useId();
+  const path = (kind: string) => `/api/desired/${encodeURIComponent(kind)}`;
+  const edit = async (kind: string) => {
+    opened.current = kind;
+    setOpen(kind);
+    setText(null);
+    setError(null);
+    const read = await callApi<{ circles: Record<string, unknown> }>("GET", path(kind));
+    if (opened.current !== kind) return;
+    if ("error" in read) return setError(read.error);
+    setText(JSON.stringify(read.circles[circle.id] ?? {}, null, 2));
+  };
+  const save = async (kind: string, value: unknown) => {
+    setBusy(true);
+    const answer = await callApi<{ ok: true }>("PUT", path(kind), { circleId: circle.id, value });
+    setBusy(false);
+    if ("error" in answer) return setError(answer.error);
+    opened.current = null;
+    setOpen(null);
+  };
+  return (
+    <>
+      <h3 class="label" data-tip={CIRCLE_SETTINGS_TIP}>
+        Settings
+      </h3>
+      <p class="help">
+        The people of {circle.name} get these values on the machines of its cards. They win over the shared
+        and machine values; in nested circles, the smallest circle wins.
+      </p>
+      <ul class="circle-settings">
+        {props.stateKinds.map(({ kind, circles }) => {
+          const set = circles.includes(circle.id);
+          return (
+            <li key={kind}>
+              <div class="row">
+                <code>{kind}</code>
+                <span
+                  class={`sticker${set ? " ok" : ""}`}
+                  data-tip={
+                    set
+                      ? `Set: ${circle.name} has its own ${kind}.`
+                      : `Not set: the people of ${circle.name} get the shared and machine values of ${kind}.`
+                  }
+                >
+                  {set ? "set" : "not set"}
+                </span>
+                <button
+                  type="button"
+                  class="btn"
+                  aria-expanded={open === kind}
+                  data-tip={`Edit the ${kind} of ${circle.name} as JSON.`}
+                  onClick={() => {
+                    if (open !== kind) return void edit(kind);
+                    opened.current = null;
+                    setOpen(null);
+                  }}
+                >
+                  {open === kind ? "Close" : "Edit"}
+                </button>
+              </div>
+              {open === kind ? (
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    let value: unknown;
+                    try {
+                      value = JSON.parse(text ?? "");
+                    } catch {
+                      return setError('Type a JSON value, for example { "client": { "sidebarTabs": [] } }.');
+                    }
+                    void save(kind, value);
+                  }}
+                >
+                  {/* A failed read leaves no text: show only its error, so the editor never waits for nothing. */}
+                  {text === null && error !== null ? null : (
+                    <textarea
+                      class="field mono"
+                      rows={8}
+                      aria-label={`${kind} of ${circle.name}`}
+                      aria-invalid={error !== null}
+                      aria-describedby={error !== null ? errorId : undefined}
+                      data-tip={`The ${kind} of ${circle.name}, as JSON. The provider checks each value that it applies.`}
+                      disabled={text === null}
+                      value={text ?? "Loading…"}
+                      onInput={(event) => {
+                        setText(event.currentTarget.value);
+                        setError(null);
+                      }}
+                    />
+                  )}
+                  {error !== null ? (
+                    <p class="error" id={errorId}>
+                      {error}
+                    </p>
+                  ) : null}
+                  <div class="row">
+                    <button
+                      class="btn"
+                      disabled={busy || text === null}
+                      data-tip={`Save the ${kind} of ${circle.name}. History records it.`}
+                    >
+                      Save
+                    </button>
+                    {set ? (
+                      <button
+                        type="button"
+                        class="btn"
+                        disabled={busy}
+                        data-tip={`Clear: the people of ${circle.name} get the shared and machine values again.`}
+                        onClick={() => void save(kind, null)}
+                      >
+                        Clear
+                      </button>
+                    ) : null}
+                  </div>
+                </form>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </>
+  );
+}
+
 export function CircleEditor(props: {
   circle: Circle;
   state: State;
@@ -656,6 +798,7 @@ export function CircleEditor(props: {
   onSecret: (secret: DeviceSecret) => void;
   /** K-539: a machine joins this circle through the one join of `joinPlan`. */
   onJoinMachine: (machineId: string) => void;
+  stateKinds: Snapshot["stateKinds"];
 }) {
   const { circle, state } = props;
   // Edits that finish after a wait (a new device token) build on the circle as it is then, not as it was.
@@ -961,6 +1104,8 @@ export function CircleEditor(props: {
         })}
         {inside.length === 0 ? <li class="help">Nothing yet. Drag cards into the circle.</li> : null}
       </ul>
+
+      {props.stateKinds.length > 0 ? <CircleSettings circle={circle} stateKinds={props.stateKinds} /> : null}
 
       <div class="danger-zone">
         <h3 class="label">Danger</h3>

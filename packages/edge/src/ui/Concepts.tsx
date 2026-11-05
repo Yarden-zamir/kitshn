@@ -154,6 +154,7 @@ const ring = (state: State, each: Circle) => (
     headAngle={0}
     zoomedOut={false}
     hidden={new Set()}
+    settings={[]}
     onMenu={noop}
   />
 );

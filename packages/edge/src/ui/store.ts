@@ -253,7 +253,7 @@ function request(message: object, requestId: string = crypto.randomUUID()): Prom
 
 /** A JSON call to the admin API. Returns the body, or an error with the reason. */
 export async function callApi<T>(
-  method: "GET" | "POST" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
   body?: object,
 ): Promise<T | { error: string }> {

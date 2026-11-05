@@ -1820,6 +1820,7 @@ export function App() {
           onToggleStack={toggleStack}
           onCommit={(edits, diffs) => void commit(edits, diffs)}
           machines={machines}
+          stateKinds={store.snapshot.stateKinds}
           onMenu={setMenu}
         />
       ) : null}
@@ -1976,6 +1977,7 @@ export function App() {
               previewCards={previewCards}
               pullRequests={pullRequests}
               cardSettings={store.snapshot.cardSettings}
+              stateKinds={store.snapshot.stateKinds}
               providerCommands={store.snapshot.providerCommands}
               onSetCardSetting={(card, key, value) => void setCardSetting(card, key, value)}
               deployNotes={store.snapshot.deployNotes}
@@ -2519,6 +2521,8 @@ function Panel(props: {
   uptime: Snapshot["uptime"];
   /** K-717, K-1625: the card settings and the provider commands of the snapshot. */
   cardSettings: Snapshot["cardSettings"];
+  /** K-726: the desired state kinds, for the settings of a circle. */
+  stateKinds: Snapshot["stateKinds"];
   providerCommands: Snapshot["providerCommands"];
   onSetCardSetting: (card: Resource, key: string, value: string) => void;
   warnings: ReadonlyArray<string>;
@@ -2560,6 +2564,7 @@ function Panel(props: {
         onDelete={props.onDeleteCircle}
         onSelectCard={props.onSelectCard}
         onSecret={props.onSecret}
+        stateKinds={props.stateKinds}
         onJoinMachine={(id) => {
           const machine = state.resources.get(id);
           if (machine) props.onJoinCircle(machine, circle);

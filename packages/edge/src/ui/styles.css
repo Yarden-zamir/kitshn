@@ -2898,3 +2898,31 @@ details.raw[open] > summary::before {
 .card.sel .machine-label.fact {
   color: inherit;
 }
+/* K-726: the settings of a circle, in the circle panel. */
+.circle-settings {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+.circle-settings .row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.circle-settings code {
+  min-width: 0;
+  margin-right: auto;
+  overflow-wrap: anywhere;
+}
+.circle-settings form {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+.circle-settings textarea {
+  width: 100%;
+  font: 0.85rem var(--mono);
+}

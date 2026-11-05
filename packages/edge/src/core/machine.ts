@@ -359,14 +359,20 @@ export type DaemonMessage =
   | { readonly type: "ask"; readonly requestId: string; readonly ask: AskWire }
   /** K-704: every provider of the machine with its kinds, commands and resources, on connect and on each change. */
   | { readonly type: "providers"; readonly providers: ReadonlyArray<ProviderReport> }
-  /** K-709: a provider set a part of a desired state; kitshn stores it and pushes it to every machine. */
+  /**
+   * K-709: a provider set a part of a desired state; kitshn stores it and pushes it to every machine. K-726: a circle
+   * part comes only as `desiredSetCircle` or `desiredInitCircle`, which an older Worker drops instead of filing it as
+   * the machine part.
+   */
   | {
-      readonly type: "desiredSet" | "desiredInit";
+      readonly type: "desiredSet" | "desiredInit" | "desiredSetCircle" | "desiredInitCircle";
       /** kitshn answers with `requestAnswer` and this id. */
       readonly requestId: string;
       readonly provider: string;
       readonly kind: string;
-      readonly part: "shared" | "machine";
+      readonly part: "shared" | "machine" | "circle";
+      /** K-726: the circle of a `circle` part. */
+      readonly circle?: string;
       readonly value: unknown;
       /** K-709: the provider's mark of this set; the next `desired` push of the kind carries it. */
       readonly rev?: string;
@@ -462,7 +468,7 @@ export type ServerToDaemon =
       /** K-709: only a desiredInit answer; false means the existing part won. */
       readonly initialized?: boolean;
     }
-  /** K-709: the shared part and this machine's part of one desired state, with the `rev` of its last set. */
+  /** K-709, K-726: the shared part, this machine's part and its circles' parts of one desired state, with the `rev` of its last set. */
   | {
       readonly type: "desired";
       readonly provider: string;

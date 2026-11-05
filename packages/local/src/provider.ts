@@ -389,6 +389,8 @@ export const Grant = Schema.Struct({
     match: Schema.Literals(["any", "all"]),
     needsPasskey: Schema.Boolean,
     rules: Schema.Array(GrantRule),
+    /** K-726: the radius of the circle on the map, so `check` orders circles by size. A Worker before K-726 omits it. */
+    r: Schema.optionalKey(Schema.Number),
   }),
   level: Schema.String,
   endsAt: Schema.NullOr(Schema.Number),
@@ -646,8 +648,16 @@ export function reportProblem(
   return first ? `${first.path}: ${first.reason}` : null;
 }
 
-/** K-709: the parts of a desired state that one machine gets: the shared part and its own; null where none is set. */
-export const DesiredParts = Schema.Struct({ shared: Schema.Unknown, machine: Schema.Unknown });
+/**
+ * K-709, K-726: the parts of a desired state that one machine gets: the shared part and its own, null where none is
+ * set, and the part of each circle that holds a card of the provider on the machine, by circle id. `circles` is absent
+ * when none of these circles has a part.
+ */
+export const DesiredParts = Schema.Struct({
+  shared: Schema.Unknown,
+  machine: Schema.Unknown,
+  circles: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+});
 export type DesiredParts = typeof DesiredParts.Type;
 
 /** K-717: card setting values, by the provider's resource id, then by setting id. */

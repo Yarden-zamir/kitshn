@@ -529,6 +529,7 @@ function MapParts(props: { state: State }) {
             headAngle={0}
             zoomedOut={false}
             hidden={new Set()}
+            settings={[]}
             onMenu={noop}
           />
           {card(site, at(0, 30))}
