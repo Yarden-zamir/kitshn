@@ -44,7 +44,7 @@ An app repo holds a recipe, `kitshn.config.ts`, and a workflow file. This file h
   - The daemon starts the app with the variables of KitSHn 1, so a KitSHn 1 `compose.yml` works unchanged, within the limits of K-818. KitSHn 1 deploy credentials never reach the app.
   - A machine runs one Compose job per app at a time.
   - The files leave R2 when the job ends, and an R2 rule removes any that remain after a day.
-- **K-813** The Actions step polls the deploy state every few seconds until it ends, then prints the job output and the address. The daemon sends the output at the end of the job, not line by line. Revisit when builds need live logs.
+- **K-813** The Actions step polls the deploy state every few seconds until it ends, then prints the job output and the address. A read that fails (a dropped connection or a Cloudflare error) fails the step only after 10 in a row, because a read changes nothing. The daemon sends the output at the end of the job, not line by line. Revisit when builds need live logs.
 - **K-814** The deploy ends with a route check: kitshn requests the address and records the status and content type.
 - **K-815** Planned: `kitshn try` builds and runs a recipe on the developer's machine with a temporary socket. It touches no environment.
 - **K-816** kitshn creates a GitHub deployment and its status for each environment of each app.
