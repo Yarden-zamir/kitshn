@@ -4674,6 +4674,28 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
+   * K-627: an update restarts the daemon, and the restart ends the other running jobs of the machine without a result.
+   * True while a job runs that a job of this side must wait for: another job for an update, an update for another job.
+   * Known limit: a job that a lost connection marked failed can still run, and no job waits for it. Revisit if a
+   * daemon often sends a result after it connects again.
+   */
+  private restartWaits(machineId: string, update: boolean): boolean {
+    return (
+      this.sql<{ id: number }>(
+        `SELECT id FROM jobs WHERE machine_id = ? AND state = 'sent'
+         AND (json_extract(command, '$.kind') = 'update') = ? LIMIT 1`,
+        machineId,
+        update ? 0 : 1,
+      ).length > 0
+    );
+  }
+
+  /** K-627: the rollout skips a machine while a provider reports busy (K-1608) or another job runs there. */
+  private busyForUpdate(machineId: string): boolean {
+    return this.busy(machineId) || this.restartWaits(machineId, true);
+  }
+
+  /**
    * K-1608: how many pushes a machine has not applied yet; a machine without providers has none. Null when it never
    * answered `applied`: a daemon from before K-1608 does not, so its count is unknown, not a growing number.
    */
@@ -6429,7 +6451,6 @@ export class Kitshn extends DurableObject<Env> {
           null,
         );
         this.load();
-        this.autoUpdate();
       }
       if (job && (command?.kind === "backup" || command?.kind === "backup-restore"))
         this.backupResult(command, JSON.parse(job.actor) as Author, result);
@@ -6440,6 +6461,8 @@ export class Kitshn extends DurableObject<Env> {
           deployObject(command.deployId, "params.env"),
         ]);
       }
+      // K-627: a job that ended frees its machine, so the next automatic update or a job that waited for it goes.
+      if (taken) this.autoUpdate();
       this.broadcast();
     }
   }
@@ -7440,8 +7463,9 @@ export class Kitshn extends DurableObject<Env> {
       command: string;
       visitor: string;
       when_idle: number;
+      created_at: number;
     }>(
-      "SELECT id, machine_id, labels, command, visitor, when_idle FROM jobs WHERE state = 'queued' AND expires_at > ? ORDER BY id",
+      "SELECT id, machine_id, labels, command, visitor, when_idle, created_at FROM jobs WHERE state = 'queued' AND expires_at > ? ORDER BY id",
       Date.now(),
     );
     for (const job of queued) {
@@ -7523,6 +7547,10 @@ export class Kitshn extends DurableObject<Env> {
             );
       if (!machine) continue;
       if (job.when_idle === 1 && this.busy(machine.id)) continue;
+      // K-627: a job of a person or a deploy waits at most BUSY_CAP_MS for the other side. The rollout counts its own
+      // wait (busySince), so its update with whenIdle waits, and its update after the cap goes at once.
+      const mayWait = automatic ? job.when_idle === 1 : Date.now() - job.created_at < BUSY_CAP_MS;
+      if (mayWait && this.restartWaits(machine.id, queuedCommand.kind === "update")) continue;
       const socket = this.openSocket(machine.id);
       if (!socket) continue;
       let command = JSON.parse(job.command) as Command;
@@ -7659,7 +7687,7 @@ export class Kitshn extends DurableObject<Env> {
         autoUpdate: machine.autoUpdate !== false,
         hasKey: machine.key?.kind === "public",
         status: this.liveStatus(machine.id),
-        busy: this.busy(machine.id),
+        busy: this.busyForUpdate(machine.id),
       })),
       this.state.paused !== null,
     );
@@ -7719,7 +7747,7 @@ export class Kitshn extends DurableObject<Env> {
     // K-627: a step whose job still waits for a busy machine holds no other machine; its job goes, without a failure.
     const held = rollout.step;
     if (held) {
-      rollout = releaseBusyStep(rollout, this.stepJob(held.jobId), (id) => this.busy(id));
+      rollout = releaseBusyStep(rollout, this.stepJob(held.jobId), (id) => this.busyForUpdate(id));
       if (rollout.step === null)
         this.sql("UPDATE jobs SET state = 'expired' WHERE id = ? AND state = 'queued'", held.jobId);
     }
@@ -7730,7 +7758,7 @@ export class Kitshn extends DurableObject<Env> {
       autoUpdate: machine.autoUpdate !== false,
       hasKey: machine.key?.kind === "public",
       status: this.liveStatus(machine.id),
-      busy: this.busy(machine.id),
+      busy: this.busyForUpdate(machine.id),
     }));
     rollout = withBusyWaits(rollout, version, machines, now);
     const next = nextAutoUpdate(version, this.state.paused !== null, rollout, machines, now);
@@ -10715,13 +10743,11 @@ export class Kitshn extends DurableObject<Env> {
     if (!Number.isInteger(size) || size < 0) return fail(411, "Send a Content-Length.");
     if (size > limit) return fail(413, `${path} takes at most ${limit} bytes.`);
     const { readable, writable } = new FixedLengthStream(size);
-    const piped = request.body.pipeTo(writable);
     const object = deployObject(row.id, path === "/deploy/archive" ? "source.tgz" : "params.env");
     try {
-      await bucket.put(object, readable);
-      await piped;
+      // One wait for both, so a body that fails while R2 reads is never an unhandled rejection.
+      await Promise.all([bucket.put(object, readable), request.body.pipeTo(writable)]);
     } catch (error) {
-      await piped.catch(() => undefined);
       return fail(502, `The upload did not reach R2: ${String(error)}`);
     }
     // Block deletes the files of the deploys it ends; a file that lands after that goes too (K-819).
@@ -14702,12 +14728,13 @@ export class Kitshn extends DurableObject<Env> {
     );
     // The stream fails when the body is not exactly Content-Length bytes, so the limit holds.
     const { readable, writable } = new FixedLengthStream(size);
-    const piped = body.pipeTo(writable);
     try {
-      await bucket.put(objectKey(item), readable, { httpMetadata: { contentType: item.contentType } });
-      await piped;
+      // One wait for both, so a body that fails while R2 reads is never an unhandled rejection.
+      await Promise.all([
+        bucket.put(objectKey(item), readable, { httpMetadata: { contentType: item.contentType } }),
+        body.pipeTo(writable),
+      ]);
     } catch (error) {
-      await piped.catch(() => undefined);
       return refuse(`The upload did not reach R2: ${String(error)}`, 502);
     }
     const resource: Resource = {
@@ -16026,12 +16053,13 @@ export class Kitshn extends DurableObject<Env> {
       );
       const next = item.slot === 0 ? 1 : 0;
       const { readable, writable } = new FixedLengthStream(size);
-      const piped = body.pipeTo(writable);
       try {
-        await bucket.put(slotKey(item, next), readable, { httpMetadata: { contentType } });
-        await piped;
+        // One wait for both, so a body that fails while R2 reads is never an unhandled rejection.
+        await Promise.all([
+          bucket.put(slotKey(item, next), readable, { httpMetadata: { contentType } }),
+          body.pipeTo(writable),
+        ]);
       } catch (error) {
-        await piped.catch(() => undefined);
         return refuse(`The upload did not reach R2, so ${item.title} keeps its bytes: ${String(error)}`, 502);
       }
       const flip = (): number =>
@@ -18152,6 +18180,8 @@ export class Kitshn extends DurableObject<Env> {
     // K-627: a busy machine whose wait reached the cap gets its update now.
     if (Object.values(this.rollout().busySince ?? {}).some((since) => since + BUSY_CAP_MS <= now))
       this.autoUpdate();
+    // K-627: a job that waited BUSY_CAP_MS for another job of its machine goes now.
+    if (this.deliverJobs() > 0) changed = true;
     if ((await this.alarmStep("rollbacks", 0, () => this.settleRollbacks())) > 0) changed = true;
     await this.alarmStep("proposals", undefined, () => this.expireProposals(now));
     await this.alarmStep("provider offline", undefined, () => this.checkOfflineProviders(now));

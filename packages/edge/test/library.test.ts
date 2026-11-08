@@ -186,14 +186,9 @@ describe("agent publish (K-1116, K-1117)", () => {
       { _tag: "circle", id: "others", after: agentCircle("others", "agent-2.access", 3000) },
     ]);
     const id = await idOf(await publish("agent-1.access", "kept.html", "<html>v1</html>"));
-    const broken = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode("<html>v2"));
-        controller.error(new Error("the connection dropped"));
-      },
-    });
-    // The connection drops after 8 of the 15 bytes that it announced.
-    expect((await publish("agent-1.access", "kept.html", { stream: broken, length: 15 })).status).toBe(502);
+    // R2 fails the write of the new version.
+    vi.spyOn(env.BUCKET!, "put").mockRejectedValueOnce(new Error("R2 is down"));
+    expect((await publish("agent-1.access", "kept.html", "<html>v2</html>")).status).toBe(502);
     expect(await content(id)).toBe("<html>v1</html>");
     expect((await state()).previousVersions).not.toContain(id);
 

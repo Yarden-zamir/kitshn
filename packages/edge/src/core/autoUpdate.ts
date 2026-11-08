@@ -20,7 +20,7 @@ export interface Rollout {
   } | null;
   readonly failed: { readonly machineId: string; readonly reason: string } | null;
   readonly updated: ReadonlyArray<string>;
-  /** Since when each BEHIND machine waits because a provider reports `busy`; absent in older rollouts. */
+  /** Since when each BEHIND machine waits because it is busy (`AutoUpdateMachine.busy`); absent in older rollouts. */
   readonly busySince?: Readonly<Record<string, number>>;
 }
 
@@ -46,7 +46,7 @@ export type LiveStatus =
 /** K-628: what the card shows about the update of its daemon. */
 export type DaemonUpdate =
   | { readonly state: "updating" }
-  /** K-627: a provider reports `busy`, so the update waits until the machine is idle, at the latest until `until`. */
+  /** K-627: the machine is busy, so the update waits until it is idle, at the latest until `until`. */
   | { readonly state: "waiting"; readonly reason: "busy"; readonly until: number }
   | { readonly state: "updated" }
   | { readonly state: "failed"; readonly reason: string };
@@ -125,7 +125,7 @@ export interface AutoUpdateMachine {
   /** K-1708: a machine without a key gets no jobs. */
   readonly hasKey: boolean;
   readonly status: LiveStatus;
-  /** K-1608: a running provider card of the machine reports `busy`. */
+  /** K-1608: a running provider card of the machine reports `busy`. K-627: or another job runs there. */
   readonly busy: boolean;
 }
 
@@ -307,7 +307,7 @@ export function rolloutView(
     if (since !== undefined)
       return is(
         "waiting",
-        `A provider reports busy; it updates at the latest at ${new Date(since + BUSY_CAP_MS).toISOString()} (K-627).`,
+        `A provider reports busy or another job runs; it updates at the latest at ${new Date(since + BUSY_CAP_MS).toISOString()} (K-627).`,
       );
     if (behind.has(machine.id)) return is("behind");
     if (!machine.autoUpdate) return is("skipped", "Update daemon automatically is off (K-626).");

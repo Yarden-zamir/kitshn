@@ -8,11 +8,12 @@ import { gzipSync } from "node:zlib";
 import { AGENT_USAGE, isAgentCommand, keyTransport, runAgentCommand } from "./agent.ts";
 import { OPS_HELP, isOpCommand, runOpCommand } from "./ops.ts";
 import { type AssetSession, jsonOf, uploadAssets } from "./assets.ts";
-import { CliError, fail } from "./cli-error.ts";
+import { CliError, errorText, fail } from "./cli-error.ts";
 import { errorOutput } from "./output.ts";
 import { type Artifact, artifactsByApp } from "./artifacts.ts";
 import { RecipeError, readApps } from "./parse.ts";
 import { envLines } from "./params.ts";
+import { sendOnceMore } from "./upload.ts";
 import {
   type AppResult,
   type Apps,
@@ -86,16 +87,6 @@ async function call<T>(server: string, path: string, body: object): Promise<T> {
 
 /** STATUS_MISSES polls in a row, 3 seconds apart, outlast a short network drop between the runner and Cloudflare. */
 const STATUS_MISSES = 10;
-
-/** An error with its cause, so "fetch failed" also names why (for example ECONNRESET). */
-function errorText(error: unknown): string {
-  if (!(error instanceof Error)) return String(error);
-  const cause =
-    error.cause instanceof Error
-      ? ("code" in error.cause && String(error.cause.code)) || error.cause.message
-      : null;
-  return cause ? `${String(error)}: ${cause}` : String(error);
-}
 
 /**
  * K-804, K-820: deploys each app of the repo as its own deploy, after the apps that it needs. When an app does not
@@ -372,15 +363,17 @@ function params(): Map<string, string> {
 }
 
 async function upload(server: string, path: string, deployId: string, body: Buffer, type: string) {
-  const response = await fetch(new URL(path, server), {
-    method: "POST",
-    headers: {
-      "content-type": type,
-      "x-kitshn-deploy": deployId,
-      authorization: `Bearer ${await oidcToken(new URL(server).origin)}`,
-    },
-    body,
-  });
+  const response = await sendOnceMore(path, async () =>
+    fetch(new URL(path, server), {
+      method: "POST",
+      headers: {
+        "content-type": type,
+        "x-kitshn-deploy": deployId,
+        authorization: `Bearer ${await oidcToken(new URL(server).origin)}`,
+      },
+      body,
+    }),
+  );
   const data = (await response.json().catch(() => null)) as { error?: string } | null;
   if (!response.ok) fail(data?.error ?? `${path} answered ${response.status}.`);
 }

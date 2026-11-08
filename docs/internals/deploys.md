@@ -39,7 +39,7 @@ An app repo holds a recipe, `kitshn.config.ts`, and a workflow file. This file h
 
 ## Compose deploys
 
-- **K-812** A Compose deploy is a job (K-610). Actions sends the checkout and the `KITSHN_*` params to R2 through the Worker. The daemon downloads them with its machine token, only while it runs that job, so the machine needs no GitHub credential. Rules:
+- **K-812** A Compose deploy is a job (K-610). Actions sends the checkout and the `KITSHN_*` params to R2 through the Worker. After a network error or a 5xx answer, it sends that file once more: the second send overwrites the same R2 object while the deploy is planned. The daemon downloads them with its machine token, only while it runs that job, so the machine needs no GitHub credential. Rules:
   - After the app comes up, the daemon keeps that build as the last good build (K-718). A push environment also keeps the build before it, with its images tagged `kitshn-keep/<card>/<service>:<deploy id>`, for a rollback (K-821).
   - The daemon starts the app with the variables of KitSHn 1, so a KitSHn 1 `compose.yml` works unchanged, within the limits of K-818. KitSHn 1 deploy credentials never reach the app.
   - A machine runs one Compose job per app at a time.

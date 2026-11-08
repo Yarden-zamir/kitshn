@@ -2,6 +2,7 @@ import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { KITSHN_PROTOCOL, type ProviderReport } from "@kitshn/local";
 import { afterEach, expect, it, vi } from "vitest";
+import { BUSY_CAP_MS } from "../src/core/autoUpdate.ts";
 import type { Machine } from "../src/core/machine.ts";
 import { type Circle, OWNER_CIRCLE_ID, type Resource } from "../src/core/model.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
@@ -91,7 +92,10 @@ async function withDaemon(
     readonly kitshn: {
       commit(actor: object, changes: Array<object>, undo: null): number | null;
       addJob(caller: object, body: unknown): Response;
+      deliverJobs(): number;
     };
+    /** Runs a write on the storage of the Durable Object. */
+    readonly exec: (query: string, ...bindings: Array<SqlStorageValue>) => void;
     /** K-627: the stored rollout. */
     readonly rollout: () => unknown;
     /** What kitshn sent the daemon. */
@@ -105,6 +109,7 @@ async function withDaemon(
       setPresence(machineId: string, online: boolean): void;
       commit(actor: object, changes: Array<object>, undo: null): number | null;
       addJob(caller: object, body: unknown): Response;
+      deliverJobs(): number;
     };
     // The Worker of a release, so there is a release to update to (K-617).
     kitshn.env = { ...kitshn.env, KITSHN_VERSION: NEW };
@@ -138,6 +143,7 @@ async function withDaemon(
             )
             .toArray(),
         kitshn,
+        exec: (query, ...bindings) => void state.storage.sql.exec(query, ...bindings),
         rollout: () =>
           JSON.parse(
             state.storage.sql
@@ -151,6 +157,23 @@ async function withDaemon(
   });
 }
 
+const owner = {
+  visitor: { email: "owner@example.com", clientId: null, ip: null },
+  actor: { _tag: "person", email: "owner@example.com" },
+};
+
+/** Sends a job as the owner and answers its id. */
+async function ownerJob(kitshn: { addJob(caller: object, body: unknown): Response }, command: object) {
+  const response = kitshn.addJob(owner, { machineId: machine.id, command });
+  expect(response.status).toBe(200);
+  return ((await response.json()) as { id: number }).id;
+}
+
+const jobResult = (id: number) => ({ type: "jobResult", id, result: { ok: true, exitCode: 0, output: "" } });
+
+const kinds = (rows: Array<{ state: string; command: string }>) =>
+  rows.map((row) => [(JSON.parse(row.command) as { kind: string }).kind, row.state]);
+
 const behindStatus = {
   type: "status",
   status: {
@@ -162,6 +185,9 @@ const behindStatus = {
     capabilities: ["update", "update-gz"],
   },
 };
+
+/** A daemon that updates only by hand: without `update`, the rollout skips it (K-627). */
+const manualStatus = { ...behindStatus, status: { ...behindStatus.status, capabilities: ["update-gz"] } };
 
 it("starts the rollout after a release wake when a signed daemon socket kept its old status (K-627)", async () => {
   const stub = await setup();
@@ -313,15 +339,74 @@ it("lets a BEHIND daemon wait while a provider is busy, with no job that holds t
   });
 });
 
+it("holds the rollout of a machine while another job runs there, and updates it when that job ends (K-627)", async () => {
+  await withDaemon(async ({ daemon, jobs, kitshn, rollout }) => {
+    await daemon({ type: "providers", providers: [busyReport(false)] });
+    const deploy = await ownerJob(kitshn, { kind: "shell", script: "docker compose up" });
+    await daemon(behindStatus);
+    // An update now would restart the daemon and lose the result of the running job.
+    expect(kinds(jobs())).toEqual([["shell", "sent"]]);
+    expect(rollout()).toMatchObject({ step: null, busySince: { [machine.id]: expect.any(Number) } });
+    await daemon(jobResult(deploy));
+    expect(kinds(jobs())).toEqual([
+      ["shell", "done"],
+      ["update", "sent"],
+    ]);
+  });
+});
+
+it("lets Update daemon by hand wait while another job runs, at most the busy cap (K-627)", async () => {
+  await withDaemon(async ({ daemon, exec, jobs, kitshn }) => {
+    await daemon({ type: "providers", providers: [busyReport(false)] });
+    await daemon(manualStatus);
+    const first = await ownerJob(kitshn, { kind: "shell", script: "docker compose up" });
+    await ownerJob(kitshn, { kind: "update" });
+    expect(kinds(jobs())).toEqual([
+      ["shell", "sent"],
+      ["update", "queued"],
+    ]);
+    await daemon(jobResult(first));
+    expect(kinds(jobs())).toEqual([
+      ["shell", "done"],
+      ["update", "sent"],
+    ]);
+    // A job that hangs holds an update only until the cap.
+    exec("DELETE FROM jobs WHERE machine_id = ?", machine.id);
+    await ownerJob(kitshn, { kind: "shell", script: "sleep infinity" });
+    const late = await ownerJob(kitshn, { kind: "update" });
+    exec("UPDATE jobs SET created_at = ? WHERE id = ?", Date.now() - BUSY_CAP_MS, late);
+    expect(kitshn.deliverJobs()).toBe(1);
+    expect(kinds(jobs())).toEqual([
+      ["shell", "sent"],
+      ["update", "sent"],
+    ]);
+  });
+});
+
+it("holds another job while an update runs on the machine, and sends it when the update ends (K-627)", async () => {
+  await withDaemon(async ({ daemon, jobs, kitshn }) => {
+    await daemon({ type: "providers", providers: [busyReport(false)] });
+    await daemon(manualStatus);
+    const update = await ownerJob(kitshn, { kind: "update" });
+    await ownerJob(kitshn, { kind: "shell", script: "docker compose up" });
+    // The restart of the update would end the job without its result.
+    expect(kinds(jobs())).toEqual([
+      ["update", "sent"],
+      ["shell", "queued"],
+    ]);
+    await daemon(jobResult(update));
+    expect(kinds(jobs())).toEqual([
+      ["update", "done"],
+      ["shell", "sent"],
+    ]);
+  });
+});
+
 it("refuses a second Update daemon while an update runs on the daemon, so the rollout step stays (K-627)", async () => {
   await withDaemon(async ({ daemon, jobs, kitshn, rollout }) => {
     await daemon(behindStatus);
     expect(jobs().map((job) => job.state)).toEqual(["sent"]);
     const step = (rollout() as { step: { jobId: number } }).step;
-    const owner = {
-      visitor: { email: "owner@example.com", clientId: null, ip: null },
-      actor: { _tag: "person", email: "owner@example.com" },
-    };
     const again = kitshn.addJob(owner, { machineId: machine.id, command: { kind: "update" } });
     expect(again.status).toBe(409);
     expect(((await again.json()) as { error: string }).error).toContain("runs now");
