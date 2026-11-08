@@ -496,6 +496,8 @@ it("runs each gated row through the owner code: it fails only where the owner fa
           answer.ok &&
           typeof jobId === "number"
         ) {
+          // The daemon ended the jobs that it got, so an update row meets no running job (K-627).
+          state.storage.sql.exec("UPDATE jobs SET state = 'done' WHERE state = 'sent' AND id != ?", jobId);
           kitshn.deliverJobs();
           const job = state.storage.sql
             .exec<{ state: string; output: string }>("SELECT state, output FROM jobs WHERE id = ?", jobId)
