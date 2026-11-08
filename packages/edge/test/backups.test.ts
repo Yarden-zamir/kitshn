@@ -266,9 +266,23 @@ describe("backup runs (K-1817 to K-1819)", () => {
       kind: "backup",
       card: "app-runs",
       run,
-      prune: false,
+      prune: expect.any(Boolean),
       pauseLimitMs: 90_000,
     });
+    // K-1817: every backup on a Sunday (UTC) prunes, the ones of "Back up now" too.
+    const prunes = await runInDurableObject(stub(), (instance, durable) =>
+      ["2026-11-08T12:00:00Z", "2026-11-09T12:00:00Z"].map((day) => {
+        const queue = instance as unknown as {
+          queueBackup(card: string, actor: unknown, now: number): { jobId: number };
+        };
+        const { jobId } = queue.queueBackup("app-runs", { _tag: "kitshn", reason: "test" }, Date.parse(day));
+        const [row] = durable.storage.sql
+          .exec<{ command: string }>("SELECT command FROM jobs WHERE id = ?", jobId)
+          .toArray();
+        return (JSON.parse(row!.command) as { prune: boolean }).prune;
+      }),
+    );
+    expect(prunes).toEqual([true, false]);
     await runInDurableObject(stub(), async (instance, durable) => {
       // The job went to the machine; the daemon answers.
       durable.storage.sql.exec("UPDATE jobs SET state = 'sent', machine_id = 'm-runs' WHERE id = ?", job!.id);

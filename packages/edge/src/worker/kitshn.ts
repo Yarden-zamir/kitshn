@@ -3010,7 +3010,9 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /** K-1817: one backup job and its row. Returns the run and the job. */
-  private queueBackup(card: string, actor: Author, prune: boolean, now: number) {
+  private queueBackup(card: string, actor: Author, now: number) {
+    // K-1817: prune once a week, on Sundays (UTC). "Back up now" on a Sunday prunes too.
+    const prune = new Date(now).getUTCDay() === 0;
     const resource = this.state.resources.get(card);
     if (!resource?.machine) throw new Error(`${card} has no machine.`);
     const home = resource.machine;
@@ -3110,7 +3112,7 @@ export class Kitshn extends DurableObject<Env> {
   private backUpNow(actor: Author, card: string) {
     const refusal = this.backupRefusal(card);
     if (refusal) return Response.json({ error: refusal }, { status: 409 });
-    const { run, jobId } = this.queueBackup(card, actor, false, Date.now());
+    const { run, jobId } = this.queueBackup(card, actor, Date.now());
     // K-538: only a backup that someone started shows its steps; the daily ones keep the K-1819 sticker.
     this.startBackupAction(card, jobId, BACK_UP_NOW, "Back up the volumes and the data folder");
     this.deliverJobs();
@@ -3258,11 +3260,9 @@ export class Kitshn extends DurableObject<Env> {
     const { deployedCards, previewCards } = this.deployedAndPreviewCards();
     const previews = new Set(previewCards);
     const actor: Author = { _tag: "kitshn", reason: "the daily backup (K-1817)" };
-    // K-1817: prune once a week, on Sundays (UTC).
-    const prune = new Date(now).getUTCDay() === 0;
     for (const card of deployedCards) {
       if (previews.has(card) || this.backupRefusal(card) !== null) continue;
-      this.queueBackup(card, actor, prune, now);
+      this.queueBackup(card, actor, now);
     }
     this.deliverJobs();
   }
