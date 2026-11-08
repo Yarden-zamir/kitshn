@@ -137,6 +137,19 @@ jobs:
               echo "::warning::$copy is edge-${named:-unknown}, not edge-$version (the release of kitshn). Update it with: kitshn skill install --repo"
             fi
           fi
+      # K-617: the CLI of the release that the kitshn server names, checked against its SHA256SUMS. The download goes
+      # through the GitHub API: the releases/download addresses answered 504 for hours on 2026-11-08. The token stays in
+      # this step, so the build commands of the next step do not see it.
+      - name: kitshn CLI
+        env:
+          SERVER: ${{ inputs.server }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(curl -fsSL "$SERVER/deploy/version")
+          [[ "$version" =~ ^[0-9a-f]{12}$ ]] || { echo "kitshn: $SERVER names no release ($version)."; exit 1; }
+          cd "$RUNNER_TEMP"
+          gh release download "edge-$version" -R Yarden-zamir/kitshn -p kitshn.mjs -p SHA256SUMS --clobber
+          grep ' kitshn.mjs$' SHA256SUMS | sha256sum -c -
       - name: kitshn deploy
         env:
           SERVER: ${{ inputs.server }}
@@ -144,13 +157,4 @@ jobs:
           KITSHN_ARTIFACT_PATH: ${{ inputs.artifact != '' && inputs.artifact-path || '' }}
           KITSHN_ARTIFACTS: ${{ github.event.action != 'closed' && inputs.artifacts || '' }}
           KITSHN_ARTIFACT_DIR: ${{ runner.temp }}/kitshn-artifacts
-        # K-617: the CLI of the release that the kitshn server names, checked against its SHA256SUMS.
-        run: |
-          version=$(curl -fsSL "$SERVER/deploy/version")
-          [[ "$version" =~ ^[0-9a-f]{12}$ ]] || { echo "kitshn: $SERVER names no release ($version)."; exit 1; }
-          base="https://github.com/Yarden-zamir/kitshn/releases/download/edge-$version"
-          cd "$RUNNER_TEMP"
-          curl -fsSL "$base/kitshn.mjs" -o kitshn.mjs
-          curl -fsSL "$base/SHA256SUMS" | grep ' kitshn.mjs$' | sha256sum -c -
-          cd "$GITHUB_WORKSPACE"
-          node "$RUNNER_TEMP/kitshn.mjs" deploy --server "$SERVER"
+        run: node "$RUNNER_TEMP/kitshn.mjs" deploy --server "$SERVER"
