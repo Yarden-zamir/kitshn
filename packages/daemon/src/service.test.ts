@@ -205,6 +205,29 @@ describe("daemon service (K-601)", () => {
       ok: false,
       reason: expect.stringContaining("kitshn-linux-arm64.gz (HTTP 404)"),
     });
+
+    // The download address answers 504 while the GitHub API works, as on 2026-11-08.
+    const api = "https://api.github.com/repos/Yarden-zamir/kitshn/releases";
+    const viaApi = async (url: string, init?: RequestInit) => {
+      if (url.startsWith("https://github.com/")) return new Response("Gateway Timeout", { status: 504 });
+      if (url === `${api}/tags/edge-${"a".repeat(12)}`)
+        return Response.json({ assets: [{ name: "SHA256SUMS", url: `${api}/assets/7` }] });
+      const accept = new Headers(init?.headers).get("accept");
+      return url === `${api}/assets/7` && accept === "application/octet-stream"
+        ? new Response("sums")
+        : new Response("Not Found", { status: 404 });
+    };
+    const through = await releaseFiles("a".repeat(12), ["SHA256SUMS"], log, { fetch: viaApi, sleep });
+    if (!through.ok) throw new Error(through.reason);
+    expect(await through.responses[0]?.text()).toBe("sums");
+    const unlisted = await releaseFiles("a".repeat(12), ["kitshn-linux-arm64.gz"], log, {
+      fetch: viaApi,
+      sleep,
+    });
+    expect(unlisted).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("HTTP 504, and the GitHub API lists no"),
+    });
   });
 
   it("names the shared socket and the daemon user that a client expects there (K-701)", () => {

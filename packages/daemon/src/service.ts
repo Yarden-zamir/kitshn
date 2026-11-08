@@ -514,27 +514,72 @@ const RELEASE_TRIES = RELEASE_WAIT_MS / RELEASE_RETRY_MS + 1;
 /** K-617: a try that gets no answer in this time counts as failed, so one hung connection never stalls the wait. */
 const RELEASE_ANSWER_MS = 20_000;
 
+/** K-617: the GitHub API of the same releases. It can work while RELEASES fails: 504 for hours on 2026-11-08. */
+const RELEASE_API = "https://api.github.com/repos/Yarden-zamir/kitshn/releases";
+
+type ReleaseFetch = (url: string, init?: RequestInit) => Promise<Response>;
+
 interface ReleaseIo {
-  readonly fetch: (url: string) => Promise<Response>;
+  readonly fetch: ReleaseFetch;
   readonly sleep: (ms: number) => Promise<void>;
 }
 
 const realIo: ReleaseIo = {
   // Only the answer has the time limit: the body of a daemon can take longer on a slow link.
-  fetch: async (url) => {
+  fetch: async (url, init) => {
     const controller = new AbortController();
     const timer = setTimeout(
       () => controller.abort(new Error(`no answer in ${RELEASE_ANSWER_MS / 1000} seconds`)),
       RELEASE_ANSWER_MS,
     );
     try {
-      return await fetch(url, { signal: controller.signal });
+      return await fetch(url, { ...init, signal: controller.signal });
     } finally {
       clearTimeout(timer);
     }
   },
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 };
+
+/** The API address of the asset `name` in a release that the GitHub API answered, or null. */
+function assetAddress(release: unknown, name: string): string | null {
+  if (
+    typeof release !== "object" ||
+    release === null ||
+    !("assets" in release) ||
+    !Array.isArray(release.assets)
+  )
+    throw new Error("the GitHub API answered a release with no asset list");
+  const assets: ReadonlyArray<unknown> = release.assets;
+  for (const asset of assets)
+    if (typeof asset === "object" && asset !== null && "name" in asset && "url" in asset)
+      if (asset.name === name && typeof asset.url === "string") return asset.url;
+  return null;
+}
+
+/**
+ * K-617: one file of edge-<version>. When the download address gives no answer or a 5xx, the file comes through the
+ * GitHub API. A 404 goes back as it is: the file is not uploaded yet.
+ */
+// The API allows 60 calls per hour per address without a token, and a 10-minute wait for 2 files can use 84.
+// A call over the limit fails like any other try. Revisit when several machines update from one address.
+export async function releaseFile(version: string, name: string, get: ReleaseFetch): Promise<Response> {
+  const direct = await get(`${RELEASES}/edge-${version}/${name}`).catch((error: unknown) => String(error));
+  if (typeof direct !== "string" && direct.status < 500) return direct;
+  if (typeof direct !== "string") await direct.body?.cancel();
+  const failed = typeof direct === "string" ? direct : `HTTP ${direct.status}`;
+  const headers = { "user-agent": "kitshn", "x-github-api-version": "2022-11-28" };
+  const release = await get(`${RELEASE_API}/tags/edge-${version}`, {
+    headers: { ...headers, accept: "application/vnd.github+json" },
+  });
+  if (!release.ok) {
+    await release.body?.cancel();
+    throw new Error(`${failed}, and HTTP ${release.status} from the GitHub API`);
+  }
+  const address = assetAddress(await release.json(), name);
+  if (!address) throw new Error(`${failed}, and the GitHub API lists no ${name}`);
+  return get(address, { headers: { ...headers, accept: "application/octet-stream" } });
+}
 
 /**
  * K-617: the files of edge-<version>, in the order of `names`. A Worker can go live before the release workflow
@@ -553,9 +598,7 @@ export async function releaseFiles(
   let missing = "";
   for (let attempt = 1; attempt <= RELEASE_TRIES; attempt++) {
     const answers = await Promise.all(
-      names.map((name) =>
-        io.fetch(`${RELEASES}/edge-${version}/${name}`).catch((error: unknown) => String(error)),
-      ),
+      names.map((name) => releaseFile(version, name, io.fetch).catch((error: unknown) => String(error))),
     );
     const responses = answers.filter((answer) => answer instanceof Response);
     if (responses.length === names.length && responses.every((response) => response.ok))
