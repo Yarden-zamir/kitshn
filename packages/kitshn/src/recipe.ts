@@ -142,6 +142,15 @@ export const workerBindingNames = (app: {
   ...Object.keys(app.vars ?? {}),
 ];
 
+/** K-805, K-815: how Cloudflare serves a static site, in its deploy and in `kitshn try`. */
+export const STATIC_SITE = {
+  compatibilityDate: "2026-10-20",
+  assets: { not_found_handling: "404-page", html_handling: "auto-trailing-slash" },
+} as const;
+
+/** K-806, K-815: how Cloudflare serves the assets folder of a Worker app. */
+export const WORKER_ASSETS = { html_handling: "auto-trailing-slash" } as const;
+
 const deploy = Schema.Array(DeployEntry).check(Schema.isMinLength(1), Schema.isMaxLength(20));
 
 /** K-804: the key of an app; it has no `-`, so a card id reads left to right. */

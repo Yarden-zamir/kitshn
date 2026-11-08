@@ -46,7 +46,13 @@ An app repo holds a recipe, `kitshn.config.ts`, and a workflow file. This file h
   - The files leave R2 when the job ends, and an R2 rule removes any that remain after a day.
 - **K-813** The Actions step polls the deploy state every few seconds until it ends, then prints the job output and the address. A read that fails (a dropped connection or a Cloudflare error) fails the step only after 10 in a row, because a read changes nothing. The daemon sends the output at the end of the job, not line by line. Revisit when builds need live logs.
 - **K-814** The deploy ends with a route check: kitshn requests the address and records the status and content type.
-- **K-815** Planned: `kitshn try` builds and runs a recipe on the developer's machine with a temporary socket. It touches no environment.
+- **K-815** `kitshn try` builds one app of the recipe file on the developer's machine and runs it on `127.0.0.1`. It calls no kitshn server, so it touches no environment. Rules:
+  - It builds with the steps of the deploy. A static site and a Worker app run in `wrangler dev`, pinned like esbuild (K-806), with the asset handling and bindings of their deploy and with local storage.
+  - A Compose app gets the variables and folders of K-812 in a temporary folder, with its socket (K-607) there. Docker Desktop gives the host no working socket that a container made in a bind mount, so a pinned `socat` container forwards the port to the socket, on Linux too.
+  - It waits up to 3 minutes for an answer, then prints the status and content type, as the route check of K-814. Without `--check`, the app runs until Ctrl-C. With `--check`, it stops, and exits 1 without an answer or with a 5xx.
+  - Every exit removes the containers and volumes of the run, and the images that it built. Ctrl-C and SIGTERM also stop a build that runs. Two cases stay: an image that a service also names with `image:`, and a temporary folder that holds files that a container wrote as root.
+  - A Compose app gets the `owner/repo` of the GitHub remote `origin` as its recipe name, else the folder name. A Worker app refuses a params value with the name of a binding, as its deploy does.
+  - Known limits: it runs one app without the apps of `needs.apps`. The K-818 checks of the daemon do not run. Crons do not run on their own, and the Access values of K-822 are missing. Revisit when a deploy fails on something that `try` passed.
 - **K-816** kitshn creates a GitHub deployment and its status for each environment of each app.
 - **K-817** A `push` entry may list up to 5 addresses (each costs API calls in one deploy request, K-406). A `pull_request` entry keeps one (K-901). Rules:
   - Each address is the apex or one level below a zone of K-1111, so Universal SSL covers it.

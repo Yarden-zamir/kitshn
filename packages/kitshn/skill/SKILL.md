@@ -15,7 +15,7 @@ A repo with `.kitshn.yaml` and `Caddyfile.j2` is a KitSHn 1 repo. Do not mix the
 ## The two programs named `kitshn`
 
 - **`kitshn` on a machine** (installed by the join command): what you, as an agent, call. It also carries this skill (`kitshn skill`). `kitshn` with no arguments lists its commands.
-- **App CLI** (`kitshn.mjs` in each `edge-<version>` release): `check` and `deploy` for GitHub Actions. You rarely run it by hand.
+- **App CLI** (`kitshn.mjs` in each `edge-<version>` release): `check` and `deploy` for GitHub Actions, and `try` to run an app on this machine.
 
 ## This skill
 
@@ -55,6 +55,7 @@ The daemon carries the skill of its release (K-618). The line under the front ma
    - `startsIn`: the circle of a new card. Without it, the card waits private in the tray. After the first deploy, the map decides (K-518).
    - `needs.apps`: deploy after those apps of the same file, and skip when one of them failed (K-820).
 2. Run `npx -y https://github.com/Yarden-zamir/kitshn/releases/download/edge/kitshn.tgz check` (or `node kitshn.mjs check`). It prints the recipe as JSON or names the mistake.
+   Then `npx -y https://github.com/Yarden-zamir/kitshn/releases/download/edge/kitshn.tgz try --check` builds the app and runs it on `127.0.0.1` with no kitshn server: it prints the route check and exits 1 on no answer or a 5xx (K-815). Without `--check`, it prints the address and runs until Ctrl-C. `--app <key>` picks one app of `defineApps`, `--params-file <file>` gives the app its values as `<NAME>=value` lines (the name without `KITSHN_`), and `--port <n>` fixes the port. Every exit removes what it made.
 3. Add a workflow, for example `.github/workflows/kitshn.yml`. Any file name works: Allow starts the file of the waiting push run again (K-1121).
 
    ```yaml
@@ -122,6 +123,7 @@ Read the Actions log first: the deploy step prints the job output and the final 
 | --- | --- |
 | "waits on the kitshn map" | First deploy of a repo (K-819). After Allow, a waiting push run starts again by itself (K-1121); run a pull request run again on GitHub. |
 | A recipe error before any work | `kitshn check` names it. Fix `kitshn.config.ts`. |
+| The app does not come up | Run `kitshn try --check` in the repo: it builds and runs the app on your machine with its logs (K-815). |
 | A missing value name | A needed `KITSHN_<NAME>` is not set (K-808). |
 | A refused Compose setting | Remove it, or ask the owner to allow it for that machine (K-818). |
 | An address that "already has a record" | Another card or a manual DNS record owns it (K-817). |

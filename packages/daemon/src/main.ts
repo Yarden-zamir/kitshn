@@ -41,16 +41,9 @@ import {
   WINDOW_ACTIONS,
 } from "@kitshn/local";
 import { linkPairs, nextReport, probeLink, providerChecks } from "./health.ts";
-import {
-  composeFiles,
-  composeRisks,
-  envFileRisks,
-  rawRisks,
-  realpathOnDisk,
-  sourceRisks,
-  spreadData,
-} from "./guard.ts";
+import { composeRisks, envFileRisks, rawRisks, realpathOnDisk, sourceRisks, spreadData } from "./guard.ts";
 import { type Notify, accessEnv, withAppEnv } from "./appEnv.ts";
+import { DEFAULT_SOCKET, appVariables, composeFiles } from "kitshn/compose";
 import { HELPER_IMAGE, backup, finishRestores, restore, unpauseMarked } from "./backup.ts";
 import { keyPlan } from "./keys.ts";
 import { dropAttested, labelPrefixes } from "./attest.ts";
@@ -1415,7 +1408,7 @@ async function composeUp(
   const source = join(dir, `src-${Date.now().toString(36)}`);
   // K-607: a short folder of its own, so the socket path fits any card id (K-804).
   const sockets = appSocketFolder(paths.data, command.project);
-  const socketPath = join(sockets, "default.sock");
+  const socketPath = join(sockets, DEFAULT_SOCKET);
   /** K-607: the folder of the app before 2026-10-30; its next deploy that comes up removes it. */
   const oldSockets = join(dir, "sockets");
   /** K-818: the configs hold the values of the params, so they stay in a folder of the daemon user only. */
@@ -1467,14 +1460,15 @@ async function composeUp(
     const data = join(dir, "data");
     const env = {
       ...process.env,
-      KITSHN_RECIPE: command.repo,
-      KITSHN_ENVIRONMENT: command.environment,
-      KITSHN_DEPLOYMENT: command.project,
-      KITSHN_SOCKET_DIR: sockets,
-      KITSHN_DEFAULT_SOCKET: socketPath,
-      KITSHN_DATA_DIR: data,
-      KITSHN_LOG_DIR: join(dir, "logs"),
-      KITSHN_PARAMS_FILE: join(dir, "params.env"),
+      ...appVariables({
+        recipe: command.repo,
+        environment: command.environment,
+        deployment: command.project,
+        socketDir: sockets,
+        data,
+        logs: join(dir, "logs"),
+        params: join(dir, "params.env"),
+      }),
       // K-1908: the app passes these on in its Compose file, as it does with KITSHN_DATA_DIR.
       ...(notify ? { KITSHN_NOTIFY_URL: notify.url, KITSHN_NOTIFY_TOKEN: notify.token } : {}),
       ...(access ? accessEnv(access) : {}),

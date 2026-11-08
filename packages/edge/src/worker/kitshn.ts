@@ -528,6 +528,7 @@ import {
   deployOrder,
   plan,
   repoSlug,
+  STATIC_SITE,
 } from "kitshn/recipe";
 import { removeStaleDomains, zoneFor, zoneOfAddressIn, zonesOf, zonesOrMain } from "./zones.ts";
 import { BIC_CALLS, type BicHosts, privateHosts, syncBic } from "./bic-sync.ts";
@@ -10979,12 +10980,11 @@ export class Kitshn extends DurableObject<Env> {
     if (typeof icon === "string") return Response.json({ error: icon }, { status: 400 });
     const metadata = {
       main_module: "worker.js",
-      compatibility_date: "2026-10-20",
+      compatibility_date: STATIC_SITE.compatibilityDate,
       assets: {
         jwt,
         config: {
-          not_found_handling: "404-page",
-          html_handling: "auto-trailing-slash",
+          ...STATIC_SITE.assets,
           ...(headers ? { _headers: headers } : {}),
           ...(redirects ? { _redirects: redirects } : {}),
         },

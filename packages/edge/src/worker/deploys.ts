@@ -1,6 +1,6 @@
 import { ICON_LIMIT, type IconType, iconType } from "kitshn/icon";
 import { DEFAULT_APP } from "kitshn/names";
-import { type DeployEvent, type WorkerApp, workerBindingNames } from "kitshn/recipe";
+import { type DeployEvent, WORKER_ASSETS, type WorkerApp, workerBindingNames } from "kitshn/recipe";
 import type { AppAccess } from "../core/machine.ts";
 
 /** K-903: kitshn refuses a new preview at this many Worker scripts in the account. */
@@ -308,7 +308,7 @@ export function workerMetadata(
           assets: {
             jwt: input.assets.jwt,
             config: {
-              html_handling: "auto-trailing-slash",
+              ...WORKER_ASSETS,
               ...(runWorkerFirst === undefined
                 ? {}
                 : {

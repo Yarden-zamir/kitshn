@@ -14,6 +14,7 @@
     "./templates": "./src/templates.ts",
     "./agent": "./src/agent.ts",
     "./cli-error": "./src/cli-error.ts",
+    "./compose": "./src/compose.ts",
     "./ops": "./src/ops.ts",
     "./operations": "./src/operations.ts"
   },
