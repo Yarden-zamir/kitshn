@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CliError } from "kitshn/cli-error";
-import { RELEASES, expectedHash } from "./service.ts";
+import { expectedHash, releaseFile } from "./service.ts";
 
 /** K-617: a release names the first 12 hex digits of its commit. */
 export const isReleaseVersion = (version: string) =>
@@ -63,9 +63,8 @@ export async function deployWorker(version: string, server: string, env: NodeJS.
     throw new CliError(
       "kitshn rollout refuses KITSHN_BACKUP_KEY_NOW: the owner runs that step in their own terminal (K-1815).",
     );
-  const base = `${RELEASES}/edge-${version}`;
   const [sums, script, bundle] = await Promise.all(
-    ["SHA256SUMS", INSTALL_ASSET, BUNDLE_ASSET].map((name) => fetch(`${base}/${name}`)),
+    ["SHA256SUMS", INSTALL_ASSET, BUNDLE_ASSET].map((name) => releaseFile(version, name, fetch)),
   );
   if (!sums?.ok || !script?.ok || !bundle?.ok)
     throw new CliError(
