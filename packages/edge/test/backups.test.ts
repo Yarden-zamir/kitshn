@@ -453,20 +453,18 @@ describe("backup runs (K-1817 to K-1819)", () => {
     expect(rows.map((row) => row.run)).toEqual(expect.arrayContaining(["o1"]));
     expect(rows.map((row) => row.run)).not.toEqual(expect.arrayContaining(["d1"]));
     expect(rows.map((row) => row.run)).not.toEqual(expect.arrayContaining(["d2"]));
-    // While the objects go, no backup of the card starts.
-    const refused = await runInDurableObject(stub(), (instance) => {
-      const guarded = instance as unknown as {
-        deletingBackups: Set<string>;
-        backupRefusal(card: string): unknown;
-      };
-      guarded.deletingBackups.add("app-del");
-      try {
-        return guarded.backupRefusal("app-del");
-      } finally {
-        guarded.deletingBackups.delete("app-del");
-      }
+    // A delete that stopped half-way leaves its mark, so no backup of the card starts until a delete ends.
+    const refused = await runInDurableObject(stub(), (instance, durable) => {
+      durable.storage.sql.exec("INSERT INTO meta (key, value) VALUES ('backups_deleting:app-del', '1')");
+      return (instance as unknown as { backupRefusal(card: string): unknown }).backupRefusal("app-del");
     });
-    expect(refused).toEqual(expect.stringContaining("being deleted"));
+    expect(refused).toEqual(expect.stringContaining("stopped half-way"));
+    expect((await admin("/api/apps/app-del/backups", "POST")).status).toBe(409);
+    expect((await admin("/api/apps/app-del/backups", "DELETE")).status).toBe(200);
+    const mark = await runInDurableObject(stub(), (_instance, durable) =>
+      durable.storage.sql.exec("SELECT key FROM meta WHERE key = 'backups_deleting:app-del'").toArray(),
+    );
+    expect(mark).toEqual([]);
     // A removed card with runs left (K-1819) can go now; a card that kitshn never knew cannot.
     expect(await admin("/api/apps/app-renamed/backups", "DELETE")).toEqual({
       status: 200,

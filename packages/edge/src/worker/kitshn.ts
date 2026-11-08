@@ -883,6 +883,9 @@ const API_MESSAGES: Readonly<Record<string, ClientMessage["type"]>> = {
 
 /** K-003: the one Durable Object. It holds all state in SQLite and a copy in memory. */
 
+/** K-1823: the meta key that marks a delete of the backups of a card as not finished. */
+const deletingKey = (card: string) => `backups_deleting:${card}`;
+
 /** K-1819, K-1823: deletes every repository of a card in R2: its own and those of its other instances (K-827). */
 async function deleteRepositories(bucket: R2Bucket, card: string) {
   let deleted = 0;
@@ -1082,8 +1085,6 @@ export class Kitshn extends DurableObject<Env> {
   private desiredRevs = new Map<string, string>();
   /** K-717: card setting values, by card id. */
   private cardSettings = new Map<string, Record<string, string>>();
-  /** K-1823: the cards whose backups go now; in memory, because a restart ends the delete too. */
-  private deletingBackups = new Set<string>();
   /**
    * K-1608: the hash of the last push that each machine applied, by `<machine id>/<push key>`. K-1302: read on first
    * use after a load, so a wake that pushes nothing reads no row of it.
@@ -2879,7 +2880,8 @@ export class Kitshn extends DurableObject<Env> {
   private restoreRefusal(card: string, machineId?: string | null): string | null {
     const resource = this.state.resources.get(card);
     if (resource?.kind !== "site.compose") return `The card "${card}" is no Compose app (K-1811).`;
-    if (this.deletingBackups.has(card)) return `The backups of ${resource.name} are being deleted (K-1823).`;
+    if (this.meta(deletingKey(card)) !== null)
+      return `The backups of ${resource.name} are being deleted, or a delete stopped half-way: run Delete backups again (K-1823).`;
     // K-827: the machine of the instance that runs the job; the home one by default.
     const machine = machineId === undefined ? resource.machine : machineId;
     if (!machine) return `${resource.name} runs on no machine.`;
@@ -3143,32 +3145,35 @@ export class Kitshn extends DurableObject<Env> {
       const command = JSON.parse(row.command) as Command;
       return (command.kind === "backup" || command.kind === "backup-restore") && command.card === card;
     });
-    if (running || this.deletingBackups.has(card))
+    if (running)
       return Response.json(
-        { error: `A backup or restore of ${name} runs; delete its backups after it ends.` },
+        {
+          error: `A backup or restore job of ${name} can still reach its repository; delete its backups after it ends, or cancel a queued one with job-cancel.`,
+        },
         { status: 409 },
       );
-    // No backup or restore of the card starts while the objects go (restoreRefusal).
-    this.deletingBackups.add(card);
-    try {
-      const objects = await deleteRepositories(bucket, card);
-      const left =
-        (await bucket.list({ prefix: `backups/${card}/`, limit: 1 })).objects.length +
-        (await bucket.list({ prefix: `backups/${card}@`, limit: 1 })).objects.length;
-      if (left > 0) throw new Error(`R2 still holds backups of ${card} after the delete.`);
-      const runs =
-        this.sql<{ n: number }>("SELECT COUNT(*) AS n FROM backups WHERE card = ?", card)[0]?.n ?? 0;
-      this.ctx.storage.transactionSync(() => {
-        this.sql("DELETE FROM backups WHERE card = ?", card);
-        this.sql("DELETE FROM backup_gone WHERE card = ?", card);
-        this.insertRevision(actor, `Deleted the backups of ${name} (K-1823)`, [], null);
-      });
-      this.backupMemory = null;
-      this.broadcast();
-      return Response.json({ runs, objects });
-    } finally {
-      this.deletingBackups.delete(card);
-    }
+    // A stored mark, so no backup or restore starts on a half-deleted repository, also after a restart
+    // (restoreRefusal). Only the end of a complete delete clears it; a second delete runs again.
+    this.setMeta(deletingKey(card), String(Date.now()));
+    const objects = await deleteRepositories(bucket, card);
+    const left =
+      (await bucket.list({ prefix: `backups/${card}/`, limit: 1 })).objects.length +
+      (await bucket.list({ prefix: `backups/${card}@`, limit: 1 })).objects.length;
+    if (left > 0)
+      return Response.json(
+        { error: `R2 still holds backups of ${name}; run Delete backups again (K-1823).` },
+        { status: 500 },
+      );
+    const runs = this.sql<{ n: number }>("SELECT COUNT(*) AS n FROM backups WHERE card = ?", card)[0]?.n ?? 0;
+    this.ctx.storage.transactionSync(() => {
+      this.sql("DELETE FROM backups WHERE card = ?", card);
+      this.sql("DELETE FROM backup_gone WHERE card = ?", card);
+      this.sql("DELETE FROM meta WHERE key = ?", deletingKey(card));
+      this.insertRevision(actor, `Deleted the backups of ${name} (K-1823)`, [], null);
+    });
+    this.backupMemory = null;
+    this.broadcast();
+    return Response.json({ runs, objects });
   }
 
   private backupList(card: string) {

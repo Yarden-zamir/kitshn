@@ -3528,13 +3528,15 @@ function CardPanel(props: {
             >
               Backups…
             </button>
-            <button
-              class="btn"
-              data-tip="Delete every backup of this app, also the before-restore runs, for good. The app and its data stay (K-1823)."
-              onClick={() => props.onDeleteBackups(resource)}
-            >
-              Delete backups…
-            </button>
+            {props.backup ? (
+              <button
+                class="btn"
+                data-tip="Delete every backup of this app, also the before-restore runs, for good. The app and its data stay (K-1823)."
+                onClick={() => props.onDeleteBackups(resource)}
+              >
+                Delete backups…
+              </button>
+            ) : null}
           </div>
         </section>
       ) : null}
