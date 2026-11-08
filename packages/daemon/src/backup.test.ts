@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { connect } from "node:net";
 import { join } from "node:path";
 import { SWAP, UNSWAP, backupSummary, keptRuns, oldWaysBack, startProxy } from "./backup.ts";
 
@@ -43,7 +44,68 @@ describe("backup helpers (K-1813, K-1817)", () => {
       rmSync(folder, { recursive: true, force: true });
     }
   });
+
+  it("passes a range answer to restic with its length and range, and not compressed", async () => {
+    const asked: Array<string | null> = [];
+    const upstream = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(request) {
+        asked.push(request.headers.get("accept-encoding"));
+        // The second chunk comes later, as from R2, so only the header gives the length.
+        const body = new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("23"));
+            setTimeout(() => {
+              controller.enqueue(new TextEncoder().encode("45"));
+              controller.close();
+            }, 1);
+          },
+        });
+        const headers = { "content-length": "4", "content-range": "bytes 2-5/10" };
+        return new Response(request.method === "HEAD" ? null : body, { status: 206, headers });
+      },
+    });
+    const folder = mkdtempSync(join(tmpdir(), "kitshn-proxy-"));
+    const proxy = startProxy(
+      { server: `http://127.0.0.1:${upstream.port}`, clientId: "id", clientSecret: "s", data: folder },
+      "app-x",
+      folder,
+    );
+    const secret = proxy.repository.split(":").at(-1) ?? "";
+    try {
+      // Raw HTTP, as restic reads it: a fetch client could fill in a length that the wire does not carry.
+      const raw = await rawRequest(proxy.socket, `GET ${secret}data/${"a".repeat(64)} HTTP/1.1`);
+      const [head = "", body] = raw.split("\r\n\r\n");
+      const lines = head.toLowerCase().split("\r\n");
+      expect(lines[0]).toBe("http/1.1 206 partial content");
+      expect(lines).toContain("content-length: 4");
+      expect(lines).toContain("content-range: bytes 2-5/10");
+      expect(
+        lines.some((line) => line.startsWith("transfer-encoding") || line.startsWith("content-encoding")),
+      ).toBe(false);
+      expect(body).toBe("2345");
+      expect(asked).toEqual(["identity"]);
+    } finally {
+      proxy.stop();
+      void upstream.stop(true);
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
 });
+
+/** One HTTP/1.1 request on a Unix socket; the whole answer as text, after the server closes. */
+function rawRequest(socket: string, line: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let answer = "";
+    const client = connect(socket, () => {
+      client.write(`${line}\r\nHost: localhost\r\nRange: bytes=2-5\r\nConnection: close\r\n\r\n`);
+    });
+    client.on("data", (chunk: Buffer) => (answer += chunk.toString("utf8")));
+    client.on("end", () => resolve(answer));
+    client.on("error", reject);
+  });
+}
 
 describe("the swap of a restore (K-1820)", () => {
   /** The scripts run with `/s` at a temporary folder, as the helper container runs them. */
