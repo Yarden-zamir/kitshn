@@ -175,7 +175,7 @@ export const OPERATIONS = {
   },
   "card-setting": {
     group: "cards",
-    title: `set a card setting: kitshn card-setting <card> --body '{"setting":"<id>","value":"<value>"}' (K-717)`,
+    title: `set a card setting: kitshn card-setting <card> --body '{"key":"<id>","value":"<value>"}' (K-717)`,
     method: "POST",
     route: "/api/cards/:target/settings",
     effect: "changes",
@@ -417,6 +417,14 @@ export const OPERATIONS = {
     method: "POST",
     route: "/api/apps/:target/backups",
     effect: "changes",
+    gate: { scope: "card" },
+  },
+  "app-backups-delete": {
+    group: "apps",
+    title: "delete every backup run of a Compose card and its repositories, for good (K-1823)",
+    method: "DELETE",
+    route: "/api/apps/:target/backups",
+    effect: "destroys",
     gate: { scope: "card" },
   },
   "app-restore": {

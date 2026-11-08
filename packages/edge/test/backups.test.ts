@@ -232,14 +232,14 @@ const daemonSocket = (machineId: string) =>
     close() {},
   }) as unknown as WebSocket;
 
-const admin = async (path: string, method: "GET" | "POST") => {
+const admin = async (path: string, method: "GET" | "POST" | "DELETE", body: object = {}) => {
   const response = await send(path, {
     method,
     headers: {
       "cf-access-jwt-assertion": await accessToken("admin-aud", { email: "owner@example.com" }),
       "content-type": "application/json",
     },
-    ...(method === "POST" ? { body: "{}" } : {}),
+    ...(method === "POST" ? { body: JSON.stringify(body) } : {}),
   });
   return { status: response.status, body: (await response.json()) as Record<string, unknown> };
 };
@@ -366,6 +366,111 @@ describe("backup runs (K-1817 to K-1819)", () => {
     });
     const after = (await admin("/api/apps/app-runs/backups", "GET")).body["runs"];
     expect(after).toContainEqual(expect.objectContaining({ run: before, state: "done", error: null }));
+  });
+
+  it("leaves a card with Daily backup off out of the daily run, also after a redeploy (K-1817)", async () => {
+    stubAccessCerts();
+    await setup("app-off", ["m-off"], "m-off");
+    await setup("app-on", ["m-on"], "m-on");
+    // Control on a card comes from its circles (K-717, tested with the provider settings); these cards have none.
+    await runInDurableObject(stub(), (instance) => {
+      vi.spyOn(instance as unknown as { canControl(): boolean }, "canControl").mockReturnValue(true);
+    });
+    expect(
+      (await admin("/api/cards/app-off/settings", "POST", { key: "dailyBackup", value: "off" })).status,
+    ).toBe(200);
+    expect(
+      (await admin("/api/cards/app-on/settings", "POST", { key: "dailyBackup", value: "no" })).status,
+    ).toBe(400);
+    const queued = await runInDurableObject(stub(), async (instance, durable) => {
+      const sql = durable.storage.sql;
+      // A redeploy writes the card again; the setting lives outside it.
+      const [row] = sql.exec<{ body: string }>("SELECT body FROM resources WHERE id = 'app-off'").toArray();
+      sql.exec("INSERT OR REPLACE INTO resources (id, body) VALUES ('app-off', ?)", row!.body);
+      sql.exec("UPDATE jobs SET state = 'done'");
+      reload(instance);
+      const daily = instance as unknown as {
+        deployedAndPreviewCards(): unknown;
+        dailyBackups(now: number): Promise<void>;
+      };
+      vi.spyOn(daily, "deployedAndPreviewCards").mockReturnValue({
+        deployedCards: ["app-off", "app-on"],
+        previewCards: [],
+        pullRequests: {},
+      });
+      await daily.dailyBackups(Date.now());
+      return sql
+        .exec<{ card: string }>(
+          "SELECT json_extract(command, '$.card') AS card FROM jobs WHERE state = 'queued' ORDER BY id",
+        )
+        .toArray()
+        .map((job) => job.card);
+    });
+    expect(queued).toEqual(["app-on"]);
+    expect((await admin("/api/apps/app-off/backups", "GET")).body["daily"]).toBe(false);
+    expect((await admin("/api/apps/app-on/backups", "GET")).body["daily"]).toBe(true);
+    // Back up now stays for a card that is out of the daily run.
+    expect((await admin("/api/apps/app-off/backups", "POST")).status).toBe(200);
+  });
+
+  it("deletes every backup of one card only, never while a job can reach it (K-1823)", async () => {
+    stubAccessCerts();
+    await setup("app-del", ["m-del", "m-two"], "m-del");
+    const keys = ["backups/app-del/config", `backups/app-del/data/${ID}`, "backups/app-del@m-two/config"];
+    const others = ["backups/app-del-2/config", "backups/app-other/config", "state/2026-11-08.json.gz"];
+    await env.BUCKET!.put(`backups/app-renamed/data/${ID}`, "x");
+    for (const key of [...keys, ...others]) await env.BUCKET!.put(key, "x");
+    await runInDurableObject(stub(), (_instance, durable) => {
+      for (const [run, card] of [
+        ["d1", "app-del"],
+        ["d2", "app-del"],
+        ["o1", "app-other"],
+        ["n1", "app-renamed"],
+      ])
+        durable.storage.sql.exec(
+          "INSERT INTO backups (run, card, machine_id, at, state) VALUES (?, ?, 'm-del', 1, 'done')",
+          run,
+          card,
+        );
+    });
+    // The sent backup job of setup can still write to the repository.
+    expect((await admin("/api/apps/app-del/backups", "DELETE")).status).toBe(409);
+    await runInDurableObject(stub(), (_instance, durable) => {
+      durable.storage.sql.exec("UPDATE jobs SET state = 'failed', output = ?", OFFLINE_OUTPUT);
+    });
+    // A dropped socket keeps the access of its job until the job expires (K-1814).
+    expect((await admin("/api/apps/app-del/backups", "DELETE")).status).toBe(409);
+    await runInDurableObject(stub(), (_instance, durable) => {
+      durable.storage.sql.exec("UPDATE jobs SET state = 'done'");
+    });
+    const deleted = await admin("/api/apps/app-del/backups", "DELETE");
+    expect(deleted).toEqual({ status: 200, body: { runs: 2, objects: 3 } });
+    for (const key of keys) expect(await env.BUCKET!.head(key)).toBeNull();
+    for (const key of others) expect(await env.BUCKET!.head(key)).not.toBeNull();
+    const rows = await runInDurableObject(stub(), (_instance, durable) =>
+      durable.storage.sql.exec<{ run: string }>("SELECT run FROM backups ORDER BY run").toArray(),
+    );
+    expect(rows.map((row) => row.run)).toEqual(expect.arrayContaining(["o1"]));
+    expect(rows.map((row) => row.run)).not.toEqual(expect.arrayContaining(["d1"]));
+    expect(rows.map((row) => row.run)).not.toEqual(expect.arrayContaining(["d2"]));
+    // A delete that stopped half-way leaves its mark, so no backup of the card starts until a delete ends.
+    const refused = await runInDurableObject(stub(), (instance, durable) => {
+      durable.storage.sql.exec("INSERT INTO meta (key, value) VALUES ('backups_deleting:app-del', '1')");
+      return (instance as unknown as { backupRefusal(card: string): unknown }).backupRefusal("app-del");
+    });
+    expect(refused).toEqual(expect.stringContaining("stopped half-way"));
+    expect((await admin("/api/apps/app-del/backups", "POST")).status).toBe(409);
+    expect((await admin("/api/apps/app-del/backups", "DELETE")).status).toBe(200);
+    const mark = await runInDurableObject(stub(), (_instance, durable) =>
+      durable.storage.sql.exec("SELECT key FROM meta WHERE key = 'backups_deleting:app-del'").toArray(),
+    );
+    expect(mark).toEqual([]);
+    // A removed card with runs left (K-1819) can go now; a card that kitshn never knew cannot.
+    expect(await admin("/api/apps/app-renamed/backups", "DELETE")).toEqual({
+      status: 200,
+      body: { runs: 1, objects: 1 },
+    });
+    expect((await admin("/api/apps/app-never/backups", "DELETE")).status).toBe(404);
   });
 
   it("deletes the repository of a removed card 7 days after the daily run first saw it gone", async () => {

@@ -32,7 +32,7 @@ import {
   type CardKind,
   type ProviderCard,
 } from "../core/model.ts";
-import type { ProviderCommand, ProviderSticker } from "@kitshn/local";
+import type { ProviderCardSetting, ProviderCommand, ProviderSticker } from "@kitshn/local";
 import { MAX_UPLOAD_BYTES, isLibraryId } from "../core/library.ts";
 import {
   type Box,
@@ -61,7 +61,9 @@ import {
   type BackupRun,
   BACKUP_LIMIT_BYTES,
   type BucketSize,
+  DAILY_BACKUP,
   backupFailureShown,
+  dailyBackupOn,
   gigabytes,
 } from "../core/backups.ts";
 import type {
@@ -867,6 +869,25 @@ export function App() {
       "error" in result
         ? { text: result.error, error: true, undo: null }
         : { text: `The backup of ${resource.name} is queued.`, error: false, undo: null },
+    );
+  };
+
+  /** K-1823: deletes every backup of the app for good, after a confirm. */
+  const deleteBackups = async (resource: Resource) => {
+    if (
+      !(await ask(
+        `Delete every backup of ${resource.name}, also the before-restore runs? Nobody can restore them afterwards. The app and its data stay.`,
+      ))
+    )
+      return;
+    const result = await callApi<{ runs: number }>(
+      "DELETE",
+      `/api/apps/${encodeURIComponent(resource.id)}/backups`,
+    );
+    showToast(
+      "error" in result
+        ? { text: result.error, error: true, undo: null }
+        : { text: `Deleted ${result.runs} backups of ${resource.name}.`, error: false, undo: null },
     );
   };
 
@@ -1981,6 +2002,7 @@ export function App() {
               r2Bucket={store.snapshot.r2Bucket}
               backupsOff={store.snapshot.backupsOff}
               onBackUpNow={(resource) => void backUpNow(resource)}
+              onDeleteBackups={(resource) => void deleteBackups(resource)}
               onBackups={setBackupsCard}
               orphanWorkers={store.snapshot.orphanWorkers}
               onDeleteOrphanWorker={(orphan) => void deleteOrphanWorker(orphan)}
@@ -2522,6 +2544,7 @@ function Panel(props: {
   /** K-1815: no backup key, so backups are off. */
   backupsOff: boolean;
   onBackUpNow: (resource: Resource) => void;
+  onDeleteBackups: (resource: Resource) => void;
   onBackups: (resource: Resource) => void;
   orphanWorkers: ReadonlyArray<OrphanWorker>;
   onDeleteOrphanWorker: (orphan: OrphanWorker) => void;
@@ -2614,6 +2637,7 @@ function Panel(props: {
         r2Bucket={props.r2Bucket}
         backupsOff={props.backupsOff}
         onBackUpNow={props.onBackUpNow}
+        onDeleteBackups={props.onDeleteBackups}
         onBackups={props.onBackups}
         orphanWorkers={cards[0].id === ADMIN_RESOURCE_ID ? props.orphanWorkers : []}
         onDeleteOrphanWorker={props.onDeleteOrphanWorker}
@@ -3047,6 +3071,7 @@ function CardPanel(props: {
   /** K-1815: no backup key, so backups are off. */
   backupsOff: boolean;
   onBackUpNow: (resource: Resource) => void;
+  onDeleteBackups: (resource: Resource) => void;
   onBackups: (resource: Resource) => void;
   /** K-909: on the admin card, what removed Worker apps left in Cloudflare. */
   orphanWorkers: ReadonlyArray<OrphanWorker>;
@@ -3471,10 +3496,18 @@ function CardPanel(props: {
                 <span>{backupLabel(props.backup)}</span>{" "}
                 {backupFailureShown(props.backup, progress) ? <BackupState run={props.backup} /> : null}
               </>
-            ) : props.backupsOff ? null : (
+            ) : props.backupsOff ? null : dailyBackupOn(props.cardSettings) ? (
               <span class="muted">No backup yet; the first runs tonight.</span>
+            ) : (
+              <span class="muted">No backup yet.</span>
             )}
           </div>
+          <SettingRow
+            setting={DAILY_BACKUP}
+            current={props.cardSettings[DAILY_BACKUP.id] ?? DAILY_BACKUP.default}
+            tip="Daily backup: on backs this app up at 03:00 UTC each day; off leaves it out. Back up now still works (K-1817)."
+            onSet={(value) => props.onSetCardSetting(resource, DAILY_BACKUP.id, value)}
+          />
           <div class="row">
             <button
               class="btn"
@@ -3495,6 +3528,15 @@ function CardPanel(props: {
             >
               Backups…
             </button>
+            {props.backup ? (
+              <button
+                class="btn"
+                data-tip="Delete every backup of this app, also the before-restore runs, for good. The app and its data stay (K-1823)."
+                onClick={() => props.onDeleteBackups(resource)}
+              >
+                Delete backups…
+              </button>
+            ) : null}
           </div>
         </section>
       ) : null}
@@ -3795,6 +3837,36 @@ const STICKER_CLASSES: Record<ProviderSticker["tone"], string> = {
   bad: "",
 };
 
+/** K-717: one card setting as a row of buttons, one per value. */
+function SettingRow(props: {
+  setting: ProviderCardSetting;
+  current: string;
+  tip: string;
+  onSet: (value: string) => void;
+}) {
+  const { setting, current } = props;
+  return (
+    <div class="row">
+      <span class="label" data-tip={props.tip}>
+        {setting.title}
+      </span>
+      <div class="seg small">
+        {setting.values.map((value) => (
+          <button
+            key={value}
+            type="button"
+            aria-pressed={value === current}
+            data-tip={`Set ${setting.title} to ${value}. It needs control on this card.`}
+            onClick={() => value !== current && props.onSet(value)}
+          >
+            {value}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** K-1625: the stickers and facts that a provider attaches to its card; kitshn shows them without reading them. */
 function ProviderFacts(props: {
   resource: Resource;
@@ -3809,32 +3881,15 @@ function ProviderFacts(props: {
   return (
     <>
       {/* K-717: a setting of the card; a missing value is the default of the setting. */}
-      {card.settings.map((setting) => {
-        const current = props.values[setting.id] ?? setting.default;
-        return (
-          <div key={setting.id} class="row">
-            <span
-              class="label"
-              data-tip={`${setting.title}: ${card.name} gets this value on ${props.resource.name}.`}
-            >
-              {setting.title}
-            </span>
-            <div class="seg small">
-              {setting.values.map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={value === current}
-                  data-tip={`Set ${setting.title} to ${value}. It needs control on this card.`}
-                  onClick={() => value !== current && props.onSetting(setting.id, value)}
-                >
-                  {value}
-                </button>
-              ))}
-            </div>
-          </div>
-        );
-      })}
+      {card.settings.map((setting) => (
+        <SettingRow
+          key={setting.id}
+          setting={setting}
+          current={props.values[setting.id] ?? setting.default}
+          tip={`${setting.title}: ${card.name} gets this value on ${props.resource.name}.`}
+          onSet={(value) => props.onSetting(setting.id, value)}
+        />
+      ))}
       {/* K-1625: a list of the card, with the commands of each row. */}
       {card.lists.map((list) => (
         <section key={list.id}>
