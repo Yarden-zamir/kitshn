@@ -2926,3 +2926,35 @@ details.raw[open] > summary::before {
   width: 100%;
   font: 0.85rem var(--mono);
 }
+
+/* K-835: the Values dialog: one line per name, its buttons at the end of the line. */
+.dialog.values {
+  width: min(48rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+}
+.values .row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 6px 0;
+}
+.values section {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: var(--bw) solid var(--border);
+}
+.values ul {
+  max-height: none;
+}
+.values li {
+  cursor: default;
+  border-bottom: 1px dashed var(--border);
+}
+.values .push {
+  margin-left: auto;
+}
+.values .when {
+  font-size: 0.8rem;
+}

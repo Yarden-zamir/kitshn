@@ -64,7 +64,8 @@ describe("Durable Object migrations", () => {
     db.exec("UPDATE deploys SET state = 'done' WHERE id = 'h2'");
     db.exec("UPDATE deploys SET state = 'skipped' WHERE id = 'a2'");
     expect(before).toEqual({ deployed: 0, preview: null });
-    expect(db.prepare("SELECT * FROM deploy_cards ORDER BY rowid").all()).toEqual([
+    const facts = "resource_id, newest_id, newest_state, newest_reason, deployed, preview, repo_ids";
+    expect(db.prepare(`SELECT ${facts} FROM deploy_cards ORDER BY rowid`).all()).toEqual([
       {
         resource_id: "a",
         newest_id: "a3",

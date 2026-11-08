@@ -518,6 +518,21 @@ import {
   pullRequestNumber,
 } from "./deploys.ts";
 import { DEFAULT_APP } from "kitshn/names";
+import { MAX_STORED, valueNameRefusal, valueRefusal } from "kitshn/values";
+import {
+  type UsedValue,
+  type ValueSetView,
+  githubNames,
+  missingText,
+  nameViews,
+  parseUsed,
+  parseValueSet,
+  resolveValues,
+  staleAfter,
+  valueSetKey,
+} from "../core/values.ts";
+import { NO_KEY, deliverValues, storedNames, valueViews, writeValue } from "./app-values.ts";
+import { aesKey } from "./seal.ts";
 import {
   AppKey,
   ComposeApp,
@@ -868,6 +883,8 @@ interface DeployFacts {
   readonly repoCards: ReadonlyArray<{ repo_id: string; resource_id: string }>;
   /** K-718: the newest deploy of each card, for `/agent/state`. */
   readonly newest: ReadonlyMap<string, { id: string; state: string; reason: string | null }>;
+  /** K-835: the names of each card that changed since the values of its live build. */
+  readonly valuesStale: Readonly<Record<string, ReadonlyArray<string>>>;
 }
 
 /** The POST paths that take a client message as their body. */
@@ -1086,6 +1103,8 @@ export class Kitshn extends DurableObject<Env> {
   private checkRetryAt = new Map<string, number>();
   /** K-1302: the deploy facts that each snapshot needs, read once; `sql` drops them on every write to `deploys`. */
   private deployFacts: DeployFacts | null = null;
+  /** K-832: the AES-GCM key of the secret values, derived once per instance. */
+  private valuesKey: Promise<CryptoKey> | null = null;
   /** K-1302: the rows that `sql` wrote, so a wake knows whether its start steps changed anything. */
   private rowsWritten = 0;
   /** K-1302: the newest 50 rows of each event table, which each snapshot shows; `sql` drops them on a write. */
@@ -1561,7 +1580,7 @@ export class Kitshn extends DurableObject<Env> {
 
   private sql<T extends Record<string, SqlStorageValue>>(query: string, ...bindings: Array<SqlStorageValue>) {
     if (!query.trimStart().startsWith("SELECT")) {
-      if (query.includes("deploys")) this.deployFacts = null;
+      if (query.includes("deploys") || query.includes("deploy_cards")) this.deployFacts = null;
       if (query.includes("ask_events")) this.recentAskRows = null;
       if (query.includes("link_events")) this.recentLinkRows = null;
     }
@@ -3458,10 +3477,10 @@ export class Kitshn extends DurableObject<Env> {
       this.sql(
         `INSERT INTO deploys (id, repo, repo_id, environment, resource_id, address, script, starts_in, kind, sha, state,
            expires_at, branch, app, machine_id, job_id, compose_file, addresses, worker, app_key, reason, version_id,
-           run_id, run_attempt, images, needs, origin, workflow, compose)
+           run_id, run_attempt, images, needs, origin, workflow, compose, values_used)
          SELECT ?, repo, repo_id, environment, resource_id, address, script, starts_in, kind, sha, ?, ?, branch, app,
            machine_id, ?, compose_file, addresses, worker, app_key, ?, version_id, NULL, NULL, images, needs, ?, workflow,
-           compose
+           compose, values_used
          FROM deploys WHERE id = ?`,
         id,
         state,
@@ -3488,12 +3507,31 @@ export class Kitshn extends DurableObject<Env> {
           error: `Cloudflare refused the rollback: ${error instanceof Error ? error.message : String(error)}`,
         };
       }
+      // K-834: the version keeps the store values of that deploy, so each one that changed since needs a redeploy.
+      const used = parseUsed(target.values_used);
+      const stored =
+        target.repo_id === null
+          ? new Map()
+          : storedNames(this.sql.bind(this), valueSetKey(target.repo_id, target.app_key, target.environment));
+      const changed = used
+        .filter((item) => item.source === "kitshn" && stored.get(item.name)?.version !== item.version)
+        .map((item) => item.name);
       this.ctx.storage.transactionSync(() => {
         insert("done", null);
+        this.valuesWentLive(card, used);
+        if (changed.length > 0)
+          this.sql(
+            "UPDATE deploy_cards SET values_stale = ? WHERE resource_id = ?",
+            JSON.stringify(changed),
+            card,
+          );
         this.insertRevision(actor, `Rolled back ${resource.name} to ${sha} (K-821)`, [], null);
       });
       return {
-        note: `${resource.name} serves ${sha} again, with the vars and secrets of that deploy; its data did not roll back.`,
+        note:
+          changed.length === 0
+            ? `${resource.name} serves ${sha} again, with the vars and secrets of that deploy; its data did not roll back.`
+            : `${resource.name} serves ${sha} again, with the vars and secrets of that deploy, so it got the old values of ${changed.join(", ")}. The next deploy gives it today's values (K-834). Its data did not roll back.`,
         jobId: null,
       };
     }
@@ -3931,6 +3969,7 @@ export class Kitshn extends DurableObject<Env> {
     const pullRequests: Array<readonly [string, number]> = [];
     const repoCards = new Map<string, Array<string>>();
     const newest = new Map<string, { id: string; state: string; reason: string | null }>();
+    const valuesStale: Record<string, ReadonlyArray<string>> = {};
     for (const row of this.sql<{
       resource_id: string;
       newest_id: string;
@@ -3939,7 +3978,10 @@ export class Kitshn extends DurableObject<Env> {
       deployed: number;
       preview: string | null;
       repo_ids: string;
+      values_stale: string | null;
     }>("SELECT * FROM deploy_cards ORDER BY rowid")) {
+      if (row.values_stale !== null)
+        valuesStale[row.resource_id] = JSON.parse(row.values_stale) as Array<string>;
       if (row.deployed === 1) {
         deployed.push(row.resource_id);
         if (row.preview !== null) {
@@ -3963,6 +4005,7 @@ export class Kitshn extends DurableObject<Env> {
         cards.map((resource_id) => ({ repo_id, resource_id })),
       ),
       newest,
+      valuesStale,
     };
     return this.deployFacts;
   }
@@ -4192,6 +4235,7 @@ export class Kitshn extends DurableObject<Env> {
       ...this.deployedAndPreviewCards(),
       orphanWorkers: this.orphanWorkers(),
       deployNotes: this.deployNotes(),
+      valuesStale: this.deploys().valuesStale,
       // K-1125: only the cards that are still checked, so a card that leaves the check loses its DOWN sticker.
       uptime: Object.fromEntries(
         this.uptimeTargets().map((card) => {
@@ -5264,8 +5308,25 @@ export class Kitshn extends DurableObject<Env> {
       if (request.method === "GET") return this.runRollbackPlanResponse(card);
       if (request.method === "POST") return await this.runRollback(caller, card);
     }
+    if (path.startsWith("/api/apps/") && path.endsWith("/redeploy") && request.method === "POST")
+      return await this.redeployApp(
+        caller,
+        decodeURIComponent(path.slice("/api/apps/".length, -"/redeploy".length)),
+      );
     if (path.startsWith("/api/apps/") && request.method === "DELETE")
       return this.removeApp(caller, decodeURIComponent(path.slice("/api/apps/".length)));
+    // K-830, K-835: the values of the value sets.
+    if (path === "/api/values" && request.method === "GET")
+      return this.valuesResponse(new URL(request.url).searchParams.get("set"));
+    if (path.startsWith("/api/values/")) {
+      const [set = "", name = "", ...rest] = path
+        .slice("/api/values/".length)
+        .split("/")
+        .map(decodeURIComponent);
+      if (rest.length === 0 && request.method === "PUT")
+        return await this.setValue(caller, set, name, await request.json().catch(() => null));
+      if (rest.length === 0 && request.method === "DELETE") return this.removeValue(caller, set, name);
+    }
     if (path === "/api/repos/check" && request.method === "POST") return await this.checkReposOnGitHub();
     // K-1770 to K-1774: the passes of Settings: on or off, the audiences, and "Rotate pass key".
     if (path === "/api/passes" && request.method === "GET") return Response.json(this.passSettings());
@@ -6195,6 +6256,20 @@ export class Kitshn extends DurableObject<Env> {
       this.updateLiveSites(machine, message.sites);
     } else if (message.type === "providers") {
       this.updateProviders(machine, message.providers);
+    } else if (
+      message.type === "jobValues" &&
+      attachment.check === "signed" &&
+      typeof message.requestId === "string"
+    ) {
+      const requestId = message.requestId.slice(0, 64);
+      const answer = await this.jobValuesAnswer(machine, message.jobId);
+      send(socket, {
+        type: "jobValues",
+        requestId,
+        ...("values" in answer
+          ? { values: answer.values, error: null }
+          : { values: null, error: answer.error }),
+      } satisfies ServerToDaemon);
     } else if (message.type === "cancelJob" && typeof message.requestId === "string") {
       const error = this.cancelJob(
         message.jobId,
@@ -6385,6 +6460,13 @@ export class Kitshn extends DurableObject<Env> {
       ) {
         this.settleNotifyToken(`job:${message.id}`, result.ok === true);
         this.settleInstance(command.project, machine.id, result.ok === true);
+        // K-835: a build that came up runs with the values of its job.
+        const [ran] = this.sql<{ values_used: string | null }>(
+          "SELECT values_used FROM jobs WHERE id = ?",
+          message.id,
+        );
+        if (result.ok === true && ran?.values_used)
+          this.valuesWentLive(command.project, parseUsed(ran.values_used));
         // K-1108: the offline route of the job goes when the site is up. K-817: a failed build gives up the DNS
         // record that its plan made.
         void this.scheduleAlarm();
@@ -7614,12 +7696,64 @@ export class Kitshn extends DurableObject<Env> {
           command = { kind: "shell", script };
         }
       }
+      // K-833: a Compose job gets the store values that its deploy needs, checked when it goes out. The job row and
+      // its message hold only the names; the daemon asks for the values over its signed connection (jobValues).
+      let values: ReadonlyArray<{ readonly name: string; readonly secret: boolean }> = [];
+      if (
+        command.kind === "compose" ||
+        command.kind === "compose-redeploy" ||
+        command.kind === "compose-rollback"
+      ) {
+        const needed = this.jobValueNeeds(command);
+        const wanted = needed?.used.filter((used) => used.source === "kitshn") ?? [];
+        const status = this.machineView(machine).status;
+        // The daemon sends its status just after it connects; a job that takes values waits for it.
+        if (wanted.length > 0 && !status) continue;
+        if (needed !== null) {
+          const stored = storedNames(this.sql.bind(this), needed.setKey);
+          const missing = wanted.flatMap((used) => {
+            const row = stored.get(used.name);
+            return row?.kind === used.kind
+              ? []
+              : [
+                  {
+                    name: used.name,
+                    kind: used.kind,
+                    why: row === undefined ? ("missing" as const) : ("kind" as const),
+                  },
+                ];
+          });
+          const refusal =
+            wanted.length > 0 && !status?.capabilities?.includes("app-values")
+              ? `The daemon of ${machine.name} cannot take kitshn values yet. Update daemon first (K-833).`
+              : missing.length > 0
+                ? missingText(this.valueSetLabel(needed.setKey), needed.setKey, missing)
+                : null;
+          if (refusal !== null) {
+            this.sql("UPDATE jobs SET state = 'failed', output = ? WHERE id = ?", refusal, job.id);
+            this.jobsEnded([job.id]);
+            this.settleInstance(command.project, machine.id, false);
+            continue;
+          }
+          const used = needed.used.map((item) =>
+            item.source === "kitshn" ? { ...item, version: stored.get(item.name)?.version ?? null } : item,
+          );
+          this.sql(
+            "UPDATE jobs SET values_used = ?, values_set = ? WHERE id = ?",
+            JSON.stringify(used),
+            needed.setKey,
+            job.id,
+          );
+          values = wanted.map((used) => ({ name: used.name, secret: used.kind === "secret" }));
+        }
+      }
       // K-1908, K-822: each Compose job of an app gets a new notify token and the current Access values.
       const app =
         command.kind === "compose" ||
         command.kind === "compose-redeploy" ||
         command.kind === "compose-rollback"
           ? {
+              ...(values.length > 0 ? { values } : {}),
               notify: {
                 url: this.notifyUrl(),
                 token: this.mintNotifyToken(command.project, `job:${job.id}`),
@@ -7638,6 +7772,67 @@ export class Kitshn extends DurableObject<Env> {
       sent++;
     }
     return sent;
+  }
+
+  /**
+   * K-831, K-833: the value set and the needed names of a Compose job: a deploy and a rollback by their deploy row, a
+   * redeploy by the last finished deploy of its card. Null for a row from before the store.
+   */
+  private jobValueNeeds(
+    command: Extract<Command, { kind: "compose" | "compose-redeploy" | "compose-rollback" }>,
+  ): { readonly setKey: string; readonly used: ReadonlyArray<UsedValue> } | null {
+    const row =
+      command.kind === "compose-redeploy"
+        ? this.lastDone(command.project)
+        : (this.sql<DeployRow>("SELECT * FROM deploys WHERE id = ?", command.deployId)[0] ?? null);
+    if (!row || row.repo_id === null) return null;
+    return {
+      setKey: valueSetKey(row.repo_id, row.app_key, row.environment),
+      used: parseUsed(row.values_used),
+    };
+  }
+
+  /**
+   * K-833: the values of a Compose job, for the daemon that runs it: only for a job that this machine runs now, of a
+   * repo that is not blocked, and not during the pause. The answer goes only over the signed connection.
+   */
+  private async jobValuesAnswer(
+    machine: Machine,
+    jobId: unknown,
+  ): Promise<{ values: Record<string, string> } | { error: string }> {
+    if (typeof jobId !== "number" || !Number.isSafeInteger(jobId))
+      return { error: "jobValues names no job." };
+    if (this.state.paused) return { error: "kitshn is paused, so it gives no values until Resume (K-1504)." };
+    const [job] = this.sql<{ command: string; values_used: string | null; values_set: string | null }>(
+      "SELECT command, values_used, values_set FROM jobs WHERE id = ? AND machine_id = ? AND state = 'sent'",
+      jobId,
+      machine.id,
+    );
+    if (!job || job.values_set === null)
+      return { error: `The job ${jobId} of ${machine.name} takes no values now.` };
+    const command = JSON.parse(job.command) as Command;
+    if (
+      command.kind !== "compose" &&
+      command.kind !== "compose-redeploy" &&
+      command.kind !== "compose-rollback"
+    )
+      return { error: `The job ${jobId} is no Compose job.` };
+    const refusal = this.repoRefusal(this.repoIdOfCard(command.project));
+    if (refusal !== null) return { error: refusal };
+    const delivered = await deliverValues(
+      this.sql.bind(this),
+      await this.secretsKey(),
+      job.values_set,
+      parseUsed(job.values_used),
+    );
+    if ("missing" in delivered)
+      return {
+        error: [
+          missingText(this.valueSetLabel(job.values_set), job.values_set, delivered.missing),
+          ...(delivered.reason === null ? [] : [delivered.reason]),
+        ].join("\n"),
+      };
+    return { values: Object.fromEntries(delivered.values.map((value) => [value.name, value.value])) };
   }
 
   /** K-627: the one rollout of daemon updates, kept in `meta` so it survives a deploy and an eviction. */
@@ -9872,7 +10067,20 @@ export class Kitshn extends DurableObject<Env> {
       // K-819: Forget stops what the repo has under way as Block does, then drops the row; the repo waits again.
       if (state === "forget") {
         this.sql("DELETE FROM repos WHERE repo_id = ?", repoId);
-        this.insertRevision(caller.actor, `Forgot ${row.name} (K-819)`, [], null);
+        // K-830: the values of a forgotten repo go with it; a new deploy of the repo needs them set again.
+        const prefix = `${repoId}:`;
+        const values = this.sql<{ name: string }>(
+          "DELETE FROM app_values WHERE substr(set_key, 1, length(?)) = ? RETURNING name",
+          prefix,
+          prefix,
+        ).length;
+        this.sql("DELETE FROM value_sets WHERE substr(set_key, 1, length(?)) = ?", prefix, prefix);
+        this.insertRevision(
+          caller.actor,
+          `Forgot ${row.name}${values === 0 ? "" : ` and its ${values === 1 ? "1 value" : `${values} values`}`} (K-819)`,
+          [],
+          null,
+        );
         return this.stopRepoDeploys(repoId, `The owner forgot ${row.name} (K-819).`);
       }
       // K-819: the owner's Allow takes over a repo that an agent key allowed, and clears the key.
@@ -10187,6 +10395,271 @@ export class Kitshn extends DurableObject<Env> {
     return null;
   }
 
+  /** K-832: the key of the secret values, from the Worker secret KITSHN_SECRETS_KEY; null without it. */
+  private secretsKey(): Promise<CryptoKey | null> {
+    const secret = this.env.KITSHN_SECRETS_KEY?.trim();
+    if (!secret) return Promise.resolve(null);
+    return (this.valuesKey ??= aesKey(secret, "kitshn app_values"));
+  }
+
+  /** K-832: a new version of a value, from one counter that never goes back, so a version is never used twice. */
+  private nextValueVersion(): number {
+    const next = Number(this.meta("app_value_version") ?? "0") + 1;
+    this.setMeta("app_value_version", String(next));
+    return next;
+  }
+
+  /** K-830: the value set of a set key, or of a card that a deploy of a repo made; null when the text names neither. */
+  private valueSetOf(ref: string): string | null {
+    if (ref.includes(":")) return parseValueSet(ref) ? ref : null;
+    const [row] = this.sql<{ set_key: string }>("SELECT set_key FROM value_cards WHERE card_id = ?", ref);
+    return row?.set_key ?? null;
+  }
+
+  /** K-830: the cards of a value set that are on the map: the card of its push environment, or each preview. */
+  private valueSetCards(setKey: string): Array<string> {
+    return this.sql<{ card_id: string }>("SELECT card_id FROM value_cards WHERE set_key = ?", setKey)
+      .map((row) => row.card_id)
+      .filter((card) => this.state.resources.has(card));
+  }
+
+  /** K-830: a value set for people: `owner/repo prod`, with the app key when it is not `app`. */
+  private valueSetLabel(setKey: string): string {
+    const parts = parseValueSet(setKey);
+    if (parts === null) throw new Error(`${setKey} is no value set key (K-830).`);
+    const [repo] = this.sql<{ name: string }>("SELECT name FROM repos WHERE repo_id = ?", parts.repoId);
+    const app = parts.appKey === DEFAULT_APP ? "" : ` ${parts.appKey}`;
+    return `${repo?.name ?? `repo ${parts.repoId}`}${app} ${parts.environment}`;
+  }
+
+  /**
+   * K-835: a change of `name` in a value set marks each card whose live build got it from the store, so the card shows
+   * "needs redeploy". Returns those cards.
+   */
+  private markValuesStale(setKey: string, name: string): Array<string> {
+    const marked: Array<string> = [];
+    for (const card of this.valueSetCards(setKey)) {
+      const [row] = this.sql<{ values_live: string | null; values_stale: string | null }>(
+        "SELECT values_live, values_stale FROM deploy_cards WHERE resource_id = ?",
+        card,
+      );
+      if (!row || !staleAfter(parseUsed(row.values_live), name)) continue;
+      const stale = new Set(JSON.parse(row.values_stale ?? "[]") as Array<string>);
+      stale.add(name);
+      this.sql(
+        "UPDATE deploy_cards SET values_stale = ? WHERE resource_id = ?",
+        JSON.stringify([...stale]),
+        card,
+      );
+      marked.push(card);
+    }
+    return marked;
+  }
+
+  /** K-835: the values that a card got with its build that came up; it no longer needs a redeploy for them. */
+  private valuesWentLive(card: string, used: ReadonlyArray<UsedValue>) {
+    this.sql(
+      "UPDATE deploy_cards SET values_live = ?, values_stale = NULL WHERE resource_id = ?",
+      JSON.stringify(used),
+      card,
+    );
+  }
+
+  /** K-835: the Values view of every value set, or of the set of `ref` (a set key or a card). */
+  private valuesResponse(ref: string | null): Response {
+    const only = ref === null || ref === "" ? null : this.valueSetOf(ref);
+    if (ref !== null && ref !== "" && only === null)
+      return Response.json({ error: `There is no such value set or card: "${ref}".` }, { status: 404 });
+    const planned = new Map(
+      this.sql<{ set_key: string; secrets: string; vars: string }>(
+        "SELECT set_key, secrets, vars FROM value_sets",
+      ).map((row) => [
+        row.set_key,
+        { secrets: JSON.parse(row.secrets) as Array<string>, vars: JSON.parse(row.vars) as Array<string> },
+      ]),
+    );
+    const stored = valueViews(this.sql.bind(this), only === null ? null : [only]);
+    const keys = only !== null ? [only] : [...new Set([...planned.keys(), ...stored.keys()])].sort();
+    const sets: Array<ValueSetView> = keys.map((key) => {
+      const parts = parseValueSet(key);
+      if (parts === null) throw new Error(`${key} is no value set key (K-830).`);
+      const cards = this.valueSetCards(key).map((id) => {
+        const [row] = this.sql<{ values_live: string | null; values_stale: string | null }>(
+          "SELECT values_live, values_stale FROM deploy_cards WHERE resource_id = ?",
+          id,
+        );
+        return {
+          id,
+          name: this.state.resources.get(id)?.name ?? id,
+          live: parseUsed(row?.values_live ?? null),
+          stale: JSON.parse(row?.values_stale ?? "[]") as Array<string>,
+        };
+      });
+      // K-831: a GitHub value of the newest live build wins, so the store does not need it.
+      const github = new Set(
+        cards.flatMap((card) =>
+          card.live.filter((used) => used.source === "github").map((used) => used.name),
+        ),
+      );
+      const [repo] = this.sql<{ name: string }>("SELECT name FROM repos WHERE repo_id = ?", parts.repoId);
+      return {
+        key,
+        label: this.valueSetLabel(key),
+        repo: repo?.name ?? parts.repoId,
+        appKey: parts.appKey,
+        environment: parts.environment,
+        cards: cards.map(({ id, name, stale }) => ({ id, name, stale })),
+        needs: planned.get(key) ?? null,
+        names: nameViews(planned.get(key) ?? null, stored.get(key) ?? [], github),
+      };
+    });
+    return Response.json({ sets, secretsKey: Boolean(this.env.KITSHN_SECRETS_KEY?.trim()) });
+  }
+
+  /** K-830, K-832: sets one value of a value set. A change keeps the kind; nothing keeps the old value. */
+  private async setValue(caller: Caller, ref: string, name: string, body: unknown): Promise<Response> {
+    const fail = (status: number, error: string) => Response.json({ error }, { status });
+    const setKey = this.valueSetOf(ref);
+    if (setKey === null) return fail(404, `There is no such value set or card: "${ref}".`);
+    const refusal = valueNameRefusal(name);
+    if (refusal !== null) return fail(400, refusal);
+    const kind = isRecord(body) ? body["kind"] : null;
+    const value = isRecord(body) ? body["value"] : null;
+    if ((kind !== "secret" && kind !== "var") || typeof value !== "string")
+      return fail(400, 'Send {"kind": "secret" | "var", "value": "<text>"}.');
+    const bad = valueRefusal(value);
+    if (bad !== null) return fail(400, bad);
+    const key = await this.secretsKey();
+    if (kind === "secret" && key === null) return fail(503, NO_KEY);
+    // The version goes into the bound data of the seal, so it is taken before the await of the seal.
+    const version = this.nextValueVersion();
+    const write = await writeValue(key, setKey, name, kind, value, version);
+    // Checked after the await, in the same step as the write, so a change in between cannot pass them.
+    const [existing] = this.sql<{ kind: string }>(
+      "SELECT kind FROM app_values WHERE set_key = ? AND name = ?",
+      setKey,
+      name,
+    );
+    if (existing && existing.kind !== kind)
+      return fail(
+        409,
+        `${name} is a ${existing.kind} in ${this.valueSetLabel(setKey)}. Remove it first to set it as a ${kind} (K-830).`,
+      );
+    const [{ count } = { count: 0 }] = this.sql<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM app_values",
+    );
+    if (!existing && count >= MAX_STORED)
+      return fail(409, `kitshn keeps at most ${MAX_STORED} values; remove one first (K-836).`);
+    const label = this.valueSetLabel(setKey);
+    const stale = this.ctx.storage.transactionSync(() => {
+      write(this.sql.bind(this), Date.now(), caller.actor);
+      const marked = this.markValuesStale(setKey, name);
+      // K-835: History names the value, never holds it, and has no Undo for it.
+      this.insertRevision(
+        caller.actor,
+        `${existing ? "Changed" : "Set"} the ${kind} ${name} of ${label}`,
+        [],
+        null,
+      );
+      return marked;
+    });
+    this.load();
+    this.broadcast();
+    return Response.json({
+      set: setKey,
+      name,
+      kind,
+      version,
+      stale: stale.map((card) => this.state.resources.get(card)?.name ?? card),
+    });
+  }
+
+  /** K-830: removes one value of a value set; nothing keeps it. A deploy that needs it stops until it is set again. */
+  private removeValue(caller: Caller, ref: string, name: string): Response {
+    const setKey = this.valueSetOf(ref);
+    if (setKey === null)
+      return Response.json({ error: `There is no such value set or card: "${ref}".` }, { status: 404 });
+    const [row] = this.sql<{ kind: string }>(
+      "SELECT kind FROM app_values WHERE set_key = ? AND name = ?",
+      setKey,
+      name,
+    );
+    if (!row)
+      return Response.json({ error: `${this.valueSetLabel(setKey)} has no value ${name}.` }, { status: 404 });
+    const label = this.valueSetLabel(setKey);
+    const stale = this.ctx.storage.transactionSync(() => {
+      this.sql("DELETE FROM app_values WHERE set_key = ? AND name = ?", setKey, name);
+      const marked = this.markValuesStale(setKey, name);
+      this.insertRevision(caller.actor, `Removed the ${row.kind} ${name} of ${label}`, [], null);
+      return marked;
+    });
+    this.load();
+    this.broadcast();
+    return Response.json({
+      set: setKey,
+      name,
+      stale: stale.map((card) => this.state.resources.get(card)?.name ?? card),
+    });
+  }
+
+  /**
+   * K-835: "Redeploy" starts a card again with today's values: a Compose app starts its last good build, and a static
+   * site or Worker app builds again through the GitHub App (K-718, K-908).
+   */
+  private async redeployApp(caller: Caller, card: string): Promise<Response> {
+    if (this.state.paused)
+      return Response.json(
+        { error: "kitshn is paused, so Redeploy waits until the owner resumes (K-1504)." },
+        { status: 423 },
+      );
+    const row = this.lastDone(card);
+    const machine = row?.machine_id ? this.state.machines.get(row.machine_id) : undefined;
+    const plan = agentDeployPlan(
+      row ? this.lastDeployOf(row) : null,
+      row?.app === "compose" ? "redeploy" : "build",
+      machine ? this.redeployFacts(machine, card, row?.repo ?? "") : null,
+    );
+    if (plan.kind === "refused") return Response.json({ error: plan.error }, { status: plan.status });
+    const refusal = this.repoRefusal(row?.repo_id ?? null);
+    if (refusal !== null || !row?.repo_id) return Response.json({ error: refusal }, { status: 403 });
+    if (plan.kind === "build")
+      return await this.agentBuild(caller, row.repo_id, plan.branch, row.workflow ?? AGENT_WORKFLOW);
+    if (!machine) return Response.json({ error: "The machine of this app is gone." }, { status: 409 });
+    const resource = this.state.resources.get(card);
+    const others = resource ? this.instanceRedeploys(resource, plan.command) : [];
+    return this.agentRedeploy(
+      caller,
+      [{ machine, command: plan.command }, ...others].map((target) => ({
+        machineId: target.machine.id,
+        command: target.command,
+      })),
+      caller.gated?.approval ?? null,
+    );
+  }
+
+  /**
+   * K-831: the store values that a planned deploy needs, by its row: the names that it takes from the store, read now.
+   * A Worker deploy and each Compose job read them when they go out, so a change after the plan still counts.
+   */
+  private async deployValues(row: DeployRow) {
+    if (row.repo_id === null) return { values: [], used: [] } as const;
+    const setKey = valueSetKey(row.repo_id, row.app_key, row.environment);
+    const delivered = await deliverValues(
+      this.sql.bind(this),
+      await this.secretsKey(),
+      setKey,
+      parseUsed(row.values_used),
+    );
+    if ("missing" in delivered)
+      return {
+        error: [
+          missingText(this.valueSetLabel(setKey), setKey, delivered.missing),
+          ...(delivered.reason === null ? [] : [delivered.reason]),
+        ].join("\n"),
+      } as const;
+    return delivered;
+  }
+
   private async planDeploy(api: Api, deployer: Deployer, input: Record<string, unknown>) {
     let recipe: Recipe;
     try {
@@ -10289,6 +10762,46 @@ export class Kitshn extends DurableObject<Env> {
         : null;
     const gate = result.kind === "teardown" || handover ? null : this.repoGate(deployer);
     if (gate) return gate;
+    // K-831: each name that the deploy needs has a value, from GitHub or the store, before any work. The plan records
+    // the needs of its value set, so the map lists the names also when it refuses.
+    let valuesUsed: ReadonlyArray<UsedValue> = [];
+    let buildVars: Readonly<Record<string, string>> = {};
+    if (result.kind === "deploy" && skip === undefined) {
+      const github = githubNames(input["github"]);
+      if (typeof github === "string") return Response.json({ error: github }, { status: 400 });
+      const setKey = valueSetKey(deployer.repoId, key, result.environment);
+      const needs = recipe.needs ?? {};
+      this.sql(
+        `INSERT INTO value_sets (set_key, secrets, vars) VALUES (?, ?, ?) ON CONFLICT (set_key) DO UPDATE SET
+         secrets = excluded.secrets, vars = excluded.vars WHERE secrets != excluded.secrets OR vars != excluded.vars`,
+        setKey,
+        JSON.stringify("secrets" in needs ? (needs.secrets ?? []) : []),
+        JSON.stringify(needs.vars ?? []),
+      );
+      const resolved = resolveValues(needs, storedNames(this.sql.bind(this), setKey), github);
+      if (resolved.missing.length > 0)
+        return Response.json(
+          { error: missingText(this.valueSetLabel(setKey), setKey, resolved.missing) },
+          { status: 409 },
+        );
+      if (
+        resolved.used.some((used) => used.source === "kitshn" && used.kind === "secret") &&
+        !this.env.KITSHN_SECRETS_KEY?.trim()
+      )
+        return Response.json({ error: NO_KEY }, { status: 503 });
+      valuesUsed = resolved.used;
+      // K-834: a static site gets its store vars at build, in the plan answer; vars are not secret.
+      if ("static" in recipe) {
+        const delivered = await deliverValues(this.sql.bind(this), null, setKey, valuesUsed);
+        if ("missing" in delivered)
+          return Response.json(
+            { error: missingText(this.valueSetLabel(setKey), setKey, delivered.missing) },
+            { status: 409 },
+          );
+        valuesUsed = delivered.used;
+        buildVars = Object.fromEntries(delivered.values.map((value) => [value.name, value.value]));
+      }
+    }
     const [mapped] = this.sql<{ card_id: string }>(
       "SELECT card_id FROM repo_cards WHERE repo_id = ? AND app_key = ? AND environment = ?",
       deployer.repoId,
@@ -10548,8 +11061,8 @@ export class Kitshn extends DurableObject<Env> {
     this.ctx.storage.transactionSync(() => {
       if (handover) this.takeOver(handover, deployer, key, result.environment);
       this.sql(
-        `INSERT INTO deploys (id, repo, repo_id, environment, resource_id, address, script, starts_in, kind, sha, state, expires_at, branch, app, machine_id, compose_file, addresses, worker, app_key, run_id, run_attempt, needs, workflow, compose)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO deploys (id, repo, repo_id, environment, resource_id, address, script, starts_in, kind, sha, state, expires_at, branch, app, machine_id, compose_file, addresses, worker, app_key, run_id, run_attempt, needs, workflow, compose, values_used)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         deployId,
         deployer.repo,
         deployer.repoId,
@@ -10574,7 +11087,14 @@ export class Kitshn extends DurableObject<Env> {
         JSON.stringify(recipe.needs?.apps ?? []),
         deployer.workflow,
         compose ? JSON.stringify(compose) : null,
+        result.kind === "deploy" ? JSON.stringify(valuesUsed) : null,
       );
+      if (result.kind === "deploy")
+        this.sql(
+          "INSERT OR IGNORE INTO value_cards (card_id, set_key) VALUES (?, ?)",
+          resourceId,
+          valueSetKey(deployer.repoId, key, result.environment),
+        );
       for (const instance of instances)
         this.sql(
           "INSERT INTO deploy_instances (deploy_id, machine_id, address, deferred) VALUES (?, ?, ?, ?)",
@@ -10594,7 +11114,11 @@ export class Kitshn extends DurableObject<Env> {
         repo_id: deployer.repoId,
         resource_id: resourceId,
       });
-    return Response.json({ deployId, plan: result });
+    return Response.json({
+      deployId,
+      plan: result,
+      ...(Object.keys(buildVars).length > 0 ? { vars: buildVars } : {}),
+    });
   }
 
   private async deployAssets(api: Api, row: DeployRow, value: unknown) {
@@ -10991,10 +11515,13 @@ export class Kitshn extends DurableObject<Env> {
       },
       bindings: [{ type: "assets", name: "ASSETS" }],
     };
-    return this.publish(api, row, deployer, "site.static", icon, async () => ({
+    const published = await this.publish(api, row, deployer, "site.static", icon, async () => ({
       metadata,
       module: STATIC_WORKER,
     }));
+    // K-834: the vars of the plan answer went into the build of these files.
+    if (published.ok) this.valuesWentLive(row.resource_id, parseUsed(row.values_used));
+    return published;
   }
 
   /**
@@ -11008,6 +11535,9 @@ export class Kitshn extends DurableObject<Env> {
     if (typeof module !== "string") return fail(module.error);
     const secrets = parseWorkerSecrets(input["secrets"]);
     if ("error" in secrets) return fail(secrets.error);
+    // K-834: the store values of the names that GitHub did not send, read now; GitHub values win (K-831).
+    const stored = await this.deployValues(row);
+    if ("error" in stored) return Response.json({ error: stored.error }, { status: 409 });
     const headers = parseConfigFile("_headers", input["headers"]);
     if (typeof headers === "object" && headers !== null) return fail(headers.error);
     const redirects = parseConfigFile("_redirects", input["redirects"]);
@@ -11044,10 +11574,16 @@ export class Kitshn extends DurableObject<Env> {
             kv,
             // K-1908: the app gets a new notify token with each deploy.
             secrets: {
+              ...Object.fromEntries(
+                stored.values.filter((value) => value.secret).map((value) => [value.name, value.value]),
+              ),
               ...secrets.secrets,
               KITSHN_NOTIFY_URL: this.notifyUrl(),
               KITSHN_NOTIFY_TOKEN: this.mintNotifyToken(row.resource_id, `deploy:${row.id}`),
             },
+            vars: Object.fromEntries(
+              stored.values.filter((value) => !value.secret).map((value) => [value.name, value.value]),
+            ),
             // K-822: after the Access sync of this deploy, so the audiences are current.
             access: this.appAccess(row.resource_id),
             assets:
@@ -11077,6 +11613,7 @@ export class Kitshn extends DurableObject<Env> {
       this.settleNotifyToken(`deploy:${row.id}`, response?.ok === true);
     }
     if (!response.ok) return response;
+    this.valuesWentLive(row.resource_id, stored.used);
     // A deploy brings a removed Worker app back, so its kept script is no longer orphaned (K-909).
     this.sql("DELETE FROM worker_storage WHERE card_id = ? AND kind = 'script'", row.resource_id);
     const notes: Array<string> = [];
@@ -11851,9 +12388,20 @@ export class Kitshn extends DurableObject<Env> {
         const opTarget = `op ${id} ${target}`.slice(0, 512);
         // K-1777: the approver reads what the answer gives, not only the fields of the call.
         const gives = isSecretOp(id) ? this.secretEffect(id, target, built.body) : (op.gives ?? null);
+        // K-1723, K-830: a hidden field (a value to set) stays with the caller; the approver reads that one waits.
+        const shown =
+          op.hidden === undefined || !isRecord(body)
+            ? body
+            : Object.fromEntries(
+                Object.entries(body).map(([field, value]) =>
+                  op.hidden?.includes(field)
+                    ? [field, "(kept by the caller until the approval)"]
+                    : [field, value],
+                ),
+              );
         const shownBody = {
           headers: gives === null ? {} : { gives },
-          body: JSON.stringify({ target, body, reason }),
+          body: JSON.stringify({ target, body: shown, reason }),
         };
         const hash = await shownHash(shownAsk("forward", opTarget, shownBody));
         const thread = labels["t3.thread.id"] ?? null;
@@ -11990,6 +12538,8 @@ export class Kitshn extends DurableObject<Env> {
       case "machine":
       case "self":
         return this.state.machines.has(target) ? null : `There is no such machine: "${target}".`;
+      case "values":
+        return this.valueSetOf(target) !== null ? null : `There is no such value set or card: "${target}".`;
       case "job": {
         const jobId = Number(target);
         const found =
@@ -12070,6 +12620,12 @@ export class Kitshn extends DurableObject<Env> {
         return !this.rolloutStopped();
       case "card":
         return cardsControlledBy(this.state, visitor, now, attested).has(target);
+      // K-830: a value set holds for a caller that controls one of its cards.
+      case "values": {
+        const setKey = this.valueSetOf(target);
+        const controlled = cardsControlledBy(this.state, visitor, now, attested);
+        return setKey !== null && this.valueSetCards(setKey).some((card) => controlled.has(card));
+      }
       case "machine":
         return agentMayRunOn(this.state, visitor, target, now, attested);
       case "self":
@@ -18455,6 +19011,8 @@ interface DeployRow extends Record<string, SqlStorageValue> {
   workflow: string | null;
   /** K-825: the `compose` part of the recipe as JSON; null on older rows and other kinds. */
   compose: string | null;
+  /** K-831: the needed names of the deploy and where each value came from, as JSON; never a value. */
+  values_used: string | null;
 }
 
 /** K-827: the job of one instance of a deploy beyond the home one. */

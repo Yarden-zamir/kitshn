@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 import { DEFAULT_APP, RESERVED_SITE_NAMES } from "./names.ts";
+import { MAX_NEEDED, PREVIEWS, valueNameRefusal } from "./values.ts";
 import type {
   ComposeApp as PublicComposeApp,
   DeployEntry as PublicDeployEntry,
@@ -156,19 +157,58 @@ const deploy = Schema.Array(DeployEntry).check(Schema.isMinLength(1), Schema.isM
 /** K-804: the key of an app; it has no `-`, so a card id reads left to right. */
 export const AppKey = Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9]{0,19}$/));
 
+const apps = Schema.optionalKey(Schema.Array(AppKey).check(Schema.isMaxLength(9)));
+const names = Schema.optionalKey(Schema.Array(Schema.String).check(Schema.isMaxLength(MAX_NEEDED)));
+
+/** K-808, K-836: why the needed names of a recipe are not allowed, or undefined. */
+const namesRefusal = (needs: {
+  readonly secrets?: ReadonlyArray<string>;
+  readonly vars?: ReadonlyArray<string>;
+}) => {
+  const all = neededNames(needs);
+  for (const name of all) {
+    const refusal = valueNameRefusal(name);
+    if (refusal !== null) return refusal;
+  }
+  const twice = all.find((name, index) => all.indexOf(name) !== index);
+  if (twice !== undefined) return `needs names ${twice} twice; a name is a secret or a var, once (K-808).`;
+  if (all.length > MAX_NEEDED)
+    return `needs names ${all.length} values; an app environment takes at most ${MAX_NEEDED} (K-836).`;
+  return undefined;
+};
+
 /**
- * K-820, K-808: what an app needs. `apps` are keys of other apps of this repo, which deploy first. `vars` and
- * `secrets` join it with K-808; until then the schema refuses them.
+ * K-820, K-808: what an app needs. `apps` are keys of other apps of this repo, which deploy first. `secrets` and
+ * `vars` are names of values that the app gets (K-830). A static site has no `secrets`: it serves its files to
+ * everyone, so a secret in its build ends up in the files.
  */
 const needs = Schema.optionalKey(
-  Schema.Struct({ apps: Schema.optionalKey(Schema.Array(AppKey).check(Schema.isMaxLength(9))) }),
+  Schema.Struct({ apps, secrets: names, vars: names }).check(Schema.makeFilter(namesRefusal)),
 );
+const staticNeeds = Schema.optionalKey(
+  Schema.Struct({ apps, vars: names }).check(Schema.makeFilter(namesRefusal)),
+);
+
+/** K-808, K-830: the names that an app needs, the secrets first. */
+export const neededNames = (needs: {
+  readonly secrets?: ReadonlyArray<string>;
+  readonly vars?: ReadonlyArray<string>;
+}): Array<string> => [...(needs.secrets ?? []), ...(needs.vars ?? [])];
 
 /** K-801, K-804: a recipe has exactly one kind. */
 export const Recipe = Schema.Union([
-  Schema.Struct({ static: StaticApp, deploy, needs }),
+  Schema.Struct({ static: StaticApp, deploy, needs: staticNeeds }),
   Schema.Struct({ compose: ComposeApp, deploy, needs }),
-  Schema.Struct({ worker: WorkerApp, deploy, needs }),
+  // K-806, K-834: a needed name becomes a binding of the Worker, so it takes no name of another binding.
+  Schema.Struct({ worker: WorkerApp, deploy, needs }).check(
+    Schema.makeFilter((recipe) => {
+      const bindings = workerBindingNames(recipe.worker);
+      const clash = neededNames(recipe.needs ?? {}).find((name) => bindings.includes(name));
+      return clash === undefined
+        ? undefined
+        : `needs names ${clash}, which is a binding of the recipe (K-834).`;
+    }),
+  ),
 ]);
 export type Recipe = typeof Recipe.Type;
 
@@ -338,6 +378,12 @@ export function plan(
   const environment = entry.name.replaceAll("{pr}", String(event.pr ?? ""));
   if (!LABEL.test(environment))
     return { kind: "error", reason: `The environment name "${environment}" is not a valid name.` };
+  // K-830: the value set of the pull requests of an app has this name.
+  if (environment === PREVIEWS)
+    return {
+      kind: "error",
+      reason: `The environment name "${PREVIEWS}" belongs to the values of previews (K-830).`,
+    };
   // K-804: the default address of an app other than `app` holds its key.
   const slug = key === DEFAULT_APP ? repoSlug(repo) : `${repoSlug(repo)}-${key}`;
   const listed =

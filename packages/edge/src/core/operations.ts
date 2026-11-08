@@ -134,6 +134,7 @@ export const AGENT_READ: Record<keyof Snapshot, "same" | { readonly hidden: stri
   pullRequests: "same",
   orphanWorkers: "same",
   deployNotes: "same",
+  valuesStale: "same",
   uptime: "same",
   bell: "same",
   icons: { hidden: "icons are images for the map; the CLI has no use for them" },

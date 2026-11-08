@@ -19,9 +19,14 @@ export function childEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-export function runBuild(dir: string, command: string) {
+/** `vars`: K-834, the needed vars of a static site, which its build gets. */
+export function runBuild(
+  dir: string,
+  command: string,
+  vars: Readonly<Record<string, string | undefined>> = {},
+) {
   console.log(`kitshn: building with: ${command}`);
-  execFileSync("sh", ["-c", command], { cwd: dir, stdio: "inherit", env: childEnv() });
+  execFileSync("sh", ["-c", command], { cwd: dir, stdio: "inherit", env: { ...childEnv(), ...vars } });
 }
 
 /** A path of the recipe after symlinks, or a failure when it leaves the repo. */

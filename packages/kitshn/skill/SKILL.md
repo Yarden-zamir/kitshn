@@ -74,7 +74,7 @@ The daemon carries the skill of its release (K-618). The line under the front ma
    ```
 
    A build that needs its own job, or runs untrusted code, uploads an artifact; the header of `kitshn2-deploy.yml` shows the pattern (K-805).
-4. Values: a GitHub secret or variable `KITSHN_<NAME>` reaches the app as `<NAME>` (K-808). Put production-only secrets in the GitHub Environment `prod`.
+4. Values: name them in the recipe, `needs: { secrets: ["OPENAI_KEY"], vars: ["MODE"] }` (K-808). A static site takes `vars` only, at build. Set each value in kitshn, from stdin: `printf %s "$KEY" | kitshn secret set <card or set> OPENAI_KEY` (add `--var` for a var). The value sets are per app environment, and one set `previews` serves every pull request (K-830); `kitshn secret list` shows each name as set or missing, never a secret. A GitHub secret or variable `KITSHN_<NAME>` still reaches the app as `<NAME>` and wins over kitshn (K-831). A Compose app gets a kitshn value only in the environment of its services, never in a path, a port or a build arg (K-833). After a change, `kitshn app-redeploy <card>` starts the app with the new value (K-835).
 5. Run `kitshn skill install --repo` and commit `.claude/skills/kitshn/SKILL.md`, so agents in the repo know kitshn.
 6. Push. The first deploy of a new repo waits: "waits on the kitshn map" (K-819). The owner clicks **Allow**, or you run `kitshn agent allow <repo id>` (the id is in `kitshn agent state`).
 
@@ -94,6 +94,7 @@ You can do what the owner can. Each call runs, waits for a person, or says why n
 - `kitshn agent state`: the cards that you manage, each with its circles by name, its newest deploy, backup and uptime (a Compose card lists `instances`: machine, address, status and newest backup of each, K-827), and your effects with their mode (`automatic`, `ask` with its circle, or `off`), with the defaults filled in. On a machine, `health` lists the health cells from and to this machine (K-631). `--body '{"all":true}'` adds the servers and link events. `kitshn status` shows the map name, the server and the effects of this machine.
 - `kitshn health [--now] [--json]`: what this machine's daemon found at its last check of its providers and links (K-630).
 - `kitshn agent deploy <card> --body '{"mode":"redeploy"}'`: redeploy a card (`"build"` runs its workflow again). `kitshn agent backup <card>` backs it up now.
+- `kitshn secret list [<card>]` shows the needed names of each app environment as set, missing or from GitHub; a var shows its value, a secret never (K-835). `printf %s "$VALUE" | kitshn secret set <card> <NAME> [--var] --reason <why>` sets one from stdin; by default it waits for the owner, and the value stays in your command until the approval, never in the ask (K-830). `kitshn secret remove <card> <NAME>` removes one.
 - `kitshn agent organize` puts the cards that you manage in a tidy grid, each in its own circles, as one Undo (K-532). No share changes. It follows your `changes`, so by default it waits for the owner.
 - `kitshn machine-shell <machine> --body '{"command":{"kind":"shell","script":"..."}}'` runs a script. A job or a deploy outside the cards that you manage waits for the owner. `kitshn machine-restart`, `machine-tunnel-restart` (K-634: when other machines get no answer from it), `machine-update` and `machine-diagnostics` take only the machine. `kitshn rollout` updates every online daemon to the release of kitshn, one at a time, and prints each step; `kitshn rollout-state` reads where it stands (K-636). `kitshn agent history t3.thread.id=<id>` lists what a thread asked.
 - `kitshn publish <file|folder> [--name <name>] [--address <name>] [--circle <circle>] [--public]` puts a page, a file or a folder site on the map (K-1116, K-1123). The same name again updates its card. `kitshn publish --previous <card>` goes back one version; `kitshn unpublish <card>` removes it (K-1117).
@@ -124,7 +125,8 @@ Read the Actions log first: the deploy step prints the job output and the final 
 | "waits on the kitshn map" | First deploy of a repo (K-819). After Allow, a waiting push run starts again by itself (K-1121); run a pull request run again on GitHub. |
 | A recipe error before any work | `kitshn check` names it. Fix `kitshn.config.ts`. |
 | The app does not come up | Run `kitshn try --check` in the repo: it builds and runs the app on your machine with its logs (K-815). |
-| A missing value name | A needed `KITSHN_<NAME>` is not set (K-808). |
+| "is missing 1 value, so nothing was deployed" | A name of `needs` has no value (K-831). Run the `kitshn secret set` command that the message prints, or set a GitHub `KITSHN_<NAME>`, then run the deploy again. |
+| "uses the kitshn value … outside the environment of a service" | A Compose file puts a kitshn value in a path, a port, a command or a build arg (K-833). Read it from the environment of the service instead. |
 | A refused Compose setting | Remove it, or ask the owner to allow it for that machine (K-818). |
 | An address that "already has a record" | Another card or a manual DNS record owns it (K-817). |
 | No machine for the job | No online machine has the labels `deploy` and those of `runsOn` (K-610). For `{ spread: n }`, the daemon also needs the capability `compose-spread` (K-826). |

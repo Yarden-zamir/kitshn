@@ -1,4 +1,5 @@
 import { SignJWT, importPKCS8 } from "jose";
+import { aesKey } from "./seal.ts";
 
 /** The kitshn GitHub App (K-908): its id and its private key, in the PKCS #1 PEM that GitHub gives, or PKCS #8. */
 export interface GitHubApp {
@@ -285,23 +286,7 @@ export async function repoToken(
  * K-1716: a token sealed with AES-GCM under a key that HKDF derives from the App private key, a Worker secret. Revoking
  * needs the token itself, so `github_tokens` keeps this sealed copy; backups leave the table out (K-1831).
  */
-async function tokenKey(appKey: string) {
-  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(appKey), "HKDF", false, [
-    "deriveKey",
-  ]);
-  return crypto.subtle.deriveKey(
-    {
-      name: "HKDF",
-      hash: "SHA-256",
-      salt: new Uint8Array(),
-      info: new TextEncoder().encode("kitshn github_tokens"),
-    },
-    base,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["encrypt", "decrypt"],
-  );
-}
+const tokenKey = (appKey: string) => aesKey(appKey, "kitshn github_tokens");
 
 export async function sealToken(appKey: string, token: string): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12));

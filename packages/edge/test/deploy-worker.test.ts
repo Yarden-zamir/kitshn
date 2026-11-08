@@ -2336,3 +2336,103 @@ describe("placement (K-823, K-824, K-827, K-828)", () => {
     ]);
   });
 });
+
+describe("app values (K-830 to K-835)", () => {
+  const needing = {
+    worker: { main: "worker.js", compatibilityDate: "2026-10-01" },
+    deploy: [{ on: "push", branch: "main", name: "prod", startsIn: "Everyone" }],
+    needs: { secrets: ["API_KEY"], vars: ["MODE", "REGION"] },
+  };
+  const finish = async (app: ReturnType<typeof repo>, github: Record<string, string>) => {
+    const plan = await step(app, "/deploy/plan", { recipe: needing, event: {}, github: Object.keys(github) });
+    if (plan.status !== 200) return plan;
+    const deployId = plan.body["deployId"];
+    await step(app, "/deploy/storage", { deployId });
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const done = await step(app, "/deploy/finish", {
+        deployId,
+        module: "export default {};",
+        secrets: github,
+      });
+      if (done.status !== 503) return done;
+    }
+    throw new Error("The Access applications never became ready.");
+  };
+
+  it("stops a deploy with missing names before any work, and names each one with its command", async () => {
+    const cloudflare = fakeCloudflare();
+    const app = repo("9301", "needy");
+    await allow(app);
+    const plan = await step(app, "/deploy/plan", { recipe: needing, event: {}, github: ["REGION"] });
+    expect(plan.status).toBe(409);
+    expect(plan.body["error"]).toContain("API_KEY (secret)");
+    expect(plan.body["error"]).toContain("kitshn secret set 9301:app:prod MODE --var");
+    expect(plan.body["error"]).not.toContain("REGION");
+    expect(cloudflare.uploads).toEqual([]);
+    // The map lists the set and its missing names before any card exists.
+    const listed = await admin("/api/values?set=9301:app:prod", "GET");
+    expect(listed.body).toMatchObject({
+      sets: [
+        {
+          key: "9301:app:prod",
+          names: [
+            { name: "API_KEY", state: "missing" },
+            { name: "MODE", state: "missing" },
+            { name: "REGION", state: "missing" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("gives a Worker its store values as bindings, lets GitHub win, and holds no secret in any answer or row", async () => {
+    const cloudflare = fakeCloudflare();
+    const app = repo("9302", "valued");
+    await allow(app);
+    const secret = "marker-secret-9302";
+    expect(
+      (await admin("/api/values/9302:app:prod/API_KEY", "PUT", { kind: "secret", value: secret })).status,
+    ).toBe(200);
+    expect(
+      (await admin("/api/values/9302:app:prod/MODE", "PUT", { kind: "var", value: "fast" })).status,
+    ).toBe(200);
+    expect(
+      (await admin("/api/values/9302:app:prod/REGION", "PUT", { kind: "var", value: "store" })).status,
+    ).toBe(200);
+    const done = await finish(app, { REGION: "from-github" });
+    expect(done.status, JSON.stringify(done.body)).toBe(200);
+    const bindings = (cloudflare.uploads.at(-1)?.["bindings"] ?? []) as Array<Record<string, string>>;
+    expect(bindings).toContainEqual({ type: "secret_text", name: "API_KEY", text: secret });
+    expect(bindings).toContainEqual({ type: "plain_text", name: "MODE", text: "fast" });
+    expect(bindings.filter((binding) => binding.name === "REGION")).toEqual([
+      { type: "secret_text", name: "REGION", text: "from-github" },
+    ]);
+    // K-832: the secret leaves only in the upload.
+    const answers = [await admin("/api/values", "GET"), await admin("/api/state", "GET")].map((answer) =>
+      JSON.stringify(answer.body),
+    );
+    const rows = await runInDurableObject(env.KITSHN.getByName("kitshn"), (_instance, durable) =>
+      JSON.stringify(
+        ["revisions", "deploys", "deploy_cards", "jobs", "value_sets"].map((table) =>
+          durable.storage.sql.exec(`SELECT * FROM ${table}`).toArray(),
+        ),
+      ),
+    );
+    for (const text of [...answers, rows]) expect(text).not.toContain(secret);
+    expect(answers[0]).toContain("fast");
+
+    // K-835: a change of a store value that the live build got marks the card; a GitHub name does not.
+    await admin("/api/values/9302:app:prod/REGION", "PUT", { kind: "var", value: "store-2" });
+    const changed = await admin("/api/values/9302:app:prod/API_KEY", "PUT", { kind: "secret", value: "new" });
+    expect(changed.body).toMatchObject({ stale: [expect.any(String)] });
+    const stale = async () =>
+      ((await admin("/api/state", "GET")).body["valuesStale"] as Record<string, unknown>)[app.card];
+    expect(await stale()).toEqual(["API_KEY"]);
+    expect((await finish(app, { REGION: "from-github" })).status).toBe(200);
+    expect(await stale()).toBeUndefined();
+    // A secret keeps its kind: a var of the same name is refused, so it never shows as plain text.
+    expect(
+      (await admin("/api/values/9302:app:prod/API_KEY", "PUT", { kind: "var", value: "x" })).status,
+    ).toBe(409);
+  });
+});

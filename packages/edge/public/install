@@ -638,6 +638,17 @@ else
   changed "made the backup key (K-1815). Keep it in your password manager; kitshn shows it only now:"
   say "           $backup_key"
 fi
+# K-832: the key of the secret app values, made once and never printed. A lost key loses only the secret values,
+# which the owner sets again, so no copy outside Cloudflare is needed.
+if printf '%s' "$secrets" | jq -e 'any(.[]; .name == "KITSHN_SECRETS_KEY")' >/dev/null; then
+  kept "Worker secret KITSHN_SECRETS_KEY (K-832)"
+else
+  secrets_key=$(head -c 32 /dev/urandom | base64 | tr -d '\n')
+  api PUT "/accounts/$ACCOUNT/workers/scripts/$SCRIPT/secrets" \
+    "$(printf '%s' "$secrets_key" | jq -Rc '{name:"KITSHN_SECRETS_KEY",text:.,type:"secret_text"}')" >/dev/null
+  secrets_key=
+  changed "made the key of the secret app values, the Worker secret KITSHN_SECRETS_KEY (K-832)"
+fi
 # The workers.dev address would skip Access. The Worker refuses requests without an Access token
 # anyway, but kitshn keeps that address off.
 api POST "/accounts/$ACCOUNT/workers/scripts/$SCRIPT/subdomain" '{"enabled":false,"previews_enabled":false}' >/dev/null

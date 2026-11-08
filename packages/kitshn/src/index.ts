@@ -67,21 +67,35 @@ export interface WorkerApp {
   readonly durableObjects?: { readonly [binding: string]: string };
   /** Cron expressions, at most 3. Only push environments run them, never previews. */
   readonly crons?: ReadonlyArray<string>;
-  /** Plain text values, at most 50. Secrets come from `KITSHN_<NAME>` (K-808), never from the recipe. */
+  /** Plain text values, at most 50. Secrets come from `needs.secrets` (K-808), never from the recipe. */
   readonly vars?: { readonly [name: string]: string };
 }
 
 /** 1 to 20 entries. */
 type Deploy = readonly [DeployEntry, ...Array<DeployEntry>];
 
-/** K-820, K-808: what an app needs. `vars` and `secrets` join `apps` with K-808. */
-interface Needs<Key extends string> {
+/** K-820, K-808: what an app needs. */
+interface StaticNeeds<Key extends string> {
   /**
    * Keys of other apps of this repo. They deploy first, and when one of them did not deploy, this app does not deploy
    * either. An app with nothing to do for the event counts as deployed. In `defineApps`, a key that no app of the file
    * has is a type error; kitshn checks it again when it reads the recipe.
    */
   readonly apps?: ReadonlyArray<Key>;
+  /**
+   * K-830: names of plain values that the app gets, such as `MODE`: an uppercase letter, then uppercase letters,
+   * digits or `_`. The values come from the kitshn store (`kitshn secret set <card> <NAME> --var`) or from a GitHub
+   * variable `KITSHN_<NAME>`. A deploy stops before any work while one has no value. A static site gets them at build.
+   */
+  readonly vars?: ReadonlyArray<string>;
+}
+
+interface Needs<Key extends string> extends StaticNeeds<Key> {
+  /**
+   * K-830: names of secret values. kitshn shows only "set" or "missing", never the value. At most 50 names with `vars`.
+   * A static site has none: its files reach everyone.
+   */
+  readonly secrets?: ReadonlyArray<string>;
 }
 
 /** K-801, K-804: a recipe has exactly one kind: `static`, `compose` or `worker`. `Key` is a key of the repo's apps. */
@@ -91,7 +105,7 @@ export type Recipe<Key extends string = string> =
       readonly compose?: never;
       readonly worker?: never;
       readonly deploy: Deploy;
-      readonly needs?: Needs<Key>;
+      readonly needs?: StaticNeeds<Key>;
     }
   | {
       readonly compose: ComposeApp;

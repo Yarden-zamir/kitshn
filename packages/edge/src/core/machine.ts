@@ -379,6 +379,8 @@ export type DaemonMessage =
     }
   /** K-1612: a local user cancels a queued job of this machine; kitshn answers with `requestAnswer`. */
   | { readonly type: "cancelJob"; readonly requestId: string; readonly jobId: number }
+  /** K-833: the values of a Compose job that this machine runs now; kitshn answers with `jobValues`. */
+  | { readonly type: "jobValues"; readonly requestId: string; readonly jobId: number }
   /**
    * K-722: A starts a run on the machine `target`. `provider` is the provider of the connection that asks, whose
    * exec user runs it on B; `attested` holds the labels that its provider vouched for (K-1752). kitshn answers with
@@ -531,6 +533,18 @@ export type ServerToDaemon =
       readonly notify?: { readonly url: string; readonly token: string };
       /** K-822: the Access values of a Compose app, read when the job goes out. */
       readonly access?: AppAccess;
+      /**
+       * K-833: the names of the store values of a Compose app, never the values: the daemon asks for them with
+       * `jobValues`. `secret` marks a value that the job output hides.
+       */
+      readonly values?: ReadonlyArray<{ readonly name: string; readonly secret: boolean }>;
+    }
+  /** K-833: the answer to `jobValues`: the values of the job, or why kitshn gives none. */
+  | {
+      readonly type: "jobValues";
+      readonly requestId: string;
+      readonly values: Readonly<Record<string, string>> | null;
+      readonly error: string | null;
     }
   /** K-1804: search the logs of the Compose app `project`. */
   | { readonly type: "logs"; readonly id: string; readonly project: string; readonly search: LogSearch }
