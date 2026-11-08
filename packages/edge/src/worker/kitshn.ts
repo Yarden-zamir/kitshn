@@ -10743,13 +10743,11 @@ export class Kitshn extends DurableObject<Env> {
     if (!Number.isInteger(size) || size < 0) return fail(411, "Send a Content-Length.");
     if (size > limit) return fail(413, `${path} takes at most ${limit} bytes.`);
     const { readable, writable } = new FixedLengthStream(size);
-    const piped = request.body.pipeTo(writable);
     const object = deployObject(row.id, path === "/deploy/archive" ? "source.tgz" : "params.env");
     try {
-      await bucket.put(object, readable);
-      await piped;
+      // One wait for both, so a body that fails while R2 reads is never an unhandled rejection.
+      await Promise.all([bucket.put(object, readable), request.body.pipeTo(writable)]);
     } catch (error) {
-      await piped.catch(() => undefined);
       return fail(502, `The upload did not reach R2: ${String(error)}`);
     }
     // Block deletes the files of the deploys it ends; a file that lands after that goes too (K-819).
@@ -14730,12 +14728,13 @@ export class Kitshn extends DurableObject<Env> {
     );
     // The stream fails when the body is not exactly Content-Length bytes, so the limit holds.
     const { readable, writable } = new FixedLengthStream(size);
-    const piped = body.pipeTo(writable);
     try {
-      await bucket.put(objectKey(item), readable, { httpMetadata: { contentType: item.contentType } });
-      await piped;
+      // One wait for both, so a body that fails while R2 reads is never an unhandled rejection.
+      await Promise.all([
+        bucket.put(objectKey(item), readable, { httpMetadata: { contentType: item.contentType } }),
+        body.pipeTo(writable),
+      ]);
     } catch (error) {
-      await piped.catch(() => undefined);
       return refuse(`The upload did not reach R2: ${String(error)}`, 502);
     }
     const resource: Resource = {
@@ -16054,12 +16053,13 @@ export class Kitshn extends DurableObject<Env> {
       );
       const next = item.slot === 0 ? 1 : 0;
       const { readable, writable } = new FixedLengthStream(size);
-      const piped = body.pipeTo(writable);
       try {
-        await bucket.put(slotKey(item, next), readable, { httpMetadata: { contentType } });
-        await piped;
+        // One wait for both, so a body that fails while R2 reads is never an unhandled rejection.
+        await Promise.all([
+          bucket.put(slotKey(item, next), readable, { httpMetadata: { contentType } }),
+          body.pipeTo(writable),
+        ]);
       } catch (error) {
-        await piped.catch(() => undefined);
         return refuse(`The upload did not reach R2, so ${item.title} keeps its bytes: ${String(error)}`, 502);
       }
       const flip = (): number =>
