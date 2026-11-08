@@ -55,7 +55,7 @@ The daemon carries the skill of its release (K-618). The line under the front ma
    - `startsIn`: the circle of a new card. Without it, the card waits private in the tray. After the first deploy, the map decides (K-518).
    - `needs.apps`: deploy after those apps of the same file, and skip when one of them failed (K-820).
 2. Run `npx -y https://github.com/Yarden-zamir/kitshn/releases/download/edge/kitshn.tgz check` (or `node kitshn.mjs check`). It prints the recipe as JSON or names the mistake.
-   Then `npx -y https://github.com/Yarden-zamir/kitshn/releases/download/edge/kitshn.tgz try --check` builds the app and runs it on `127.0.0.1` with no kitshn server: it prints the route check and exits 1 on no answer or a 5xx (K-815). Without `--check`, it prints the address and runs until Ctrl-C. `--app <key>` picks one app of `defineApps`, `--params-file <file>` gives the app its values, and `--port <n>` fixes the port. Every exit removes what it made.
+   Then `npx -y https://github.com/Yarden-zamir/kitshn/releases/download/edge/kitshn.tgz try --check` builds the app and runs it on `127.0.0.1` with no kitshn server: it prints the route check and exits 1 on no answer or a 5xx (K-815). Without `--check`, it prints the address and runs until Ctrl-C. `--app <key>` picks one app of `defineApps`, `--params-file <file>` gives the app its values as `<NAME>=value` lines (the name without `KITSHN_`), and `--port <n>` fixes the port. Every exit removes what it made.
 3. Add a workflow, for example `.github/workflows/kitshn.yml`. Any file name works: Allow starts the file of the waiting push run again (K-1121).
 
    ```yaml

@@ -5,6 +5,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   mkdtempSync,
   realpathSync,
   rmSync,
@@ -13,10 +14,18 @@ import {
 import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
+import { parseEnv } from "node:util";
 import { bundleWorker, childEnv, insideRepo, runBuild } from "./build.ts";
 import { CliError, errorText, fail } from "./cli-error.ts";
 import { DEFAULT_SOCKET, appVariables, composeFiles } from "./compose.ts";
-import { type Apps, type Recipe, STATIC_SITE, WORKER_ASSETS, type WorkerApp } from "./recipe.ts";
+import {
+  type Apps,
+  type Recipe,
+  STATIC_SITE,
+  WORKER_ASSETS,
+  type WorkerApp,
+  workerBindingNames,
+} from "./recipe.ts";
 
 export interface TryOptions {
   readonly dir: string;
@@ -49,7 +58,7 @@ export function pickApp(apps: Apps, key: string | null): { readonly key: string;
   const picked = key ?? (keys.length === 1 ? keys[0] : undefined);
   if (picked === undefined)
     return fail(`kitshn.config.ts has the apps ${keys.join(", ")}; name one with --app.`);
-  const recipe = apps[picked];
+  const recipe = Object.hasOwn(apps, picked) ? apps[picked] : undefined;
   if (!recipe) return fail(`kitshn.config.ts has no app ${picked}; it has ${keys.join(", ")}.`);
   return { key: picked, recipe };
 }
@@ -132,7 +141,11 @@ export async function tryApp(apps: Apps, options: TryOptions): Promise<boolean> 
     console.log(`kitshn: try runs ${key} alone; it does not start ${needed.join(", ")}, which ${key} needs.`);
   // Before the build, so a Ctrl-C in the build still removes what try made.
   const stop = Promise.withResolvers<void>();
-  const onSignal = () => stop.resolve();
+  const stopping = new AbortController();
+  const onSignal = () => {
+    stopping.abort();
+    stop.resolve();
+  };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
   const root = mkdtempSync(join(tmpdir(), "kitshn-try-"));
@@ -141,12 +154,12 @@ export async function tryApp(apps: Apps, options: TryOptions): Promise<boolean> 
     const port = options.port ?? (await freePort());
     const { exited } =
       "compose" in recipe
-        ? await startCompose(dir, recipe.compose.file ?? null, root, port, options.paramsFile, cleanups)
+        ? await startCompose(dir, recipe.compose.file ?? null, root, port, options, cleanups, stopping.signal)
         : startWrangler(dir, recipe, root, port, options.paramsFile, cleanups);
     const address = `http://127.0.0.1:${port}/`;
     const answer = await firstAnswer(address, Promise.race([exited, stop.promise]));
     if (answer === null) {
-      console.error(`kitshn: ${address} gave no answer.`);
+      if (!stopping.signal.aborted) console.error(`kitshn: ${address} gave no answer.`);
       return false;
     }
     console.log(`kitshn: route check: ${answer.status} ${answer.contentType}`);
@@ -157,7 +170,8 @@ export async function tryApp(apps: Apps, options: TryOptions): Promise<boolean> 
     if (stoppedByApp) console.error(`kitshn: ${key} stopped.`);
     return ok && !stoppedByApp;
   } finally {
-    // The signal handlers stay until the end, so a second Ctrl-C does not stop the cleanup.
+    // The signal handlers stay until the end, and the cleanup steps run in their own process groups, so a second
+    // Ctrl-C reaches neither.
     for (const cleanup of cleanups.reverse()) {
       try {
         await cleanup();
@@ -182,8 +196,9 @@ async function startCompose(
   file: string | null,
   root: string,
   port: number,
-  paramsFile: string | null,
+  { paramsFile }: TryOptions,
   cleanups: Array<Cleanup>,
+  stopping: AbortSignal,
 ): Promise<Group> {
   try {
     execFileSync("docker", ["info", "--format", "{{.ServerVersion}}"], { stdio: "ignore" });
@@ -223,9 +238,8 @@ async function startCompose(
   ];
   const env = {
     ...childEnv(),
-    // There is no GitHub repo name here, so the folder name stands in for it.
     ...appVariables({
-      recipe: basename(dir),
+      recipe: repoName(dir),
       environment: "try",
       deployment: project,
       socketDir,
@@ -243,16 +257,24 @@ async function startCompose(
       "docker compose down",
       "docker",
       [...compose, "down", "--remove-orphans", "--volumes", "--rmi", "local"],
-      {
-        env,
-      },
+      { env },
     ),
   );
   await run("docker compose up", "docker", [...compose, "up", "--detach", "--build", "--remove-orphans"], {
     cwd: dir,
     env,
+    stopping,
   });
-  const follow = startGroup("docker", [...compose, "logs", "--follow"], { cwd: dir, env });
+  // Only the services of the app: the door runs on after the app stops, and its logs would never end.
+  const services = execFileSync("docker", [...compose, "config", "--services"], {
+    cwd: dir,
+    env,
+    encoding: "utf8",
+  })
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((name) => name !== "" && name !== DOOR);
+  const follow = startGroup("docker", [...compose, "logs", "--follow", ...services], { cwd: dir, env });
   cleanups.push(() => stopGroup(follow));
   return follow;
 }
@@ -273,6 +295,15 @@ function startWrangler(
     config = staticConfig(insideRepo(dir, recipe.static.output, "the output folder"));
   } else {
     const app = recipe.worker;
+    if (paramsFile !== null) {
+      // K-806: the deploy refuses a value with the name of a binding, so try refuses it too.
+      const names = workerBindingNames(app);
+      const clash = Object.keys(parseEnv(readFileSync(paramsFile, "utf8"))).find((name) =>
+        names.includes(name),
+      );
+      if (clash !== undefined)
+        fail(`the params file gives ${clash}, which is the name of a binding of the recipe.`);
+    }
     // A folder of its own: wrangler watches the folder of `main`, and the local storage changes all the time.
     const bundle = join(root, "bundle");
     mkdirSync(bundle);
@@ -348,18 +379,30 @@ function freePort(): Promise<number> {
   });
 }
 
+/** A program in its own process group, so a Ctrl-C of the terminal does not reach it; `stopping` ends it. */
 function run(
   title: string,
   program: string,
   args: ReadonlyArray<string>,
-  options: { readonly cwd?: string; readonly env: NodeJS.ProcessEnv },
+  options: { readonly cwd?: string; readonly env: NodeJS.ProcessEnv; readonly stopping?: AbortSignal },
 ): Promise<void> {
+  const { stopping, ...spawnOptions } = options;
   return new Promise((done, failed) => {
-    const child = spawn(program, args, { stdio: ["ignore", "inherit", "inherit"], ...options });
+    if (stopping?.aborted) return failed(new CliError(`${title} did not start: try stops.`));
+    const child = spawn(program, args, {
+      stdio: ["ignore", "inherit", "inherit"],
+      detached: true,
+      ...spawnOptions,
+    });
+    const end = () => signalGroup(child, "SIGTERM");
+    stopping?.addEventListener("abort", end, { once: true });
     child.once("error", failed);
-    child.once("close", (code) =>
-      code === 0 ? done() : failed(new CliError(`${title} failed with exit code ${code ?? "none"}.`)),
-    );
+    child.once("close", (code) => {
+      stopping?.removeEventListener("abort", end);
+      if (code === 0) done();
+      else if (stopping?.aborted) failed(new CliError(`${title} stopped: try stops.`));
+      else failed(new CliError(`${title} failed with exit code ${code ?? "none"}.`));
+    });
   });
 }
 
@@ -383,20 +426,37 @@ function startGroup(
   return { child, exited };
 }
 
+function signalGroup(child: ChildProcess, name: NodeJS.Signals) {
+  if (child.pid === undefined) return;
+  try {
+    process.kill(-child.pid, name);
+  } catch {
+    // The group has ended.
+  }
+}
+
 async function stopGroup(group: Group) {
-  const pid = group.child.pid;
-  if (pid === undefined) return;
-  const signal = (name: NodeJS.Signals) => {
-    try {
-      process.kill(-pid, name);
-    } catch {
-      // The group has ended.
-    }
-  };
-  signal("SIGTERM");
+  signalGroup(group.child, "SIGTERM");
+  let timer: NodeJS.Timeout | undefined;
   const ended = await Promise.race([
     group.exited.then(() => true),
-    new Promise<false>((done) => setTimeout(() => done(false), 10_000)),
+    new Promise<false>((done) => {
+      timer = setTimeout(() => done(false), 10_000);
+    }),
   ]);
-  if (!ended) signal("SIGKILL");
+  clearTimeout(timer);
+  if (!ended) signalGroup(group.child, "SIGKILL");
+}
+
+/**
+ * K-812: the `owner/repo` of the git remote `origin`, as the deploy names it. A folder without that remote gives its
+ * own name, so an app that parses `owner/repo` gets no slash there.
+ */
+function repoName(dir: string): string {
+  const remote = spawnSync("git", ["-C", dir, "remote", "get-url", "origin"], { encoding: "utf8" });
+  const url = remote.status === 0 ? remote.stdout.trim() : "";
+  const path = (url.endsWith(".git") ? url.slice(0, -4) : url).replaceAll(":", "/").split("/").slice(-2);
+  return path.length === 2 && path.every((part) => part !== "") && url.includes("github.com")
+    ? path.join("/")
+    : basename(dir);
 }

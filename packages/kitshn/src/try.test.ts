@@ -41,6 +41,7 @@ describe("kitshn try (K-815)", () => {
     });
     expect(() => pickApp(apps, null)).toThrow("--app");
     expect(() => pickApp(apps, "three")).toThrow("no app three");
+    expect(() => pickApp(apps, "constructor")).toThrow("no app constructor");
     expect(pickApp(apps, "two").key).toBe("two");
   });
 });
