@@ -63,7 +63,7 @@ export function ValuesDialog(props: {
   } | null>(null);
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState("");
-  const path = `/api/values${props.only === null ? "" : `?set=${encodeURIComponent(props.only)}`}`;
+  const path = props.only === null ? "/api/values" : `/api/values?set=${encodeURIComponent(props.only)}`;
   const load = async () => {
     const result = await callApi<{ sets: Array<ValueSetView>; secretsKey: boolean }>("GET", path);
     if ("error" in result) return setError(result.error);
