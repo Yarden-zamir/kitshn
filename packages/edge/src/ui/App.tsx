@@ -382,6 +382,8 @@ export function App() {
   const [moreMenu, setMoreMenu] = useState<Rect | null>(null);
   /** K-509, K-528: folded, the shelf shows only its count; on a phone it is a sheet. */
   const [shelfChoice, setShelfChoice] = useState(() => localStorage.getItem(SHELF_KEY));
+  /** K-528: on a phone a panel sheet folds the shelf; a tap opens it for this sheet only and saves nothing. */
+  const [shelfOverSheet, setShelfOverSheet] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
   const toastTimer = useRef<number | null>(null);
   const toastShownAt = useRef(0);
@@ -1132,6 +1134,12 @@ export function App() {
     fullPage || ((panel === "details" || panel === "safety" || panel === "settings") && detailsLarge);
   /** The panel floats over the map, so the map keeps its width and fit and pan leave its part free. */
   const floating = shownPanel !== null && !large;
+  const wide = screenWidth > 720;
+  const sheet = floating && !wide;
+  // A closed sheet already shows the saved shelf; the reset is for the next sheet.
+  useEffect(() => {
+    if (!sheet) setShelfOverSheet(false);
+  }, [sheet]);
 
   const ready = state !== null;
   // K-514: fits on load without a saved view, and when the panel opens or closes until the owner pans or zooms.
@@ -1209,9 +1217,12 @@ export function App() {
 
   const tray = [...state.resources.values()].filter((resource) => !state.places.has(resource.id));
   const trayShown = tray.length > 0 && route.tab === "map";
-  const wide = screenWidth > 720;
-  const trayOpen = shelfChoice === null ? wide : shelfChoice === "open";
+  const trayOpen = sheet ? shelfOverSheet : shelfChoice === null ? wide : shelfChoice === "open";
   const toggleTray = () => {
+    if (sheet) {
+      setShelfOverSheet(!trayOpen);
+      return;
+    }
     const next = trayOpen ? "closed" : "open";
     localStorage.setItem(SHELF_KEY, next);
     setShelfChoice(next);
@@ -2355,6 +2366,7 @@ export function App() {
       {palette !== null ? (
         <Palette
           initialQuery={palette}
+          wide={wide}
           onClose={() => setPalette(null)}
           entries={[
             { label: "Open History", tip: TABS.history, run: () => openTab("history") },
