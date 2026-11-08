@@ -1,18 +1,19 @@
 #!/usr/bin/env node
-// The kitshn CLI for app repos: `kitshn check` (K-802) and `kitshn deploy` (K-803, K-805, K-811).
+// The kitshn CLI for app repos: `kitshn check` (K-802), `kitshn deploy` (K-803, K-805, K-811) and `kitshn try` (K-815).
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve, sep } from "node:path";
-import { gzipSync } from "node:zlib";
+import { join, resolve } from "node:path";
 import { AGENT_USAGE, isAgentCommand, keyTransport, runAgentCommand } from "./agent.ts";
 import { OPS_HELP, isOpCommand, runOpCommand } from "./ops.ts";
 import { type AssetSession, jsonOf, uploadAssets } from "./assets.ts";
+import { bundleWorker, insideRepo, runBuild } from "./build.ts";
 import { CliError, errorText, fail } from "./cli-error.ts";
 import { errorOutput } from "./output.ts";
 import { type Artifact, artifactsByApp } from "./artifacts.ts";
 import { RecipeError, readApps } from "./parse.ts";
 import { envLines } from "./params.ts";
+import { tryApp } from "./try.ts";
 import { sendOnceMore } from "./upload.ts";
 import {
   type AppResult,
@@ -204,45 +205,6 @@ async function deployApp(
 }
 
 /**
- * The environment of the build command and of npx, without the two variables that mint GitHub OIDC tokens. This is
- * defense in depth, not isolation: a build runs as the same user and can still read the environment of this process,
- * and hosted runners give sudo. A build that runs untrusted code belongs in its own job without `id-token: write`,
- * which passes its output as an artifact (K-805).
- */
-function childEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  delete env["ACTIONS_ID_TOKEN_REQUEST_URL"];
-  delete env["ACTIONS_ID_TOKEN_REQUEST_TOKEN"];
-  return env;
-}
-
-function runBuild(dir: string, command: string) {
-  console.log(`kitshn: building with: ${command}`);
-  execFileSync("sh", ["-c", command], { cwd: dir, stdio: "inherit", env: childEnv() });
-}
-
-/** A path of the recipe after symlinks, or a failure when it leaves the repo. */
-function insideRepo(dir: string, path: string, what: string): string {
-  const full = resolve(dir, path);
-  // realpath follows a symlink, so a link cannot point outside the repo.
-  const real = existsSync(full) ? realpathSync(full) : full;
-  const root = realpathSync(dir);
-  if (real !== root && !real.startsWith(root + sep)) fail(`${what} ${path} is outside the repo.`);
-  if (!existsSync(full)) fail(`${what} ${path} does not exist after the build.`);
-  return full;
-}
-
-/**
- * K-806: the esbuild that bundles Worker apps, pinned. Known limit: npx downloads it from npm in each deploy, so a
- * deploy needs the npm registry and trusts that package. Revisit when that download fails a deploy, or when the
- * kitshn release can ship esbuild itself.
- */
-const ESBUILD = "esbuild@0.28.2";
-
-/** K-806: the Free plan limit of a Worker, gzip-compressed. */
-const WORKER_GZIP_LIMIT = 3 * 1024 * 1024;
-
-/**
  * K-806: bundles `main` into one ES module, uploads the assets folder, and sends both with the `KITSHN_<NAME>` values
  * of the run (K-808). kitshn makes the storage of the environment and the Worker.
  */
@@ -253,48 +215,9 @@ async function deployWorker(
   app: WorkerApp,
   env: ReadonlyMap<string, string>,
 ) {
-  if (app.build) runBuild(dir, app.build);
-  const main = insideRepo(dir, app.main, "the entry module");
   const work = mkdtempSync(join(tmpdir(), "kitshn-worker-"));
   try {
-    const outfile = join(work, "worker.js");
-    const metafile = join(work, "meta.json");
-    console.log(`kitshn: bundling ${app.main} with ${ESBUILD}`);
-    // From the temporary folder and the public registry, so the .npmrc and node_modules of the repo do not choose
-    // the esbuild that runs.
-    execFileSync(
-      "npx",
-      [
-        "--yes",
-        "--registry=https://registry.npmjs.org",
-        ESBUILD,
-        main,
-        "--bundle",
-        "--format=esm",
-        "--platform=neutral",
-        "--conditions=workerd,worker,browser",
-        "--main-fields=module,main",
-        "--external:cloudflare:*",
-        "--external:node:*",
-        `--outfile=${outfile}`,
-        `--metafile=${metafile}`,
-        "--log-level=warning",
-      ],
-      { cwd: work, stdio: "inherit", env: childEnv() },
-    );
-    const module = readFileSync(outfile, "utf8");
-    const size = gzipSync(module).length;
-    if (size > WORKER_GZIP_LIMIT)
-      fail(
-        `the bundle is ${Math.round(size / 1024)} KB gzip-compressed; a Worker on the Free plan takes 3 MB.`,
-      );
-    const meta = JSON.parse(readFileSync(metafile, "utf8")) as {
-      outputs: Record<string, { exports?: ReadonlyArray<string> }>;
-    };
-    const exports = new Set(Object.values(meta.outputs).flatMap((output) => output.exports ?? []));
-    for (const [binding, name] of Object.entries(app.durableObjects ?? {}))
-      if (!exports.has(name))
-        fail(`${app.main} exports no class ${name} for the Durable Object binding ${binding}.`);
+    const { module, size } = bundleWorker(dir, app, work);
     const storage = await call<{ created: ReadonlyArray<string> }>(server, "/deploy/storage", { deployId });
     for (const name of storage.created) console.log(`kitshn: made the KV namespace of ${name}.`);
     const assets = app.assets
@@ -441,6 +364,14 @@ const flag = (name: string, fallback: string) => {
   return index >= 0 ? (args[index + 1] ?? fallback) : fallback;
 };
 
+const portFlag = (text: string): number | null => {
+  if (text === "") return null;
+  const port = Number(text);
+  return Number.isInteger(port) && port >= 1 && port <= 65535
+    ? port
+    : fail(`--port takes a port from 1 to 65535, not ${text}.`);
+};
+
 const transport = () => keyTransport(flag("--server", process.env["KITSHN_SERVER"] ?? ""));
 if (isAgentCommand(command)) await runAgentCommand(command, args, transport);
 // K-1777, K-1778: the same operations as the map and the machine, with the token of an actor.
@@ -457,6 +388,17 @@ else if (command !== undefined && isOpCommand(command)) {
   try {
     if (command === "check") console.log(JSON.stringify(loadApps(flag("--dir", ".")), null, 2));
     else if (command === "deploy") await deploy(flag("--server", ""), flag("--dir", "."));
+    else if (command === "try") {
+      const dir = flag("--dir", ".");
+      const ok = await tryApp(loadApps(dir), {
+        dir,
+        app: flag("--app", "") || null,
+        port: portFlag(flag("--port", "")),
+        paramsFile: flag("--params-file", "") || null,
+        check: args.includes("--check"),
+      });
+      if (!ok) process.exitCode = 1;
+    }
   } catch (error) {
     if (json) {
       process.stdout.write(errorOutput(error instanceof Error ? error.message : String(error)));
@@ -470,11 +412,14 @@ else if (command !== undefined && isOpCommand(command)) {
 if (
   command !== "check" &&
   command !== "deploy" &&
+  command !== "try" &&
   !isAgentCommand(command) &&
   !(command !== undefined && isOpCommand(command))
 ) {
   console.log(`kitshn check [--dir <app>]                  check kitshn.config.ts and print it as JSON (K-802)
 kitshn deploy --server <address> [--dir <app>]   deploy from GitHub Actions (K-803)
+kitshn try [--dir <app>] [--app <key>] [--port <n>] [--params-file <file>] [--check]
+                                             build and run one app on 127.0.0.1, no kitshn server (K-815)
 ${AGENT_USAGE}
 ${OPS_HELP}
                                              with a token of an actor: --server or KITSHN_SERVER, and KITSHN_TOKEN=<client id>:<secret>`);
