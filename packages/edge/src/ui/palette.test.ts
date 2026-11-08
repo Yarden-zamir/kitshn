@@ -18,7 +18,10 @@ function withPalette(
   before.focus();
   try {
     act(() =>
-      render(h(Palette, { initialQuery: "", onClose: () => act(() => render(null, root)), entries }), root),
+      render(
+        h(Palette, { initialQuery: "", wide: true, onClose: () => act(() => render(null, root)), entries }),
+        root,
+      ),
     );
     const input = root.querySelector<HTMLInputElement>('input[aria-label="Find"]');
     if (!input) throw new Error("no input");
@@ -140,7 +143,9 @@ describe("command palette", () => {
     const root = document.createElement("div");
     document.body.append(root);
     const show = (entries: ReadonlyArray<PaletteEntry>) =>
-      act(() => render(h(Palette, { initialQuery: "", onClose: () => undefined, entries }), root));
+      act(() =>
+        render(h(Palette, { initialQuery: "", wide: true, onClose: () => undefined, entries }), root),
+      );
     try {
       show(entriesOf("old"));
       const input = root.querySelector<HTMLInputElement>('input[aria-label="Find"]');

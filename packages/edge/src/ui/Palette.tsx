@@ -40,6 +40,8 @@ function listAt(entries: ReadonlyArray<PaletteEntry>, keys: ReadonlyArray<string
  */
 export function Palette(props: {
   initialQuery: string;
+  /** Over 720 px; a phone gets a short hint that fits the field. */
+  wide: boolean;
   onClose: () => void;
   entries: ReadonlyArray<PaletteEntry>;
 }) {
@@ -130,7 +132,9 @@ export function Palette(props: {
           placeholder={
             shownPath.length > 0
               ? "Type to filter this list."
-              : "Find a card, a circle or an action. Try “share”."
+              : props.wide
+                ? "Find a card, a circle or an action. Try “share”."
+                : "Find a card or an action."
           }
           value={query}
           onInput={(event) => {
