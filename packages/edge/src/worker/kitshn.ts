@@ -3126,8 +3126,12 @@ export class Kitshn extends DurableObject<Env> {
    */
   private async deleteBackups(actor: Author, card: string) {
     const resource = this.state.resources.get(card);
-    if (resource?.kind !== "site.compose")
+    // A removed card keeps its runs until the 03:00 run drops them (K-1819); they can go now too.
+    const removed =
+      resource === undefined && this.sql("SELECT run FROM backups WHERE card = ? LIMIT 1", card).length > 0;
+    if (resource?.kind !== "site.compose" && !removed)
       return Response.json({ error: `The card "${card}" is no Compose app (K-1811).` }, { status: 404 });
+    const name = resource?.name ?? card;
     const bucket = this.env.BUCKET;
     if (!bucket) return Response.json({ error: "R2 is off on this account." }, { status: 503 });
     // The jobs that can still reach the repository (K-1814): queued, sent, or cut off by a dropped socket.
@@ -3141,7 +3145,7 @@ export class Kitshn extends DurableObject<Env> {
     });
     if (running || this.deletingBackups.has(card))
       return Response.json(
-        { error: `A backup or restore of ${resource.name} runs; delete its backups after it ends.` },
+        { error: `A backup or restore of ${name} runs; delete its backups after it ends.` },
         { status: 409 },
       );
     // No backup or restore of the card starts while the objects go (restoreRefusal).
@@ -3156,7 +3160,8 @@ export class Kitshn extends DurableObject<Env> {
         this.sql<{ n: number }>("SELECT COUNT(*) AS n FROM backups WHERE card = ?", card)[0]?.n ?? 0;
       this.ctx.storage.transactionSync(() => {
         this.sql("DELETE FROM backups WHERE card = ?", card);
-        this.insertRevision(actor, `Deleted the backups of ${resource.name} (K-1823)`, [], null);
+        this.sql("DELETE FROM backup_gone WHERE card = ?", card);
+        this.insertRevision(actor, `Deleted the backups of ${name} (K-1823)`, [], null);
       });
       this.backupMemory = null;
       this.broadcast();

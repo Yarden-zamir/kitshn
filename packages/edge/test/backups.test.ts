@@ -418,12 +418,14 @@ describe("backup runs (K-1817 to K-1819)", () => {
     await setup("app-del", ["m-del", "m-two"], "m-del");
     const keys = ["backups/app-del/config", `backups/app-del/data/${ID}`, "backups/app-del@m-two/config"];
     const others = ["backups/app-del-2/config", "backups/app-other/config", "state/2026-11-08.json.gz"];
+    await env.BUCKET!.put(`backups/app-renamed/data/${ID}`, "x");
     for (const key of [...keys, ...others]) await env.BUCKET!.put(key, "x");
     await runInDurableObject(stub(), (_instance, durable) => {
       for (const [run, card] of [
         ["d1", "app-del"],
         ["d2", "app-del"],
         ["o1", "app-other"],
+        ["n1", "app-renamed"],
       ])
         durable.storage.sql.exec(
           "INSERT INTO backups (run, card, machine_id, at, state) VALUES (?, ?, 'm-del', 1, 'done')",
@@ -465,6 +467,12 @@ describe("backup runs (K-1817 to K-1819)", () => {
       }
     });
     expect(refused).toEqual(expect.stringContaining("being deleted"));
+    // A removed card with runs left (K-1819) can go now; a card that kitshn never knew cannot.
+    expect(await admin("/api/apps/app-renamed/backups", "DELETE")).toEqual({
+      status: 200,
+      body: { runs: 1, objects: 1 },
+    });
+    expect((await admin("/api/apps/app-never/backups", "DELETE")).status).toBe(404);
   });
 
   it("deletes the repository of a removed card 7 days after the daily run first saw it gone", async () => {
