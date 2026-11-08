@@ -62,7 +62,11 @@ async function restic(machineId: string, path: string, init: RequestInit<Incomin
       "cf-access-jwt-assertion": await accessToken("connect-aud", { common_name: `${machineId}.access` }),
     },
   });
-  return { status: response.status, text: new TextDecoder().decode(await response.arrayBuffer()) };
+  return {
+    status: response.status,
+    headers: response.headers,
+    text: new TextDecoder().decode(await response.arrayBuffer()),
+  };
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -96,8 +100,20 @@ describe("restic through the Worker (K-1813, K-1814)", () => {
       headers: { "content-length": "10" },
     });
     expect(saved.status).toBe(200);
-    const part = await restic("m-a", `${base}/data/${ID}`, { headers: { range: "bytes=2-5" } });
-    expect([part.status, part.text]).toEqual([206, "2345"]);
+    // restic refuses a range answer whose Content-Length is not the length that it asked for.
+    const read = async (range?: string) => {
+      const answer = await restic("m-a", `${base}/data/${ID}`, range ? { headers: { range } } : {});
+      return [
+        answer.status,
+        answer.text,
+        answer.headers.get("content-length"),
+        answer.headers.get("content-range"),
+        answer.headers.get("cache-control"),
+      ];
+    };
+    expect(await read("bytes=2-5")).toEqual([206, "2345", "4", "bytes 2-5/10", "no-transform"]);
+    expect(await read("bytes=7-")).toEqual([206, "789", "3", "bytes 7-9/10", "no-transform"]);
+    expect(await read()).toEqual([200, "0123456789", "10", null, "no-transform"]);
     const listed = await restic("m-a", `${base}/data/`, {
       headers: { accept: "application/vnd.x.restic.rest.v2" },
     });

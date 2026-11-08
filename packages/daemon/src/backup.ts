@@ -101,14 +101,24 @@ export function startProxy(machine: Machine, card: string, folder: string) {
         const value = request.headers.get(name);
         if (value !== null) headers.set(name, value);
       }
+      // Bun asks for gzip by default and unpacks it, but keeps the old Content-Encoding.
+      headers.set("accept-encoding", "identity");
       // A pack is at most 32 MiB; a whole body gets a Content-Length, which the Worker needs to stream it to R2.
       const body = request.method === "POST" ? await request.arrayBuffer() : undefined;
-      return fetch(`${base.href}${url.pathname.slice(secret.length + 1)}${url.search}`, {
+      const answer = await fetch(`${base.href}${url.pathname.slice(secret.length + 1)}${url.search}`, {
         method: request.method,
         headers,
         body,
         redirect: "manual",
       });
+      if (request.method === "HEAD") return answer;
+      // Bun sends a streamed answer in chunks without its Content-Length, and restic refuses a read without the
+      // asked length. A whole body gets its length again; a read is at most one pack, as with a POST. fetch
+      // unpacks the body, so the old length and encoding do not hold.
+      const out = new Headers(answer.headers);
+      out.delete("content-length");
+      out.delete("content-encoding");
+      return new Response(await answer.arrayBuffer(), { status: answer.status, headers: out });
     },
   });
   return {

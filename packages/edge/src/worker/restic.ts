@@ -4,7 +4,7 @@ import { resticObject } from "../core/backups.ts";
 const V2 = "application/vnd.x.restic.rest.v2";
 
 /** `bytes=<start>-<end>` or `bytes=<start>-`; null for any other form, which restic does not send. */
-export function parseRange(header: string): R2Range | null {
+export function parseRange(header: string): { offset: number; length?: number } | null {
   if (!header.startsWith("bytes=")) return null;
   const [start = "", end = ""] = header.slice("bytes=".length).split("-");
   const offset = Number(start);
@@ -49,7 +49,21 @@ export async function serveRestic(bucket: R2Bucket, card: string, path: string, 
       return new Response("kitshn reads only bytes=<start>-<end>.", { status: 416 });
     const object = await bucket.get(target.key, range ? { range } : {});
     if (!object) return new Response("Not found.", { status: 404 });
-    return new Response(object.body, { status: range ? 206 : 200 });
+    // restic refuses a range answer whose Content-Length is not the asked length. no-transform keeps the
+    // Cloudflare edge from compressing the body, which would drop the length.
+    const headers = new Headers({ "cache-control": "no-transform" });
+    if (!range) {
+      headers.set("content-length", String(object.size));
+      return new Response(object.body, { status: 200, headers });
+    }
+    if (range.offset >= object.size) {
+      headers.set("content-range", `bytes */${object.size}`);
+      return new Response("The range starts after the end of the file.", { status: 416, headers });
+    }
+    const length = Math.min(range.length ?? object.size, object.size - range.offset);
+    headers.set("content-length", String(length));
+    headers.set("content-range", `bytes ${range.offset}-${range.offset + length - 1}/${object.size}`);
+    return new Response(object.body, { status: 206, headers });
   }
   if (method === "POST") {
     const header = request.headers.get("content-length");
