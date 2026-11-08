@@ -167,6 +167,8 @@ import {
   BACK_UP_NOW,
   instanceRepository,
   repositoryParts,
+  DAILY_BACKUP,
+  dailyBackupOn,
 } from "../core/backups.ts";
 import { bucketSize, stateExport, writeExport } from "./backups.ts";
 import {
@@ -388,6 +390,7 @@ import {
   ExecRun as ExecRunSchema,
   type ExecFrame,
   type ExecRun,
+  type ProviderCardSetting,
   type ProviderClient,
   type ProviderCommand,
   desiredProblem,
@@ -879,6 +882,26 @@ const API_MESSAGES: Readonly<Record<string, ClientMessage["type"]>> = {
 };
 
 /** K-003: the one Durable Object. It holds all state in SQLite and a copy in memory. */
+
+/** K-1819, K-1823: deletes every repository of a card in R2: its own and those of its other instances (K-827). */
+async function deleteRepositories(bucket: R2Bucket, card: string) {
+  let deleted = 0;
+  for (const prefix of [`backups/${card}/`, `backups/${card}@`]) {
+    let cursor: string | undefined;
+    do {
+      const page = await bucket.list({ prefix, ...(cursor ? { cursor } : {}) });
+      if (page.objects.length > 0) await bucket.delete(page.objects.map((object) => object.key));
+      deleted += page.objects.length;
+      cursor = page.truncated ? page.cursor : undefined;
+    } while (cursor);
+  }
+  return deleted;
+}
+
+/** K-717: the settings of a card: those of its provider, or the ones that kitshn gives its kind (K-1817). */
+const settingsOf = (card: Resource): ReadonlyArray<ProviderCardSetting> =>
+  card.provider?.settings ?? (card.kind === "site.compose" ? [DAILY_BACKUP] : []);
+
 export class Kitshn extends DurableObject<Env> {
   private state!: State;
   /**
@@ -1059,6 +1082,8 @@ export class Kitshn extends DurableObject<Env> {
   private desiredRevs = new Map<string, string>();
   /** K-717: card setting values, by card id. */
   private cardSettings = new Map<string, Record<string, string>>();
+  /** K-1823: the cards whose backups go now; in memory, because a restart ends the delete too. */
+  private deletingBackups = new Set<string>();
   /**
    * K-1608: the hash of the last push that each machine applied, by `<machine id>/<push key>`. K-1302: read on first
    * use after a load, so a wake that pushes nothing reads no row of it.
@@ -2854,6 +2879,7 @@ export class Kitshn extends DurableObject<Env> {
   private restoreRefusal(card: string, machineId?: string | null): string | null {
     const resource = this.state.resources.get(card);
     if (resource?.kind !== "site.compose") return `The card "${card}" is no Compose app (K-1811).`;
+    if (this.deletingBackups.has(card)) return `The backups of ${resource.name} are being deleted (K-1823).`;
     // K-827: the machine of the instance that runs the job; the home one by default.
     const machine = machineId === undefined ? resource.machine : machineId;
     if (!machine) return `${resource.name} runs on no machine.`;
@@ -3094,9 +3120,56 @@ export class Kitshn extends DurableObject<Env> {
     });
   }
 
+  /**
+   * K-1823: "Delete backups" removes every run of a Compose card and its repositories in R2, for good. The backup key
+   * stays, because it serves every card, and so does the Daily backup setting. History records it without Undo.
+   */
+  private async deleteBackups(actor: Author, card: string) {
+    const resource = this.state.resources.get(card);
+    if (resource?.kind !== "site.compose")
+      return Response.json({ error: `The card "${card}" is no Compose app (K-1811).` }, { status: 404 });
+    const bucket = this.env.BUCKET;
+    if (!bucket) return Response.json({ error: "R2 is off on this account." }, { status: 503 });
+    // The jobs that can still reach the repository (K-1814): queued, sent, or cut off by a dropped socket.
+    const running = this.sql<{ command: string }>(
+      `SELECT command FROM jobs WHERE state IN ('queued', 'sent')
+       OR (state = 'failed' AND output = '${OFFLINE_OUTPUT}' AND expires_at > ?)`,
+      Date.now(),
+    ).some((row) => {
+      const command = JSON.parse(row.command) as Command;
+      return (command.kind === "backup" || command.kind === "backup-restore") && command.card === card;
+    });
+    if (running || this.deletingBackups.has(card))
+      return Response.json(
+        { error: `A backup or restore of ${resource.name} runs; delete its backups after it ends.` },
+        { status: 409 },
+      );
+    // No backup or restore of the card starts while the objects go (restoreRefusal).
+    this.deletingBackups.add(card);
+    try {
+      const objects = await deleteRepositories(bucket, card);
+      const left =
+        (await bucket.list({ prefix: `backups/${card}/`, limit: 1 })).objects.length +
+        (await bucket.list({ prefix: `backups/${card}@`, limit: 1 })).objects.length;
+      if (left > 0) throw new Error(`R2 still holds backups of ${card} after the delete.`);
+      const runs =
+        this.sql<{ n: number }>("SELECT COUNT(*) AS n FROM backups WHERE card = ?", card)[0]?.n ?? 0;
+      this.ctx.storage.transactionSync(() => {
+        this.sql("DELETE FROM backups WHERE card = ?", card);
+        this.insertRevision(actor, `Deleted the backups of ${resource.name} (K-1823)`, [], null);
+      });
+      this.backupMemory = null;
+      this.broadcast();
+      return Response.json({ runs, objects });
+    } finally {
+      this.deletingBackups.delete(card);
+    }
+  }
+
   private backupList(card: string) {
     const runs = this.sql<BackupRow>("SELECT * FROM backups WHERE card = ? ORDER BY at DESC LIMIT 50", card);
-    return Response.json({ runs: runs.map(backupRun) });
+    // K-1817: `daily` is the check of the daily run, so an agent can read whether the card is in it.
+    return Response.json({ runs: runs.map(backupRun), daily: dailyBackupOn(this.cardSettings.get(card)) });
   }
 
   /** K-538: the steps of a backup or restore job that someone started; the machine reports only its end. */
@@ -3262,7 +3335,12 @@ export class Kitshn extends DurableObject<Env> {
     const previews = new Set(previewCards);
     const actor: Author = { _tag: "kitshn", reason: "the daily backup (K-1817)" };
     for (const card of deployedCards) {
-      if (previews.has(card) || this.backupRefusal(card) !== null) continue;
+      if (
+        previews.has(card) ||
+        !dailyBackupOn(this.cardSettings.get(card)) ||
+        this.backupRefusal(card) !== null
+      )
+        continue;
       this.queueBackup(card, actor, now);
     }
     this.deliverJobs();
@@ -3282,15 +3360,7 @@ export class Kitshn extends DurableObject<Env> {
       if (this.state.resources.has(card)) this.sql("DELETE FROM backup_gone WHERE card = ?", card);
     const gone = this.sql<{ card: string }>("SELECT card FROM backup_gone WHERE since < ?", now - 7 * DAY);
     for (const { card } of gone) {
-      // K-827: the repositories of the other instances go with the card's own.
-      for (const prefix of [`backups/${card}/`, `backups/${card}@`]) {
-        let cursor: string | undefined;
-        do {
-          const page = await bucket.list({ prefix, ...(cursor ? { cursor } : {}) });
-          if (page.objects.length > 0) await bucket.delete(page.objects.map((object) => object.key));
-          cursor = page.truncated ? page.cursor : undefined;
-        } while (cursor);
-      }
+      await deleteRepositories(bucket, card);
       this.sql("DELETE FROM backups WHERE card = ?", card);
       this.sql("DELETE FROM backup_gone WHERE card = ?", card);
     }
@@ -4635,14 +4705,14 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-717: one card setting of a provider card. It needs control on the card, which kitshn checks here; it changes
+   * K-717: one card setting of a provider card, or one that kitshn gives a kind itself. It needs control on the card, which kitshn checks here; it changes
    * no access, so it is no proposal (K-715). History records it without Undo.
    */
   private setCardSetting(caller: Caller, cardId: string, body: unknown) {
     const card = this.state.resources.get(cardId);
     const key = isRecord(body) && typeof body["key"] === "string" ? body["key"] : null;
     const value = isRecord(body) && typeof body["value"] === "string" ? body["value"] : null;
-    const setting = card?.provider?.settings.find((item) => item.id === key);
+    const setting = (card ? settingsOf(card) : []).find((item) => item.id === key);
     if (!card || !setting)
       return Response.json({ error: `${cardId} has no setting ${key}.` }, { status: 404 });
     if (value === null || !setting.values.includes(value))
@@ -5244,6 +5314,7 @@ export class Kitshn extends DurableObject<Env> {
         .map(decodeURIComponent);
       if (run === "" && request.method === "GET") return this.backupList(card);
       if (run === "" && request.method === "POST") return this.backUpNow(caller.actor, card);
+      if (run === "" && request.method === "DELETE") return await this.deleteBackups(caller.actor, card);
       if (action === "restore" && request.method === "POST")
         return this.restoreBackup(caller.actor, card, run);
     }

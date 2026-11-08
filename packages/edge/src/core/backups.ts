@@ -1,4 +1,17 @@
 // K-1811 to K-1822: backups of Compose cards and of the Durable Object. Shared by the Worker, the map and the daemon.
+import type { ProviderCardSetting } from "@kitshn/local";
+
+/** K-1817, K-717: the card setting that kitshn itself gives each Compose card. "off" leaves the card out of the daily run. */
+export const DAILY_BACKUP: ProviderCardSetting = {
+  id: "dailyBackup",
+  title: "Daily backup",
+  values: ["on", "off"],
+  default: "on",
+};
+
+/** K-1817: whether the daily run backs up a card with these setting values (K-717). */
+export const dailyBackupOn = (settings: Readonly<Record<string, string>> | undefined) =>
+  (settings?.[DAILY_BACKUP.id] ?? DAILY_BACKUP.default) !== "off";
 
 /** K-1819: one backup run of a card, as the `backups` table keeps it. */
 export interface BackupRun {

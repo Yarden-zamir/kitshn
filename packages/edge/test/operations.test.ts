@@ -356,6 +356,7 @@ const BOTH_FAIL: Partial<Record<OpId, string>> = {
   "provider-forget": "the provider still runs on the machine",
   "app-logs": "needs a card with logs: a Worker site or a Compose app",
   "app-backup": "needs a Compose card",
+  "app-backups-delete": "needs a Compose card",
   "app-restore": "needs a Compose card",
   "app-rollbacks": "needs a card that a deploy made",
   "app-rollback": "needs a card that a deploy made",
