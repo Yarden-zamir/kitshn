@@ -167,7 +167,7 @@ function MachineStickers(props: { view: MachineView; state: State }) {
         class="sticker wait"
         href={panel}
         onPointerDown={keepPress}
-        data-tip={`Update waits: busy, ${ago(Date.now(), update.until)} left. A provider of this machine reports busy, so kitshn updates the other machines first, and this one when it is idle, or ${untilText(update.until)} also while busy (K-627).`}
+        data-tip={`Update waits: busy, ${ago(Date.now(), update.until)} left. A provider of this machine reports busy or another job runs there, so kitshn updates the other machines first, and this one when it is idle, or ${untilText(update.until)} also while busy (K-627).`}
       >
         update waits
       </a>
