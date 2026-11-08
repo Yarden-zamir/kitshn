@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { withAppEnv } from "./appEnv.ts";
+import { maskSecrets, valueMarkers, withAppEnv } from "./appEnv.ts";
 
 const notify = { url: "https://kit.example.com/notify", token: "secret-token" };
 
@@ -90,5 +90,38 @@ describe("withAppEnv (K-1908, K-822)", () => {
     expect(() => withAppEnv({ services: { web: { environment: ["A=1"] } } }, { notify })).toThrow(
       /not a map/,
     );
+  });
+});
+
+describe("store values in the checked config (K-833)", () => {
+  it("gives each service the name from the environment, and turns each marker back into ${NAME}", () => {
+    const markers = valueMarkers(["API_KEY"]);
+    const marker = markers["API_KEY"] ?? "";
+    const config = {
+      services: {
+        web: { image: "web", environment: { BEARER: `Bearer ${marker}` } },
+        worker: { image: "worker" },
+      },
+    };
+    const result = withAppEnv(config, {}, markers);
+    expect(result).toEqual({
+      services: {
+        web: { image: "web", environment: { API_KEY: null, BEARER: "Bearer ${API_KEY}" } },
+        worker: { image: "worker", environment: { API_KEY: null } },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(marker);
+  });
+
+  it("stops a deploy that uses a value outside the environment of a service, where the checks saw only its marker", () => {
+    const markers = valueMarkers(["DATA_PATH"]);
+    const config = {
+      services: { web: { image: "web", volumes: [{ type: "bind", source: markers["DATA_PATH"] }] } },
+    };
+    expect(() => withAppEnv(config, {}, markers)).toThrow(/outside the environment/);
+  });
+
+  it("hides each secret of 4 characters or more in the job output", () => {
+    expect(maskSecrets("token=abcd1234 and abcd", ["abcd1234", "abc"])).toBe("token=*** and abcd");
   });
 });

@@ -2,8 +2,12 @@
 import type { AgentTransport } from "./agent.ts";
 import { CliError } from "./cli-error.ts";
 import { OPERATIONS, type OpId, RELEASE_WAIT_MS, isOpId, opsText } from "./operations.ts";
+import { SECRET_HELP, runSecretCommand } from "./secret.ts";
+import { opResult } from "./op-result.ts";
 
-export const OP_COMMANDS = ["ops", "state"] as const;
+export { opResult };
+
+export const OP_COMMANDS = ["ops", "state", "secret"] as const;
 export type OpCommand = (typeof OP_COMMANDS)[number] | OpId;
 
 export const isOpCommand = (value: string): value is OpCommand =>
@@ -13,6 +17,7 @@ export const OPS_HELP = `kitshn ops [--json]                     every operation
 kitshn state [field...] [--json]        the map as the owner sees it, without the hidden fields (K-1777)
 kitshn <operation> [target] [--body json] [--reason text]
                                         do one operation as this actor: it runs, waits for a person, or says why not
+${SECRET_HELP}
 kitshn rollout [version] [--retry] [--json]
                                         update every online daemon to the release of kitshn and follow it;
                                         --retry asks the Owner to end a stopped rollout (K-636)`;
@@ -28,16 +33,6 @@ const flag = (args: ReadonlyArray<string>, name: string) => {
   const index = args.indexOf(name);
   return index >= 0 ? args[index + 1] : undefined;
 };
-
-/** The result of an operation answer, or the reason of its refusal as a CliError. */
-export async function opResult(response: Response): Promise<unknown> {
-  const data: unknown = await response.json().catch(() => null);
-  if (isRecord(data) && data["outcome"] === "done") return data["result"];
-  const reason = isRecord(data)
-    ? String(data["reason"] ?? data["error"] ?? `kitshn answered ${response.status}`)
-    : `kitshn answered ${response.status}`;
-  throw new CliError(reason);
-}
 
 /** The body of `kitshn <operation>`: the target, `--body` as JSON, and `--reason`. */
 export function opCallBody(args: ReadonlyArray<string>): { target: string; body: unknown; reason?: string } {
@@ -199,6 +194,7 @@ export async function runOpCommand(
     return;
   }
   if (command === "rollout") return await followRollout(args, transport, json);
+  if (command === "secret") return await runSecretCommand(args, transport);
   const result = await opResult(
     await transport().call(`/op/${command}`, {
       method: "POST",

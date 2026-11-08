@@ -407,6 +407,28 @@ export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [
     "CREATE INDEX dns_objects_retry ON dns_objects (retry_at) WHERE error IS NOT NULL",
     "CREATE INDEX route_objects_retry ON route_objects (retry_at) WHERE error IS NOT NULL",
   ],
+  // 50: app values (K-830 to K-836). `app_values` holds one row per name of a value set: a secret sealed with AES-GCM
+  // (K-832), a var as text. `value_sets` holds the needs of the newest plan of each set, so the map lists missing names
+  // before a card exists, and `value_cards` the set of each card. Deploys and jobs keep the names that they used, never a value. `deploy_cards` keeps the
+  // values of the build that came up and the names changed since, for "needs redeploy" (K-835).
+  [
+    `CREATE TABLE app_values (set_key TEXT NOT NULL, name TEXT NOT NULL, kind TEXT NOT NULL, version INTEGER NOT NULL,
+      iv BLOB, sealed BLOB, plain TEXT, set_at INTEGER NOT NULL, set_by TEXT NOT NULL, PRIMARY KEY (set_key, name),
+      CHECK (kind IN ('secret', 'var'))) WITHOUT ROWID`,
+    "CREATE TABLE value_sets (set_key TEXT PRIMARY KEY, secrets TEXT NOT NULL, vars TEXT NOT NULL)",
+    // The value set of each card that a deploy made; the rows of before fill it once.
+    "CREATE TABLE value_cards (card_id TEXT PRIMARY KEY, set_key TEXT NOT NULL)",
+    "CREATE INDEX value_cards_set ON value_cards (set_key)",
+    `INSERT OR IGNORE INTO value_cards (card_id, set_key)
+     SELECT resource_id, repo_id || ':' || app_key || ':' ||
+       CASE WHEN environment GLOB 'pr-[0-9]*' THEN 'previews' ELSE environment END
+     FROM deploys WHERE kind = 'deploy' AND repo_id IS NOT NULL ORDER BY rowid`,
+    "ALTER TABLE deploys ADD COLUMN values_used TEXT",
+    "ALTER TABLE jobs ADD COLUMN values_used TEXT",
+    "ALTER TABLE jobs ADD COLUMN values_set TEXT",
+    "ALTER TABLE deploy_cards ADD COLUMN values_live TEXT",
+    "ALTER TABLE deploy_cards ADD COLUMN values_stale TEXT",
+  ],
 ];
 
 /** K-819: the migration after which the Durable Object derives the repo ids of older deploy rows. */

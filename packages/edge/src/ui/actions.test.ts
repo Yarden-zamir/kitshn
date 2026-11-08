@@ -131,6 +131,7 @@ function context(version = "0123456789ab"): ActionContext {
     openStacks: new Set(),
     folderSites: new Set(),
     providerCommands: {},
+    valuesStale: {},
   };
 }
 
@@ -174,11 +175,19 @@ describe("card actions", () => {
       "tray",
       "time",
       "logs",
+      "values",
       "rollback",
       "rollback-run",
       "backups",
       "remove-app",
     ]);
+    // K-835: Redeploy shows only while a value changed since the build that runs.
+    const stale = actionsFor({ ...context(), valuesStale: { riffle: ["API_KEY"] } }, handlers, {
+      _tag: "card",
+      id: "riffle",
+    });
+    run(find(stale, "redeploy"));
+    expect(calls.at(-1)).toMatchObject(["redeploy", { id: "riffle" }]);
     // K-212, K-533: a card without a time offers end times from now.
     expect(items(find(groups, "time")).map((item) => item.label)).toEqual([
       "For 1 h",

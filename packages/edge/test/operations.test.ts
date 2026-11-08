@@ -310,6 +310,9 @@ const TARGETS: Partial<Record<OpId, string>> = {
   desired: "t3.settings",
   "desired-set-shared": "t3.settings",
   "desired-set-circle": OWNER_CIRCLE_ID,
+  // K-830: a value set of the waiting repo 1002; the set runs before the remove.
+  "value-set": "1002:app:prod",
+  "value-remove": "1002:app:prod",
 };
 const BODIES: Partial<Record<OpId, unknown>> = {
   "card-time": { endsAt: null },
@@ -335,6 +338,8 @@ const BODIES: Partial<Record<OpId, unknown>> = {
   "audience-add": { address: "https://aud.example.com" },
   "audience-labels": { address: "https://aud.example.com", labels: false },
   "ask-events": { label: "t3.thread.id=nothing" },
+  "value-set": { name: "API_KEY", kind: "secret", value: "a test secret" },
+  "value-remove": { name: "API_KEY" },
 };
 /**
  * Rows whose fixture fails for the owner too, so the test cannot see a refusal of the agent alone. Each reason says
@@ -358,6 +363,7 @@ const BOTH_FAIL: Partial<Record<OpId, string>> = {
   "app-backup": "needs a Compose card",
   "app-restore": "needs a Compose card",
   "app-rollbacks": "needs a card that a deploy made",
+  "app-redeploy": "needs a card that a deploy made",
   "app-rollback": "needs a card that a deploy made",
   "app-run-rollback-plan": "needs a deploy of a workflow run",
   "app-run-rollback": "needs a deploy of a workflow run",
@@ -1311,4 +1317,49 @@ it("asks the Owner to end a stopped rollout when a machine calls it, and the app
     state.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'daemon_rollout'").one(),
   );
   expect(JSON.parse(stored.value)).toMatchObject({ failed: null });
+});
+
+it("keeps the value of an agent's value-set out of its proposal, and sets it when the same call comes again (K-1723, K-830)", async () => {
+  stubAccessCerts();
+  const key = await newMachineKey();
+  await setup({ maintains: { mode: "automatic" } }, key);
+  const stub = env.KITSHN.getByName("kitshn");
+  await runInDurableObject(stub, (_, state) =>
+    state.storage.sql.exec(
+      "INSERT OR REPLACE INTO repos (repo_id, name, state, first_seen) VALUES ('2001', 'acme/app', 'allowed', 1)",
+    ),
+  );
+  const value = "marker-of-a-secret-value";
+  const body = call("2001:app:prod", { name: "API_KEY", kind: "secret", value });
+  const send = (nonce: string) =>
+    forwarded(key, "POST", "/op/value-set", `${nonce}-0123456789abcdef`, body, {}, ADMIN);
+  // No card of the set is the machine's, so the call asks the Owner (K-1777).
+  const first = await send("set-1");
+  expect(first.status, await first.clone().text()).toBe(409);
+  const { proposalId } = (await first.json()) as { proposalId: string };
+  const stored = await runInDurableObject(stub, (_, state) =>
+    JSON.stringify(state.storage.sql.exec("SELECT * FROM proposals").toArray()),
+  );
+  expect(stored).toContain("API_KEY");
+  expect(stored).not.toContain(value);
+  await runInDurableObject(stub, (_, state) =>
+    state.storage.sql.exec(
+      "UPDATE proposals SET state = 'approved', decided_at = ?, decided_by = ? WHERE id = ?",
+      Date.now(),
+      JSON.stringify({ actor: { _tag: "person", email: "owner@example.com" } }),
+      proposalId,
+    ),
+  );
+  const again = await send("set-2");
+  expect(again.status, await again.clone().text()).toBe(200);
+  const rows = await runInDurableObject(stub, (_, state) => ({
+    values: state.storage.sql.exec("SELECT name, kind, plain FROM app_values").toArray(),
+    everything: JSON.stringify(
+      ["proposals", "revisions", "ask_events"].map((table) =>
+        state.storage.sql.exec(`SELECT * FROM ${table}`).toArray(),
+      ),
+    ),
+  }));
+  expect(rows.values).toEqual([{ name: "API_KEY", kind: "secret", plain: null }]);
+  expect(rows.everything).not.toContain(value);
 });

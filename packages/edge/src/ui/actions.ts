@@ -97,6 +97,8 @@ export interface ActionContext {
   readonly folderSites: ReadonlySet<string>;
   /** K-707: the commands of the providers of each machine, by machine id. */
   readonly providerCommands: Snapshot["providerCommands"];
+  /** K-835: the cards that need a redeploy, with the names that changed. */
+  readonly valuesStale: Snapshot["valuesStale"];
 }
 
 export interface ActionHandlers {
@@ -142,6 +144,10 @@ export interface ActionHandlers {
   readonly logs: (resource: Resource) => void;
   /** K-1819: opens the backups of a Compose card. */
   readonly backups: (resource: Resource) => void;
+  /** K-835: opens the values of one card, or of every value set with null. */
+  readonly values: (resource: Resource | null) => void;
+  /** K-835: starts a card again with today's values. */
+  readonly redeploy: (resource: Resource) => void;
   readonly runJob: (view: MachineView, command: Command) => void;
   /** K-626: "Update daemon automatically" of a machine. */
   readonly setAutoUpdate: (view: MachineView, on: boolean) => void;
@@ -921,6 +927,28 @@ export function cardActions(ctx: ActionContext, h: ActionHandlers, resource: Res
       ...(hasLogs(resource.kind) && ctx.deployed.has(resource.id)
         ? [{ id: "logs", label: "Logs…", tip: LOGS_TIP, run: () => h.logs(resource) }]
         : []),
+      // K-835: an app of a repo has values; a folder site has no repo (K-1123).
+      ...(isAppCard(resource) && ctx.deployed.has(resource.id) && !ctx.folderSites.has(resource.id)
+        ? [
+            {
+              id: "values",
+              label: "Values…",
+              keywords: "secrets vars environment variables",
+              tip: "The secrets and vars that this app needs, with set or missing. A secret never shows again.",
+              run: () => h.values(resource),
+            },
+            ...((ctx.valuesStale[resource.id] ?? []).length > 0
+              ? [
+                  {
+                    id: "redeploy",
+                    label: "Redeploy",
+                    tip: `Start ${resource.name} again with today's values: ${(ctx.valuesStale[resource.id] ?? []).join(", ")} changed.`,
+                    run: () => h.redeploy(resource),
+                  },
+                ]
+              : []),
+          ]
+        : []),
       ...(isAppCard(resource) && ctx.deployed.has(resource.id) && !ctx.previews.has(resource.id)
         ? [
             {
@@ -1219,6 +1247,13 @@ export function mapActions(ctx: ActionContext, h: ActionHandlers, at: Point | nu
         keywords: "tidy arrange sort grid",
         tip: ORGANIZE_TIP,
         run: h.organize,
+      },
+      {
+        id: "values",
+        label: "Values…",
+        keywords: "secrets vars environment variables",
+        tip: "The secrets and vars of every app and environment, with set or missing (K-835).",
+        run: () => h.values(null),
       },
     ],
   ];

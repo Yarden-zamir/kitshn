@@ -289,8 +289,6 @@ export default defineApps({ app: { static: { output: "public" }, deploy: [{ on: 
     expect(() => decodeApps({ a: app(["b"]), b: app(["a"]) })).toThrow(/cycle/);
     expect(() => decodeApps({ "my-app": app() })).toThrow();
     expect(() => decodeApps({})).toThrow();
-    // K-808: `vars` and `secrets` join `needs` later; until then the schema refuses them.
-    expect(() => decodeApps({ web: { ...app(), needs: { vars: ["TOKEN"] } } })).toThrow();
   });
 
   it("skips an app when an app it needs failed or was skipped, and counts nothing to do as deployed", () => {
@@ -316,5 +314,52 @@ export default defineApps({ app: { static: { output: "public" }, deploy: [{ on: 
     expect(plan(preview, "Yarden-zamir/me", event, "yarden-zamir.com")).toMatchObject({
       address: "me-pr-31.yarden-zamir.com",
     });
+  });
+});
+
+describe("needed values (K-808, K-836)", () => {
+  const compose = (needs: unknown) => ({ compose: {}, deploy: [{ on: "push", name: "prod" }], needs });
+  const worker = (needs: unknown) => ({
+    worker: { main: "src/index.ts", compatibilityDate: "2026-10-01", kv: ["CACHE"], vars: { MODE: "x" } },
+    deploy: [{ on: "push", name: "prod" }],
+    needs,
+  });
+
+  it("takes secret and var names of an app", () => {
+    expect(decodeRecipe(compose({ secrets: ["OPENAI_KEY"], vars: ["MODE"] }))).toMatchObject({
+      needs: { secrets: ["OPENAI_KEY"], vars: ["MODE"] },
+    });
+  });
+
+  it("refuses names that are no value names, belong to kitshn, come twice or are too many", () => {
+    expect(() => decodeRecipe(compose({ secrets: ["openai"] }))).toThrow(/not a value name/);
+    expect(() => decodeRecipe(compose({ vars: ["KITSHN_ZONE"] }))).toThrow(/KITSHN_/);
+    expect(() => decodeRecipe(compose({ secrets: ["TOKEN"], vars: ["TOKEN"] }))).toThrow(/twice/);
+    const many = Array.from({ length: 26 }, (_, index) => `NAME_${index}`);
+    expect(() => decodeRecipe(compose({ secrets: many, vars: many.map((name) => `${name}_V`) }))).toThrow(
+      /at most 50/,
+    );
+  });
+
+  it("gives a static site no secrets, because its files reach everyone", () => {
+    const site = (needs: unknown) => ({
+      static: { output: "site" },
+      deploy: [{ on: "push", name: "prod" }],
+      needs,
+    });
+    expect(decodeRecipe(site({ vars: ["MODE"] }))).toMatchObject({ needs: { vars: ["MODE"] } });
+    expect(() => decodeRecipe(site({ secrets: ["TOKEN"] }))).toThrow();
+  });
+
+  it("refuses a needed name of a Worker that another binding of the recipe has", () => {
+    expect(decodeRecipe(worker({ secrets: ["API_KEY"] }))).toMatchObject({ needs: { secrets: ["API_KEY"] } });
+    expect(() => decodeRecipe(worker({ secrets: ["CACHE"] }))).toThrow(/binding/);
+    expect(() => decodeRecipe(worker({ vars: ["MODE"] }))).toThrow(/binding/);
+  });
+
+  it("keeps the environment name previews for the values of pull requests (K-830)", () => {
+    const recipe = decodeRecipe({ static: { output: "site" }, deploy: [{ on: "push", name: "previews" }] });
+    const event = { name: "push", branch: "main", pr: null, action: null } as const;
+    expect(plan(recipe, "o/r", event, "example.com")).toMatchObject({ kind: "error" });
   });
 });

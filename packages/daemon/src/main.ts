@@ -42,7 +42,7 @@ import {
 } from "@kitshn/local";
 import { linkPairs, nextReport, probeLink, providerChecks } from "./health.ts";
 import { composeRisks, envFileRisks, rawRisks, realpathOnDisk, sourceRisks, spreadData } from "./guard.ts";
-import { type Notify, accessEnv, withAppEnv } from "./appEnv.ts";
+import { type Notify, accessEnv, maskSecrets, valueMarkers, withAppEnv } from "./appEnv.ts";
 import { DEFAULT_SOCKET, appVariables, composeFiles } from "kitshn/compose";
 import { HELPER_IMAGE, backup, finishRestores, restore, unpauseMarked } from "./backup.ts";
 import { keyPlan } from "./keys.ts";
@@ -1398,10 +1398,13 @@ async function deployFile(deployId: string, file: string): Promise<Buffer> {
  * name of the address, and the tunnel sends the address there.
  */
 async function composeUp(
+  jobId: number,
   command: Extract<Command, { kind: "compose" | "compose-redeploy" | "compose-rollback" }>,
-  job: { readonly notify?: Notify | undefined; readonly access?: AppAccess | undefined },
+  job: AppJob,
 ): Promise<JobOutcome> {
   const { notify, access } = job;
+  /** K-833: the secret values of the job, which its output hides. */
+  let secrets: Array<string> = [];
   const dir = join(paths.data, "apps", command.project);
   // K-818: each deploy unpacks into a new folder that no running container mounts, so the old app runs on
   // while the new one is read, checked and built. A job of the same app never runs at the same time.
@@ -1457,6 +1460,10 @@ async function composeUp(
     }
     mkdirSync(source);
     await step("unpack the source", "tar", ["-xzf", join(dir, "source.tgz"), "-C", source]);
+    // K-833: the store values live only in the memory of this job, and reach Compose in its environment.
+    const values = (job.values ?? []).length > 0 ? await jobValues(jobId) : {};
+    secrets = (job.values ?? []).filter((value) => value.secret).flatMap((value) => values[value.name] ?? []);
+    const markers = valueMarkers(Object.keys(values));
     const data = join(dir, "data");
     const env = {
       ...process.env,
@@ -1519,10 +1526,8 @@ async function composeUp(
           "read the Compose settings",
           "docker",
           [...composeArgs, "config", "--format", "json", ...extra, "-o", file],
-          {
-            cwd: source,
-            env,
-          },
+          // K-833: the markers stand in for the store values, so the config file holds none.
+          { cwd: source, env: { ...env, ...markers } },
         );
         return JSON.parse(readFileSync(file, "utf8")) as unknown;
       } finally {
@@ -1549,7 +1554,8 @@ async function composeUp(
     // Build and start from the checked config itself, so the repo's files are not read again. It stays with
     // the last good build, so a teardown reads the same services.
     // K-1908: the token stays out of this file, which stays with the last good build.
-    writeFileSync(checked, JSON.stringify(withAppEnv(withLogLimits(config), job)), { mode: 0o600 });
+    writeFileSync(checked, JSON.stringify(withAppEnv(withLogLimits(config), job, markers)), { mode: 0o600 });
+    const runEnv = { ...env, ...values };
     // The params file again: without it Compose reads the repo's `.env`, and `COMPOSE_PROFILES` is lost.
     const run = [
       "compose",
@@ -1582,7 +1588,7 @@ async function composeUp(
     } else
       await step("docker compose build", "nice", ["-n", "19", "docker", ...run, "build"], {
         cwd: source,
-        env,
+        env: runEnv,
       });
     // K-818: no container of the app runs from here to `up`, so none can swap a path in the data, log or
     // sockets folder between the check below and `up`. Orphans and one-off runs count too.
@@ -1610,7 +1616,7 @@ async function composeUp(
       upStarted = true;
       return step("docker compose up", "docker", [...run, "up", "-d", "--no-build", "--remove-orphans"], {
         cwd: source,
-        env,
+        env: runEnv,
       });
     });
     void checkSites();
@@ -1653,7 +1659,7 @@ async function composeUp(
       );
     output += removeOldSockets(oldSockets);
     output += `\nThe app answers on its socket; the tunnel sends ${command.name} there.\n`;
-    return { ok: true, exitCode: 0, output, images: kept };
+    return { ok: true, exitCode: 0, output: maskSecrets(output, secrets), images: kept };
   } catch (error) {
     output += `\n[kitshn: ${error instanceof Error ? error.message : String(error)}]`;
     rmSync(checked, { force: true });
@@ -1668,8 +1674,52 @@ async function composeUp(
         (cleanup: unknown) => `${String(cleanup)}\n`,
       );
     }
-    return { ok: false, exitCode: null, output };
+    return { ok: false, exitCode: null, output: maskSecrets(output, secrets) };
   }
+}
+
+/** K-1908, K-822, K-833: what the `job` message of a Compose job carries beyond its command. */
+type AppJob = {
+  readonly notify?: Notify | undefined;
+  readonly access?: AppAccess | undefined;
+  readonly values?: ReadonlyArray<{ readonly name: string; readonly secret: boolean }> | undefined;
+};
+
+/** K-833: the answers to `jobValues` that a job waits for. */
+const valueWaiters = new Map<
+  string,
+  (answer: {
+    readonly values: Readonly<Record<string, string>> | null;
+    readonly error: string | null;
+  }) => void
+>();
+
+/** K-833: the store values of a Compose job, over the signed connection, only while the job runs. */
+async function jobValues(jobId: number): Promise<Readonly<Record<string, string>>> {
+  const ws = socket;
+  if (ws === null || challenge === null)
+    throw new Error(
+      "the daemon has no signed connection to kitshn, so it cannot get the values of this job (K-833)",
+    );
+  const requestId = crypto.randomUUID();
+  const answer = await new Promise<{ values: Readonly<Record<string, string>> | null; error: string | null }>(
+    (resolve) => {
+      const timer = setTimeout(() => {
+        valueWaiters.delete(requestId);
+        resolve({
+          values: null,
+          error: "kitshn did not send the values of this job within 60 seconds (K-833)",
+        });
+      }, 60_000);
+      valueWaiters.set(requestId, (result) => {
+        clearTimeout(timer);
+        resolve(result);
+      });
+      sendOn(ws, { type: "jobValues", requestId, jobId });
+    },
+  );
+  if (answer.values === null) throw new Error(answer.error ?? "kitshn sent no values for this job (K-833)");
+  return answer.values;
 }
 
 /**
@@ -1881,17 +1931,13 @@ function oneAtATime(project: string, work: () => Promise<JobOutcome>): Promise<J
 }
 
 /** Resolves to null when the result comes later from another daemon (K-629). */
-function runJob(
-  jobId: number,
-  command: Command,
-  job: { readonly notify?: Notify | undefined; readonly access?: AppAccess | undefined } = {},
-): Promise<JobOutcome | null> {
+function runJob(jobId: number, command: Command, job: AppJob = {}): Promise<JobOutcome | null> {
   if (
     command.kind === "compose" ||
     command.kind === "compose-redeploy" ||
     command.kind === "compose-rollback"
   )
-    return oneAtATime(command.project, () => composeUp(command, job));
+    return oneAtATime(command.project, () => composeUp(jobId, command, job));
   if (command.kind === "compose-down") return oneAtATime(command.project, () => composeDown(command));
   if (command.kind === "compose-volume-remove")
     return oneAtATime(command.project, () => removeVolume(command));
@@ -2110,6 +2156,8 @@ function report() {
               "protocol-2",
               // K-634: this daemon restarts its tunnel service as a job.
               "tunnel-restart",
+              // K-833: this daemon asks for the store values of a Compose job and hides the secret ones in its output.
+              "app-values",
               ...(doorState.problem === null ? ["doors"] : []),
             ],
       ...(keptBytes === undefined ? {} : { keptBytes }),
@@ -2778,6 +2826,9 @@ function connect(config: JoinSecrets) {
           registry().forget(message.provider) === null
         )
           sendProviders();
+      } else if (message.type === "jobValues") {
+        valueWaiters.get(message.requestId)?.(message);
+        valueWaiters.delete(message.requestId);
       } else if (message.type === "requestAnswer") {
         answerWaiters.get(message.requestId)?.(message.error, message.initialized);
         answerWaiters.delete(message.requestId);
@@ -2851,6 +2902,14 @@ function connect(config: JoinSecrets) {
         socket = null;
         // K-722: the runs of both sides end with the relay.
         hub().kitshnLost();
+      }
+      // K-833: a job that waits for its values gets none from a closed connection.
+      for (const [requestId, settle] of valueWaiters) {
+        settle({
+          values: null,
+          error: `the connection to kitshn closed (${event.code}) before the values came (K-833)`,
+        });
+        valueWaiters.delete(requestId);
       }
       // K-709: a request in flight gets no answer from a closed connection.
       for (const [requestId, settle] of answerWaiters) {

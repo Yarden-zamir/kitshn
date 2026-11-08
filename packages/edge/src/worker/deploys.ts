@@ -254,6 +254,8 @@ export function workerMetadata(
   input: {
     readonly kv: ReadonlyMap<string, string>;
     readonly secrets: Readonly<Record<string, string>>;
+    /** K-834: the plain store vars of the app, as plain text bindings. */
+    readonly vars?: Readonly<Record<string, string>>;
     readonly access: AppAccess;
     readonly assets: {
       readonly jwt: string;
@@ -279,6 +281,8 @@ export function workerMetadata(
     bindings.push({ type: "durable_object_namespace", name, class_name: className });
   for (const [name, text] of Object.entries(app.vars ?? {}))
     bindings.push({ type: "plain_text", name, text });
+  for (const [name, text] of Object.entries(input.vars ?? {}))
+    if (!(name in input.secrets)) bindings.push({ type: "plain_text", name, text });
   for (const [name, text] of Object.entries(input.secrets))
     bindings.push({ type: "secret_text", name, text });
   // K-822: a var or secret of the app with the same name wins.
@@ -287,7 +291,8 @@ export function workerMetadata(
     KITSHN_ACCESS_AUDIENCES: input.access.audiences.join(","),
   };
   for (const [name, text] of Object.entries(access))
-    if (!names.includes(name) && !(name in input.secrets)) bindings.push({ type: "plain_text", name, text });
+    if (!names.includes(name) && !(name in input.secrets) && !(name in (input.vars ?? {})))
+      bindings.push({ type: "plain_text", name, text });
   const runWorkerFirst = app.assets?.runWorkerFirst;
   const classes = [...new Set(Object.values(app.durableObjects ?? {}))].sort();
   const metadata = {

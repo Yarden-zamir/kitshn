@@ -54,8 +54,8 @@ const forgetHidden = (repo: RepoView) => !repo.goneOnGitHub && (repo.state === "
 function forgetTip(repo: RepoView) {
   const refused = forgetRefusal(repo, repo.resourceIds.length);
   if (refused) return refused;
-  if (repo.goneOnGitHub) return `Forget ${repo.name}: it leaves this list.`;
-  return `Forget ${repo.name}: it leaves this list. Its next deploy waits for Allow again, and an agent key with "creates" can then allow it.`;
+  if (repo.goneOnGitHub) return `Forget ${repo.name}: it leaves this list, with its kitshn values.`;
+  return `Forget ${repo.name}: it leaves this list, and its kitshn values are deleted. Its next deploy waits for Allow again, and an agent key with "creates" can then allow it.`;
 }
 
 // K-819: the repo list asks GitHub about deleted repos once per page load; the server keeps it to one check a day.

@@ -147,10 +147,13 @@ async function deployApp(
   artifact: Artifact | null,
   run: { deployId: string | null },
 ) {
+  // K-831: kitshn checks the needed names against the names of the GitHub values, never their values.
   const plan = await call<{
     deployId: string | null;
     plan: { kind: string; reason?: string; address?: string; environment?: string };
-  }>(server, "/deploy/plan", { recipe, key, event });
+    /** K-834: the store vars of a static site, for its build. */
+    vars?: Record<string, string>;
+  }>(server, "/deploy/plan", { recipe, key, event, github: [...env.keys()] });
   if (plan.plan.kind === "skip" || !plan.deployId) {
     console.log(`kitshn: ${label}nothing to do. ${plan.plan.reason ?? ""}`);
     return;
@@ -169,7 +172,14 @@ async function deployApp(
     if (artifact) fail("an artifact is for a static site; a Worker app builds with `build` (K-806).");
     return deployWorker(server, dir, plan.deployId, recipe.worker, env);
   }
-  if (recipe.static.build) runBuild(dir, recipe.static.build);
+  // K-834: a static site gets its needed vars at build: a GitHub value of the run wins over the store.
+  const vars = {
+    ...plan.vars,
+    ...Object.fromEntries(
+      (recipe.needs?.vars ?? []).flatMap((name) => (env.has(name) ? [[name, env.get(name)]] : [])),
+    ),
+  };
+  if (recipe.static.build) runBuild(dir, recipe.static.build, vars);
   const output = resolve(dir, recipe.static.output);
   // K-805: a site that its own job built arrives at its artifact path, which must be the output folder of the recipe.
   const artifactPath = artifact?.path;

@@ -142,6 +142,8 @@ export interface Snapshot {
   readonly orphanWorkers: ReadonlyArray<OrphanWorker>;
   /** K-820: the cards whose newest deploy failed or did not run, with why. */
   readonly deployNotes: Readonly<Record<string, DeployNote>>;
+  /** K-835: the cards that need a redeploy, with the names that changed since the values of their live build. */
+  readonly valuesStale: Readonly<Record<string, ReadonlyArray<string>>>;
   /** K-1125: the uptime of each checked card: up or down, and since when. */
   readonly uptime: Readonly<Record<string, { readonly up: boolean; readonly since: number }>>;
   /** K-1905: the open notifications of the caller that are neither muted nor snoozed. */

@@ -57,6 +57,8 @@ export interface Env {
   readonly KITSHN_IMPORT_AT?: string;
   /** K-1815: the key of the backup passwords. Without it, kitshn makes no backup. */
   readonly KITSHN_BACKUP_KEY?: string;
+  /** K-832: the key of the secret app values. Without it, kitshn keeps no secret value. */
+  readonly KITSHN_SECRETS_KEY?: string;
   /** Local development only: the email to act as. The Worker honours it only on localhost. */
   readonly DEV_IDENTITY?: string;
   /** Local development only: seed sample cards. The Durable Object honours it only when the host is localhost. */

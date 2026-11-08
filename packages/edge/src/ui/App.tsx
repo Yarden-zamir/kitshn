@@ -47,6 +47,7 @@ import {
 import { awaitsAllow } from "../core/repos.ts";
 import type { Command } from "../core/machine.ts";
 import { ROLLBACK_DATA, RollbackDialog } from "./Rollback.tsx";
+import { ValuesDialog, staleText } from "./Values.tsx";
 import { LogsDialog } from "./Logs.tsx";
 import { hasLogs } from "../core/logs.ts";
 import {
@@ -345,6 +346,8 @@ export function App() {
   const [rollback, setRollback] = useState<{ card: Resource; mode: "card" | "run" } | null>(null);
   const [logs, setLogs] = useState<Resource | null>(null);
   const [backupsCard, setBackupsCard] = useState<Resource | null>(null);
+  /** K-835: the Values dialog: a card or a set key, null for every set, undefined while it is closed. */
+  const [valuesOf, setValuesOf] = useState<string | null | undefined>(undefined);
   const [restoringTime, setRestoringTime] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const [trayFilter, setTrayFilter] = useState("");
@@ -1045,6 +1048,27 @@ export function App() {
     );
   };
 
+  /** K-835: starts a card again with today's values; the answer says what started. */
+  const redeploy = async (cardId: string) => {
+    const name = state?.resources.get(cardId)?.name ?? cardId;
+    const result = await callApi<{ job?: number; dispatched?: { repo: string; branch: string } }>(
+      "POST",
+      `/api/apps/${encodeURIComponent(cardId)}/redeploy`,
+      {},
+    );
+    showToast(
+      "error" in result
+        ? { text: result.error, error: true, undo: null }
+        : {
+            text: result.dispatched
+              ? `A build of ${result.dispatched.repo} from ${result.dispatched.branch} started for ${name}.`
+              : `${name} starts its last good build with today's values.`,
+            error: false,
+            undo: null,
+          },
+    );
+  };
+
   const removeApp = async (resource: Resource) => {
     const result = await callApi<{ revision: number | null; notes: ReadonlyArray<string> }>(
       "DELETE",
@@ -1735,6 +1759,8 @@ export function App() {
       selectAndFocus({ cards: new Set([resource.id]), circle: null }, 'input[aria-label="Redirect address"]'),
     logs: setLogs,
     backups: setBackupsCard,
+    values: (resource) => setValuesOf(resource?.id ?? null),
+    redeploy: (resource) => void redeploy(resource.id),
     runJob: (machine, command) => void runJob(machine, command),
     setAutoUpdate: (machine, on) =>
       void setAutoUpdate(machine.machine.id, on).then(({ text, error }) =>
@@ -1783,6 +1809,7 @@ export function App() {
     openStacks,
     folderSites,
     providerCommands: store.snapshot.providerCommands,
+    valuesStale: store.snapshot.valuesStale,
   };
 
   const waitingRepos = store.snapshot?.repos.filter(awaitsAllow).length ?? 0;
@@ -1971,6 +1998,9 @@ export function App() {
               onLeaveCircle={leaveCircle}
               onRemoveApp={(resource) => void removeApp(resource)}
               onRollback={(resource, mode) => setRollback({ card: resource, mode })}
+              onValues={(resource) => setValuesOf(resource.id)}
+              onRedeploy={(resource) => void redeploy(resource.id)}
+              valuesStale={store.snapshot.valuesStale}
               previousVersions={previousVersions}
               onRestorePrevious={(resource) => void restorePrevious(resource)}
               onSetAddress={setAddress}
@@ -2055,6 +2085,15 @@ export function App() {
           ask={ask}
           onClose={() => setBackupsCard(null)}
           onDone={(text, error) => showToast({ text, error, undo: null })}
+        />
+      ) : null}
+      {valuesOf !== undefined ? (
+        <ValuesDialog
+          only={valuesOf}
+          ask={ask}
+          onClose={() => setValuesOf(undefined)}
+          onDone={(text, error) => showToast({ text, error, undo: null })}
+          onRedeploy={redeploy}
         />
       ) : null}
       {restoringTime ? (
@@ -2510,6 +2549,10 @@ function Panel(props: {
   onLeaveCircle: (machine: Resource, circle: Circle) => void;
   onRemoveApp: (resource: Resource) => void;
   onRollback: (resource: Resource, mode: "card" | "run") => void;
+  /** K-835: the values of a card, and its start with today's values. */
+  onValues: (resource: Resource) => void;
+  onRedeploy: (resource: Resource) => void;
+  valuesStale: Readonly<Record<string, ReadonlyArray<string>>>;
   /** K-1117: the pages and files that have a previous version. */
   previousVersions: ReadonlySet<string>;
   onRestorePrevious: (resource: Resource) => void;
@@ -2605,6 +2648,9 @@ function Panel(props: {
         onLeaveCircle={props.onLeaveCircle}
         onRemoveApp={props.onRemoveApp}
         onRollback={props.onRollback}
+        onValues={props.onValues}
+        onRedeploy={props.onRedeploy}
+        stale={props.valuesStale[cards[0].id] ?? []}
         onRestorePrevious={props.previousVersions.has(cards[0].id) ? props.onRestorePrevious : null}
         onSetAddress={props.onSetAddress}
         redirects={props.redirects[cards[0].id] ?? []}
@@ -3034,6 +3080,10 @@ function CardPanel(props: {
   onLeaveCircle: (machine: Resource, circle: Circle) => void;
   onRemoveApp: (resource: Resource) => void;
   onRollback: (resource: Resource, mode: "card" | "run") => void;
+  /** K-835: the values of the card, its start with today's values, and the names changed since its build. */
+  onValues: (resource: Resource) => void;
+  onRedeploy: (resource: Resource) => void;
+  stale: ReadonlyArray<string>;
   /** K-1117: swaps a page or a file with its previous version, or null when it has none. */
   onRestorePrevious: ((resource: Resource) => void) | null;
   /** K-1120: a page or a file gets a new address name. */
@@ -3495,6 +3545,40 @@ function CardPanel(props: {
             >
               Backups…
             </button>
+          </div>
+        </section>
+      ) : null}
+      {isAppCard(resource) && props.deployed && !resource.id.startsWith(FOLDER_SITE_PREFIX) ? (
+        <section aria-label="Values">
+          <div class="row">
+            <span class="label" data-tip="Values: the secrets and vars that this app names in needs (K-830).">
+              Values
+            </span>
+            {props.stale.length > 0 ? (
+              <span class="sticker wait" data-tip={staleText(props.stale) ?? ""}>
+                needs redeploy
+              </span>
+            ) : null}
+            <button
+              class="btn"
+              data-tip="The secrets and vars that this app needs, with set or missing. A secret never shows again."
+              onClick={() => props.onValues(resource)}
+            >
+              Values…
+            </button>
+            {props.stale.length > 0 ? (
+              <button
+                class="btn primary"
+                data-tip={
+                  resource.kind === "site.compose"
+                    ? "Start the last good build again with today's values."
+                    : "Build the branch again through the GitHub App, with today's values."
+                }
+                onClick={() => props.onRedeploy(resource)}
+              >
+                Redeploy
+              </button>
+            ) : null}
           </div>
         </section>
       ) : null}

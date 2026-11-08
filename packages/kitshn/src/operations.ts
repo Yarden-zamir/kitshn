@@ -15,7 +15,7 @@ export const EFFECTS = [
   "maintains",
   /** New cards. They land only in the creator's own circles, so creating never shares. */
   "creates",
-  /** Existing cards in scope: deploys, settings, desired state, repo push tokens, backups. */
+  /** Existing cards in scope: deploys, settings, desired state, repo push tokens, backups, app values. */
   "changes",
   /** Shell and exec on machines in scope. */
   "runs",
@@ -56,12 +56,14 @@ export const EFFECT_DEFAULTS: Record<Effect, "automatic" | "ask the Owner" | "of
  * - `ports`: the body fields `machine` and `relay` name cards that the caller controls (K-2007).
  * - `self`: the machine of the caller.
  * - `rollout`: holds while the rollout of kitshn runs or ended; a stopped rollout is the Owner's to end (K-636).
+ * - `values`: a value set (its key, or a card of it) with a card that the caller controls (K-830). A set with no card
+ *   yet asks the Owner.
  * - `owner`: never holds, so every call asks the Owner: settings of the whole kitshn and actions with no target that a
  *   caller controls.
  * A target that does not exist refuses. An edit that does not resolve does not pass the rule.
  */
 export type Scope =
-  "any" | "card" | "own" | "machine" | "rule" | "job" | "ports" | "self" | "rollout" | "owner";
+  "any" | "card" | "own" | "machine" | "rule" | "job" | "ports" | "self" | "rollout" | "values" | "owner";
 
 /** K-1777: only a person can do it, because only a person has the proof. The reason shows in review and in help. */
 export interface PersonGate {
@@ -99,6 +101,11 @@ export interface Operation {
   readonly gate: Gate;
   /** The answer holds a secret: an approval runs nothing, the same call again within 1 hour gets it (K-1723). */
   readonly secret?: true;
+  /**
+   * K-1723, K-830: body fields that no proposal, approval hash or event holds. The approver reads that a value waits;
+   * the caller keeps it and sends the same call again after the approval.
+   */
+  readonly hidden?: ReadonlyArray<string>;
   /** What the answer gives beyond the call, for the approver to read; a secret row names it per call instead. */
   readonly gives?: string;
   /** The agent uses this command instead, because the call uploads files or needs the local machine. */
@@ -467,6 +474,48 @@ export const OPERATIONS = {
     route: "/api/apps/:target",
     effect: "destroys",
     gate: { scope: "own" },
+  },
+  "app-redeploy": {
+    group: "apps",
+    title:
+      "start a card again with today's values: a Compose app starts its last good build, a static site or Worker app builds again through the GitHub App (K-835)",
+    method: "POST",
+    route: "/api/apps/:target/redeploy",
+    effect: "changes",
+    gate: { scope: "card" },
+  },
+  values: {
+    group: "apps",
+    title: `the value sets with each name and its state; a var shows its value, a secret never (K-835). --body '{"set":"<set or card>"}' reads one; the short form is kitshn secret list`,
+    method: "GET",
+    route: "/api/values",
+    pick: ["set"],
+    effect: "reads",
+    gate: { scope: "any" },
+    short: "kitshn secret list [<card|set>]",
+  },
+  "value-set": {
+    group: "apps",
+    title:
+      "set a value of a value set: a set key or a card, a name, the kind and the value; the short form reads the value from stdin (K-830)",
+    method: "PUT",
+    route: "/api/values/:target/:name",
+    pick: ["kind", "value"],
+    hidden: ["value"],
+    effect: "changes",
+    gate: { scope: "values" },
+    short: "kitshn secret set <card|set> <NAME> [--var] < value-file",
+  },
+  "value-remove": {
+    group: "apps",
+    title: `remove a value of a value set: --body '{"name":"<NAME>"}' (K-830)`,
+    method: "DELETE",
+    route: "/api/values/:target/:name",
+    pick: [],
+    // A removed value has no Undo (K-835).
+    effect: "destroys",
+    gate: { scope: "values" },
+    short: "kitshn secret remove <card|set> <NAME>",
   },
   "worker-storage-remove": {
     group: "apps",

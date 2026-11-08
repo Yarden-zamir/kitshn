@@ -26,6 +26,8 @@ export const SECRET_ROWS: ReadonlyArray<{ readonly table: string } | { readonly 
   // K-1907: the VAPID private key of Web Push, and the subscriptions, whose endpoints and auth secrets are keys too.
   { metaPrefix: "push_vapid_jwk" },
   { table: "push_subscriptions" },
+  // K-832: the app values. After an import, every name is missing until the owner sets it again.
+  { table: "app_values" },
 ];
 
 const secretTables = new Set(SECRET_ROWS.flatMap((row) => ("table" in row ? [row.table] : [])));

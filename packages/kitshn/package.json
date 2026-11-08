@@ -16,7 +16,8 @@
     "./cli-error": "./src/cli-error.ts",
     "./compose": "./src/compose.ts",
     "./ops": "./src/ops.ts",
-    "./operations": "./src/operations.ts"
+    "./operations": "./src/operations.ts",
+    "./values": "./src/values.ts"
   },
   "publishConfig": {
     "exports": {
