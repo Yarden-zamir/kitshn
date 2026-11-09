@@ -372,10 +372,7 @@ describe("backup runs (K-1817 to K-1819)", () => {
     stubAccessCerts();
     await setup("app-off", ["m-off"], "m-off");
     await setup("app-on", ["m-on"], "m-on");
-    // Control on a card comes from its circles (K-717, tested with the provider settings); these cards have none.
-    await runInDurableObject(stub(), (instance) => {
-      vi.spyOn(instance as unknown as { canControl(): boolean }, "canControl").mockReturnValue(true);
-    });
+    // These cards sit in no circle, so nobody has control on them (K-717); Daily backup needs none (K-1817).
     expect(
       (await admin("/api/cards/app-off/settings", "POST", { key: "dailyBackup", value: "off" })).status,
     ).toBe(200);

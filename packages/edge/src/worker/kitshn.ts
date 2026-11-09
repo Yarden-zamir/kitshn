@@ -4730,7 +4730,10 @@ export class Kitshn extends DurableObject<Env> {
         { error: `${setting.title} is one of ${setting.values.join(", ")}.` },
         { status: 400 },
       );
-    if (!this.callerControls(caller, card.id))
+    // K-1817: Daily backup takes the permission of Back up now and Delete backups, which this owner route (or a gated
+    // /op call) already is; every other setting needs control on the card.
+    const backupSetting = card.kind === "site.compose" && setting.id === DAILY_BACKUP.id;
+    if (!backupSetting && !this.callerControls(caller, card.id))
       return Response.json(
         { error: `${setting.title} needs control on ${card.name} (K-717).` },
         { status: 403 },
