@@ -34,7 +34,7 @@ import {
 import { callApi } from "./store.ts";
 import { Switch, useDialogEscape } from "./controls.tsx";
 import { ItemIcon } from "./ItemIcon.tsx";
-import { ActorRights, withMode } from "./ActorRights.tsx";
+import { ActorPolicyEditor, ActorRights, withMode } from "./ActorRights.tsx";
 import { formatConditions, parseConditions } from "../core/asks.ts";
 import type { ComponentChildren } from "preact";
 import { levelEdit } from "./actions.ts";
@@ -902,6 +902,7 @@ export function CircleEditor(props: {
                         }
                       />
                     ) : null}
+                    {(actor.conditions ?? []).length === 0 ? <ActorPolicyEditor actor={actor} /> : null}
                     {machineId === null ? (
                       <details>
                         <summary data-tip={`Add a phone, desktop app or script to ${actor.name} (K-1601).`}>

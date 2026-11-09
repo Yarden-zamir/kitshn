@@ -45,6 +45,7 @@ import {
   revisionTargets,
   type RevisionTarget,
   targetOf,
+  policyWidening,
   ruleViolation,
   stacksWithout,
   endText,
@@ -77,6 +78,9 @@ import {
   type Actor,
   type Credential,
   actorIdOf,
+  actorPolicyOf,
+  allows,
+  policyText,
   credentialKey,
   machineActorId,
   EFFECTS,
@@ -304,6 +308,7 @@ import {
   shownAsk,
   shownHash,
   PASSKEY_EFFECTS,
+  approvalRefusal,
   approveVia,
   askNotificationText,
   WINDOW_ACTIONS,
@@ -416,7 +421,7 @@ import { seed } from "../core/seed.ts";
 import {
   type Attested,
   type Visitor,
-  adminPasskey,
+  ownerProof,
   circleMatches,
   passkeyHolds,
   visitorLevel,
@@ -1857,6 +1862,19 @@ export class Kitshn extends DurableObject<Env> {
 
   private persist(changes: ReadonlyArray<Change>) {
     for (const change of changes) {
+      // K-1779: by any path, a change of an actor's options, a removed credential or a deleted actor ends the approvals
+      // that the actor gave and that no call used yet, so an approval never outlives what let it pass. An added
+      // credential ends none.
+      if (change._tag === "actor" && change.before !== null) {
+        const after = change.after;
+        const kept = new Set((after?.credentials ?? []).map(credentialKey));
+        if (
+          after === null ||
+          !deepEqual(change.before.policy ?? null, after.policy ?? null) ||
+          change.before.credentials.some((credential) => !kept.has(credentialKey(credential)))
+        )
+          this.endApprovalsBy(change.before);
+      }
       // K-1117: the first move or share of a card ends the tray right of the key that published it.
       const card =
         change._tag === "place" ? change.id : change._tag === "shareSetting" ? change.id.split("/")[0] : null;
@@ -2175,9 +2193,9 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /** The rules that every write keeps (K-105, K-1504). Returns the state after the changes. */
-  private checked(changes: ReadonlyArray<Change>, base: State = this.state): State {
+  private checked(changes: ReadonlyArray<Change>, base: State = this.state, policyWrite = false): State {
     const after = applyChanges(base, changes);
-    const violation = ruleViolation(after);
+    const violation = ruleViolation(after) ?? (policyWrite ? null : policyWidening(base, after));
     if (violation) throw new RuleError(violation);
     refuseRaiseWhilePaused(base, after);
     refuseLockout(base, after);
@@ -2194,10 +2212,12 @@ export class Kitshn extends DurableObject<Env> {
     changes: ReadonlyArray<Change>,
     undo: UndoOf | null,
     named: string | null = null,
+    /** K-1779: only `setActorPolicy` turns on an option of an actor policy. */
+    policyWrite = false,
   ): number | null {
     if (changes.length === 0) return null;
     const before = this.state;
-    const after = this.checked(changes);
+    const after = this.checked(changes, this.state, policyWrite);
     const now = Date.now();
     const merge = undo === null && named === null ? this.movesToMerge(actor, now, changes) : null;
     const label =
@@ -2319,6 +2339,66 @@ export class Kitshn extends DurableObject<Env> {
 
   private apply(actor: Author, edits: ReadonlyArray<Edit>) {
     return this.commit(actor, refuseResume(resolveEdits(this.state, edits)), null);
+  }
+
+  /**
+   * K-1779: the approvals and passkey options of one actor. Only the owner sets them: a gated call passed an approval
+   * with a passkey (or `approvesWithoutPasskey`, an owner-level option), and a direct call holds the admin with the
+   * owner's proof (`ownerProof`) or acts as the owner (K-1778).
+   */
+  private setActorPolicy(caller: Caller, actorId: string, body: unknown): Response {
+    const actor = this.state.actors.get(actorId);
+    if (!actor) return Response.json({ error: `There is no such actor: "${actorId}".` }, { status: 404 });
+    const policy = actorPolicyOf(isRecord(body) ? body["policy"] : undefined);
+    if (typeof policy === "string") return Response.json({ error: policy }, { status: 400 });
+    const owner =
+      caller.gated !== undefined ||
+      (this.hasAdmin(caller.visitor) &&
+        (caller.visitor.email === null || ownerProof(this.state, caller.visitor, Date.now())));
+    if (!owner)
+      return Response.json(
+        { error: "Only the owner, with a passkey, changes approvals and passkey options (K-1779)." },
+        { status: 403 },
+      );
+    const { policy: _before, ...rest } = actor;
+    const after: Actor = policy === null ? rest : { ...rest, policy };
+    try {
+      const revision = this.commit(
+        caller.actor,
+        resolveEdits(this.state, [{ _tag: "actor", id: actor.id, after }]),
+        null,
+        `Set the approvals and passkey options of ${actor.name}: ${policyText(after.policy)} (K-1779)`,
+        true,
+      );
+      this.broadcast();
+      return Response.json({ revision, policy: after.policy ?? null });
+    } catch (error) {
+      if (error instanceof RuleError) return Response.json({ error: error.message }, { status: 409 });
+      throw error;
+    }
+  }
+
+  /**
+   * K-1779: ends the approvals that the actor gave and that no call used yet (K-1714, K-1723). Known limit: an approval
+   * of a machine names only the machine, so this also ends the approvals of the other actors of that machine; that
+   * errs on the safe side. Revisit when approvals record the actor.
+   */
+  private endApprovalsBy(actor: Actor) {
+    const now = Date.now();
+    for (const credential of actor.credentials) {
+      const [path, value] =
+        credential._tag === "login"
+          ? ["$.actor.email", credential.email]
+          : credential._tag === "token"
+            ? ["$.actor.clientId", credential.clientId]
+            : ["$.actor.machineId", credential.machineId];
+      this.sql(
+        `UPDATE proposals SET used_at = ? WHERE state = 'approved' AND used_at IS NULL
+         AND lower(json_extract(decided_by, '${path}')) = lower(?)`,
+        now,
+        value,
+      );
+    }
   }
 
   /**
@@ -5252,6 +5332,12 @@ export class Kitshn extends DurableObject<Env> {
       if (request.method === "PUT")
         return this.putDesired(caller, kind, await request.json().catch(() => null));
     }
+    if (path.startsWith("/api/actors/") && path.endsWith("/policy") && request.method === "PUT")
+      return this.setActorPolicy(
+        caller,
+        decodeURIComponent(path.slice("/api/actors/".length, -"/policy".length)),
+        await request.json().catch(() => null),
+      );
     if (path.startsWith("/api/cards/") && path.endsWith("/settings") && request.method === "POST")
       return this.setCardSetting(
         caller,
@@ -11872,12 +11958,12 @@ export class Kitshn extends DurableObject<Env> {
       labels = verified;
     }
     const attested = machine ? { labels, prefixes: this.labelPrefixesOf(machine.id) } : null;
-    // K-1778: the admin runs as the owner: a login with the passkey of the admin, or another proof of the admin with
-    // "shares" and "secrets" automatic. A login without that passkey goes through the gate.
+    // K-1778: the admin runs as the owner: a login with the passkey of the admin (or its step "owner" off, K-1779), or
+    // another proof of the admin with "shares" and "secrets" automatic. Any other login goes through the gate.
     // K-636: only a person ends a stopped rollout, so an admin proof of an agent goes through the gate, which asks the Owner.
     const admin =
       this.hasAdmin(caller.visitor, attested) &&
-      (caller.visitor.email === null || adminPasskey(this.state, caller.visitor, now)) &&
+      (caller.visitor.email === null || ownerProof(this.state, caller.visitor, now)) &&
       !(id === "rollout" && this.rolloutStopped() && this.isAgentSender(caller.visitor));
     const asker = this.askerOf(caller.visitor);
     if (!admin && asker === null)
@@ -11896,6 +11982,7 @@ export class Kitshn extends DurableObject<Env> {
           ? caller
           : { ...caller, actor: asker.author };
     const read = id === "state" && request.method === "GET";
+    if (id === "approve" && request.method === "POST") return this.opApprove(request, as, asker);
     if (!isOpId(id)) return refused(404, `kitshn has no operation "${id}"; kitshn ops lists them.`);
     if (request.method !== "POST" && !read) return refused(405, "Send an operation with POST.");
     const op: Operation = OPERATIONS[id];
@@ -12055,6 +12142,64 @@ export class Kitshn extends DurableObject<Env> {
           return { credential: credentialKey(credential), machineId: null, name: actor.name };
       }
     return null;
+  }
+
+  /**
+   * K-1723, K-1779: a token approves an open ask with its own proof: `{ target: <proposal id>, body: { hash? }, reason }`.
+   * `decide` runs every check of a machine's approval, with the policy of the token's actor. A machine approves over its
+   * signed connection (K-1726), and a person through the approve applications, because only those carry its passkey.
+   */
+  private async opApprove(request: Request, as: Caller, asker: Asker | null): Promise<Response> {
+    const refused = (status: number, reason: string) =>
+      Response.json({ outcome: "refused", reason, error: reason }, { status });
+    if (asker === null || asker.machineId !== null || as.visitor.email !== null)
+      return refused(
+        403,
+        "On /op only a token approves; a machine uses kitshn agent approve, and a person the Asks list (K-1723).",
+      );
+    if (this.state.paused) return refused(403, "kitshn is paused, so asks wait until Resume (K-1504).");
+    if (!allows(this.credentialActor(as.visitor), "approvesWithToken"))
+      return refused(
+        403,
+        "This token does not approve: the owner turns on approves asks with a token for its actor (K-1779).",
+      );
+    const input: unknown = await request.json().catch(() => null);
+    const target = isRecord(input) && typeof input["target"] === "string" ? input["target"] : "";
+    if (target === "") return refused(400, 'Send {"target": "<proposal id>", "reason": "..."} as JSON.');
+    const body = isRecord(input) && isRecord(input["body"]) ? input["body"] : {};
+    const hash = typeof body["hash"] === "string" ? body["hash"] : null;
+    // K-1722: an approve names the text that it read; `kitshn state` gives `shownHash` for each ask that it may answer.
+    if (hash === null)
+      return refused(400, 'Send the shownHash of the ask that you read as body {"hash": "..."} (K-1722).');
+    const reason =
+      isRecord(input) && typeof input["reason"] === "string" ? input["reason"].slice(0, 500) : null;
+    const decided = await this.decide(
+      target,
+      "approved",
+      { actor: as.actor, visitor: as.visitor, machineId: null, reason },
+      hash,
+      null,
+    );
+    return decided.ok
+      ? Response.json({ outcome: "done", result: decided.result ?? null })
+      : refused(403, decided.error);
+  }
+
+  /** K-1779: the actor of a proof's credential, whose policy decides its approvals; a machine key reads its machine actor. */
+  private credentialActor(visitor: Visitor): Actor | undefined {
+    const credential = this.askerOf(visitor)?.credential;
+    return credential === undefined ? undefined : this.actorOfCredential(credential);
+  }
+
+  /** K-1727, K-1778: the actor of a credential key; a machine key is its machine actor, not one of its agent actors. */
+  private actorOfCredential(key: string): Actor | undefined {
+    if (key.startsWith("machine/"))
+      return this.state.actors.get(machineActorId(key.slice("machine/".length)));
+    return [...this.state.actors.values()].find(
+      (actor) =>
+        (actor.conditions ?? []).length === 0 &&
+        actor.credentials.some((held) => credentialKey(held) === key),
+    );
   }
 
   /**
@@ -13583,7 +13728,7 @@ export class Kitshn extends DurableObject<Env> {
     return (
       this.sql(
         `SELECT 1 AS one FROM proposals WHERE machine_id = ? AND action = ? AND target = ? AND right_name = ?
-         AND circle_id = ? AND state = 'approved' AND decided_at > ? LIMIT 1`,
+         AND circle_id = ? AND state = 'approved' AND used_at IS NULL AND decided_at > ? LIMIT 1`,
         machineId,
         action,
         target,
@@ -13815,13 +13960,18 @@ export class Kitshn extends DurableObject<Env> {
     const [row] = this.sql<ProposalRow>("SELECT * FROM proposals WHERE id = ?", proposalId);
     if (!row) return { ok: false, error: `kitshn has no proposal ${proposalId}.` };
     const proposal = proposalOf(row);
-    // K-1778: the credential that asked never approves its own ask; another member of the circle does.
-    if (decision === "approved" && this.askerOf(by.visitor)?.credential === proposal.credential)
-      return {
-        ok: false,
-        error:
-          "The credential that asked never approves its own ask; another member of the circle approves it (K-1778).",
-      };
+    // K-1727, K-1779: the actor that asked approves its own ask only when the owner allows it. Every credential of one
+    // actor counts as that actor; a machine key is its machine actor.
+    const approver = this.credentialActor(by.visitor);
+    const asker = this.actorOfCredential(proposal.credential);
+    const own =
+      this.askerOf(by.visitor)?.credential === proposal.credential ||
+      (approver !== undefined && approver.id === asker?.id);
+    const ownRefusal =
+      decision === "approved" && own
+        ? approvalRefusal({ own, passkey: false, approver, right: proposal.right })
+        : null;
+    if (ownRefusal !== null) return { ok: false, error: ownRefusal };
     const circle = this.state.circles.get(proposal.circleId);
     const refusal = answerRefusal(
       circle,
@@ -13838,13 +13988,13 @@ export class Kitshn extends DurableObject<Env> {
         ok: false,
         error: `${circle.name} needs a passkey: approve through the passkey check (K-1723).`,
       };
-    // K-1723, K-1778: an ask of "shares" or "secrets" needs a person's passkey, also where the circle lets a token or a
-    // machine approve. An actor whose effect is automatic never asks.
-    if (decision === "approved" && PASSKEY_EFFECTS.has(proposal.right) && via !== "passkey")
-      return {
-        ok: false,
-        error: `This ask is for "${proposal.right}", so only a person approves it, through the passkey check (K-1723).`,
-      };
+    // K-1723, K-1779: an ask of "shares" or "secrets" needs a passkey proof, also where the circle lets a token or a
+    // machine approve, unless the owner lets the approver's actor approve without one.
+    const stepRefusal =
+      decision === "approved"
+        ? approvalRefusal({ own: false, passkey: via === "passkey", approver, right: proposal.right })
+        : null;
+    if (stepRefusal !== null) return { ok: false, error: stepRefusal };
     if (proposal.state !== "pending")
       return { ok: false, error: `This ask is already decided (${proposal.state}).` };
     if (decision === "approved" && seenHash !== null && seenHash !== proposal.shownHash)
@@ -13873,8 +14023,10 @@ export class Kitshn extends DurableObject<Env> {
       }
       return { ok: false, error: `This ask is no longer allowed: ${gone}` };
     }
-    // K-718: only a person lifts the limit of a machine, so the approval of a machine leaves the ask open for a person.
-    if (decision === "approved" && by.machineId !== null) {
+    // K-718: only a person lifts the limit of a machine, so the approval of a machine or a token (a proof with no login)
+    // leaves the ask open for a person.
+    const person = by.visitor.email !== null;
+    if (decision === "approved" && !person) {
       const asker = this.state.machines.get(proposal.machineId);
       const outside = this.outsideAgentLimit(
         { email: null, clientId: asker?.clientId ?? null, ip: null },
@@ -13928,7 +14080,7 @@ export class Kitshn extends DurableObject<Env> {
           proposal.labels,
           this.attestedOf(machine.id, proposal.labels),
           proposal.circleId === OWNER_CIRCLE_ID &&
-            by.machineId === null &&
+            person &&
             (proposal.action === "job" || proposal.action === "deploy") &&
             proposal.right !== "shares"
             ? { machineId: machine.id, key: keyMark(machine), right: proposal.right, person: true }

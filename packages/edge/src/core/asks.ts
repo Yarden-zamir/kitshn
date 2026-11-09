@@ -5,12 +5,14 @@ import {
   type Directory,
   type Effect,
   HIGH_RISK_EFFECTS,
+  type PolicyOption,
   type RightCondition,
   type RightMode,
   type State,
   isPerson,
   machineIdOf,
   memberActor,
+  allows,
 } from "./model.ts";
 import { FORWARD_HEADERS } from "./machine.ts";
 import { type Attested, type Visitor, circleMatches } from "./visitor.ts";
@@ -258,8 +260,33 @@ export const APPROVED_WINDOW_MS = 60 * 60_000;
  */
 export const WINDOW_ACTIONS: ReadonlySet<AskAction> = new Set(["github-token", "pass"]);
 
-/** K-1723: an approval of an ask for these effects needs a passkey proof, because they raise access or hand out secrets. */
+/**
+ * K-1723: an approval of an ask for these effects needs a passkey proof, because they raise access or hand out secrets.
+ * Every row that changes an actor policy or reverses a revision has one of them (`operations.test.ts`). K-1779: the
+ * owner can turn this step off for one approver.
+ */
 export const PASSKEY_EFFECTS: ReadonlySet<Effect> = new Set(["shares", "secrets"]);
+
+/**
+ * K-1723, K-1727, K-1779: why this approver may not approve, from its proof and the policy of its actor, or null. The
+ * circle check comes apart (`answerRefusal`). Self-approval and the passkey step are separate options, so one never
+ * implies the other.
+ */
+export function approvalRefusal(input: {
+  /** The approver is the actor that asked (K-1727). */
+  readonly own: boolean;
+  /** The approver came through the passkey application within 10 minutes (K-1723). */
+  readonly passkey: boolean;
+  /** The actor of the approver's credential: its policy decides the options. */
+  readonly approver: Pick<Actor, "policy"> | undefined;
+  readonly right: Effect;
+}): string | null {
+  if (input.own && !allows(input.approver, "approvesOwnAsks"))
+    return "The actor that asked never approves its own ask; another member of the circle approves it, or the owner lets this actor approve its own asks (K-1727, K-1779).";
+  if (!PASSKEY_EFFECTS.has(input.right) || input.passkey || allows(input.approver, "approvesWithoutPasskey"))
+    return null;
+  return `This ask is for "${input.right}", so only a person approves it, through the passkey check, unless the owner lets you approve without a passkey (K-1723, K-1779).`;
+}
 
 /** K-1723: the approve path of an ask; a passkey circle and an ask of a passkey effect go through the passkey check. */
 export const approveVia = (circle: Pick<Circle, "needsPasskey"> | undefined, right: Effect) =>
@@ -288,6 +315,22 @@ export function answerRefusal(
     return `${circle.name} needs a passkey, and "approves without passkey" is off, so a token or a machine does not answer its asks (K-1727).`;
   return null;
 }
+
+/** K-1725, K-1779: what each option of an actor policy lets happen with no person, as the map warns before and after. */
+export const POLICY_WARNINGS: Record<PolicyOption, string> = {
+  approvesOwnAsks:
+    "approves its own asks: in a circle where it answers, its asks need no one else. On a machine actor, every process of the machine approves the asks of that machine.",
+  approvesWithToken:
+    "approves asks with a token: whoever holds one of its tokens answers the asks of its approver circles.",
+  approvesWithoutPasskey:
+    'approves asks of "shares" and "secrets" without a passkey: such an ask can share the admin, hand out secrets or change these options, so whoever holds its credential can reach owner level.',
+  ownerWithoutPasskey:
+    "acts as the owner without a passkey when its login holds the admin: a login without the passkey check runs every owner action. The pause ends it.",
+};
+
+/** K-1725, K-1779: the warnings of the options that an actor has on. */
+export const policyWarnings = (actor: Pick<Actor, "name" | "policy">) =>
+  (actor.policy?.allows ?? []).map((option) => `${actor.name} ${POLICY_WARNINGS[option]}`);
 
 /** K-1717: ask events stay 30 days, at most 5,000, as K-1610. */
 export const ASK_EVENT_DAYS = 30;
@@ -375,13 +418,15 @@ export function rightWarnings(
     }
     const agentsHere =
       approvesWithoutPasskey(circle) && circle.members.some((member) => isAgentMember(member, state));
-    // K-1778: the credential that asked never approves, so a circle of this actor alone answers no ask of it.
+    // K-1727: the credential that asked approves only with "approves its own asks" (K-1779), so a circle of this actor
+    // alone answers no ask of it by default.
     if (
+      !allows(actor, "approvesOwnAsks") &&
       circle.members.length > 0 &&
       circle.members.every((member) => member._tag === "actor" && member.actorId === actor.id)
     )
       warnings.push(
-        `"${name}" asks ${circle.name}, which holds only this actor, and an actor never approves its own ask.`,
+        `"${name}" asks ${circle.name}, which holds only this actor, and an actor never approves its own ask unless the owner turns on "approves its own asks".`,
       );
     if (HIGH_RISK_EFFECTS.has(right) && !circle.members.some((member) => isPersonMember(member, state)))
       warnings.push(

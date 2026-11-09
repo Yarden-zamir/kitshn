@@ -1,15 +1,30 @@
-import { EFFECT_HELP, automaticWarning, formatConditions, rightWarnings } from "../core/asks.ts";
+import { useState } from "preact/hooks";
+import {
+  EFFECT_HELP,
+  POLICY_WARNINGS,
+  automaticWarning,
+  formatConditions,
+  policyWarnings,
+  rightWarnings,
+} from "../core/asks.ts";
 import {
   type Actor,
   EFFECTS,
   EVERYONE_CIRCLE_ID,
   type Effect,
   type Member,
+  POLICY_OPTIONS,
+  POLICY_TEXT,
+  allows,
+  type PolicyOption,
+  isPerson,
+  withPolicyOption,
   type RightMode,
   type State,
 } from "../core/model.ts";
 import { EFFECT_DEFAULTS } from "../core/operations.ts";
-import { Radio } from "./controls.tsx";
+import { Radio, Switch } from "./controls.tsx";
+import { callApi } from "./store.ts";
 
 type ActorMember = Extract<Member, { _tag: "actor" }>;
 
@@ -123,5 +138,78 @@ export function RightStickers(props: { readonly member: ActorMember }) {
         ];
       })}
     </>
+  );
+}
+
+/**
+ * K-1779: what the owner lets one actor do without a person or a passkey. Turning an option on shows its warning and
+ * waits for a confirm; turning one off runs at once, because it lowers access. The server checks the owner's passkey.
+ */
+export function ActorPolicyEditor(props: { readonly actor: Actor }) {
+  const [pending, setPending] = useState<PolicyOption | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const { actor } = props;
+  const options = POLICY_OPTIONS.filter(
+    (option) =>
+      (option !== "ownerWithoutPasskey" || isPerson(actor)) &&
+      (option !== "approvesWithToken" || actor.credentials.some((credential) => credential._tag === "token")),
+  );
+  const isOn = (option: PolicyOption) => allows(actor, option);
+  const save = async (option: PolicyOption, on: boolean) => {
+    setPending(null);
+    const policy = withPolicyOption(actor.policy, option, on) ?? {};
+    const result = await callApi<{ revision: number | null }>(
+      "PUT",
+      `/api/actors/${encodeURIComponent(actor.id)}/policy`,
+      { policy },
+    );
+    setError("error" in result ? result.error : null);
+  };
+  return (
+    <details>
+      <summary data-tip="Approvals and passkey: what this actor does without a person or a passkey. Every option is off by default (K-1779).">
+        Approvals and passkey
+      </summary>
+      {options.map((option) => (
+        <Switch
+          key={option}
+          checked={isOn(option)}
+          label={POLICY_TEXT[option]}
+          tip={`${actor.name} ${POLICY_WARNINGS[option]}`}
+          onChange={(on) => (on ? setPending(option) : void save(option, false))}
+        />
+      ))}
+      {pending !== null ? (
+        <>
+          <p class="warning">
+            ⚠️ {actor.name} {POLICY_WARNINGS[pending]}
+          </p>
+          <div class="choices">
+            <button
+              type="button"
+              class="btn"
+              data-tip="Turn the option on; History records it, and Undo turns it off."
+              onClick={() => void save(pending, true)}
+            >
+              Turn on
+            </button>
+            <button
+              type="button"
+              class="btn"
+              data-tip="Leave the option off."
+              onClick={() => setPending(null)}
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      ) : null}
+      {policyWarnings(actor).map((warning) => (
+        <p key={warning} class="warning">
+          ⚠️ {warning}
+        </p>
+      ))}
+      {error !== null ? <p class="warning">{error}</p> : null}
+    </details>
   );
 }

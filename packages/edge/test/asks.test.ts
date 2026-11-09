@@ -2,7 +2,7 @@ import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AskOutcome, Machine, ServerToDaemon } from "../src/core/machine.ts";
-import { type Circle, OWNER_CIRCLE_ID, type RightMode } from "../src/core/model.ts";
+import { type Circle, OWNER_CIRCLE_ID, type RightMode, machineActorId } from "../src/core/model.ts";
 import { accessToken, send, stubAccessCerts } from "./access.ts";
 import { insertActors, machine as machineChip, person, tokenActor } from "./actors.ts";
 
@@ -1242,7 +1242,8 @@ it("only a person lifts the K-718 limit of a machine (K-718, K-1723)", async () 
     ok: false,
     error: expect.stringContaining("never approves its own ask"),
   });
-  // A machine in the Owner circle does not approve a call outside K-718, and the ask stays for a person.
+  // A machine or a token in the Owner circle does not approve a call outside K-718, and the ask stays for a person.
+  const script = tokenActor("t-script", "script.access", "Script");
   const held = await setup({});
   await machineWithCards(held, ["vps"]);
   const ownerCircle = await runInDurableObject(held, (_, state) => {
@@ -1266,11 +1267,11 @@ it("only a person lifts the K-718 limit of a machine (K-718, K-1723)", async () 
       JSON.stringify({
         ...circle,
         needsPasskey: false,
-        members: [...circle.members, machineChip("mac")],
+        members: [...circle.members, machineChip("mac"), script],
       }),
       OWNER_CIRCLE_ID,
     );
-    insertActors(sql, [machineChip("mac")]);
+    insertActors(sql, [machineChip("mac"), script]);
     return before;
   });
   await evictDurableObject(held);
@@ -1280,6 +1281,15 @@ it("only a person lifts the K-718 limit of a machine (K-718, K-1723)", async () 
       ...owner,
       visitor: { email: null, clientId: "mac.access", ip: null },
       machineId: "mac",
+    }),
+  ).toMatchObject({ ok: false, error: expect.stringContaining("Only a person") });
+  // K-1779: a token is no person either, so its approval leaves the ask open too.
+  expect(
+    await decideAs(held, asked, {
+      actor: { _tag: "device", clientId: "script.access", name: "Script" },
+      visitor: { email: null, clientId: "script.access", ip: null },
+      machineId: null,
+      reason: null,
     }),
   ).toMatchObject({ ok: false, error: expect.stringContaining("Only a person") });
   expect(await decideAs(held, asked, owner)).toMatchObject({ ok: true });
@@ -1635,4 +1645,26 @@ it("shows only the state and the reason of a job for a card that the machine doe
     (_, state) => state.storage.sql.exec<{ id: number }>("SELECT id FROM jobs").one().id,
   );
   expect(await ask(tray, "job-read", String(own))).toMatchObject({ result: { state: "sent" } });
+});
+
+it("never turns on an actor option through an approved apply ask, only through actor-policy (K-1779)", async () => {
+  const stub = await setup({ maintains: { mode: "automatic" } });
+  const id = machineActorId("vps");
+  const before = await runInDurableObject(stub, (_, state) =>
+    JSON.parse(
+      state.storage.sql.exec<{ body: string }>("SELECT body FROM actors WHERE id = ?", id).one().body,
+    ),
+  );
+  const edits = [{ _tag: "actor", id, after: { ...before, policy: { allows: ["approvesOwnAsks"] } } }];
+  const proposal = proposalOf(await ask(stub, "apply", "", { body: { edits } }));
+  const approved = await runInDurableObject(stub, (instance) =>
+    (instance as unknown as Instance).decide(proposal, "approved", owner, null, "passkey"),
+  );
+  expect(approved).toMatchObject({ ok: false, error: expect.stringContaining("Only actor-policy") });
+  const after = await runInDurableObject(stub, (_, state) =>
+    JSON.parse(
+      state.storage.sql.exec<{ body: string }>("SELECT body FROM actors WHERE id = ?", id).one().body,
+    ),
+  );
+  expect(after.policy).toBeUndefined();
 });

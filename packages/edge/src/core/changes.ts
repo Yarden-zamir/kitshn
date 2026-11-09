@@ -846,6 +846,8 @@ function actorViolation(state: State): string | null {
       const [only] = actor.credentials;
       if (actor.credentials.length !== 1 || only?._tag !== "machine")
         return `The actor ${actor.name} has conditions, so it has exactly one machine credential and nothing else (K-1754).`;
+      if (actor.policy !== undefined)
+        return `The agent ${actor.name} proves calls with the key of its machine, so its approvals and passkey steps are those of the machine actor (K-1779).`;
       continue;
     }
     for (const credential of actor.credentials) {
@@ -855,6 +857,20 @@ function actorViolation(state: State): string | null {
         return `${actor.name} and ${state.actors.get(other)?.name ?? other} have the same credential; a login, a token or a machine belongs to one actor (K-1778).`;
       owners.set(key, actor.id);
     }
+  }
+  return null;
+}
+
+/**
+ * K-1779: why `after` turns on an option of an actor policy that `before` did not have, or null. Only `actor-policy`
+ * turns one on, so every other write (a map edit, an ask, an Undo) may only turn options off.
+ */
+export function policyWidening(before: State, after: State): string | null {
+  for (const actor of after.actors.values()) {
+    const had = before.actors.get(actor.id)?.policy?.allows ?? [];
+    const added = (actor.policy?.allows ?? []).filter((option) => !had.includes(option));
+    if (added.length > 0)
+      return `Only actor-policy turns on an approval or passkey option of ${actor.name}, with the owner's proof (K-1779).`;
   }
   return null;
 }
@@ -1113,6 +1129,11 @@ export function refuseRaiseWhilePaused(before: State, after: State): void {
   for (const id of new Set([...before.ends.keys(), ...after.ends.keys()]))
     if (ends(after.ends.get(id)) > ends(before.ends.get(id)) && after.places.has(id))
       throw new RuleError("While paused, access only goes down: a card would end later.");
+  // K-1779: an approval or passkey option of an actor lets in more.
+  if (policyWidening(before, after) !== null)
+    throw new RuleError(
+      "While paused, access only goes down: no approval or passkey option turns on (K-1779).",
+    );
   // K-1778: an actor that gains a credential or loses a condition lets in more.
   for (const actor of after.actors.values()) {
     const old = before.actors.get(actor.id);

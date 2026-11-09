@@ -9,7 +9,7 @@ kitshn has no login code. Cloudflare Access logs people in, and kitshn compiles 
 - **K-103** A circle with "needs passkey" asks for a passkey or a security key after the login, through Access [independent MFA](https://developers.cloudflare.com/cloudflare-one/access-controls/access-settings/independent-mfa/).
 - **K-104** kitshn administration is a resource of kind `kitshn.admin` with the level `control`. Its card sits in the Owner circle, which has "needs passkey" on.
 - **K-105** kitshn refuses every change that leaves the admin resource without a share to a circle with at least one person and "needs passkey". The guard runs on every write: a drag, a circle edit, an undo, an agent tool and the pause (K-1504). It also refuses a share of the admin resource with an "everyone" circle, because that circle compiles to an Access Bypass policy.
-- **K-106** A token proves a call with an Access service token. Each token is a credential of one actor (K-1778): the phone or desktop app of a person, or a script with its own name.
+- **K-106** A token proves a call with an Access service token. Each token is a credential of one actor (K-1778): the phone or desktop app of a person, a script with its own name, or an MCP connection (K-1780).
 - **K-107** A machine proves itself to Access with its own service token (K-602), and to kitshn also with its own key pair (K-1704). A machine is an actor too (K-1778), so a share can give one machine access to another resource.
 - **K-108** kitshn has no browser approvals of the machine map. A passkey or a device token replaces them.
 - **K-109** Access sessions of the admin resource last 24 hours. Sessions of other resources last 30 days, unless a circle sets a shorter time.

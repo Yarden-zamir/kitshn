@@ -99,6 +99,70 @@ export interface Actor {
   readonly name: string;
   readonly credentials: ReadonlyArray<Credential>;
   readonly conditions?: ReadonlyArray<RightCondition>;
+  /** K-1779: what the owner lets this actor do without a person or a passkey. Absent means every default. */
+  readonly policy?: ActorPolicy;
+}
+
+/**
+ * K-1779: what the owner lets one actor do without a person or a passkey. `approvesOwnAsks`: approve the asks of the
+ * actor itself (K-1727). `approvesWithToken`: approve with a token on `/op` or MCP (K-1780). `approvesWithoutPasskey`:
+ * approve an ask of "shares" or "secrets" with no passkey proof (K-1723); such an ask can give owner level, so this is
+ * one step for every passkey ask. `ownerWithoutPasskey`: a login of the actor that holds the admin acts as the owner
+ * without the passkey of K-1778.
+ */
+export const POLICY_OPTIONS = [
+  "approvesOwnAsks",
+  "approvesWithToken",
+  "approvesWithoutPasskey",
+  "ownerWithoutPasskey",
+] as const;
+export type PolicyOption = (typeof POLICY_OPTIONS)[number];
+
+/** K-1779: the options that are on, never empty, in `POLICY_OPTIONS` order. Absent means every default (all off). */
+export interface ActorPolicy {
+  readonly allows: ReadonlyArray<PolicyOption>;
+}
+
+/** K-1779: whether the owner turned this option on for the actor. */
+export const allows = (actor: Pick<Actor, "policy"> | undefined, option: PolicyOption) =>
+  actor?.policy?.allows.includes(option) === true;
+
+/** K-1779: the policy of a call body in its one stored form, null for every default, or why the body is not a policy. */
+export function actorPolicyOf(input: unknown): ActorPolicy | null | string {
+  if (input === undefined || input === null) return null;
+  if (typeof input !== "object" || Array.isArray(input)) return "Send the policy as an object.";
+  const { allows: options = [], ...rest } = input as Record<string, unknown>;
+  const unknown = Object.keys(rest);
+  if (unknown.length > 0) return `A policy has no field ${unknown.join(", ")}.`;
+  if (
+    !Array.isArray(options) ||
+    options.some((option) => !(POLICY_OPTIONS as ReadonlyArray<unknown>).includes(option))
+  )
+    return `allows lists options of ${POLICY_OPTIONS.join(", ")}.`;
+  const kept = POLICY_OPTIONS.filter((option) => options.includes(option));
+  return kept.length === 0 ? null : { allows: kept };
+}
+
+/** K-1779: what each option lets an actor do, in the words of the map and of History. */
+export const POLICY_TEXT = {
+  approvesOwnAsks: "approves its own asks",
+  approvesWithToken: "approves asks with a token, on /op or MCP",
+  approvesWithoutPasskey: 'approves asks of "shares" and "secrets" without a passkey',
+  ownerWithoutPasskey: "acts as the owner without a passkey when its login holds the admin",
+} as const satisfies Record<PolicyOption, string>;
+
+/** K-1779: the options of a policy in words, or "every default". */
+export const policyText = (policy: ActorPolicy | undefined) =>
+  policy === undefined ? "every default" : policy.allows.map((option) => POLICY_TEXT[option]).join("; ");
+
+/** K-1779: the policy with one option on or off, in the stored form of `actorPolicyOf`. */
+export function withPolicyOption(policy: ActorPolicy | undefined, option: PolicyOption, on: boolean) {
+  const options = new Set(policy?.allows ?? []);
+  if (on) options.add(option);
+  else options.delete(option);
+  const next = actorPolicyOf({ allows: [...options] });
+  if (typeof next === "string") throw new Error(next);
+  return next;
 }
 
 /** K-1778: one key per credential, so kitshn finds a second owner of a login or a token. */

@@ -13,7 +13,10 @@ import { actorOf, keyRights, login, machineKey, token } from "../src/core/testki
 
 const known = new Map<string, Actor>();
 
-const chipOf = (actor: Actor, rights?: Partial<Record<Effect, RightMode>>): Member => {
+const chipOf = (
+  actor: Actor,
+  rights?: Partial<Record<Effect, RightMode>>,
+): Extract<Member, { _tag: "actor" }> => {
   known.set(actor.id, actor);
   return { _tag: "actor", actorId: actor.id, ...(rights ? { rights } : {}) };
 };
