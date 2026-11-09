@@ -104,83 +104,66 @@ export interface Actor {
 }
 
 /**
- * K-1779: the passkey steps that the owner can turn off for one actor. `approve`: approve an ask of "shares" or
- * "secrets" (K-1723). `security`: approve an ask that changes an actor policy or undoes a revision. `owner`: a login of
- * the actor that holds the admin acts as the owner without the passkey of K-1778.
+ * K-1779: what the owner lets one actor do without a person or a passkey. `approvesOwnAsks`: approve the asks of the
+ * actor itself (K-1727). `approvesWithToken`: approve with a token on `/op` or MCP (K-1780). `approvesWithoutPasskey`:
+ * approve an ask of "shares" or "secrets" with no passkey proof (K-1723); such an ask can give owner level, so this is
+ * one step for every passkey ask. `ownerWithoutPasskey`: a login of the actor that holds the admin acts as the owner
+ * without the passkey of K-1778.
  */
-export const PASSKEY_STEPS = ["approve", "security", "owner"] as const;
-export type PasskeyStep = (typeof PASSKEY_STEPS)[number];
+export const POLICY_OPTIONS = [
+  "approvesOwnAsks",
+  "approvesWithToken",
+  "approvesWithoutPasskey",
+  "ownerWithoutPasskey",
+] as const;
+export type PolicyOption = (typeof POLICY_OPTIONS)[number];
 
-/** K-1779: every option is off when absent, which is the behavior of kitshn before the policy existed. */
+/** K-1779: the options that are on, never empty, in `POLICY_OPTIONS` order. Absent means every default (all off). */
 export interface ActorPolicy {
-  /** The actor approves the asks of its own credentials (K-1727 refuses that by default). */
-  readonly approvesOwnAsks?: true;
-  /** The steps where the actor's proof counts without a passkey. */
-  readonly withoutPasskey?: ReadonlyArray<PasskeyStep>;
+  readonly allows: ReadonlyArray<PolicyOption>;
 }
 
-/**
- * K-1779: the policy of a call body in its one stored form (steps in `PASSKEY_STEPS` order, no empty field), null for
- * every default, or why the body is not a policy.
- */
+/** K-1779: whether the owner turned this option on for the actor. */
+export const allows = (actor: Pick<Actor, "policy"> | undefined, option: PolicyOption) =>
+  actor?.policy?.allows.includes(option) === true;
+
+/** K-1779: the policy of a call body in its one stored form, null for every default, or why the body is not a policy. */
 export function actorPolicyOf(input: unknown): ActorPolicy | null | string {
   if (input === undefined || input === null) return null;
   if (typeof input !== "object" || Array.isArray(input)) return "Send the policy as an object.";
-  const { approvesOwnAsks, withoutPasskey, ...rest } = input as Record<string, unknown>;
+  const { allows: options = [], ...rest } = input as Record<string, unknown>;
   const unknown = Object.keys(rest);
   if (unknown.length > 0) return `A policy has no field ${unknown.join(", ")}.`;
-  if (approvesOwnAsks !== undefined && typeof approvesOwnAsks !== "boolean")
-    return "approvesOwnAsks is true or false.";
-  const steps = withoutPasskey ?? [];
   if (
-    !Array.isArray(steps) ||
-    steps.some((step) => !(PASSKEY_STEPS as ReadonlyArray<unknown>).includes(step))
+    !Array.isArray(options) ||
+    options.some((option) => !(POLICY_OPTIONS as ReadonlyArray<unknown>).includes(option))
   )
-    return `withoutPasskey lists steps of ${PASSKEY_STEPS.join(", ")}.`;
-  const kept = PASSKEY_STEPS.filter((step) => steps.includes(step));
-  const policy: ActorPolicy = {
-    ...(approvesOwnAsks === true ? { approvesOwnAsks: true } : {}),
-    ...(kept.length > 0 ? { withoutPasskey: kept } : {}),
-  };
-  return Object.keys(policy).length === 0 ? null : policy;
+    return `allows lists options of ${POLICY_OPTIONS.join(", ")}.`;
+  const kept = POLICY_OPTIONS.filter((option) => options.includes(option));
+  return kept.length === 0 ? null : { allows: kept };
 }
 
 /** K-1779: what each option lets an actor do, in the words of the map and of History. */
 export const POLICY_TEXT = {
   approvesOwnAsks: "approves its own asks",
-  approve: 'approves asks of "shares" and "secrets" without a passkey',
-  security: "approves changes of approvals and passkey steps, and undos, without a passkey",
-  owner: "acts as the owner without a passkey when its login holds the admin",
+  approvesWithToken: "approves asks with a token, on /op or MCP",
+  approvesWithoutPasskey: 'approves asks of "shares" and "secrets" without a passkey',
+  ownerWithoutPasskey: "acts as the owner without a passkey when its login holds the admin",
 } as const satisfies Record<PolicyOption, string>;
 
 /** K-1779: the options of a policy in words, or "every default". */
-export const policyText = (policy: ActorPolicy | undefined) => {
-  const parts = [
-    ...(policy?.approvesOwnAsks === true ? [POLICY_TEXT.approvesOwnAsks] : []),
-    ...(policy?.withoutPasskey ?? []).map((step) => POLICY_TEXT[step]),
-  ];
-  return parts.length === 0 ? "every default" : parts.join("; ");
-};
+export const policyText = (policy: ActorPolicy | undefined) =>
+  policy === undefined ? "every default" : policy.allows.map((option) => POLICY_TEXT[option]).join("; ");
 
-/** K-1779: one option of a policy, the unit that the map turns on or off. */
-export type PolicyOption = "approvesOwnAsks" | PasskeyStep;
-
-/** K-1779: the policy with one option on or off, in the stored form of `actorPolicyOf`; null for every default. */
+/** K-1779: the policy with one option on or off, in the stored form of `actorPolicyOf`. */
 export function withPolicyOption(policy: ActorPolicy | undefined, option: PolicyOption, on: boolean) {
-  const steps = new Set(policy?.withoutPasskey ?? []);
-  if (option !== "approvesOwnAsks") {
-    if (on) steps.add(option);
-    else steps.delete(option);
-  }
-  const approvesOwnAsks = option === "approvesOwnAsks" ? on : policy?.approvesOwnAsks === true;
-  const next = actorPolicyOf({ approvesOwnAsks, withoutPasskey: [...steps] });
+  const options = new Set(policy?.allows ?? []);
+  if (on) options.add(option);
+  else options.delete(option);
+  const next = actorPolicyOf({ allows: [...options] });
   if (typeof next === "string") throw new Error(next);
   return next;
 }
-
-/** K-1779: whether the owner turned this passkey step off for the actor. */
-export const skipsPasskey = (actor: Pick<Actor, "policy"> | undefined, step: PasskeyStep) =>
-  actor?.policy?.withoutPasskey?.includes(step) === true;
 
 /** K-1778: one key per credential, so kitshn finds a second owner of a login or a token. */
 export const credentialKey = (credential: Credential) => {

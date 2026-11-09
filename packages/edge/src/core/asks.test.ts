@@ -4,13 +4,11 @@ import {
   ASK_ACTIONS,
   WINDOW_ACTIONS,
   approvalRefusal,
-  approvalStep,
   askNotificationText,
   askRequest,
   formatConditions,
   labelProblem,
   parseConditions,
-  proposalOp,
   rightWarnings,
 } from "./asks.ts";
 import type { Circle } from "./model.ts";
@@ -124,54 +122,34 @@ describe("conditions on attested labels (K-1754)", () => {
 });
 
 describe("approvals by the policy of the approver (K-1723, K-1727, K-1779)", () => {
-  it("needs the step security for an actor policy or an undo, the step approve for shares and secrets, else none", () => {
-    expect(proposalOp("forward", "op actor-policy a-1")).toBe("actor-policy");
-    expect(proposalOp("forward", "op undo ")).toBe("undo");
-    expect(proposalOp("deploy", "op undo")).toBeNull();
-    expect(approvalStep("shares", "actor-policy")).toBe("security");
-    expect(approvalStep("changes", "undo-item")).toBe("security");
-    expect(approvalStep("shares", "apply")).toBe("approve");
-    expect(approvalStep("secrets", null)).toBe("approve");
-    expect(approvalStep("changes", "apply")).toBeNull();
-  });
-
   it("keeps today's rule with no policy, and each option opens only its own case", () => {
-    const allowed = (
-      own: boolean,
-      step: "approve" | "security" | null,
-      passkey: boolean,
-      policy: Parameters<typeof approvalRefusal>[0]["approver"],
-    ) => approvalRefusal({ own, step, passkey, approver: policy, right: "shares" }) === null;
-    const none = {};
-    const self = { policy: { approvesOwnAsks: true as const } };
-    const approve = { policy: { withoutPasskey: ["approve" as const] } };
-    const security = { policy: { withoutPasskey: ["security" as const] } };
-    // [own, step, passkey, policy, allowed]
+    type Approver = Parameters<typeof approvalRefusal>[0]["approver"];
+    const policy = (...allows: NonNullable<NonNullable<Approver>["policy"]>["allows"]): Approver => ({
+      policy: { allows },
+    });
+    const none: Approver = {};
+    const self = policy("approvesOwnAsks");
+    const noPasskey = policy("approvesWithoutPasskey");
+    const both = policy("approvesOwnAsks", "approvesWithoutPasskey");
+    // [own, right, passkey, approver, allowed]
     const cases = [
-      [false, null, false, none, true],
-      [true, null, false, none, false],
-      [true, null, true, none, false],
-      [true, null, false, self, true],
-      [false, "approve", false, none, false],
-      [false, "approve", true, none, true],
-      [false, "approve", false, approve, true],
-      [false, "approve", false, security, false],
-      [false, "security", false, approve, false],
-      [false, "security", false, security, true],
-      [false, "security", true, none, true],
-      // Self-approval does not skip the passkey, and the passkey step does not allow self-approval.
-      [true, "approve", false, self, false],
-      [true, "approve", false, approve, false],
-      [
-        true,
-        "approve",
-        false,
-        { policy: { approvesOwnAsks: true as const, withoutPasskey: ["approve" as const] } },
-        true,
-      ],
+      [false, "changes", false, none, true],
+      [true, "changes", false, none, false],
+      [true, "changes", true, none, false],
+      [true, "changes", false, self, true],
+      [false, "shares", false, none, false],
+      [false, "secrets", true, none, true],
+      [false, "shares", false, noPasskey, true],
+      [false, "shares", false, policy("approvesWithToken", "ownerWithoutPasskey"), false],
+      // Self-approval does not skip the passkey, and the passkey option does not allow self-approval.
+      [true, "shares", false, self, false],
+      [true, "shares", false, noPasskey, false],
+      [true, "shares", false, both, true],
     ] as const;
-    expect(cases.map(([own, step, passkey, policy]) => allowed(own, step, passkey, policy))).toEqual(
-      cases.map((row) => row[4]),
-    );
+    expect(
+      cases.map(
+        ([own, right, passkey, approver]) => approvalRefusal({ own, right, passkey, approver }) === null,
+      ),
+    ).toEqual(cases.map((row) => row[4]));
   });
 });

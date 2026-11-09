@@ -14,7 +14,7 @@ export default {
           };
         };
         const actor = data.snapshot?.actors?.find((one) => one.name === "Deploy bot");
-        if (actor) actor.policy = { approvesOwnAsks: true };
+        if (actor) actor.policy = { allows: ["approvesOwnAsks"] };
         socket.send(JSON.stringify(data));
       });
     });

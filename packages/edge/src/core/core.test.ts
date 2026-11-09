@@ -20,6 +20,7 @@ import {
   removeAppChanges,
   resolveEdits,
   revisionTargets,
+  policyWidening,
   ruleViolation,
   shareDiff,
   stacksWithout,
@@ -1435,22 +1436,51 @@ describe("actors and the passkey line (K-1778)", () => {
       ...both,
       actors: new Map(both.actors).set(ownerActor.id, {
         ...ownerActor,
-        policy: { withoutPasskey: ["owner" as const] },
+        policy: { allows: ["ownerWithoutPasskey" as const] },
       }),
     };
     expect(ownerProof(stepOff, owner, 0)).toBe(true);
     expect(ownerProof(stepOff, tokenOf("owner-phone.access"), 0)).toBe(false);
+    // K-1504: the pause ends the option; only a passkey runs as the owner then. Here the Owner circle needs none.
+    const plainOwner = {
+      ...stepOff,
+      circles: new Map(stepOff.circles).set(OWNER_CIRCLE_ID, {
+        ...circle(stepOff, OWNER_CIRCLE_ID),
+        needsPasskey: false,
+      }),
+    };
+    expect(ownerProof(plainOwner, owner, 0)).toBe(true);
+    expect(ownerProof({ ...plainOwner, paused: "lockdown" }, owner, 0)).toBe(false);
   });
 
   it("stores a policy in one form, and refuses a bad one (K-1779)", () => {
     expect(actorPolicyOf(undefined)).toBeNull();
-    expect(actorPolicyOf({ approvesOwnAsks: false, withoutPasskey: [] })).toBeNull();
-    expect(actorPolicyOf({ withoutPasskey: ["owner", "approve", "owner"], approvesOwnAsks: true })).toEqual({
-      approvesOwnAsks: true,
-      withoutPasskey: ["approve", "owner"],
+    expect(actorPolicyOf({ allows: [] })).toBeNull();
+    expect(
+      actorPolicyOf({ allows: ["ownerWithoutPasskey", "approvesOwnAsks", "ownerWithoutPasskey"] }),
+    ).toEqual({
+      allows: ["approvesOwnAsks", "ownerWithoutPasskey"],
     });
-    for (const bad of [[], "x", { withoutPasskey: ["resume"] }, { approvesOwnAsks: 1 }, { admin: true }])
+    for (const bad of [[], "x", { allows: ["resume"] }, { allows: "approvesOwnAsks" }, { admin: true }])
       expect(actorPolicyOf(bad)).toEqual(expect.any(String));
+    // Only actor-policy turns an option on: every other write may only turn options off.
+    const state = withPhones();
+    const [first] = state.actors.values();
+    const withOptions = (...allows: Array<"approvesOwnAsks" | "approvesWithToken">) => ({
+      ...state,
+      actors: new Map(state.actors).set(first!.id, {
+        ...first!,
+        ...(allows.length > 0 ? { policy: { allows } } : {}),
+      }),
+    });
+    expect(policyWidening(state, withOptions("approvesOwnAsks"))).toMatch(/Only actor-policy/);
+    expect(
+      policyWidening(withOptions("approvesOwnAsks"), withOptions("approvesOwnAsks", "approvesWithToken")),
+    ).toMatch(/Only actor-policy/);
+    expect(
+      policyWidening(withOptions("approvesOwnAsks", "approvesWithToken"), withOptions("approvesOwnAsks")),
+    ).toBeNull();
+    expect(policyWidening(withOptions("approvesOwnAsks"), state)).toBeNull();
   });
 
   it("compiles no token, machine or network of a passkey circle into Access", () => {
@@ -1482,7 +1512,7 @@ describe("actors and the passkey line (K-1778)", () => {
     const agent = { ...actorOf(M1), id: "a-agent", conditions };
     expect(ruleViolation({ ...state, actors: new Map(state.actors).set(agent.id, agent) })).toBeNull();
     // K-1779: an agent proves calls with its machine's key, so the policy of the machine actor counts, not its own.
-    const withPolicy = { ...agent, policy: { approvesOwnAsks: true as const } };
+    const withPolicy = { ...agent, policy: { allows: ["approvesOwnAsks" as const] } };
     expect(ruleViolation({ ...state, actors: new Map(state.actors).set(agent.id, withPolicy) })).toMatch(
       /K-1779/,
     );

@@ -635,7 +635,7 @@ export const OPERATIONS = {
   },
   "actor-policy": {
     group: "circles",
-    title: `set what one actor does without a person or a passkey: --body '{"policy":{"approvesOwnAsks":true,"withoutPasskey":["approve","security","owner"]}}'; {} restores every default (K-1779)`,
+    title: `set what one actor does without a person or a passkey: --body '{"policy":{"allows":["approvesOwnAsks","approvesWithToken","approvesWithoutPasskey","ownerWithoutPasskey"]}}'; {} turns every option off (K-1779)`,
     method: "PUT",
     route: "/api/actors/:target/policy",
     pick: ["policy"],

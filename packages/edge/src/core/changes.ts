@@ -861,6 +861,20 @@ function actorViolation(state: State): string | null {
   return null;
 }
 
+/**
+ * K-1779: why `after` turns on an option of an actor policy that `before` did not have, or null. Only `actor-policy`
+ * turns one on, so every other write (a map edit, an ask, an Undo) may only turn options off.
+ */
+export function policyWidening(before: State, after: State): string | null {
+  for (const actor of after.actors.values()) {
+    const had = before.actors.get(actor.id)?.policy?.allows ?? [];
+    const added = (actor.policy?.allows ?? []).filter((option) => !had.includes(option));
+    if (added.length > 0)
+      return `Only actor-policy turns on an approval or passkey option of ${actor.name}, with the owner's proof (K-1779).`;
+  }
+  return null;
+}
+
 /** An "all" circle matches someone only with one person of one login, no other actor, and domains of that person. */
 function allCircleCanMatch(circle: Circle, directory: Directory): boolean {
   const actors = circle.members.flatMap((member) => {

@@ -5,7 +5,6 @@ import {
   type Directory,
   type Effect,
   HIGH_RISK_EFFECTS,
-  type PasskeyStep,
   type PolicyOption,
   type RightCondition,
   type RightMode,
@@ -13,7 +12,7 @@ import {
   isPerson,
   machineIdOf,
   memberActor,
-  skipsPasskey,
+  allows,
 } from "./model.ts";
 import { FORWARD_HEADERS } from "./machine.ts";
 import { type Attested, type Visitor, circleMatches } from "./visitor.ts";
@@ -263,27 +262,10 @@ export const WINDOW_ACTIONS: ReadonlySet<AskAction> = new Set(["github-token", "
 
 /**
  * K-1723: an approval of an ask for these effects needs a passkey proof, because they raise access or hand out secrets.
- * K-1779: the owner can turn this step off for one approver.
+ * Every row that changes an actor policy or reverses a revision has one of them (`operations.test.ts`). K-1779: the
+ * owner can turn this step off for one approver.
  */
 export const PASSKEY_EFFECTS: ReadonlySet<Effect> = new Set(["shares", "secrets"]);
-
-/**
- * K-1779: the operations whose asks change who may do what without a person: an actor policy, and an undo, which can
- * reverse a change of one. Their approval needs the step "security", apart from "approve".
- */
-export const SECURITY_OPS: ReadonlySet<string> = new Set(["actor-policy", "undo", "undo-item"]);
-
-/** K-1723, K-1779: the passkey step that an approval of this ask needs, or null when any member's proof answers it. */
-export function approvalStep(right: Effect, op: string | null): PasskeyStep | null {
-  if (op !== null && SECURITY_OPS.has(op)) return "security";
-  return PASSKEY_EFFECTS.has(right) ? "approve" : null;
-}
-
-/** K-1777: the operation of a forwarded call's proposal target (`op <id> <target>`), or null for an ask of K-1711. */
-export const proposalOp = (action: string, target: string): string | null =>
-  action === "forward" && target.startsWith("op ")
-    ? (target.slice("op ".length).split(" ")[0] ?? null)
-    : null;
 
 /**
  * K-1723, K-1727, K-1779: why this approver may not approve, from its proof and the policy of its actor, or null. The
@@ -291,22 +273,19 @@ export const proposalOp = (action: string, target: string): string | null =>
  * implies the other.
  */
 export function approvalRefusal(input: {
-  /** The approver proves the same credential that asked. */
+  /** The approver is the actor that asked (K-1727). */
   readonly own: boolean;
-  /** `approvalStep` of the ask. */
-  readonly step: PasskeyStep | null;
   /** The approver came through the passkey application within 10 minutes (K-1723). */
   readonly passkey: boolean;
   /** The actor of the approver's credential: its policy decides the options. */
   readonly approver: Pick<Actor, "policy"> | undefined;
   readonly right: Effect;
 }): string | null {
-  if (input.own && input.approver?.policy?.approvesOwnAsks !== true)
-    return "The credential that asked never approves its own ask; another member of the circle approves it, or the owner lets this actor approve its own asks (K-1727, K-1779).";
-  if (input.step === null || input.passkey || skipsPasskey(input.approver, input.step)) return null;
-  return input.step === "security"
-    ? "This ask changes who may do what without a person, so only a person approves it, through the passkey check, unless the owner turned that step off for you (K-1779)."
-    : `This ask is for "${input.right}", so only a person approves it, through the passkey check, unless the owner turned that step off for you (K-1723, K-1779).`;
+  if (input.own && !allows(input.approver, "approvesOwnAsks"))
+    return "The actor that asked never approves its own ask; another member of the circle approves it, or the owner lets this actor approve its own asks (K-1727, K-1779).";
+  if (!PASSKEY_EFFECTS.has(input.right) || input.passkey || allows(input.approver, "approvesWithoutPasskey"))
+    return null;
+  return `This ask is for "${input.right}", so only a person approves it, through the passkey check, unless the owner lets you approve without a passkey (K-1723, K-1779).`;
 }
 
 /** K-1723: the approve path of an ask; a passkey circle and an ask of a passkey effect go through the passkey check. */
@@ -341,19 +320,17 @@ export function answerRefusal(
 export const POLICY_WARNINGS: Record<PolicyOption, string> = {
   approvesOwnAsks:
     "approves its own asks: in a circle where it answers, its asks need no one else. On a machine actor, every process of the machine approves the asks of that machine.",
-  approve:
-    'approves asks of "shares" and "secrets" without a passkey: whoever holds its credential raises access and hands out secrets that it may approve.',
-  security:
-    "approves changes of approvals and passkey steps, and undos, without a passkey: it can give other actors these options when it approves their asks.",
-  owner:
-    "acts as the owner without a passkey when its login holds the admin: a login without the passkey check runs every owner action.",
+  approvesWithToken:
+    "approves asks with a token: whoever holds one of its tokens answers the asks of its approver circles.",
+  approvesWithoutPasskey:
+    'approves asks of "shares" and "secrets" without a passkey: such an ask can share the admin, hand out secrets or change these options, so whoever holds its credential can reach owner level.',
+  ownerWithoutPasskey:
+    "acts as the owner without a passkey when its login holds the admin: a login without the passkey check runs every owner action. The pause ends it.",
 };
 
 /** K-1725, K-1779: the warnings of the options that an actor has on. */
 export const policyWarnings = (actor: Pick<Actor, "name" | "policy">) =>
-  (["approvesOwnAsks", ...(actor.policy?.withoutPasskey ?? [])] as const)
-    .filter((option) => option !== "approvesOwnAsks" || actor.policy?.approvesOwnAsks === true)
-    .map((option) => `${actor.name} ${POLICY_WARNINGS[option]}`);
+  (actor.policy?.allows ?? []).map((option) => `${actor.name} ${POLICY_WARNINGS[option]}`);
 
 /** K-1717: ask events stay 30 days, at most 5,000, as K-1610. */
 export const ASK_EVENT_DAYS = 30;
@@ -444,7 +421,7 @@ export function rightWarnings(
     // K-1727: the credential that asked approves only with "approves its own asks" (K-1779), so a circle of this actor
     // alone answers no ask of it by default.
     if (
-      actor.policy?.approvesOwnAsks !== true &&
+      !allows(actor, "approvesOwnAsks") &&
       circle.members.length > 0 &&
       circle.members.every((member) => member._tag === "actor" && member.actorId === actor.id)
     )

@@ -342,7 +342,7 @@ const BODIES: Partial<Record<OpId, unknown>> = {
   "audience-add": { address: "https://aud.example.com" },
   "audience-labels": { address: "https://aud.example.com", labels: false },
   "ask-events": { label: "t3.thread.id=nothing" },
-  "actor-policy": { policy: { approvesOwnAsks: true } },
+  "actor-policy": { policy: { allows: ["approvesOwnAsks"] } },
 };
 /**
  * Rows whose fixture fails for the owner too, so the test cannot see a refusal of the agent alone. Each reason says
@@ -1322,7 +1322,7 @@ it("asks the Owner to end a stopped rollout when a machine calls it, and the app
   expect(JSON.parse(stored.value)).toMatchObject({ failed: null });
 });
 
-it("lets a token approve on /op by the policy of its actor, which only actor-policy changes, with the owner's passkey (K-1727, K-1779)", async () => {
+it("lets a token approve on /op only by the options of its actor, which only actor-policy turns on, with the owner's passkey (K-1722, K-1727, K-1779)", async () => {
   stubAccessCerts();
   const script = tokenActor("t-script", "script.access", "nightly backup");
   // "maintains" asks the circle of the token itself, so the token is an approver of its own ask.
@@ -1335,7 +1335,26 @@ it("lets a token approve on /op by the policy of its actor, which only actor-pol
   const first = await post(jwt, "/op/machine-order", order);
   expect(first.status, await first.clone().text()).toBe(409);
   const { proposalId } = (await first.json()) as { proposalId: string };
-  const approve = () => post(jwt, "/op/approve", call(proposalId));
+  // K-1722: the read gives the hash of each ask that the token may answer.
+  const read = (await (await send("/op/state", { headers: { "cf-access-jwt-assertion": jwt } })).json()) as {
+    result: { snapshot: { proposals: Array<{ id: string; shownHash: string }> } };
+  };
+  const hash = read.result.snapshot.proposals.find((proposal) => proposal.id === proposalId)?.shownHash;
+  expect(hash).toEqual(expect.any(String));
+  const approve = (body: object = { hash }) =>
+    post(jwt, "/op/approve", JSON.stringify({ target: proposalId, body, reason: "test" }));
+  const setPolicy = (allows: ReadonlyArray<string>) =>
+    send(`/api/actors/${script.actorId}/policy`, {
+      method: "PUT",
+      headers: { "cf-access-jwt-assertion": owner, "content-type": "application/json" },
+      body: JSON.stringify({ policy: { allows } }),
+    });
+  // A token approves nothing until the owner turns that on (S1), and an approve names the text that it read.
+  expect(await (await approve()).json()).toMatchObject({
+    reason: expect.stringContaining("approves asks with a token"),
+  });
+  expect((await setPolicy(["approvesWithToken"])).status).toBe(200);
+  expect((await approve({})).status).toBe(400);
   const own = await approve();
   expect(own.status).toBe(403);
   expect(await own.json()).toMatchObject({ outcome: "refused", reason: expect.stringContaining("K-1727") });
@@ -1347,24 +1366,19 @@ it("lets a token approve on /op by the policy of its actor, which only actor-pol
         .body,
     ),
   );
-  const policy = { approvesOwnAsks: true };
-  // A map edit never changes a policy, also the owner's: only actor-policy does.
+  const policy = { allows: ["approvesOwnAsks", "approvesWithToken"] };
+  // A map edit never turns an option on, also the owner's: only actor-policy does.
   const edit = await post(
     owner,
     "/api/apply",
     JSON.stringify({ edits: [{ _tag: "actor", id: script.actorId, after: { ...actor, policy } }] }),
   );
   expect(edit.status).toBe(409);
-  expect(await edit.json()).toMatchObject({ error: expect.stringContaining("actor-policy") });
+  expect(await edit.json()).toMatchObject({ error: expect.stringContaining("Only actor-policy") });
   // The token asks for its own option: it waits for the Owner, as any call of the scope "owner".
   const asks = await post(jwt, "/op/actor-policy", call(script.actorId, { policy }));
   expect(asks.status).toBe(409);
-  const set = await send(`/api/actors/${script.actorId}/policy`, {
-    method: "PUT",
-    headers: { "cf-access-jwt-assertion": owner, "content-type": "application/json" },
-    body: JSON.stringify({ policy }),
-  });
-  expect(set.status, await set.clone().text()).toBe(200);
+  expect((await setPolicy(policy.allows)).status).toBe(200);
 
   expect((await approve()).status).toBe(200);
   const second = await post(jwt, "/op/machine-order", order);
@@ -1377,10 +1391,82 @@ it("lets a token approve on /op by the policy of its actor, which only actor-pol
   );
   expect(history).toEqual(
     expect.arrayContaining([
-      expect.stringContaining("approvals and passkey steps of nightly backup: approves its own asks"),
+      expect.stringContaining("options of nightly backup: approves its own asks; approves asks with a token"),
       expect.stringContaining("Approved the ask of nightly backup"),
     ]),
   );
+});
+
+it("counts every token of one actor as that actor, and ends an approval when its approver's options change (K-1727, K-1779)", async () => {
+  stubAccessCerts();
+  const reviewer = tokenActor("t-review", "review.access", "reviewer");
+  const ask = { maintains: { mode: "ask" as const, circleId: "agents" } };
+  await setup({}, null, undefined, [{ ...reviewer, rights: ask }]);
+  // One actor "builder" with two tokens, in the same circle.
+  const builder = {
+    id: "a-builder",
+    name: "builder",
+    credentials: [
+      { _tag: "token", tokenId: "t-one", clientId: "one.access", name: "builder one" },
+      { _tag: "token", tokenId: "t-two", clientId: "two.access", name: "builder two" },
+    ],
+  };
+  const stub = env.KITSHN.getByName("kitshn");
+  await runInDurableObject(stub, (_, state) => {
+    const { sql } = state.storage;
+    sql.exec(ACTOR_ROW, builder.id, JSON.stringify(builder));
+    const circle = JSON.parse(
+      sql.exec<{ body: string }>("SELECT body FROM circles WHERE id = 'agents'").one().body,
+    ) as Circle;
+    sql.exec(
+      "UPDATE circles SET body = ? WHERE id = 'agents'",
+      JSON.stringify({
+        ...circle,
+        members: [...circle.members, { _tag: "actor", actorId: builder.id, rights: ask }],
+      }),
+    );
+    sql.exec("DELETE FROM proposals");
+  });
+  await evictDurableObject(stub);
+  const owner = await accessToken(ADMIN, { email: "owner@example.com" });
+  for (const id of [builder.id, reviewer.actorId])
+    expect(
+      (
+        await send(`/api/actors/${id}/policy`, {
+          method: "PUT",
+          headers: { "cf-access-jwt-assertion": owner, "content-type": "application/json" },
+          body: JSON.stringify({ policy: { allows: ["approvesWithToken"] } }),
+        })
+      ).status,
+    ).toBe(200);
+  const one = await accessToken(ADMIN, { common_name: "one.access" });
+  const two = await accessToken(ADMIN, { common_name: "two.access" });
+  const review = await accessToken(ADMIN, { common_name: "review.access" });
+  const order = call("vps", { order: 4 });
+  const first = await post(one, "/op/machine-order", order);
+  expect(first.status, await first.clone().text()).toBe(409);
+  const { proposalId } = (await first.json()) as { proposalId: string };
+  const hash = await runInDurableObject(
+    stub,
+    (_, state) =>
+      state.storage.sql
+        .exec<{ shown_hash: string }>("SELECT shown_hash FROM proposals WHERE id = ?", proposalId)
+        .one().shown_hash,
+  );
+  const approve = (jwt: string) =>
+    post(jwt, "/op/approve", JSON.stringify({ target: proposalId, body: { hash } }));
+  // The second token of the same actor is the actor that asked.
+  const sibling = await approve(two);
+  expect(sibling.status).toBe(403);
+  expect(await sibling.json()).toMatchObject({ reason: expect.stringContaining("K-1727") });
+  expect((await approve(review)).status).toBe(200);
+  // The owner changes the reviewer's options before the call runs: the approval ends, and the call waits again.
+  await send(`/api/actors/${reviewer.actorId}/policy`, {
+    method: "PUT",
+    headers: { "cf-access-jwt-assertion": owner, "content-type": "application/json" },
+    body: JSON.stringify({ policy: {} }),
+  });
+  expect((await post(one, "/op/machine-order", order)).status).toBe(409);
 });
 
 it("gives each MCP connection the identity of its token: two tokens, two actors, the same gate as /op (K-1778, K-1780)", async () => {
@@ -1425,10 +1511,23 @@ it("gives each MCP connection the identity of its token: two tokens, two actors,
     arguments: { operation: "resume" },
   });
   expect(refused).toMatchObject({ isError: true, structuredContent: { outcome: "refused" } });
+  // Only an operation id reaches /op, so a path like "../api/state" never does; a large request is refused unread.
+  for (const operation of ["../api/state", "%2e%2e", "."])
+    expect(
+      await rpc(scriptJwt, "tools/call", { name: "kitshn_call", arguments: { operation } }),
+    ).toMatchObject({
+      isError: true,
+    });
+  const large = await send("/mcp", {
+    method: "POST",
+    headers: { "cf-access-jwt-assertion": scriptJwt, "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "ping", params: { pad: "x".repeat(300 * 1024) } }),
+  });
+  expect(large.status).toBe(413);
   const proposals = await runInDurableObject(env.KITSHN.getByName("kitshn"), (_, state) =>
     state.storage.sql
       .exec<{ credential: string }>(
-        "SELECT DISTINCT credential FROM proposals WHERE credential LIKE 'token/%'",
+        "SELECT DISTINCT credential FROM proposals WHERE credential IN ('token/t-script', 'token/t-builder')",
       )
       .toArray(),
   );

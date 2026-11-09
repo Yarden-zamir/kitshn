@@ -13,7 +13,9 @@ import {
   EVERYONE_CIRCLE_ID,
   type Effect,
   type Member,
+  POLICY_OPTIONS,
   POLICY_TEXT,
+  allows,
   type PolicyOption,
   isPerson,
   withPolicyOption,
@@ -147,13 +149,12 @@ export function ActorPolicyEditor(props: { readonly actor: Actor }) {
   const [pending, setPending] = useState<PolicyOption | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { actor } = props;
-  const options: ReadonlyArray<PolicyOption> = isPerson(actor)
-    ? ["approvesOwnAsks", "approve", "security", "owner"]
-    : ["approvesOwnAsks", "approve", "security"];
-  const isOn = (option: PolicyOption) =>
-    option === "approvesOwnAsks"
-      ? actor.policy?.approvesOwnAsks === true
-      : actor.policy?.withoutPasskey?.includes(option) === true;
+  const options = POLICY_OPTIONS.filter(
+    (option) =>
+      (option !== "ownerWithoutPasskey" || isPerson(actor)) &&
+      (option !== "approvesWithToken" || actor.credentials.some((credential) => credential._tag === "token")),
+  );
+  const isOn = (option: PolicyOption) => allows(actor, option);
   const save = async (option: PolicyOption, on: boolean) => {
     setPending(null);
     const policy = withPolicyOption(actor.policy, option, on) ?? {};

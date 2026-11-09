@@ -1,9 +1,12 @@
 // K-1780: the MCP server of kitshn. Stateless streamable HTTP: one JSON answer per POST, no session and no stream.
 // Each tool call is one call of `/op`, so the one gate decides it and History names the actor of the token (K-1777).
-import { OPERATIONS, type Operation, isPersonGate } from "../core/operations.ts";
+import { OPERATIONS, type Operation, isOpId, isPersonGate } from "../core/operations.ts";
 
 /** The protocol versions that this server speaks, newest first; an unknown request gets the newest. */
 export const MCP_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"] as const;
+
+/** K-1780: the largest MCP request that kitshn reads; an operation body is small JSON. */
+export const MCP_MAX_BYTES = 256 * 1024;
 
 /** One call of `/op` with the caller of the MCP request: `GET /op/state`, or `POST /op/<operation>` with this body. */
 export type OpCall = (operation: string, body: string | null) => Promise<Response>;
@@ -31,7 +34,7 @@ const TOOLS = [
     name: "kitshn_call",
     title: "kitshn call",
     description:
-      'Run one kitshn operation as your own identity. The answer is done (with the result), waiting (a person or circle must approve; send the same call again after the approval), or refused (with the reason). Approve an ask with operation "approve" and the proposal id as target.',
+      'Run one kitshn operation as your own identity. The answer is done (with the result), waiting (a person or circle must approve; send the same call again after the approval), or refused (with the reason). Approve an ask with operation "approve", the proposal id as target, and body {"hash": <its shownHash from kitshn_state>}.',
     inputSchema: {
       type: "object",
       properties: {
@@ -95,7 +98,7 @@ async function toolCall(params: unknown, op: OpCall) {
   if (name === "kitshn_state") return toolResult(await op("state", null));
   if (name === "kitshn_call") {
     const operation = args["operation"];
-    if (typeof operation !== "string" || operation === "" || operation.includes("/"))
+    if (typeof operation !== "string" || !isOpId(operation))
       return {
         content: [{ type: "text", text: "Name an operation id from kitshn_operations." }],
         isError: true,
@@ -120,7 +123,17 @@ export async function mcpAnswer(request: Request, op: OpCall, version: string): 
       status: 405,
       headers: { allow: "POST" },
     });
-  const message: unknown = await request.json().catch(() => undefined);
+  const declared = Number(request.headers.get("content-length") ?? "0");
+  const text = declared > MCP_MAX_BYTES ? null : await request.text();
+  if (text === null || new TextEncoder().encode(text).length > MCP_MAX_BYTES)
+    return rpcError(null, -32600, `Send at most ${MCP_MAX_BYTES} bytes per request.`, 413);
+  const message: unknown = (() => {
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      return undefined;
+    }
+  })();
   if (Array.isArray(message)) return rpcError(null, -32600, "Send one JSON-RPC message per request.", 400);
   if (!isRecord(message) || message["jsonrpc"] !== "2.0" || typeof message["method"] !== "string")
     return rpcError(null, -32600, "Send a JSON-RPC 2.0 message.", 400);
