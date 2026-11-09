@@ -1460,12 +1460,26 @@ it("counts every token of one actor as that actor, and ends an approval when its
   expect(sibling.status).toBe(403);
   expect(await sibling.json()).toMatchObject({ reason: expect.stringContaining("K-1727") });
   expect((await approve(review)).status).toBe(200);
-  // The owner changes the reviewer's options before the call runs: the approval ends, and the call waits again.
-  await send(`/api/actors/${reviewer.actorId}/policy`, {
-    method: "PUT",
-    headers: { "cf-access-jwt-assertion": owner, "content-type": "application/json" },
-    body: JSON.stringify({ policy: {} }),
-  });
+  // The owner undoes the revision that gave the reviewer its option, before the call runs. Undo is not actor-policy,
+  // and still ends the approval, so the call waits again.
+  const undone = await runInDurableObject(
+    stub,
+    (_, state) =>
+      state.storage.sql
+        .exec<{ id: number }>(
+          "SELECT id FROM revisions WHERE summary LIKE 'Set the approvals and passkey options of reviewer%'",
+        )
+        .one().id,
+  );
+  expect(
+    (
+      await send("/api/undo", {
+        method: "POST",
+        headers: { "cf-access-jwt-assertion": owner, "content-type": "application/json" },
+        body: JSON.stringify({ revision: undone }),
+      })
+    ).status,
+  ).toBe(200);
   expect((await post(one, "/op/machine-order", order)).status).toBe(409);
 });
 

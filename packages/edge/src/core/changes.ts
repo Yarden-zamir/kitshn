@@ -1129,6 +1129,11 @@ export function refuseRaiseWhilePaused(before: State, after: State): void {
   for (const id of new Set([...before.ends.keys(), ...after.ends.keys()]))
     if (ends(after.ends.get(id)) > ends(before.ends.get(id)) && after.places.has(id))
       throw new RuleError("While paused, access only goes down: a card would end later.");
+  // K-1779: an approval or passkey option of an actor lets in more.
+  if (policyWidening(before, after) !== null)
+    throw new RuleError(
+      "While paused, access only goes down: no approval or passkey option turns on (K-1779).",
+    );
   // K-1778: an actor that gains a credential or loses a condition lets in more.
   for (const actor of after.actors.values()) {
     const old = before.actors.get(actor.id);

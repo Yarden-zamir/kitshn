@@ -1862,6 +1862,16 @@ export class Kitshn extends DurableObject<Env> {
 
   private persist(changes: ReadonlyArray<Change>) {
     for (const change of changes) {
+      // K-1779: any change of an actor's options or credentials, by any path, ends the approvals it gave and that no
+      // call used yet, so an approval never outlives the option or the credential that let it pass.
+      if (
+        change._tag === "actor" &&
+        change.before !== null &&
+        (change.after === null ||
+          !deepEqual(change.before.policy ?? null, change.after.policy ?? null) ||
+          !deepEqual(change.before.credentials, change.after.credentials))
+      )
+        this.endApprovalsBy(change.before);
       // K-1117: the first move or share of a card ends the tray right of the key that published it.
       const card =
         change._tag === "place" ? change.id : change._tag === "shareSetting" ? change.id.split("/")[0] : null;
@@ -2357,7 +2367,6 @@ export class Kitshn extends DurableObject<Env> {
         `Set the approvals and passkey options of ${actor.name}: ${policyText(after.policy)} (K-1779)`,
         true,
       );
-      this.endApprovalsBy(actor);
       this.broadcast();
       return Response.json({ revision, policy: after.policy ?? null });
     } catch (error) {

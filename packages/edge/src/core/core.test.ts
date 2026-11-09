@@ -1006,6 +1006,18 @@ describe("emergency pause (K-1504)", () => {
       circles: new Map(strict.circles).set("owner", { ...allMatch, members: owner.members }),
     };
     expect(() => refuseRaiseWhilePaused(strict, looser)).toThrow(/only goes down/);
+    // K-1779: no approval or passkey option turns on during a pause; turning one off is fine.
+    const [someone] = [...paused.actors.values()];
+    if (!someone) throw new Error("the paused state has no actor");
+    const optioned = {
+      ...paused,
+      actors: new Map(paused.actors).set(someone.id, {
+        ...someone,
+        policy: { allows: ["approvesWithToken" as const] },
+      }),
+    };
+    expect(() => refuseRaiseWhilePaused(paused, optioned)).toThrow(/only goes down/);
+    expect(() => refuseRaiseWhilePaused(optioned, paused)).not.toThrow();
     const ending = {
       ...paused,
       shareSettings: new Map([["kitshn-admin/owner", { level: null, endsAt: 5 }]]),
