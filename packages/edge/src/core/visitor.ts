@@ -13,6 +13,7 @@ import {
   activeShares,
   isPublicCircle,
   levelRank,
+  skipsPasskey,
 } from "./model.ts";
 
 /** Who sent a request, as Access and Cloudflare tell the Worker (K-404). */
@@ -161,6 +162,23 @@ export function adminPasskey(state: State, visitor: Visitor, now: number): boole
     (share) => share.level === "control" && circleMatches(share.circle, visitor, state),
   );
   return giving.length > 0 && giving.every((share) => share.circle.needsPasskey);
+}
+
+/**
+ * K-1778, K-1779: a login acts as the owner on the admin path with the passkey of `adminPasskey`, or when the owner
+ * turned the step "owner" off for its actor. The caller still needs the admin (`hasAdmin`); this only decides the proof.
+ */
+export function ownerProof(state: State, visitor: Visitor, now: number): boolean {
+  if (adminPasskey(state, visitor, now)) return true;
+  const email = visitor.email?.toLowerCase();
+  if (email === undefined) return false;
+  return [...state.actors.values()].some(
+    (actor) =>
+      skipsPasskey(actor, "owner") &&
+      actor.credentials.some(
+        (credential) => credential._tag === "login" && credential.email.toLowerCase() === email,
+      ),
+  );
 }
 
 /** K-207: the highest level of the shares whose circle matches the visitor, or null. */

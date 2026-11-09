@@ -3,11 +3,14 @@ import { ASK_ACTIONS as LOCAL_ACTIONS, WINDOW_ACTIONS as LOCAL_WINDOW } from "..
 import {
   ASK_ACTIONS,
   WINDOW_ACTIONS,
+  approvalRefusal,
+  approvalStep,
   askNotificationText,
   askRequest,
   formatConditions,
   labelProblem,
   parseConditions,
+  proposalOp,
   rightWarnings,
 } from "./asks.ts";
 import type { Circle } from "./model.ts";
@@ -117,5 +120,58 @@ describe("conditions on attested labels (K-1754)", () => {
     ]);
     expect(parseConditions("nokey")).toEqual(expect.any(String));
     expect(formatConditions(conditions)).toBe("t3.project.name=kitshn,riffle");
+  });
+});
+
+describe("approvals by the policy of the approver (K-1723, K-1727, K-1779)", () => {
+  it("needs the step security for an actor policy or an undo, the step approve for shares and secrets, else none", () => {
+    expect(proposalOp("forward", "op actor-policy a-1")).toBe("actor-policy");
+    expect(proposalOp("forward", "op undo ")).toBe("undo");
+    expect(proposalOp("deploy", "op undo")).toBeNull();
+    expect(approvalStep("shares", "actor-policy")).toBe("security");
+    expect(approvalStep("changes", "undo-item")).toBe("security");
+    expect(approvalStep("shares", "apply")).toBe("approve");
+    expect(approvalStep("secrets", null)).toBe("approve");
+    expect(approvalStep("changes", "apply")).toBeNull();
+  });
+
+  it("keeps today's rule with no policy, and each option opens only its own case", () => {
+    const allowed = (
+      own: boolean,
+      step: "approve" | "security" | null,
+      passkey: boolean,
+      policy: Parameters<typeof approvalRefusal>[0]["approver"],
+    ) => approvalRefusal({ own, step, passkey, approver: policy, right: "shares" }) === null;
+    const none = {};
+    const self = { policy: { approvesOwnAsks: true as const } };
+    const approve = { policy: { withoutPasskey: ["approve" as const] } };
+    const security = { policy: { withoutPasskey: ["security" as const] } };
+    // [own, step, passkey, policy, allowed]
+    const cases = [
+      [false, null, false, none, true],
+      [true, null, false, none, false],
+      [true, null, true, none, false],
+      [true, null, false, self, true],
+      [false, "approve", false, none, false],
+      [false, "approve", true, none, true],
+      [false, "approve", false, approve, true],
+      [false, "approve", false, security, false],
+      [false, "security", false, approve, false],
+      [false, "security", false, security, true],
+      [false, "security", true, none, true],
+      // Self-approval does not skip the passkey, and the passkey step does not allow self-approval.
+      [true, "approve", false, self, false],
+      [true, "approve", false, approve, false],
+      [
+        true,
+        "approve",
+        false,
+        { policy: { approvesOwnAsks: true as const, withoutPasskey: ["approve" as const] } },
+        true,
+      ],
+    ] as const;
+    expect(cases.map(([own, step, passkey, policy]) => allowed(own, step, passkey, policy))).toEqual(
+      cases.map((row) => row[4]),
+    );
   });
 });

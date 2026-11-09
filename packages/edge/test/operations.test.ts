@@ -2,7 +2,13 @@ import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, expect, it, vi } from "vitest";
 import { newMachineKey } from "../src/core/machine.ts";
-import { type Circle, OWNER_CIRCLE_ID, type Resource, providerCardId } from "../src/core/model.ts";
+import {
+  type Circle,
+  OWNER_CIRCLE_ID,
+  type Resource,
+  machineActorId,
+  providerCardId,
+} from "../src/core/model.ts";
 import {
   OPERATIONS,
   OP_IDS,
@@ -310,6 +316,7 @@ const TARGETS: Partial<Record<OpId, string>> = {
   desired: "t3.settings",
   "desired-set-shared": "t3.settings",
   "desired-set-circle": OWNER_CIRCLE_ID,
+  "actor-policy": machineActorId("vps"),
 };
 const BODIES: Partial<Record<OpId, unknown>> = {
   "card-time": { endsAt: null },
@@ -335,6 +342,7 @@ const BODIES: Partial<Record<OpId, unknown>> = {
   "audience-add": { address: "https://aud.example.com" },
   "audience-labels": { address: "https://aud.example.com", labels: false },
   "ask-events": { label: "t3.thread.id=nothing" },
+  "actor-policy": { policy: { approvesOwnAsks: true } },
 };
 /**
  * Rows whose fixture fails for the owner too, so the test cannot see a refusal of the agent alone. Each reason says
@@ -1312,4 +1320,117 @@ it("asks the Owner to end a stopped rollout when a machine calls it, and the app
     state.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'daemon_rollout'").one(),
   );
   expect(JSON.parse(stored.value)).toMatchObject({ failed: null });
+});
+
+it("lets a token approve on /op by the policy of its actor, which only actor-policy changes, with the owner's passkey (K-1727, K-1779)", async () => {
+  stubAccessCerts();
+  const script = tokenActor("t-script", "script.access", "nightly backup");
+  // "maintains" asks the circle of the token itself, so the token is an approver of its own ask.
+  await setup({}, null, undefined, [
+    { ...script, rights: { maintains: { mode: "ask", circleId: "agents" } } },
+  ]);
+  const jwt = await accessToken(ADMIN, { common_name: "script.access" });
+  const owner = await accessToken(ADMIN, { email: "owner@example.com" });
+  const order = call("vps", { order: 7 });
+  const first = await post(jwt, "/op/machine-order", order);
+  expect(first.status, await first.clone().text()).toBe(409);
+  const { proposalId } = (await first.json()) as { proposalId: string };
+  const approve = () => post(jwt, "/op/approve", call(proposalId));
+  const own = await approve();
+  expect(own.status).toBe(403);
+  expect(await own.json()).toMatchObject({ outcome: "refused", reason: expect.stringContaining("K-1727") });
+
+  const stub = env.KITSHN.getByName("kitshn");
+  const actor = await runInDurableObject(stub, (_, state) =>
+    JSON.parse(
+      state.storage.sql.exec<{ body: string }>("SELECT body FROM actors WHERE id = ?", script.actorId).one()
+        .body,
+    ),
+  );
+  const policy = { approvesOwnAsks: true };
+  // A map edit never changes a policy, also the owner's: only actor-policy does.
+  const edit = await post(
+    owner,
+    "/api/apply",
+    JSON.stringify({ edits: [{ _tag: "actor", id: script.actorId, after: { ...actor, policy } }] }),
+  );
+  expect(edit.status).toBe(409);
+  expect(await edit.json()).toMatchObject({ error: expect.stringContaining("actor-policy") });
+  // The token asks for its own option: it waits for the Owner, as any call of the scope "owner".
+  const asks = await post(jwt, "/op/actor-policy", call(script.actorId, { policy }));
+  expect(asks.status).toBe(409);
+  const set = await send(`/api/actors/${script.actorId}/policy`, {
+    method: "PUT",
+    headers: { "cf-access-jwt-assertion": owner, "content-type": "application/json" },
+    body: JSON.stringify({ policy }),
+  });
+  expect(set.status, await set.clone().text()).toBe(200);
+
+  expect((await approve()).status).toBe(200);
+  const second = await post(jwt, "/op/machine-order", order);
+  expect(second.status, await second.clone().text()).toBe(200);
+  const history = await runInDurableObject(stub, (_, state) =>
+    state.storage.sql
+      .exec<{ summary: string }>("SELECT summary FROM revisions ORDER BY id")
+      .toArray()
+      .map((row) => row.summary),
+  );
+  expect(history).toEqual(
+    expect.arrayContaining([
+      expect.stringContaining("approvals and passkey steps of nightly backup: approves its own asks"),
+      expect.stringContaining("Approved the ask of nightly backup"),
+    ]),
+  );
+});
+
+it("gives each MCP connection the identity of its token: two tokens, two actors, the same gate as /op (K-1778, K-1780)", async () => {
+  stubAccessCerts();
+  const script = tokenActor("t-script", "script.access", "nightly backup");
+  const builder = tokenActor("t-builder", "builder.access", "builder");
+  await setup({}, null, undefined, [script, { ...builder, rights: { maintains: { mode: "automatic" } } }]);
+  const rpc = async (jwt: string, method: string, params: object = {}) => {
+    const answer = await send("/mcp", {
+      method: "POST",
+      headers: {
+        "cf-access-jwt-assertion": jwt,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    });
+    expect(answer.status, await answer.clone().text()).toBe(200);
+    return (
+      (await answer.json()) as { result: { structuredContent?: { outcome?: string }; isError?: boolean } }
+    ).result;
+  };
+  const scriptJwt = await accessToken(ADMIN, { common_name: "script.access" });
+  const builderJwt = await accessToken(ADMIN, { common_name: "builder.access" });
+  expect(await rpc(scriptJwt, "initialize", { protocolVersion: "2025-06-18" })).toMatchObject({
+    protocolVersion: "2025-06-18",
+    serverInfo: { name: "kitshn" },
+  });
+  const tools = (await rpc(scriptJwt, "tools/list")) as unknown as { tools: Array<{ name: string }> };
+  expect(tools.tools.map((tool) => tool.name)).toEqual(["kitshn_operations", "kitshn_state", "kitshn_call"]);
+  const order = {
+    name: "kitshn_call",
+    arguments: { operation: "machine-order", target: "vps", body: { order: 3 } },
+  };
+  // The same call: the token with "maintains" at default waits for the Owner, the builder's runs at once.
+  expect((await rpc(scriptJwt, "tools/call", order)).structuredContent).toMatchObject({ outcome: "waiting" });
+  expect((await rpc(builderJwt, "tools/call", order)).structuredContent).toMatchObject({ outcome: "done" });
+  const viaOp = await post(scriptJwt, "/op/machine-order", call("vps", { order: 3 }));
+  expect(await viaOp.json()).toMatchObject({ outcome: "waiting" });
+  const refused = await rpc(scriptJwt, "tools/call", {
+    name: "kitshn_call",
+    arguments: { operation: "resume" },
+  });
+  expect(refused).toMatchObject({ isError: true, structuredContent: { outcome: "refused" } });
+  const proposals = await runInDurableObject(env.KITSHN.getByName("kitshn"), (_, state) =>
+    state.storage.sql
+      .exec<{ credential: string }>(
+        "SELECT DISTINCT credential FROM proposals WHERE credential LIKE 'token/%'",
+      )
+      .toArray(),
+  );
+  expect(proposals).toEqual([{ credential: "token/t-script" }]);
 });

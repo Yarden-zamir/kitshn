@@ -846,6 +846,8 @@ function actorViolation(state: State): string | null {
       const [only] = actor.credentials;
       if (actor.credentials.length !== 1 || only?._tag !== "machine")
         return `The actor ${actor.name} has conditions, so it has exactly one machine credential and nothing else (K-1754).`;
+      if (actor.policy !== undefined)
+        return `The agent ${actor.name} proves calls with the key of its machine, so its approvals and passkey steps are those of the machine actor (K-1779).`;
       continue;
     }
     for (const credential of actor.credentials) {

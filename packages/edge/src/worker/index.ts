@@ -32,6 +32,7 @@ import { deniedPage, helpPageHeaders, loginHelpPage, wantedAddress } from "./hel
 import type { ProviderClient } from "@kitshn/local";
 import { portNameError } from "../core/port.ts";
 import { readUsage } from "./usage.ts";
+import { mcpAnswer } from "./mcp.ts";
 import { zoneFor, zonesOf, zonesOrMain } from "./zones.ts";
 
 export { Kitshn } from "./kitshn.ts";
@@ -511,6 +512,31 @@ export default {
       const headers = new Headers(request.headers);
       headers.set("x-kitshn-caller", JSON.stringify(caller));
       return env.KITSHN.getByName("kitshn").fetch(new Request(request, { headers }));
+    }
+    // K-1780: the MCP server sits below the admin address like `/op`, behind the same Access application and token
+    // policy. Each tool call is one `/op` call with the caller of this request, so the same gate decides.
+    if (url.pathname === "/mcp") {
+      const origin = request.headers.get("origin");
+      if (origin !== null && origin !== url.origin)
+        return Response.json({ error: `kitshn refuses requests from ${origin}.` }, { status: 403 });
+      const caller = await callerOf(request, env, env.ACCESS_ADMIN_AUD);
+      if (typeof caller === "string") return Response.json({ error: caller }, { status: 401 });
+      const headers = new Headers({
+        "content-type": "application/json",
+        "x-kitshn-caller": JSON.stringify(caller),
+      });
+      return mcpAnswer(
+        request,
+        (operation, body) =>
+          env.KITSHN.getByName("kitshn").fetch(
+            new Request(`${url.origin}/op/${operation}`, {
+              method: body === null ? "GET" : "POST",
+              headers,
+              ...(body === null ? {} : { body }),
+            }),
+          ),
+        env.KITSHN_VERSION,
+      );
     }
     // K-1132: a refused person asks the owner for access. The Durable Object checks the token of the `/ask` application.
     if (url.pathname === "/ask") {

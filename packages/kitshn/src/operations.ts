@@ -103,7 +103,10 @@ export interface Operation {
   readonly gives?: string;
   /** The agent uses this command instead, because the call uploads files or needs the local machine. */
   readonly short?: string;
-  /** `/op` does not take this call, because it uploads files or approves with its own proof; `short` does. */
+  /**
+   * `/op` does not run the owner route of this call, because it uploads files or approves with its own proof; `short`
+   * does. Exception: a token approves on `/op` with its own proof (K-1779).
+   */
   readonly shortOnly?: true;
 }
 
@@ -630,6 +633,15 @@ export const OPERATIONS = {
     effect: "maintains",
     gate: { scope: "any" },
   },
+  "actor-policy": {
+    group: "circles",
+    title: `set what one actor does without a person or a passkey: --body '{"policy":{"approvesOwnAsks":true,"withoutPasskey":["approve","security","owner"]}}'; {} restores every default (K-1779)`,
+    method: "PUT",
+    route: "/api/actors/:target/policy",
+    pick: ["policy"],
+    effect: "shares",
+    gate: { scope: "owner" },
+  },
   "device-list": {
     group: "circles",
     title: "list the device tokens (K-106)",
@@ -776,12 +788,12 @@ export const OPERATIONS = {
   },
   approve: {
     group: "asks",
-    title: "approve an open ask of a circle that you are in, with your own proof (K-1723, K-1726)",
+    title: "approve an open ask of a circle that you are in, with your own proof (K-1723, K-1726, K-1779)",
     method: "POST",
     route: "/api/approve/:via/:target",
     effect: "maintains",
     gate: { scope: "any" },
-    short: "kitshn agent approve <proposal id>",
+    short: "kitshn agent approve <proposal id> on a machine; a token calls approve on /op or MCP",
     shortOnly: true,
   },
   "ask-events": {

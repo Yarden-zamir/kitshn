@@ -37,13 +37,14 @@ import {
   type ResourceKind,
   type Resource,
   type State,
+  actorPolicyOf,
   circleAloneKey,
   levelForKind,
   shareKey,
 } from "./model.ts";
 import { placeInside } from "./place.ts";
 import { seed } from "./seed.ts";
-import { adminPasskey, circleMatches, ipInRange, visitorLevel } from "./visitor.ts";
+import { adminPasskey, circleMatches, ipInRange, ownerProof, visitorLevel } from "./visitor.ts";
 import { actorOf, chip, login, machineKey, token } from "./testkit.ts";
 
 const OWNER = "owner@example.com";
@@ -1425,6 +1426,31 @@ describe("actors and the passkey line (K-1778)", () => {
     };
     const both = { ...state, circles: new Map(state.circles).set("her", plain) };
     expect(adminPasskey(both, owner, 0)).toBe(false);
+    // K-1779: the owner can turn the step off for that login; a token never proves it this way.
+    expect(ownerProof(both, owner, 0)).toBe(false);
+    const ownerActor = [...both.actors.values()].find((actor) =>
+      actor.credentials.some((credential) => credential._tag === "login" && credential.email === OWNER),
+    )!;
+    const stepOff = {
+      ...both,
+      actors: new Map(both.actors).set(ownerActor.id, {
+        ...ownerActor,
+        policy: { withoutPasskey: ["owner" as const] },
+      }),
+    };
+    expect(ownerProof(stepOff, owner, 0)).toBe(true);
+    expect(ownerProof(stepOff, tokenOf("owner-phone.access"), 0)).toBe(false);
+  });
+
+  it("stores a policy in one form, and refuses a bad one (K-1779)", () => {
+    expect(actorPolicyOf(undefined)).toBeNull();
+    expect(actorPolicyOf({ approvesOwnAsks: false, withoutPasskey: [] })).toBeNull();
+    expect(actorPolicyOf({ withoutPasskey: ["owner", "approve", "owner"], approvesOwnAsks: true })).toEqual({
+      approvesOwnAsks: true,
+      withoutPasskey: ["approve", "owner"],
+    });
+    for (const bad of [[], "x", { withoutPasskey: ["resume"] }, { approvesOwnAsks: 1 }, { admin: true }])
+      expect(actorPolicyOf(bad)).toEqual(expect.any(String));
   });
 
   it("compiles no token, machine or network of a passkey circle into Access", () => {
@@ -1455,6 +1481,11 @@ describe("actors and the passkey line (K-1778)", () => {
     );
     const agent = { ...actorOf(M1), id: "a-agent", conditions };
     expect(ruleViolation({ ...state, actors: new Map(state.actors).set(agent.id, agent) })).toBeNull();
+    // K-1779: an agent proves calls with its machine's key, so the policy of the machine actor counts, not its own.
+    const withPolicy = { ...agent, policy: { approvesOwnAsks: true as const } };
+    expect(ruleViolation({ ...state, actors: new Map(state.actors).set(agent.id, withPolicy) })).toMatch(
+      /K-1779/,
+    );
     const her = circle(state, "her");
     const ghost = { ...her, members: [{ _tag: "actor", actorId: "a-ghost" } as const] };
     expect(ruleViolation({ ...state, circles: new Map(state.circles).set("her", ghost) })).toMatch(
