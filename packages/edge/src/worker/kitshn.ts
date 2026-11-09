@@ -1862,16 +1862,19 @@ export class Kitshn extends DurableObject<Env> {
 
   private persist(changes: ReadonlyArray<Change>) {
     for (const change of changes) {
-      // K-1779: any change of an actor's options or credentials, by any path, ends the approvals it gave and that no
-      // call used yet, so an approval never outlives the option or the credential that let it pass.
-      if (
-        change._tag === "actor" &&
-        change.before !== null &&
-        (change.after === null ||
-          !deepEqual(change.before.policy ?? null, change.after.policy ?? null) ||
-          !deepEqual(change.before.credentials, change.after.credentials))
-      )
-        this.endApprovalsBy(change.before);
+      // K-1779: by any path, a change of an actor's options, a removed credential or a deleted actor ends the approvals
+      // that the actor gave and that no call used yet, so an approval never outlives what let it pass. An added
+      // credential ends none.
+      if (change._tag === "actor" && change.before !== null) {
+        const after = change.after;
+        const kept = new Set((after?.credentials ?? []).map(credentialKey));
+        if (
+          after === null ||
+          !deepEqual(change.before.policy ?? null, after.policy ?? null) ||
+          change.before.credentials.some((credential) => !kept.has(credentialKey(credential)))
+        )
+          this.endApprovalsBy(change.before);
+      }
       // K-1117: the first move or share of a card ends the tray right of the key that published it.
       const card =
         change._tag === "place" ? change.id : change._tag === "shareSetting" ? change.id.split("/")[0] : null;
@@ -2376,8 +2379,9 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
-   * K-1779: a change of an actor policy ends the approvals that the actor gave and that no call used yet, so an
-   * approval never outlives the option that let it pass (K-1714, K-1723).
+   * K-1779: ends the approvals that the actor gave and that no call used yet (K-1714, K-1723). Known limit: an approval
+   * of a machine names only the machine, so this also ends the approvals of the other actors of that machine; that
+   * errs on the safe side. Revisit when approvals record the actor.
    */
   private endApprovalsBy(actor: Actor) {
     const now = Date.now();
