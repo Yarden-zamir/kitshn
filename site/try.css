@@ -27,7 +27,7 @@
 }
 .cta.solo {
   grid-template-columns: 1fr auto;
-  background: var(--pink);
+  background: var(--coral);
   gap: 1rem 2rem;
   padding: 0.6rem 1.2rem;
   color: #000000;

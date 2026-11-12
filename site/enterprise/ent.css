@@ -1035,10 +1035,10 @@
   justify-content: space-between;
   align-items: center;
   font-family: var(--mono);
-  color: var(--muted);
+  color: var(--code-muted);
   background: none;
   border: 0;
-  border-bottom: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--code-hairline);
 }
 .ent-code .sticker {
   font-family: var(--sans);
