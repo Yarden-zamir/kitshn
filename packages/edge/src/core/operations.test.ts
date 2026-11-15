@@ -215,6 +215,7 @@ describe("operations (K-1777)", () => {
       "passes-set",
       "audience-add",
       "audience-labels",
+      "actor-policy", // it turns on approval and passkey options, so its ask needs a passkey approval (K-1779)
     ];
     expect(rows.filter(([, op]) => op.secret === true && op.effect !== "secrets").map(([id]) => id)).toEqual(
       [],

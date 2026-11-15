@@ -3,6 +3,7 @@ import { ASK_ACTIONS as LOCAL_ACTIONS, WINDOW_ACTIONS as LOCAL_WINDOW } from "..
 import {
   ASK_ACTIONS,
   WINDOW_ACTIONS,
+  approvalRefusal,
   askNotificationText,
   askRequest,
   formatConditions,
@@ -117,5 +118,38 @@ describe("conditions on attested labels (K-1754)", () => {
     ]);
     expect(parseConditions("nokey")).toEqual(expect.any(String));
     expect(formatConditions(conditions)).toBe("t3.project.name=kitshn,riffle");
+  });
+});
+
+describe("approvals by the policy of the approver (K-1723, K-1727, K-1779)", () => {
+  it("keeps today's rule with no policy, and each option opens only its own case", () => {
+    type Approver = Parameters<typeof approvalRefusal>[0]["approver"];
+    const policy = (...allows: NonNullable<NonNullable<Approver>["policy"]>["allows"]): Approver => ({
+      policy: { allows },
+    });
+    const none: Approver = {};
+    const self = policy("approvesOwnAsks");
+    const noPasskey = policy("approvesWithoutPasskey");
+    const both = policy("approvesOwnAsks", "approvesWithoutPasskey");
+    // [own, right, passkey, approver, allowed]
+    const cases = [
+      [false, "changes", false, none, true],
+      [true, "changes", false, none, false],
+      [true, "changes", true, none, false],
+      [true, "changes", false, self, true],
+      [false, "shares", false, none, false],
+      [false, "secrets", true, none, true],
+      [false, "shares", false, noPasskey, true],
+      [false, "shares", false, policy("approvesWithToken", "ownerWithoutPasskey"), false],
+      // Self-approval does not skip the passkey, and the passkey option does not allow self-approval.
+      [true, "shares", false, self, false],
+      [true, "shares", false, noPasskey, false],
+      [true, "shares", false, both, true],
+    ] as const;
+    expect(
+      cases.map(
+        ([own, right, passkey, approver]) => approvalRefusal({ own, right, passkey, approver }) === null,
+      ),
+    ).toEqual(cases.map((row) => row[4]));
   });
 });

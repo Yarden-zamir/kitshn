@@ -54,6 +54,14 @@ export const Actor = Schema.Struct({
   name: Name,
   credentials: Schema.Array(Credential).check(Schema.isMinLength(1), Schema.isMaxLength(50)),
   conditions: Schema.optionalKey(Conditions),
+  policy: Schema.optionalKey(
+    Schema.Struct({
+      allows: Schema.Array(Schema.Literals(Model.POLICY_OPTIONS)).check(
+        Schema.isMinLength(1),
+        Schema.isMaxLength(Model.POLICY_OPTIONS.length),
+      ),
+    }),
+  ),
 });
 
 export const Member = Schema.Union([
