@@ -109,6 +109,14 @@ describe("the tunnel restart after links with no answer (K-634)", () => {
     expect(restarts([silent("a", 2)])).toEqual([]);
   });
 
+  it("restarts nothing when the reporter reaches none of 2 or more other machines, its own network being the suspect", () => {
+    expect(restarts([silent("b", 4), silent("c", 4), silent("d", 4)])).toEqual([]);
+    // One other machine that answers, even with a 530, proves the reporter's network, so the silent one restarts.
+    expect(restarts([silent("b", 4), silent("c", 4), link("d", 0)])).toEqual(["b", "c"]);
+    // With only one other machine, kitshn cannot tell the two apart and keeps the restart.
+    expect(restarts([silent("b", 4)])).toEqual(["b"]);
+  });
+
   it("restarts only an online machine whose daemon can, at most once in 30 minutes and once per streak", () => {
     expect(restarts([silent("b", 2)], { restartable: (id) => id !== "b" })).toEqual([]);
     const longStreak = now - 40 * 60_000;

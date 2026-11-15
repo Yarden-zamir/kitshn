@@ -85,4 +85,5 @@ Each machine runs one `kitshn` daemon. This file holds the rules for machines, j
   - Only an online machine whose daemon reports `tunnel-restart` gets the job, at most once in 30 minutes, and once per failure streak. So a link that stays dead for another reason, such as a missing DNS record, does not restart the tunnel again and again.
   - History records it, with no Undo. The `health` notification of the link says that kitshn restarted the tunnel.
   - "Restart tunnel" on the machine card and in its panel queues the same job. Agents send it as a closed command with the rights of "Restart daemon" (K-718).
-  - Known limit: one machine that reports is enough, so a reporter with a bad network can restart a good tunnel. Revisit with 3 or more machines, then ask for 2 reporters.
+  - A report that gets no answer from any of 2 or more other machines restarts nothing, because the reporter's own network is then the suspect. Known limit: one reporter is still enough when it reaches at least one other machine, or when only one other machine exists. Revisit with 4 or more machines, then ask for 2 reporters.
+  - On Linux the tunnel unit stops in at most 10 seconds (`TimeoutStopSec=10`), because `cloudflared` with `--protocol http2` does not exit on its own. A daemon update rewrites the unit, which restarts the tunnel once (K-603).
