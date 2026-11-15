@@ -126,6 +126,11 @@ export function tunnelRestarts(
   lastRestart: (machineId: string) => number | null,
   now: number,
 ): Array<string> {
+  // A reporter that reaches none of 2 or more other machines has the fault itself, most likely its own network, so a
+  // restart of their tunnels would only cut working tunnels (K-634).
+  const others = report.links.filter((check) => check.machineId !== reporterId);
+  const targets = new Set(others.map((check) => check.machineId));
+  if (targets.size >= 2 && others.every((check) => check.status === null)) return [];
   const due = report.links.filter((check) => {
     if (check.status !== null || check.failures < HEALTH_NOTIFY_AFTER || check.machineId === reporterId)
       return false;

@@ -93,6 +93,7 @@ describe("daemon service (K-601)", () => {
       "/home/u/.config/systemd/user/kitshn-tunnel.service",
     );
     const unit = tunnelServiceFile("linux", "/d/cloudflared", "/d/tunnel-token");
+    expect(unit).toContain("TimeoutStopSec=10");
     expect(unit).toContain('--token-file "/d/tunnel-token"');
     expect(unit).toContain("Restart=always");
     expect(tunnelServiceFile("darwin", "/d/cloudflared", "/d/t")).toContain(

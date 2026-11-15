@@ -359,6 +359,8 @@ Wants=network-online.target
 ExecStart="${cloudflared}" --no-autoupdate tunnel ${tunnelArgs.join(" ")} run --token-file "${tokenFile}"
 Restart=always
 RestartSec=5
+# K-634: cloudflared with --protocol http2 unregisters but does not exit, so the default 90 s stop keeps the tunnel down.
+TimeoutStopSec=10
 
 [Install]
 WantedBy=default.target
