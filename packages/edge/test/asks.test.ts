@@ -918,7 +918,18 @@ it("runs an approved Owner ask of an unset right, and refuses it once the owner 
     };
   };
   const seen = async () => ((await ask(near, "state")) as Seen).result;
-  // K-1722: the machine sees its own open ask in `state`, also when it answers for no circle (K-1726).
+  // K-1722: the machine sees its own open ask in `state`, also when it answers for no circle (K-1726), and never the
+  // open ask of another machine.
+  await runInDurableObject(near, (_, state) => {
+    const now = Date.now();
+    state.storage.sql.exec(
+      `INSERT INTO proposals (id, machine_id, credential, action, target, body, reason, labels, right_name, circle_id,
+       shown, shown_hash, state, created_at, expires_at, verified) VALUES ('p-other', 'other', 'machine/other',
+       'publish', 'pg', 'null', NULL, '{}', 'shares', 'owner', 's', 'h-other', 'pending', ?, ?, '[]')`,
+      now,
+      now + 60_000,
+    );
+  });
   expect((await seen()).waiting.map((proposal) => proposal.id)).toEqual([waitingId(publish)]);
   // K-1723: an ask of "shares" takes a person's passkey.
   expect(await approve(near, waitingId(publish))).toMatchObject({
