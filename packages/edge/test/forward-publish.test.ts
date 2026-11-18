@@ -105,3 +105,30 @@ it("binds an approval of a forwarded call to the thread that asked (K-1714)", as
   // K-1777: the approval says that a person gave it, so its job keeps the 1-hour expiry of K-613.
   expect(found).toEqual({ same: { id: "p-thread", person: true }, other: null, none: null });
 });
+
+it("refuses a forwarded public publish that has no spot before it asks, so nobody approves a call that cannot run (K-1116, K-1776)", async () => {
+  stubAccessCerts();
+  const key = await newMachineKey();
+  // The agent circle sits far from Everyone, so no approval of "shares" gives the card a spot.
+  await setup({ creates: { mode: "automatic" } }, key);
+  const page = { "x-kitshn-name": "far.html", "content-type": "text/html", "x-kitshn-public": "true" };
+  const pageCall = await forwarded(key, "POST", "/agent/library", "nonce-far-00123456789", "<p>f</p>", page);
+  const site = await forwarded(
+    key,
+    "POST",
+    "/agent/sites/plan",
+    "nonce-far-10123456789",
+    JSON.stringify({ folder: "far", public: true }),
+    { "content-type": "application/json" },
+  );
+  for (const answer of [pageCall, site]) {
+    expect(answer.status).toBe(409);
+    const body = (await answer.json()) as { outcome?: string; error: string };
+    expect(body.outcome).toBeUndefined();
+    expect(body.error).toMatch(/overlaps Everyone/);
+  }
+  const proposals = await runInDurableObject(env.KITSHN.getByName("kitshn"), (_, state) =>
+    state.storage.sql.exec("SELECT id FROM proposals WHERE shown LIKE '%far%'").toArray(),
+  );
+  expect(proposals).toEqual([]);
+});

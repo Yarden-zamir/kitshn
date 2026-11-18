@@ -440,17 +440,24 @@ export function agentUploadPlace(
   if (!publish)
     return (
       placeInside(state, home, new Set([home.id]), taken) ??
-      `kitshn finds no free spot inside "${home.name}".`
+      `kitshn finds no free spot inside "${home.name}". ${FREE_A_SPOT}`
     );
   if (!agentHas(state, visitor, "shares", now, attested, approved))
     return 'This agent may not publish: "shares" is not automatic for it. The owner sets it (K-718).';
   const everyone = [...state.circles.values()].find(isEveryoneCircle);
   if (!everyone) return "The map has no Everyone circle.";
-  return (
-    placeInside(state, home, new Set([home.id, everyone.id]), taken) ??
-    publishRefusal(state, visitor, now, attested)
-  );
+  const wanted = new Set([home.id, everyone.id]);
+  const spot = placeInside(state, home, wanted, taken);
+  if (spot) return spot;
+  // An overlap that only cards fill is full, not missing; the owner frees a spot there.
+  return placeInside(state, home, wanted)
+    ? `The overlap of "${home.name}" and Everyone has no free spot for a card. ${FREE_A_SPOT}`
+    : publishRefusal(state, visitor, now, attested);
 }
+
+/** K-1116: what the owner does when the cards of the map fill the spot that an upload needs. */
+const FREE_A_SPOT =
+  "Ask the owner to move or remove a card there, or to make the circle bigger (K-505), then publish again.";
 
 /** A pull request environment is always `pr-<n>` (K-807). */
 export const isPreview = (environment: string) => /^pr-\d+$/.test(environment);

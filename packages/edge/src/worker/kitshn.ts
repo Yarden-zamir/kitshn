@@ -11796,6 +11796,22 @@ export class Kitshn extends DurableObject<Env> {
       // An approval of a call that cannot run would only cost the approver a click.
       if (wait !== null && circlesOf(this.state, caller.visitor, now, attested).size === 0)
         return refuse(403, "This agent is in no agent circle, so it manages nothing (K-718).");
+      // K-1116: the same for a first publish that has no spot, also with the approval.
+      const landing =
+        wait === null ? null : this.firstPublishLanding(machine, path, request.headers, input, now);
+      const spot =
+        landing === null
+          ? null
+          : agentUploadPlace(
+              this.state,
+              caller.visitor,
+              landing.circle,
+              landing.publish,
+              now,
+              attested,
+              needed,
+            );
+      if (typeof spot === "string") return refuse(409, spot);
       if (wait !== null) {
         const proposal = await this.forwardProposal(
           machineAsker(machine),
@@ -12241,6 +12257,43 @@ export class Kitshn extends DurableObject<Env> {
   }
 
   /**
+   * K-1116, K-1123: where a forwarded first publish of a page, a file or a folder site asks to land, as `agentUploadPlace`
+   * takes it; null for any other call, and for an update, which keeps its place (K-1117).
+   */
+  private firstPublishLanding(
+    machine: Machine,
+    path: string,
+    headers: Headers,
+    input: unknown,
+    now: number,
+  ): { readonly circle: string | null; readonly publish: boolean } | null {
+    const clientId = machine.clientId;
+    if (path === "/agent/library") {
+      const header = (key: string) => {
+        try {
+          return decodeURIComponent(headers.get(key) ?? "").trim();
+        } catch {
+          return "";
+        }
+      };
+      const known = this.sql(
+        "SELECT 1 FROM library WHERE source = ? AND added_by = ?",
+        `agent:${clientId}:${header("x-kitshn-name")}`,
+        clientId,
+      );
+      if (known.length > 0) return null;
+      return {
+        circle: header("x-kitshn-circle") || null,
+        publish: headers.get("x-kitshn-public") === "true",
+      };
+    }
+    if (path !== "/agent/sites/plan" || !isRecord(input)) return null;
+    if (this.folderSiteKnown(clientId, String(input["folder"] ?? "").trim(), now)) return null;
+    const circle = typeof input["circle"] === "string" ? input["circle"].trim() : "";
+    return { circle: circle || null, publish: input["public"] === true };
+  }
+
+  /**
    * K-1714, K-1776: the unused approval of exactly this forwarded call (its shown hash) of this machine and thread, from
    * this circle, within the hour, and whether a person gave it; null when there is none. An ask of "shares" or "secrets"
    * takes only an approval of the same effect, because only that one passed the passkey check (K-1723).
@@ -12428,6 +12481,10 @@ export class Kitshn extends DurableObject<Env> {
       const checked = new Set(this.uptimeTargets().map((card) => card.id));
       // K-1726: a machine sees the open asks of the circles that it is a member of, so its agent can answer them.
       const answerable = machine ? this.answerableProposals(caller.visitor, attested) : [];
+      // K-1722: and the open asks of its own credential, which History calls "waiting".
+      const waiting = machine
+        ? this.openProposals().filter((proposal) => proposal.credential === machineAsker(machine).credential)
+        : [];
       // The servers and the link events are most of the answer, so they come only with `?all=1`.
       const all = new URL(request.url).searchParams.get("all") === "1";
       const circleRef = (id: string) => ({ id, name: this.state.circles.get(id)?.name ?? id });
@@ -12441,7 +12498,7 @@ export class Kitshn extends DurableObject<Env> {
             ? { ...base, mode: "ask" as const, circle: circleRef(mode.circleId) }
             : { ...base, mode: mode.mode };
         }),
-        ...(machine ? { proposals: answerable } : {}),
+        ...(machine ? { proposals: answerable, waiting } : {}),
         // K-619: a machine sees its own listening ports, the list of the site wizard.
         ...(machine && all ? { servers: this.machineView(machine).servers } : {}),
         // K-1610: the newest 50 calls from or to this machine.
@@ -12486,8 +12543,9 @@ export class Kitshn extends DurableObject<Env> {
               // K-212: when the card leaves every circle for the tray, or null.
               endsAt: this.state.ends.get(id) ?? null,
               added: added.has(id),
+              // K-1116: a public card names Everyone also when "shares" asks, so its publish says who opens it.
               circles: circlesHolding(this.state, id)
-                .filter((circle) => visible(circle.id))
+                .filter((circle) => visible(circle.id) || isEveryoneCircle(circle))
                 .map((circle) => ({ id: circle.id, name: circle.name })),
               // K-718: what the owner snapshot shows of the card, so an agent needs no owner read.
               deploy: deploys.newest.get(id) ?? null,
@@ -13049,7 +13107,8 @@ export class Kitshn extends DurableObject<Env> {
         // manages; at "automatic" askEdits already took it. Any other edit asks the Owner, whatever "shares" says. A
         // rule that binds the owner too (K-105) refuses also with "shares".
         const withShares = this.askEdits(machine, action, target, raw["body"], now, attested, ["shares"]);
-        if (typeof withShares === "string") return event({ outcome: "refused", reason: edits });
+        // Its reason, because no approval changes it: a publish with no spot, or a rule of K-105.
+        if (typeof withShares === "string") return event({ outcome: "refused", reason: withShares });
         const shares = machineEffectiveMode(this.state, machine.id, "shares", now, attested);
         if (shares.mode === "off") return event(offRight("shares"));
         const reach =

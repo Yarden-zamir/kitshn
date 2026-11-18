@@ -270,6 +270,13 @@ describe("agent publish (K-1116, K-1117)", () => {
     if (!everyone) throw new Error("The seed has no Everyone circle.");
     await apply([{ _tag: "place", id, after: { x: everyone.x, y: everyone.y } }]);
     expect(await (await visit("/my-design")).text()).toBe("<p>named</p>");
+    // Plain HTTP goes on to HTTPS first, so no page or file runs in an insecure context.
+    for (const host of ["pages.example.com", "files.example.com"]) {
+      const ctx = createExecutionContext();
+      const plain = await worker.fetch(new Request(`http://${host}/my-design?a=1`), env, ctx);
+      await waitOnExecutionContext(ctx);
+      expect([plain.status, plain.headers.get("location")]).toEqual([308, `https://${host}/my-design?a=1`]);
+    }
 
     const renamed = await ownerPost(`/api/cards/${id}/address`, { address: "renamed" });
     const { revision } = (await renamed.json()) as { revision: number };

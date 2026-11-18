@@ -479,8 +479,18 @@ async function denied(url: URL, env: Env) {
 export default {
   async fetch(request, env, ctx): Promise<Response> {
     const url = new URL(request.url);
-    if (url.hostname === `pages.${env.KITSHN_ZONE}`) return content(request, env, "page");
-    if (url.hostname === `files.${env.KITSHN_ZONE}`) return content(request, env, "file");
+    const item =
+      url.hostname === `pages.${env.KITSHN_ZONE}`
+        ? "page"
+        : url.hostname === `files.${env.KITSHN_ZONE}`
+          ? "file"
+          : null;
+    // K-1116: a page or a file opens over HTTPS only. 308 keeps the method; no HSTS, which browsers keep.
+    if (item !== null && url.protocol === "http:") {
+      url.protocol = "https:";
+      return Response.redirect(url.toString(), 308);
+    }
+    if (item !== null) return content(request, env, item);
     // K-1108, K-817: only an offline route brings a live site's request here, on any zone that kitshn publishes on.
     if (
       !adminHosts(env).includes(url.hostname) &&

@@ -63,12 +63,12 @@ Each operation has exactly one effect (K-1730). Circles decide where an actor ac
   - "shares", "secrets", "runs" or "destroys" is "automatic"; its chip on the map carries a warning;
   - an approver circle with a machine member reads requester text, which an agent can write to fool another agent;
   - "changes" is "automatic" on a machine actor with no conditions (K-1754).
-- **K-1726** An agent that answers for a circle uses `kitshn agent approve` or `kitshn agent deny` with a reason. It never approves an ask of its own credential (K-1727). It sees in `state` the proposals of its circles, in a passkey circle only while "approves without passkey" is on.
+- **K-1726** An agent that answers for a circle uses `kitshn agent approve` or `kitshn agent deny` with a reason. It never approves an ask of its own credential (K-1727). It sees in `state` the proposals of its circles, in a passkey circle only while "approves without passkey" is on. A machine also sees its own open asks there, under `waiting`.
 - **K-1727** The credential that asked never approves its own ask, also when its actor is in the approver circle (K-1778). So no thread on a machine approves an ask of that machine. It may deny it, because that lowers access.
 - **K-1776** A call whose effect asks the Owner, by its mode or by its default, waits for the Owner, and the approval runs that one call. A target that fails the scope of its operation (K-1777) waits for the Owner the same way, whatever "shares" says (K-1778). Rules:
   - An effect set to "off" refuses with one line that names the effect. "Off" counts only for its own effect.
   - A `job` or `deploy` outside the limit of K-718 asks the Owner also when its effect is "automatic" or "ask <circle>".
-  - A job that no approval can run, a command that does not parse, and a backup or restore of a card that the machine does not manage refuse at once, with no proposal. A volume removal follows "destroys", on `/connect` as on `/op`.
+  - A job that no approval can run, a command that does not parse, a backup or restore of a card that the machine does not manage, and a first publish with no spot for its card (K-1116) refuse at once, with no proposal. A volume removal follows "destroys", on `/connect` as on `/op`.
   - A `kitshn gh` token ask with `auto` asks for write, because gh cannot say whether it writes.
 
 ## Operations

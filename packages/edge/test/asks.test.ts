@@ -880,27 +880,46 @@ it("runs an approved Owner ask of an unset right, and refuses it once the owner 
   );
   expect(repo.state).toBe("allowed");
   // "shares" unset: a page that the machine added goes into Everyone after the approval.
-  const near = await setup({ changes: { mode: "automatic" } }, { x: 1000, y: 0 });
-  await runInDurableObject(near, (_, state) => {
-    const sql = state.storage.sql;
-    sql.exec(
-      "INSERT OR REPLACE INTO library (id, kind, title, size, content_type, created_at, added_by) VALUES ('pg', 'page', 'pg', 1, 'text/html', 0, 'vps.access')",
-    );
-    const page = {
-      id: "pg",
-      kind: "page",
-      name: "pg",
-      addresses: [],
-      status: "running",
-      group: null,
-      machine: null,
-    };
-    sql.exec("INSERT OR REPLACE INTO resources (id, body) VALUES ('pg', ?)", JSON.stringify(page));
-    sql.exec("INSERT OR REPLACE INTO places (id, x, y) VALUES ('pg', 1150, 0)");
+  const addPage = (stub: DurableObjectStub, x: number) =>
+    runInDurableObject(stub, (_, state) => {
+      const sql = state.storage.sql;
+      sql.exec(
+        "INSERT OR REPLACE INTO library (id, kind, title, size, content_type, created_at, added_by) VALUES ('pg', 'page', 'pg', 1, 'text/html', 0, 'vps.access')",
+      );
+      const page = {
+        id: "pg",
+        kind: "page",
+        name: "pg",
+        addresses: [],
+        status: "running",
+        group: null,
+        machine: null,
+      };
+      sql.exec("INSERT OR REPLACE INTO resources (id, body) VALUES ('pg', ?)", JSON.stringify(page));
+      sql.exec("INSERT OR REPLACE INTO places (id, x, y) VALUES ('pg', ?, 0)", x);
+    });
+  // K-1116: with no overlap of the agent circle and Everyone, no approval gives the page a spot, so it asks nobody.
+  const far = await setup({ changes: { mode: "automatic" } });
+  await addPage(far, 5000);
+  await evictDurableObject(far);
+  expect(await ask(far, "publish", "pg")).toMatchObject({
+    outcome: "refused",
+    reason: expect.stringMatching(/overlaps Everyone/),
   });
+  const near = await setup({ changes: { mode: "automatic" } }, { x: 1000, y: 0 });
+  await addPage(near, 1150);
   await evictDurableObject(near);
   const publish = await ask(near, "publish", "pg");
   expect(publish).toMatchObject({ outcome: "waiting" });
+  type Seen = {
+    result: {
+      waiting: Array<{ id: string }>;
+      cards: Array<{ id: string; circles: Array<{ id: string }> }>;
+    };
+  };
+  const seen = async () => ((await ask(near, "state")) as Seen).result;
+  // K-1722: the machine sees its own open ask in `state`, also when it answers for no circle (K-1726).
+  expect((await seen()).waiting.map((proposal) => proposal.id)).toEqual([waitingId(publish)]);
   // K-1723: an ask of "shares" takes a person's passkey.
   expect(await approve(near, waitingId(publish))).toMatchObject({
     ok: false,
@@ -910,6 +929,12 @@ it("runs an approved Owner ask of an unset right, and refuses it once the owner 
     (instance as unknown as Instance).decide(waitingId(publish), "approved", owner, null, "passkey"),
   );
   expect(viaPasskey).toMatchObject({ ok: true });
+  // The card is public now, and `state` says so also while "shares" asks, so the CLI names who opens it (K-1116).
+  const after = await seen();
+  expect(after.waiting).toEqual([]);
+  expect(after.cards.find((card) => card.id === "pg")?.circles.map((circle) => circle.id)).toContain(
+    "everyone",
+  );
   // K-1711: "public": false moves the page out of Everyone into the agent circle that holds it, also when the
   // machine has an earlier agent circle elsewhere.
   await runInDurableObject(near, (_, state) => {

@@ -320,6 +320,16 @@ describe("agent keys that add and publish apps (K-718, K-819)", () => {
     expect(
       agentUploadPlace(withRights("agents", { shares: true }), as("agent-1"), null, true, 0, null),
     ).toMatch(/overlaps Everyone/);
+    // A full overlap is not a missing one: the refusal names what frees a spot.
+    const full = new Map(right.places);
+    for (let x = 300; x <= 1200; x += 100)
+      for (let y = -100; y <= 800; y += 60) full.set(`card-${x}-${y}`, { x, y });
+    expect(agentUploadPlace({ ...right, places: full }, as("agent-1"), null, true, 0, null)).toMatch(
+      /overlap of "agents" and Everyone has no free spot/,
+    );
+    expect(agentUploadPlace({ ...right, places: full }, as("agent-1"), "agents", false, 0, null)).toMatch(
+      /no free spot inside "agents"/,
+    );
   });
   it("lets a page or a file that the key published become public, as an app of a repo that it allowed", () => {
     const state = overlapping({ shares: true });
