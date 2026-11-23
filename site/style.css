@@ -1,78 +1,45 @@
 @import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=JetBrains+Mono:wght@400;600&display=swap");
 
-/* The shared rules of every site page, in the tick3d tokens, with light and dark mode. */
+/* The shared rules of every site page: graphite ink and one yolk yellow on white, the look of the logo. The theme is
+   locked to light; there is no dark mode and no switch. */
 :root {
   color-scheme: light;
-  --canvas: #e4e7ff;
-  --dots: #00000026;
+  --canvas: #fbfbf9;
+  --dots: #19191b14;
   --surface: #ffffff;
-  --raised: #f1f2ff;
-  --tint: #fff4c4;
-  --code-bg: #ffffff;
-  --code-ink: #000000;
-  --code-str: #13803a;
-  --ink: #000000;
-  --muted: #3d3d5c;
-  --border: #000000;
-  --hairline: #0000001f;
-  --shadow-ink: #000000;
-  --accent: #6c5ce7;
-  --accent-fg: #ffffff;
-  --select: #ffe14d;
-  --select-fg: #000000;
-  --info: #00b3ff;
-  --warning: #ffb347;
-  --green: #7cff8a;
-  --yellow: #ffe14d;
-  --pink: #ff9eb0;
-  --radius: 0.25rem;
-  --pill: 0.25rem;
+  --raised: #f4f4f2;
+  --tint: #fff7d1;
+  --code-bg: #19191b;
+  --code-ink: #f4f4ef;
+  --code-muted: #a3a3aa;
+  --code-hairline: #ffffff22;
+  --code-str: #6ee7a0;
+  --ink: #19191b;
+  --muted: #6b6b70;
+  --border: #19191b;
+  --hairline: #19191b1f;
+  --shadow-ink: #19191b;
+  --accent: #ffd23f;
+  --accent-fg: #19191b;
+  --select: #ffd23f;
+  --select-fg: #19191b;
+  --focus: #ffd23f99;
+  --info: #5cc8ff;
+  --warning: #ffad4d;
+  --green: #6ee7a0;
+  --yellow: #ffd23f;
+  --pink: #ff9fb2;
+  --coral: #ff7a6b;
+  --stone: #c8c8c3;
+  --radius: 14px;
+  --pill: 999px;
   --square: 4px;
-  --bw: 2px;
-  --shadow: 4px 4px 0 0 var(--shadow-ink);
-  --shadow-up: 6px 6px 0 0 var(--shadow-ink);
+  --bw: 1.5px;
+  --shadow: 3px 3px 0 0 var(--shadow-ink);
+  --shadow-up: 5px 5px 0 0 var(--shadow-ink);
   --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --sans: "Bricolage Grotesque", system-ui, sans-serif;
   --mono: "JetBrainsMono Nerd Font Mono", "JetBrains Mono", monospace;
-}
-/* Dark mode follows the device, unless the visitor picks light or dark with the header switch (theme.js). */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-    --canvas: #15122b;
-    --dots: #f3f0ff22;
-    --surface: #262147;
-    --raised: #1d1938;
-    --tint: #2c2650;
-    --code-bg: #1d1938;
-    --code-ink: #f3f0ff;
-    --code-str: #7cff8a;
-    --ink: #f3f0ff;
-    --muted: #bdb6e6;
-    --border: #f3f0ff;
-    --hairline: #f3f0ff26;
-    --shadow-ink: #b9a8ff;
-    --select: #6c5ce7;
-    --select-fg: #ffffff;
-  }
-}
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --canvas: #15122b;
-  --dots: #f3f0ff22;
-  --surface: #262147;
-  --raised: #1d1938;
-  --tint: #2c2650;
-  --code-bg: #1d1938;
-  --code-ink: #f3f0ff;
-  --code-str: #7cff8a;
-  --ink: #f3f0ff;
-  --muted: #bdb6e6;
-  --border: #f3f0ff;
-  --hairline: #f3f0ff26;
-  --shadow-ink: #b9a8ff;
-  --select: #6c5ce7;
-  --select-fg: #ffffff;
 }
 
 * {
@@ -146,7 +113,7 @@ pre {
 :focus-visible {
   outline: 2px solid var(--ink);
   outline-offset: 2px;
-  box-shadow: 0 0 0 6px #ff527766;
+  box-shadow: 0 0 0 6px var(--focus);
 }
 img {
   max-width: 100%;
@@ -265,18 +232,6 @@ section {
 }
 .top nav .btn {
   margin-left: 0.3rem;
-}
-.top nav .theme-toggle {
-  padding: 6px 8px;
-}
-.theme-toggle svg {
-  width: 1.1rem;
-  height: 1.1rem;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 /* On a phone the header keeps the brand and Install on one row; the first screen links to the rest. */
 @media (max-width: 640px) {
@@ -534,20 +489,20 @@ section {
   align-items: center;
   margin: 0 -1rem 0.9rem;
   padding: 0.55rem 0.8rem;
-  border-bottom: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--code-hairline);
 }
 .term-bar i {
   width: 0.6rem;
   height: 0.6rem;
   border-radius: 50%;
-  background: var(--hairline);
+  background: var(--code-hairline);
 }
 .term-bar i:first-child {
   background: var(--accent);
 }
 .term-bar span {
   margin-left: 0.5rem;
-  color: var(--muted);
+  color: var(--code-muted);
   font-size: 0.75rem;
 }
 
@@ -588,8 +543,8 @@ section {
   align-items: center;
   padding: 0.35rem 0.6rem;
   font: 0.72rem var(--mono);
-  color: var(--muted);
-  border-bottom: 1px solid var(--hairline);
+  color: var(--code-muted);
+  border-bottom: 1px solid var(--code-hairline);
 }
 .ai-copy {
   position: relative;
@@ -1235,7 +1190,7 @@ figcaption {
   align-items: center;
   padding: 0.5rem 0.8rem;
   color: var(--code-ink);
-  border-bottom: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--code-hairline);
 }
 .fm-file-name img {
   width: 1.4rem;
@@ -1244,7 +1199,7 @@ figcaption {
 .fm-file-name span {
   margin-left: auto;
   font: 0.72rem var(--mono);
-  color: var(--muted);
+  color: var(--code-muted);
 }
 .fm-file pre {
   margin: 0;
@@ -1693,7 +1648,7 @@ figcaption {
 }
 .hs-term p {
   margin: 0;
-  color: var(--muted);
+  color: var(--code-muted);
 }
 .hs-term p b {
   color: var(--green);
@@ -2270,7 +2225,7 @@ figcaption {
   gap: 1.5rem 2rem;
   align-items: center;
   padding: 2rem;
-  background: var(--raised);
+  background: var(--stone);
 }
 .teams > * {
   min-width: 0;
