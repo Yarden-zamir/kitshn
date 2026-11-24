@@ -1,4 +1,4 @@
-import { join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { DEFAULT_APP } from "./names.ts";
 
 /** K-805: an artifact of an earlier job of the run, which goes into the output folder of one app. */
@@ -59,4 +59,21 @@ export function artifactsByApp(
     byApp.set(key, { from: join(root, name), path: item.path });
   }
   return byApp;
+}
+
+/**
+ * K-804: the folder that holds an artifact. `actions/download-artifact` puts each artifact of the run in a folder
+ * with its name, but the only artifact of a run goes straight into the download folder. So with one artifact in
+ * the input and no folder of that name, the download folder itself is the artifact. Known limit: a wrong name in
+ * a run with several artifacts then takes all of them; the CLI says so in the log. Revisit when the workflow
+ * downloads each artifact by its name.
+ */
+export function artifactFolder(
+  artifact: Artifact & { readonly from: string },
+  count: number,
+  exists: (path: string) => boolean,
+): string | null {
+  if (exists(artifact.from)) return artifact.from;
+  const root = dirname(artifact.from);
+  return count === 1 && exists(root) ? root : null;
 }

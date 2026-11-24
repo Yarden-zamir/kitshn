@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { artifactsByApp } from "./artifacts.ts";
+import { artifactFolder, artifactsByApp } from "./artifacts.ts";
 
 describe("artifacts by app (K-805, K-804)", () => {
   const dir = "/runner/kitshn-artifacts";
@@ -39,5 +39,14 @@ describe("artifacts by app (K-805, K-804)", () => {
     expect(artifactsByApp(["app"], { KITSHN_ARTIFACTS: "{", KITSHN_ARTIFACT_DIR: dir })).toHaveProperty(
       "error",
     );
+  });
+
+  it("finds the only artifact of a run straight in the download folder, and never takes it for one of several", () => {
+    const has = (paths: Array<string>) => (path: string) => paths.includes(path);
+    const cv = { from: `${dir}/cv`, path: "cv/public" };
+    expect(artifactFolder(cv, 2, has([dir, `${dir}/cv`]))).toBe(`${dir}/cv`);
+    expect(artifactFolder(cv, 1, has([dir]))).toBe(dir);
+    expect(artifactFolder(cv, 2, has([dir]))).toBeNull();
+    expect(artifactFolder(cv, 1, has([]))).toBeNull();
   });
 });

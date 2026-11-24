@@ -10,7 +10,7 @@
 # KITSHN_GITHUB_CLIENT_ID and KITSHN_GITHUB_CLIENT_SECRET (add GitHub login, K-102),
 # KITSHN_OWNER_DEVICES (a JSON list of {tokenId, clientId, name} service tokens that join the Owner
 # circle when kitshn starts for the first time, for agents; K-106), KITSHN_DEPLOY_OWNERS (comma-separated
-# GitHub user names whose repos may deploy, K-811; a second run keeps the list when it is not set),
+# GitHub user or organization names whose repos may deploy, K-811; a second run keeps the list when it is not set),
 # KITSHN_ZONES (comma-separated further zones of the account that the extra addresses of an app may use, K-817;
 # a second run keeps the list when it is not set), KITSHN_GITHUB_APP_ID and KITSHN_GITHUB_APP_KEY (the id and the private key file of the kitshn GitHub
 # App, so agent keys can start a repo's kitshn workflow, K-718; a second run keeps them unless
@@ -512,14 +512,14 @@ if printf '%s' "$scripts" | jq -e --arg s "$SCRIPT" 'any(.[]; .id == $s)' >/dev/
   printf '%s' "$settings" | jq -e 'any(.bindings[]?; .type == "durable_object_namespace" and .class_name == "Kitshn")' >/dev/null ||
     die "a Worker named $SCRIPT exists and it is not kitshn. kitshn does not overwrite it."
 fi
-# K-811: the GitHub owners that may deploy, as user ids, which never change hands like a name can.
+# K-811: the GitHub owners that may deploy, as account ids, which never change hands like a name can.
 DEPLOY_OWNER_IDS=$(printf "%s" "$settings" | jq -r '[.bindings[]? | select(.name == "DEPLOY_OWNER_IDS") | .text][0] // ""')
 if [ -n "${KITSHN_DEPLOY_OWNERS:-}" ]; then
   DEPLOY_OWNER_IDS=""
   for login in $(printf '%s' "$KITSHN_DEPLOY_OWNERS" | tr ',' ' '); do
-    # K-811: user accounts only; an organization is not on the list for now.
-    id=$(curl -fsS "https://api.github.com/users/$login" | jq -r 'select(.type == "User") | .id // empty') || die "GitHub knows no user $login."
-    [ -n "$id" ] || die "$login is not a GitHub user account (K-811)."
+    # K-811: a user or an organization; each new repo of it still waits for its own Allow (K-819).
+    id=$(curl -fsS "https://api.github.com/users/$login" | jq -r 'select(.type == "User" or .type == "Organization") | .id // empty') || die "GitHub knows no account $login."
+    [ -n "$id" ] || die "$login is not a GitHub user or organization (K-811)."
     DEPLOY_OWNER_IDS="${DEPLOY_OWNER_IDS:+$DEPLOY_OWNER_IDS,}$id"
   done
   kept "deploys from GitHub owners $KITSHN_DEPLOY_OWNERS ($DEPLOY_OWNER_IDS)"
