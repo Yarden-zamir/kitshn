@@ -10,7 +10,7 @@ import { type AssetSession, jsonOf, uploadAssets } from "./assets.ts";
 import { bundleWorker, insideRepo, runBuild } from "./build.ts";
 import { CliError, errorText, fail } from "./cli-error.ts";
 import { errorOutput } from "./output.ts";
-import { type Artifact, artifactsByApp } from "./artifacts.ts";
+import { type Artifact, artifactFolder, artifactsByApp } from "./artifacts.ts";
 import { RecipeError, readApps } from "./parse.ts";
 import { envLines } from "./params.ts";
 import { tryApp } from "./try.ts";
@@ -181,8 +181,15 @@ async function deployApp(
     );
   }
   if (artifact?.from) {
-    if (!existsSync(artifact.from)) fail(`the artifact of ${key} was not downloaded; check its name.`);
-    cpSync(artifact.from, output, { recursive: true });
+    const named = Object.keys(JSON.parse(process.env["KITSHN_ARTIFACTS"] ?? "{}") as object).length;
+    const folder =
+      artifactFolder({ ...artifact, from: artifact.from }, named, existsSync) ??
+      fail(`the artifact of ${key} was not downloaded; check its name.`);
+    if (folder !== artifact.from)
+      console.log(
+        `kitshn: ${label}the only artifact of the run is in the download folder itself; kitshn takes it.`,
+      );
+    cpSync(folder, output, { recursive: true });
   }
   if (artifactPath && recipe.static.build)
     console.log(

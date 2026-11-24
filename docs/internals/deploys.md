@@ -35,7 +35,7 @@ An app repo holds a recipe, `kitshn.config.ts`, and a workflow file. This file h
 - **K-808** Planned: `needs.vars` and `needs.secrets` list names, and the values come from the kitshn store (K-809). Until then, the schema refuses them. A `KITSHN_<NAME>` GitHub variable or secret forwards as `<NAME>` on each deploy. A deploy fails before any work when a needed name has no value. A Worker app gets each value as a secret binding, and kitshn stores none. A repo secret also reaches pull request previews, so a secret for production only goes in the GitHub Environment "prod".
 - **K-809** Planned: the kitshn store encrypts secret values with AES-GCM under a Worker secret. The map shows names and "set" or "missing", never a value.
 - **K-810** The workflow file is the same few lines for every app. It needs `permissions: id-token: write` and calls the reusable workflow of K-803.
-- **K-811** Deploy auth: Actions sends its GitHub OIDC token. kitshn accepts a token whose `repository_owner_id` is on its list of owners, and refuses any other. The list holds user accounts only, no organizations for now.
+- **K-811** Deploy auth: Actions sends its GitHub OIDC token. kitshn accepts a token whose `repository_owner_id` is on its list of owners, and refuses any other. The list holds user and organization accounts, by id, so a renamed account keeps its place. Each new repo of a listed owner still waits for its own Allow (K-819). The kitshn GitHub App (K-908) needs an installation on each owner whose repos use it.
 
 ## Compose deploys
 
