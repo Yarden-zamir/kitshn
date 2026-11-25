@@ -5,6 +5,7 @@ import {
   agentDeployPlan,
   agentHas,
   agentHomeCircle,
+  deployStartCircles,
   agentMayCommand,
   agentMayRunOn,
   agentRefusal,
@@ -369,6 +370,20 @@ describe("agent keys that add and publish apps (K-718, K-819)", () => {
     const placed = { ...start(), places: new Map(start().places).set("new", place!) };
     expect(circlesHolding(placed, "new").map((circle) => circle.id)).toEqual(["agents"]);
     expect(agentHomeCircle(start(), "stranger", 0)).toBeUndefined();
+  });
+  it("starts a card of an agent-allowed repo in startsIn only when the agent may publish (K-807, K-819)", () => {
+    const ids = (sets: ReturnType<typeof deployStartCircles>) =>
+      sets.map((set) => set.map((circle) => circle.id));
+    const agent = { clientId: "agent-1" };
+    expect(ids(deployStartCircles(start(), null, "Everyone", 0))).toEqual([["everyone"]]);
+    expect(ids(deployStartCircles(start(), agent, "Everyone", 0))).toEqual([["agents"]]);
+    // With "shares" automatic, the overlap with the agent's circle comes first, so the agent keeps managing it.
+    expect(ids(deployStartCircles(overlapping({ shares: true }), agent, "Everyone", 0))).toEqual([
+      ["agents", "everyone"],
+      ["everyone"],
+    ]);
+    expect(ids(deployStartCircles(overlapping({ shares: true }), agent, null, 0))).toEqual([["agents"]]);
+    expect(ids(deployStartCircles(start(), { clientId: "stranger" }, "Everyone", 0))).toEqual([]);
   });
   it("deploys the Compose apps of an agent-allowed repo only to machines that the key runs jobs on", () => {
     const base = start();
