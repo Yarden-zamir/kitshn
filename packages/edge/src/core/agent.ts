@@ -226,6 +226,31 @@ export const agentHomeCircle = (
   return homes.find((home) => holding.some((circle) => circle.id === home.id)) ?? homes[0];
 };
 
+/**
+ * K-807, K-819: the circles where a new card of a deploy may start, best first; each entry is the set of circles
+ * that its spot must be inside. A repo that an agent allowed starts in that agent's circle, unless the agent has
+ * "shares" automatic: then it may publish, so `startsIn` holds, in the overlap with its circle first, so it keeps
+ * managing the card. An empty list sends the card to the tray.
+ */
+export function deployStartCircles(
+  state: State,
+  allowedBy: { readonly clientId: string } | null,
+  startsIn: string | null,
+  now: number,
+): Array<ReadonlyArray<Circle>> {
+  const named =
+    startsIn === null
+      ? undefined
+      : [...state.circles.values()].find((circle) =>
+          [circle.id, circle.name.toLowerCase()].includes(startsIn.toLowerCase()),
+        );
+  if (allowedBy === null) return named ? [[named]] : [];
+  const home = agentHomeCircle(state, allowedBy.clientId, now);
+  const visitor = { email: null, clientId: allowedBy.clientId, ip: null };
+  if (!named || !agentHas(state, visitor, "shares", now, null)) return home ? [[home]] : [];
+  return home && home.id !== named.id ? [[home, named], [named]] : [[named]];
+}
+
 /** K-718: the agent circles of a key at the level `control`, in map order. */
 const controlCircles = (state: State, visitor: Visitor, now: number, attested: Attested | null) =>
   [...circlesOf(state, visitor, now, attested)]

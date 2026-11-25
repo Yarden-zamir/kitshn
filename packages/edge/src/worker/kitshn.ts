@@ -236,6 +236,7 @@ import {
   agentDeployPlan,
   agentHas,
   agentHomeCircle,
+  deployStartCircles,
   agentMayCommand,
   agentMayRunOn,
   CLOSED_COMMANDS,
@@ -10770,16 +10771,16 @@ export class Kitshn extends DurableObject<Env> {
       ...withInstances,
     });
     this.load();
-    // K-819: the card of a repo that an agent key allowed starts in that key's circle, never in `startsIn`.
+    // K-807, K-819: `startsIn`, or the circle of the agent that allowed the repo when that agent may not publish.
     const allowedBy = this.allowingAgent(row.repo_id);
-    const circle = allowedBy
-      ? agentHomeCircle(this.state, allowedBy.clientId, Date.now())
-      : row.starts_in
-        ? [...this.state.circles.values()].find((item) =>
-            [item.id, item.name.toLowerCase()].includes(row.starts_in!.toLowerCase()),
-          )
-        : undefined;
-    const place = circle ? placeInside(this.state, { x: circle.x, y: circle.y }, new Set([circle.id])) : null;
+    let circle: Circle | undefined;
+    let place: Point | null = null;
+    for (const wanted of deployStartCircles(this.state, allowedBy, row.starts_in, Date.now())) {
+      const first = wanted[0]!;
+      place = placeInside(this.state, { x: first.x, y: first.y }, new Set(wanted.map((item) => item.id)));
+      circle = wanted.at(-1);
+      if (place) break;
+    }
     // K-1504: a deploy that was running when the pause started finishes with its card in the tray.
     if (circle && place && !this.state.paused) {
       this.commit(
@@ -10787,7 +10788,8 @@ export class Kitshn extends DurableObject<Env> {
         resolveEdits(this.state, [{ _tag: "place", id: row.resource_id, after: place }]),
         null,
       );
-      return allowedBy
+      const named = [circle.id, circle.name.toLowerCase()].includes((row.starts_in ?? "").toLowerCase());
+      return allowedBy && !named
         ? `The card starts in ${circle.name}, a circle of the agent ${allowedBy.name} that allowed the repo (K-819).`
         : `The card starts in ${circle.name} (K-807).`;
     }
